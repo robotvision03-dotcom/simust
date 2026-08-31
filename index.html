@@ -6,146 +6,248 @@
     <title>SIMUST PLAY IT SMART · Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* ----- GLOBAL THEME (unchanged) ----- */
-        :root { --bg-deep: #0a0c12; --bg-card: #10131f; --bg-card-light: #0c1020; --gold: #ffc107; --gold-light: #ffd700; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --white: #ffffff; --gray: #c8c8c8; --gray-dark: #969696; }
+        /* ----- SIMUST portal theme (matched to my_simust.html) ----- */
+        :root {
+            --ink: #f5f8fb;
+            --muted: #a9b4c5;
+            --navy: #06101f;
+            --navy-2: #0a1930;
+            --blue: #276ce5;
+            --blue-soft: #7ca8f8;
+            --gold: #d6b34b;
+            --gold-light: #ead48f;
+            --line: #ffffff24;
+            --portal-panel: #0b192d;
+            --bg-deep: #07111f;
+            --bg-card: #0b192d;
+            --bg-card-light: #0a1930;
+            --green: #2ecc71;
+            --yellow: #fbbf24;
+            --red: #e74c3c;
+            --white: #f5f8fb;
+            --gray: #a9b4c5;
+            --gray-dark: #8fa0b6;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: var(--bg-deep); font-family: 'Inter', 'Segoe UI', system-ui, monospace; color: var(--white); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .simust-card { background: var(--bg-card); border-radius: 28px; border: 1px solid rgba(255,193,7,0.25); box-shadow: 0 20px 35px -12px rgba(0,0,0,0.5); max-width: 1400px; width: 100%; overflow: hidden; }
-        .simust-header { background: linear-gradient(145deg, #0b0e17 0%, #07090f 100%); border-bottom: 2px solid var(--gold); padding: 20px 28px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        html { background: var(--navy); }
+        body { background: var(--bg-deep); font-family: Arial, Helvetica, sans-serif; color: var(--ink); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; -webkit-font-smoothing: antialiased; }
+        .simust-card { background: var(--portal-panel); border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 20px 35px -12px rgba(0,0,0,0.55); max-width: 1400px; width: 100%; overflow: hidden; display: flex; flex-direction: column; min-height: 900px; }
+        .simust-header { background: #050e1a; border-bottom: 1px solid var(--line); padding: 18px 28px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        .simust-tabs { display: flex; gap: 1px; padding: 0 24px; border-bottom: 1px solid var(--line); overflow-x: auto; background: #050e1a; }
+        .simust-body { flex: 1 1 auto; min-height: 720px; width: 100%; padding: 24px; background: var(--bg-deep); }
+        .simust-footer { text-align: center; font-size: 10px; color: #647185; letter-spacing: 0.08em; border-top: 1px solid var(--line); padding: 16px; background: #040b14; }
         .gold-accent { color: var(--gold); }
-        .stat-number { font-size: 2.4rem; font-weight: 800; background: linear-gradient(135deg, #ffd966, #ffb347); -webkit-background-clip: text; background-clip: text; color: transparent; }
-        .btn-primary { background: linear-gradient(105deg, var(--gold), #ffae00); color: var(--bg-deep); font-weight: bold; padding: 10px 24px; border-radius: 40px; border: none; cursor: pointer; transition: 0.2s; }
-        .btn-primary:hover { transform: scale(1.02); box-shadow: 0 0 20px rgba(255,193,7,0.3); }
-        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .btn-realtime { background: linear-gradient(105deg, #10b981, #059669); color: white; }
-        .btn-realtime:disabled { background: #4a5568; color: #9ca3af; }
+        .stat-number { font-size: 2.4rem; font-weight: 800; color: var(--gold-light); }
+        .panel { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); }
+        .btn-primary { background: linear-gradient(105deg, var(--gold), #d6b34b); color: #07111f; font-weight: 800; padding: 10px 24px; border-radius: 6px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-primary:hover { transform: scale(1.01); box-shadow: 0 0 24px rgba(214,179,75,0.25); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-realtime { background: linear-gradient(105deg, #2ecc71, #1ea55a); color: #07111f; }
+        .btn-realtime:disabled { background: #1a2d4a; color: #8fa0b6; }
         .btn-danger { background: var(--red); color: white; }
-        .btn-results { background: linear-gradient(105deg, #8b5cf6, #6d28d9); color: white; }
-        .btn-logout { background: linear-gradient(105deg, #ef4444, #b91c1c); color: white; padding: 8px 18px; border-radius: 40px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .btn-logout:hover { transform: scale(1.04); box-shadow: 0 0 20px rgba(239,68,68,0.3); }
-        .live-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; animation: pulse 1.5s infinite; }
+        .btn-results { background: linear-gradient(105deg, var(--blue), #1d5bc4); color: white; }
+        .btn-logout { background: transparent; color: #a8c6ff; border: 1px solid var(--line); padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer; transition: 0.2s; }
+        .btn-logout:hover { background: #ffffff0a; color: var(--ink); }
+        .live-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-inline-end: 8px; animation: pulse 1.5s infinite; }
         .live-dot.active { background: var(--green); }
-        .live-dot.inactive { background: #6b7280; animation: none; }
+        .live-dot.inactive { background: #647185; animation: none; }
         @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
-        .tab-button { background: transparent; color: #9ca3af; border-bottom: 2px solid transparent; padding: 12px 24px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-size: 14px; }
-        .tab-button.active { color: var(--gold); border-bottom-color: var(--gold); background: rgba(255,193,7,0.05); }
-        .tab-button:hover { color: var(--white); }
-        .player-card { background: var(--bg-card-light); border-radius: 16px; border: 1px solid rgba(255,193,7,0.25); padding: 12px 18px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
-        .player-card:hover { border-color: var(--gold); background: #12162a; }
-        .player-card.active { border-color: var(--gold); background: #1a1f35; }
-        .search-input { background: #1a1f2e; border: 1px solid rgba(255,193,7,0.25); border-radius: 40px; padding: 12px 20px; color: white; outline: none; width: 100%; transition: border 0.2s; }
+        .tab-button { background: transparent; color: #8190a5; border: none; border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.04em; }
+        .tab-button.active { color: #fff; border-bottom-color: var(--gold); background: #276ce51a; }
+        .tab-button:hover { color: #dce7f5; background: #276ce50d; }
+        .player-card { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 12px 18px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
+        .player-card:hover { border-color: var(--gold); background: #10243f; }
+        .player-card.active { border-color: var(--gold); background: #10243f; }
+        .search-input { background: #07111f; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; color: #fff; outline: none; width: 100%; transition: border-color 0.2s; }
         .search-input:focus { border-color: var(--gold); }
         .toggle-switch { position: relative; display: inline-block; width: 56px; height: 28px; margin: 0 10px; }
         .toggle-switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #4a5568; border-radius: 34px; transition: 0.3s; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #1a2d4a; border-radius: 34px; transition: 0.3s; }
         .slider::before { content: ''; position: absolute; height: 22px; width: 22px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s; }
-        input:checked + .slider { background: #10b981; }
+        input:checked + .slider { background: var(--green); }
         input:checked + .slider::before { transform: translateX(28px); }
         .viz-status-on { color: var(--green); font-weight: bold; }
         .viz-status-off { color: var(--red); font-weight: bold; }
-        .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg-card); border-left: 4px solid var(--green); padding: 14px 24px; border-radius: 14px; z-index: 1100; box-shadow: 0 10px 40px rgba(0,0,0,0.6); animation: slideIn 0.3s ease; border: 1px solid rgba(255,193,7,0.15); }
+        .toast { position: fixed; bottom: 24px; inset-inline-end: 24px; background: var(--portal-panel); border-inline-start: 4px solid var(--gold); padding: 14px 24px; border-radius: 8px; z-index: 1100; box-shadow: 0 10px 40px rgba(0,0,0,0.6); animation: slideIn 0.3s ease; border: 1px solid var(--line); color: var(--ink); }
         @keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
         .loading-spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--gold); border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .clear-selection-btn { background: #374151; color: var(--red); border: none; padding: 6px 16px; border-radius: 40px; cursor: pointer; font-size: 13px; transition: 0.2s; }
-        .clear-selection-btn:hover { background: #4a5568; }
-        .refresh-btn { background: #2a2e42; padding: 4px 14px; border-radius: 20px; font-size: 11px; cursor: pointer; border: none; color: #e2e8f0; transition: 0.2s; }
-        .refresh-btn:hover { background: #3a3e52; }
-        .auto-badge { background: #10b981; border-radius: 20px; padding: 2px 10px; font-size: 10px; font-weight: bold; margin-left: 8px; animation: pulse 1s infinite; }
-        .metric-ring { background: var(--bg-card-light); border-radius: 20px; border: 1px solid rgba(255,193,7,0.15); padding: 14px 10px 10px 10px; text-align: center; transition: border-color 0.2s; display: flex; flex-direction: column; align-items: center; }
-        .metric-ring:hover { border-color: rgba(255,193,7,0.4); }
-        .metric-ring .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #9ca3af; margin-bottom: 4px; }
+        .clear-selection-btn { background: #1a2d4a; color: var(--red); border: 1px solid var(--line); padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; transition: 0.2s; }
+        .clear-selection-btn:hover { background: #2a3d5a; }
+        .refresh-btn { background: #07111f; padding: 6px 14px; border-radius: 6px; font-size: 11px; cursor: pointer; border: 1px solid var(--line); color: #dce7f5; font-weight: 700; transition: 0.2s; }
+        .refresh-btn:hover { border-color: var(--gold); color: var(--gold-light); }
+        .auto-badge { background: var(--green); color: #07111f; border-radius: 6px; padding: 2px 8px; font-size: 10px; font-weight: 800; margin-inline-start: 8px; animation: pulse 1s infinite; }
+        .metric-ring { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 14px 10px 10px 10px; text-align: center; transition: background 0.15s; display: flex; flex-direction: column; align-items: center; }
+        .metric-ring:hover { background: #10243f; }
+        .metric-ring .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #9ca3af; margin-bottom: 4px; font-weight: 700; }
         .metric-ring .value { font-size: 22px; font-weight: 800; }
-        .metric-ring .sub { font-size: 11px; color: #9ca3af; }
+        .metric-ring .sub { font-size: 11px; color: #8090a5; }
         .ring-chart-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; }
         .ring-chart-wrapper canvas { max-height: 110px; max-width: 110px; margin: 0 auto; display: block; }
-        .table-wrap { overflow-x: auto; margin-top: 12px; border-radius: 16px; border: 1px solid #1f2538; }
+        .table-wrap { overflow-x: auto; margin-top: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--portal-panel); }
         .table-wrap table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 780px; }
-        .table-wrap th { background: #07090f; color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.4px; padding: 10px 8px; text-align: left; border-bottom: 1px solid #2a2e42; white-space: nowrap; }
-        .table-wrap td { padding: 7px 8px; border-bottom: 1px solid #1a1f2e; color: #e2e8f0; white-space: nowrap; }
-        .table-wrap tr:hover td { background: #141a2a; }
-        .table-wrap .result-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-weight: 600; font-size: 10px; }
-        .result-badge.correct { background: rgba(74,222,128,0.2); color: var(--green); }
+        .table-wrap th { background: #050e1a; color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.4px; padding: 10px 8px; text-align: start; border-bottom: 1px solid var(--line); white-space: nowrap; }
+        .table-wrap td { padding: 7px 8px; border-bottom: 1px solid var(--line); color: #dce7f7; white-space: nowrap; }
+        .table-wrap tr:hover td { background: #10243f; }
+        .table-wrap .result-badge { display: inline-block; padding: 2px 10px; border-radius: 6px; font-weight: 600; font-size: 10px; }
+        .result-badge.correct { background: rgba(46,204,113,0.2); color: var(--green); }
         .result-badge.late { background: rgba(251,191,36,0.2); color: var(--yellow); }
-        .result-badge.wrong { background: rgba(248,113,113,0.2); color: var(--red); }
-        .result-badge.miss { background: rgba(96,165,250,0.2); color: #60a5fa; }
-        .fac-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-weight: 700; font-size: 10px; background: rgba(255,193,7,0.15); color: var(--gold); border: 1px solid rgba(255,193,7,0.25); }
-        .fac-badge.right { background: rgba(248,113,113,0.2); color: #f87171; border-color: rgba(248,113,113,0.3); }
-        .fac-badge.left { background: rgba(96,165,250,0.2); color: #60a5fa; border-color: rgba(96,165,250,0.3); }
+        .result-badge.wrong { background: rgba(231,76,60,0.2); color: var(--red); }
+        .result-badge.miss { background: rgba(39,108,229,0.2); color: var(--blue-soft); }
+        .fac-badge { display: inline-block; padding: 2px 10px; border-radius: 6px; font-weight: 700; font-size: 10px; background: rgba(214,179,75,0.15); color: var(--gold); border: 1px solid rgba(214,179,75,0.25); }
+        .fac-badge.right { background: rgba(231,76,60,0.2); color: #e74c3c; border-color: rgba(231,76,60,0.3); }
+        .fac-badge.left { background: rgba(39,108,229,0.2); color: var(--blue-soft); border-color: rgba(39,108,229,0.3); }
         .hamburger-menu { position: relative; display: inline-block; }
-        .hamburger-btn { background: transparent; border: none; color: var(--gold); font-size: 28px; cursor: pointer; padding: 4px 12px; border-radius: 8px; transition: 0.2s; }
-        .hamburger-btn:hover { background: rgba(255,193,7,0.1); }
-        .dropdown-menu { position: absolute; top: 40px; left: 0; background: var(--bg-card); border: 1px solid rgba(255,193,7,0.2); border-radius: 16px; padding: 8px 0; min-width: 180px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); z-index: 200; display: none; }
+        .hamburger-btn { background: transparent; border: none; color: var(--gold); font-size: 28px; cursor: pointer; padding: 4px 12px; border-radius: 6px; transition: 0.2s; }
+        .hamburger-btn:hover { background: rgba(214,179,75,0.12); }
+        .dropdown-menu { position: absolute; top: 40px; inset-inline-start: 0; background: var(--portal-panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; min-width: 180px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); z-index: 200; display: none; }
         .dropdown-menu.open { display: block; }
-        .dropdown-menu button { display: block; width: 100%; text-align: left; padding: 10px 20px; background: transparent; border: none; color: #e2e8f0; font-size: 14px; cursor: pointer; transition: 0.2s; }
-        .dropdown-menu button:hover { background: rgba(255,193,7,0.1); color: var(--gold); }
-        .player-profile { background: var(--bg-card-light); border-radius: 20px; border: 1px solid rgba(255,193,7,0.2); padding: 20px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; transition: 0.2s; cursor: pointer; }
-        .player-profile:hover { border-color: rgba(255,193,7,0.4); }
-        .player-avatar { width: 100px; height: 100px; border-radius: 50%; background: #1a1f2e; border: 3px solid var(--gold); display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; color: var(--gold); flex-shrink: 0; overflow: hidden; }
+        .dropdown-menu button { display: block; width: 100%; text-align: start; padding: 10px 20px; background: transparent; border: none; color: #dce7f5; font-size: 14px; cursor: pointer; transition: 0.2s; }
+        .dropdown-menu button:hover { background: #276ce51a; color: var(--gold); }
+        .player-profile { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 20px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; transition: 0.2s; cursor: pointer; }
+        .player-profile:hover { background: #10243f; }
+        .player-avatar { width: 100px; height: 100px; border-radius: 50%; background: #1a2d4a; border: 2px solid var(--gold); display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; color: var(--gold); flex-shrink: 0; overflow: hidden; }
         .player-avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .player-info h2 { font-size: 24px; font-weight: 800; color: white; margin-bottom: 4px; }
-        .player-info .player-id { font-size: 14px; color: var(--gray-dark); font-family: monospace; margin-bottom: 8px; }
+        .player-info h2 { font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 4px; }
+        .player-info .player-id { font-size: 14px; color: var(--gray-dark); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-bottom: 8px; }
         .player-info .player-details { display: flex; flex-wrap: wrap; gap: 16px 24px; font-size: 14px; }
-        .player-info .player-details span { color: var(--gray); }
-        .player-info .player-details strong { color: white; font-weight: 600; }
-        .player-info .player-details .label { color: var(--gray-dark); margin-right: 4px; }
-        .score-badge { display: inline-block; padding: 2px 12px; border-radius: 20px; font-weight: bold; font-size: 13px; }
-        .score-high { background: rgba(74,222,128,0.2); color: var(--green); border: 1px solid rgba(74,222,128,0.3); }
+        .player-info .player-details span { color: var(--muted); }
+        .player-info .player-details strong { color: #fff; font-weight: 600; }
+        .player-info .player-details .label { color: var(--gray-dark); margin-inline-end: 4px; }
+        .score-badge { display: inline-block; padding: 2px 12px; border-radius: 6px; font-weight: bold; font-size: 13px; }
+        .score-high { background: rgba(46,204,113,0.2); color: var(--green); border: 1px solid rgba(46,204,113,0.3); }
         .score-mid { background: rgba(251,191,36,0.2); color: var(--yellow); border: 1px solid rgba(251,191,36,0.3); }
-        .score-low { background: rgba(248,113,113,0.2); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
-        .level-progress { background: #0c1020; border-radius: 12px; padding: 12px 16px; border: 1px solid rgba(255,193,7,0.15); margin: 8px 0; }
+        .score-low { background: rgba(231,76,60,0.2); color: var(--red); border: 1px solid rgba(231,76,60,0.3); }
+        .level-progress { background: var(--portal-panel); border-radius: 8px; padding: 12px 16px; border: 1px solid var(--line); margin: 8px 0; }
         .level-progress .level-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-height: 320px; overflow-y: auto; padding: 4px 2px; }
         .level-progress .level-bar::-webkit-scrollbar { width: 4px; }
         .level-progress .level-bar::-webkit-scrollbar-track { background: var(--bg-deep); border-radius: 2px; }
         .level-progress .level-bar::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 2px; }
-        .level-progress .level-item { display: inline-flex; align-items: center; gap: 4px; background: #1a1f2e; padding: 3px 10px; border-radius: 16px; font-size: 11px; color: #9ca3af; border: 1px solid transparent; transition: all 0.2s; white-space: nowrap; }
-        .level-progress .level-item.unlocked { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.55); font-weight: 600; }
-        .level-progress .level-item.completed { background: rgba(74,222,128,0.22); color: var(--green); border-color: rgba(74,222,128,0.45); }
-        .level-progress .level-item.current { background: rgba(255,193,7,0.15); color: var(--gold); border-color: rgba(255,193,7,0.4); font-weight: bold; box-shadow: 0 0 12px rgba(255,193,7,0.08); }
-        .level-progress .level-item.locked { opacity: 0.55; cursor: not-allowed; background: #141927; border-color: rgba(255,255,255,0.05); color: #9ca3af; font-weight: 400; }
-        .level-progress .level-item .level-label { font-size: 10px; font-weight: 500; }
-        .level-progress .level-item .level-badge { font-size: 12px; }
-        .level-progress .level-category { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 0; border-bottom: 1px solid rgba(255,193,7,0.06); margin-bottom: 4px; width: 100%; }
+        .level-progress .level-item { display: flex; flex-direction: row; align-items: center; gap: 6px; background: #1a2d4a; padding: 3px 10px; border-radius: 6px; font-size: 11px; color: #8fa0b6; border: 1px solid transparent; transition: all 0.2s; white-space: nowrap; position: relative; }
+        .level-progress .level-item.unlocked { background: rgba(46,204,113,0.18); color: var(--green); border-color: rgba(46,204,113,0.45); font-weight: 600; }
+        .level-progress .level-item.completed { background: rgba(46,204,113,0.22); color: var(--green); border-color: rgba(46,204,113,0.45); }
+        .level-progress .level-item.current { background: rgba(214,179,75,0.15); color: var(--gold); border-color: rgba(214,179,75,0.4); font-weight: bold; }
+        .level-progress .level-item.locked { opacity: 0.55; cursor: not-allowed; background: #07111f; border-color: var(--line); color: #8fa0b6; font-weight: 400; }
+        .level-progress .level-item .level-label { font-size: 10px; font-weight: 500; flex: 1 1 auto; min-width: 0; overflow: visible; line-height: 1.3; }
+        .level-progress .level-item .level-badge { font-size: 12px; flex: 0 0 auto; position: static; display: inline-flex; align-items: center; }
+        .level-progress .level-category { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 0; border-bottom: 1px solid var(--line); margin-bottom: 4px; width: 100%; }
         .level-progress .level-category .cat-label { font-size: 10px; font-weight: 700; color: var(--gold); letter-spacing: 0.5px; text-transform: uppercase; min-width: 80px; opacity: 0.7; }
         .level-progress .level-category .cat-items { display: flex; flex-wrap: wrap; gap: 4px; }
-        .level-progress .level-summary { font-size: 10px; color: var(--gray-dark); margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.04); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+        .level-progress .level-summary { font-size: 10px; color: var(--gray-dark); margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
         .unlock-btn, .lock-btn { background: transparent; border: none; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 6px; transition: 0.2s; }
-        .unlock-btn { color: #4ade80; background: rgba(16,185,129,0.2); border: 1px solid rgba(74,222,128,0.5); }
-        .unlock-btn:hover { background: rgba(16,185,129,0.35); transform: scale(1.1); }
+        .unlock-btn { color: var(--green); background: rgba(46,204,113,0.2); border: 1px solid rgba(46,204,113,0.5); }
+        .unlock-btn:hover { background: rgba(46,204,113,0.35); transform: scale(1.1); }
         .lock-btn { color: var(--red); }
-        .lock-btn:hover { background: rgba(248,113,113,0.15); transform: scale(1.1); }
-        .btn-unlock { background: linear-gradient(105deg, #34d399, #059669); color: #052e16; font-weight: bold; padding: 10px 24px; border-radius: 40px; border: none; cursor: pointer; transition: 0.2s; }
-        .btn-unlock:hover { transform: scale(1.02); box-shadow: 0 0 20px rgba(52,211,153,0.4); }
-        .btn-unlock:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; background: #374151; color: #9ca3af; }
-        .login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 2000; backdrop-filter: blur(6px); }
-        .lang-switcher { display: flex; gap: 2px; background: #0c1020; border: 1px solid rgba(255,193,7,0.25); border-radius: 8px; padding: 4px; }
-        .lang-btn { background: transparent; border: none; color: #9ca3af; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
-        .lang-btn.active { background: rgba(255,193,7,0.18); color: var(--gold); }
-        .login-lang-switcher { position: absolute; top: 20px; right: 24px; }
-        .login-box { background: var(--bg-card); border-radius: 28px; border: 1px solid rgba(255,193,7,0.3); padding: 48px 40px; max-width: 420px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
-        .login-box h1 { font-size: 32px; font-weight: 900; text-align: center; margin-bottom: 8px; }
-        .login-box .subtitle { text-align: center; color: var(--gray-dark); font-size: 14px; margin-bottom: 28px; }
-        .login-input { background: #1a1f2e; border: 1px solid rgba(255,193,7,0.25); border-radius: 40px; padding: 14px 20px; color: white; outline: none; width: 100%; transition: border 0.2s; font-size: 15px; margin-bottom: 16px; }
+        .lock-btn:hover { background: rgba(231,76,60,0.15); transform: scale(1.1); }
+        .btn-unlock { background: linear-gradient(105deg, #2ecc71, #1ea55a); color: #07111f; font-weight: 800; padding: 10px 24px; border-radius: 6px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-unlock:hover { transform: scale(1.01); box-shadow: 0 0 20px rgba(46,204,113,0.35); }
+        .btn-unlock:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; background: #1a2d4a; color: #8fa0b6; }
+        .login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #07111f; display: flex; align-items: center; justify-content: center; z-index: 2000; overflow-y: auto; padding: 28px 16px; }
+        .lang-dropdown { position: relative; display: inline-block; }
+        .lang-dropdown-toggle { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: #07111f; border: 1px solid var(--line); border-radius: 8px; color: var(--gold); cursor: pointer; padding: 0; }
+        .lang-dropdown-toggle:hover, .lang-dropdown.open .lang-dropdown-toggle { border-color: var(--gold); background: rgba(214,179,75,0.12); }
+        .lang-dropdown-menu { display: none; position: absolute; top: calc(100% + 6px); inset-inline-end: 0; min-width: 168px; margin: 0; padding: 6px 0; list-style: none; background: var(--portal-panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); z-index: 2100; }
+        .lang-dropdown.open .lang-dropdown-menu { display: block; }
+        .lang-dropdown-menu button { display: block; width: 100%; text-align: start; background: transparent; border: none; color: #dce7f5; font-size: 13px; font-weight: 700; padding: 9px 16px; cursor: pointer; }
+        .lang-dropdown-menu button:hover, .lang-dropdown-menu button.active { background: #276ce51a; color: var(--gold); }
+        .login-lang-switcher { position: absolute; top: 20px; inset-inline-end: 24px; }
+        .login-layout { display: flex; flex-wrap: wrap; gap: 22px; align-items: stretch; justify-content: center; width: 100%; max-width: 920px; }
+        .login-box { background: var(--navy-2); border-radius: 12px; border: 1px solid var(--line); padding: 40px 32px; max-width: 420px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.45); }
+        .login-box h1 { font-size: 28px; font-weight: 800; text-align: center; margin-bottom: 8px; letter-spacing: -0.03em; }
+        .login-box .subtitle { text-align: center; color: #8fa0b6; font-size: 14px; margin-bottom: 28px; }
+        .today-schedule-panel { background: var(--navy-2); border-radius: 12px; border: 1px solid var(--line); padding: 28px 24px; max-width: 360px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.45); display: flex; flex-direction: column; min-height: 280px; }
+        .today-schedule-panel .kicker { color: var(--gold); font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 8px; }
+        .today-schedule-panel h2 { font-size: 20px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 6px; }
+        .today-schedule-panel .sub { color: #8fa0b6; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+        .today-schedule-list { display: flex; flex-direction: column; gap: 8px; }
+        .today-schedule-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; background: #07111f; border: 1px solid var(--line); border-radius: 8px; }
+        .today-schedule-row .who { font-weight: 700; color: #dce7f5; font-size: 13px; }
+        .today-schedule-row .when { color: var(--gold); font-size: 12px; font-weight: 800; white-space: nowrap; }
+        .today-schedule-empty { color: #8fa0b6; font-size: 13px; font-style: italic; padding: 12px 0; }
+        .login-input { background: #07111f; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; color: #fff; outline: none; width: 100%; transition: border-color 0.2s; font-size: 15px; margin-bottom: 16px; }
         .login-input:focus { border-color: var(--gold); }
-        .login-input::placeholder { color: #6b7280; }
-        .login-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 40px; border: none; background: linear-gradient(105deg, var(--gold), #ffae00); color: var(--bg-deep); cursor: pointer; transition: 0.2s; margin-top: 8px; }
-        .login-btn:hover { transform: scale(1.02); box-shadow: 0 0 30px rgba(255,193,7,0.25); }
+        .login-input::placeholder { color: #647185; }
+        .login-btn { width: 100%; padding: 14px; font-size: 15px; font-weight: 800; border-radius: 6px; border: none; background: linear-gradient(105deg, var(--gold), #d6b34b); color: #07111f; cursor: pointer; transition: 0.2s; margin-top: 8px; }
+        .login-btn:hover { transform: scale(1.01); box-shadow: 0 0 30px rgba(214,179,75,0.25); }
         .login-error { color: var(--red); font-size: 13px; text-align: center; margin-top: 12px; min-height: 20px; }
-        .login-footer { text-align: center; margin-top: 24px; font-size: 12px; color: #4a5568; }
-        .modal-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center; z-index:3000; backdrop-filter:blur(4px); }
-        .modal-box { background: var(--bg-card); border-radius: 28px; border:1px solid rgba(255,193,7,0.3); padding: 32px; max-width: 600px; width:90%; max-height:90vh; overflow-y:auto; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+        .login-footer { text-align: center; margin-top: 24px; font-size: 12px; color: #647185; letter-spacing: 0.08em; }
+        .modal-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(5,14,26,0.82); display:flex; align-items:center; justify-content:center; z-index:3000; }
+        .modal-box { background: var(--navy-2); border-radius: 12px; border:1px solid var(--line); padding: 32px; max-width: 600px; width:90%; max-height:90vh; overflow-y:auto; box-shadow: 0 20px 40px rgba(0,0,0,0.55); }
         .modal-box h2 { font-size:24px; font-weight:800; color:var(--gold); margin-bottom:16px; }
         .modal-box .form-group { margin-bottom:12px; }
-        .modal-box .form-group label { display:block; font-size:12px; color:var(--gray-dark); margin-bottom:4px; }
-        .modal-box .form-group input { width:100%; background:#1a1f2e; border:1px solid rgba(255,193,7,0.25); border-radius:40px; padding:10px 16px; color:white; outline:none; font-size:14px; }
+        .modal-box .form-group label { display:block; font-size:12px; color:var(--gray-dark); margin-bottom:4px; font-weight: 700; letter-spacing: 0.04em; }
+        .modal-box .form-group input { width:100%; background:#07111f; border:1px solid var(--line); border-radius:6px; padding:10px 14px; color:#fff; outline:none; font-size:14px; }
         .modal-box .form-group input:focus { border-color:var(--gold); }
-        .modal-box .btn-row { display:flex; gap:12px; justify-content:flex-end; margin-top:20px; }
-        .modal-box .btn-row button { padding:8px 24px; border-radius:40px; border:none; font-weight:bold; cursor:pointer; }
-        .modal-box .btn-row .save-btn { background:var(--green); color:var(--bg-deep); }
-        .modal-box .btn-row .cancel-btn { background:#4a5568; color:white; }
+        .modal-box .btn-row { display:flex; gap:12px; justify-content:end; margin-top:20px; }
+        .modal-box .btn-row button { padding:8px 20px; border-radius:6px; border:none; font-weight:800; cursor:pointer; }
+        .modal-box .btn-row .save-btn { background:var(--green); color:#07111f; }
+        .modal-box .btn-row .cancel-btn { background:transparent; color:#a8c6ff; border: 1px solid var(--line); }
         .modal-box .btn-row .delete-btn { background:var(--red); color:white; }
-        @media (max-width:768px) { .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
+        @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
         @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
+
+        .num-ltr,
+        .metric-ring .value,
+        .stat-number,
+        .player-info .player-id,
+        .today-schedule-row .when,
+        .ring-chart-wrapper,
+        .table-wrap td {
+            unicode-bidi: isolate;
+        }
+        .num-ltr,
+        .metric-ring .value,
+        .stat-number,
+        .player-info .player-id,
+        .today-schedule-row .when,
+        .ring-chart-wrapper {
+            direction: ltr;
+        }
+        .toggle-switch { direction: ltr; }
+
+        html[dir="rtl"] body { text-align: start; }
+        html[dir="rtl"] .simust-header,
+        html[dir="rtl"] .simust-tabs,
+        html[dir="rtl"] .player-profile,
+        html[dir="rtl"] .player-card,
+        html[dir="rtl"] .login-box,
+        html[dir="rtl"] .today-schedule-panel {
+            text-align: start;
+        }
+        html[dir="rtl"] .table-wrap { direction: rtl; }
+        html[dir="rtl"] .table-wrap th,
+        html[dir="rtl"] .table-wrap td { text-align: start; }
+        html[dir="rtl"] .metric-ring,
+        html[dir="rtl"] .ring-chart-wrapper,
+        html[dir="rtl"] canvas { direction: ltr; unicode-bidi: isolate; }
+        html[dir="rtl"] .lang-dropdown-menu {
+            inset-inline-end: 0;
+            inset-inline-start: auto;
+            text-align: start;
+        }
+        html[dir="rtl"] .dropdown-menu {
+            inset-inline-start: 0;
+            inset-inline-end: auto;
+            text-align: start;
+        }
+        html[dir="rtl"] .toast {
+            inset-inline-end: 24px;
+            inset-inline-start: auto;
+            animation-name: slideInRtl;
+        }
+        @keyframes slideInRtl { from { transform: translateX(-100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
+        html[dir="rtl"] .login-input,
+        html[dir="rtl"] .search-input { text-align: start; }
+        html[dir="rtl"] input[type="password"],
+        html[dir="rtl"] input[type="email"],
+        html[dir="rtl"] input[type="number"] {
+            direction: ltr;
+            text-align: start;
+            unicode-bidi: isolate;
+        }
+        html[dir="rtl"] .gold-accent,
+        html[dir="rtl"] .simust-header h1,
+        html[dir="rtl"] .login-box h1 { direction: ltr; unicode-bidi: isolate; }
     </style>
 </head>
 <body>
@@ -184,6 +286,153 @@
         var sanitizeDisplay = function(val) {
             if (val === undefined || val === null || val === 'N/A' || val === '') return '–';
             return val;
+        };
+
+        var computePlayerAeAcc = function(player) {
+            if (player && ((Number(player.avgAe) || 0) > 0 || (Number(player.avgAcc) || 0) > 0)) {
+                return { ae: Number(player.avgAe) || 0, acc: Number(player.avgAcc) || 0 };
+            }
+            var sessions = (player && player.sessions) || [];
+            var totalCorrect = 0, totalLate = 0, totalWrong = 0, totalMiss = 0;
+            var aeWeighted = 0, aeWeight = 0;
+            sessions.forEach(function(s) {
+                var stats = (s && s.statistics) || {};
+                var actions = (s && s.actions) || [];
+                var correct = stats.correct || 0;
+                var late = stats.late || 0;
+                var wrong = stats.wrong || 0;
+                var miss = stats.miss || 0;
+                var total = stats.total || (s && s.total_actions) || (correct + late + wrong + miss) || actions.length;
+                totalCorrect += correct;
+                totalLate += late;
+                totalWrong += wrong;
+                totalMiss += miss;
+                var avgAe = stats.avg_ae || 0;
+                if (!avgAe && actions.length) {
+                    var sumAe = 0, n = 0;
+                    actions.forEach(function(a) {
+                        var v = a.ae;
+                        if (v !== undefined && v !== null && v !== 'N/A') {
+                            sumAe += parseFloat(v) || 0;
+                            n++;
+                        }
+                    });
+                    avgAe = n ? sumAe / n : 0;
+                }
+                if (avgAe && total) { aeWeighted += avgAe * total; aeWeight += total; }
+            });
+            var pooled = totalCorrect + totalLate + totalWrong + totalMiss;
+            return {
+                ae: aeWeight ? aeWeighted / aeWeight : 0,
+                acc: pooled ? ((totalCorrect + totalLate) / pooled * 100) : 0
+            };
+        };
+
+        var RING_TRACK = '#1a2d4a';
+        var MetricRingChart = function(ringProps) {
+            var value = ringProps.value || 0;
+            var max = ringProps.max || 100;
+            var color = ringProps.color || '#d6b34b';
+            var label = ringProps.label || '';
+            var sub = ringProps.sub || '';
+            var size = ringProps.size || 90;
+            var canvasRef = useRef(null);
+            var chartRef = useRef(null);
+            useEffect(function() {
+                if (!canvasRef.current) return;
+                var ctx = canvasRef.current.getContext('2d');
+                chartRef.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        datasets: [{
+                            data: [0, 100],
+                            backgroundColor: [color, RING_TRACK],
+                            borderWidth: 0,
+                            circumference: 360,
+                            rotation: -90
+                        }]
+                    },
+                    options: {
+                        responsive: false,
+                        animation: false,
+                        maintainAspectRatio: true,
+                        cutout: '70%',
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                    }
+                });
+                return function() {
+                    if (chartRef.current) {
+                        chartRef.current.destroy();
+                        chartRef.current = null;
+                    }
+                };
+            }, []);
+            useEffect(function() {
+                if (!chartRef.current) return;
+                var pct = Math.min(100, Math.max(0, (value / max) * 100));
+                chartRef.current.data.datasets[0].data = [pct, 100 - pct];
+                chartRef.current.data.datasets[0].backgroundColor = [color, RING_TRACK];
+                chartRef.current.update('none');
+            }, [value, max, color]);
+            return React.createElement('div', { className: "ring-chart-wrapper" },
+                React.createElement('canvas', { ref: canvasRef, width: size, height: size, style: { maxWidth: size, maxHeight: size } }),
+                label ? React.createElement('div', { className: "text-xs font-bold mt-1" }, label) : null,
+                sub ? React.createElement('div', { className: "text-xs text-gray-400" }, sub) : null
+            );
+        };
+
+        var AEPRingChart = function(props) {
+            var rightPct = props.rightPct || 0;
+            var leftPct = props.leftPct || 0;
+            var facTotal = props.facTotal || 0;
+            var facDisplay = props.facDisplay || '';
+            var canvasRef = useRef(null);
+            var chartRef = useRef(null);
+            useEffect(function() {
+                if (!canvasRef.current) return;
+                var ctx = canvasRef.current.getContext('2d');
+                chartRef.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        datasets: [
+                            { data: [0, 100], backgroundColor: ['#e74c3c', RING_TRACK],
+                                borderWidth: 0, circumference: 360, rotation: -90 },
+                            { data: [0, 100], backgroundColor: ['#276ce5', RING_TRACK],
+                                borderWidth: 0, circumference: 360, rotation: -90 }
+                        ]
+                    },
+                    options: {
+                        responsive: false,
+                        animation: false,
+                        maintainAspectRatio: true,
+                        cutout: '50%',
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                    }
+                });
+                return function() {
+                    if (chartRef.current) {
+                        chartRef.current.destroy();
+                        chartRef.current = null;
+                    }
+                };
+            }, []);
+            useEffect(function() {
+                if (!chartRef.current) return;
+                chartRef.current.data.datasets[0].data = [rightPct, 100 - rightPct];
+                chartRef.current.data.datasets[1].data = [leftPct, 100 - leftPct];
+                chartRef.current.update('none');
+            }, [rightPct, leftPct]);
+            return React.createElement('div', { className: "ring-chart-wrapper" },
+                React.createElement('canvas', { ref: canvasRef, width: 90, height: 90, style: { maxWidth: 90, maxHeight: 90 } }),
+                React.createElement('div', { className: "text-xs font-bold mt-1" }, 'AEP'),
+                React.createElement('div', { className: "text-xs text-gray-400" },
+                    "R " + rightPct.toFixed(0) + "% / L " + leftPct.toFixed(0) + "%"
+                ),
+                facTotal > 0 ?
+                React.createElement('div', { className: "text-xs mt-0.5 font-semibold", style: { color: '#ead48f' } },
+                    facDisplay) :
+                null
+            );
         };
 
         // Category order and sorting
@@ -277,22 +526,97 @@
         var LanguageSwitcher = function(props) {
             var lang = props.lang || 'en';
             var onChange = props.onLangChange || function() {};
-            var langs = [
-                { id: 'en', label: 'EN', title: 'English' },
-                { id: 'de', label: 'DE', title: 'German' },
-                { id: 'es', label: 'ES', title: 'Spanish' },
-                { id: 'it', label: 'IT', title: 'Italian' }
-            ];
-            return React.createElement('div', { className: 'lang-switcher' + (props.className ? ' ' + props.className : '') },
-                langs.map(function(item) {
-                    return React.createElement('button', {
-                        key: item.id,
-                        type: 'button',
-                        className: 'lang-btn' + (lang === item.id ? ' active' : ''),
-                        title: item.title,
-                        onClick: function() { onChange(item.id); }
-                    }, item.label);
-                })
+            var openState = useState(false);
+            var open = openState[0];
+            var setOpen = openState[1];
+            var boxRef = useRef(null);
+            var langs = (typeof SIMUST_LANG_OPTIONS !== 'undefined' && SIMUST_LANG_OPTIONS.length)
+                ? SIMUST_LANG_OPTIONS
+                : [
+                    { id: 'en', nameKey: 'langEn', fallback: 'English' },
+                    { id: 'de', nameKey: 'langDe', fallback: 'German' },
+                    { id: 'es', nameKey: 'langEs', fallback: 'Spanish' },
+                    { id: 'it', nameKey: 'langIt', fallback: 'Italian' },
+                    { id: 'ar', nameKey: 'langAr', fallback: 'Arabic' },
+                    { id: 'nl', nameKey: 'langNl', fallback: 'Dutch' }
+                ];
+            var t = props.t || function(k, fb) { return (typeof simustT === 'function' ? simustT(k) : (fb || k)); };
+            useEffect(function() {
+                var onDoc = function(e) {
+                    if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+                };
+                document.addEventListener('click', onDoc);
+                return function() { document.removeEventListener('click', onDoc); };
+            }, []);
+            return React.createElement('div', {
+                    className: 'lang-dropdown' + (open ? ' open' : '') + (props.className ? ' ' + props.className : ''),
+                    ref: boxRef
+                },
+                React.createElement('button', {
+                    type: 'button',
+                    className: 'lang-dropdown-toggle',
+                    title: t('language', 'Language'),
+                    'aria-label': t('language', 'Language'),
+                    'aria-expanded': open ? 'true' : 'false',
+                    onClick: function(e) { e.stopPropagation(); setOpen(!open); }
+                }, React.createElement('svg', { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': 'true', focusable: 'false' },
+                    React.createElement('circle', { cx: 12, cy: 12, r: 9, fill: 'none', stroke: 'currentColor', strokeWidth: 1.7 }),
+                    React.createElement('path', { d: 'M3 12h18M12 3c2.6 3 3.8 6 3.8 9s-1.2 6-3.8 9c-2.6-3-3.8-6-3.8-9s1.2-6 3.8-9z', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7 })
+                )),
+                React.createElement('ul', { className: 'lang-dropdown-menu', role: 'listbox' },
+                    langs.map(function(item) {
+                        return React.createElement('li', { key: item.id },
+                            React.createElement('button', {
+                                type: 'button',
+                                className: lang === item.id ? 'active' : '',
+                                'data-lang': item.id,
+                                onClick: function(e) {
+                                    e.stopPropagation();
+                                    onChange(item.id);
+                                    setOpen(false);
+                                }
+                            }, t(item.nameKey, item.fallback))
+                        );
+                    })
+                )
+            );
+        };
+
+        var TodaySchedulePanel = function(props) {
+            var t = props.t || function(k) { return k; };
+            var itemsState = useState(null);
+            var items = itemsState[0];
+            var setItems = itemsState[1];
+
+            useEffect(function() {
+                axios.get("/reservations/today").then(function(res) {
+                    setItems((res.data && res.data.reservations) || []);
+                }).catch(function() {
+                    setItems([]);
+                });
+            }, []);
+
+            var body;
+            if (items === null) {
+                body = React.createElement('div', { className: "today-schedule-empty" }, "…");
+            } else if (!items.length) {
+                body = React.createElement('div', { className: "today-schedule-empty" }, t("noReservationsToday"));
+            } else {
+                body = React.createElement('div', { className: "today-schedule-list" },
+                    items.map(function(row) {
+                        return React.createElement('div', { className: "today-schedule-row", key: row.id || (row.player_name + row.start) },
+                            React.createElement('span', { className: "who" }, row.player_name || t("reservationBooked")),
+                            React.createElement('span', { className: "when" }, (row.start || "") + "–" + (row.end || ""))
+                        );
+                    })
+                );
+            }
+
+            return React.createElement('div', { className: "today-schedule-panel" },
+                React.createElement('div', { className: "kicker" }, t("reservationKicker")),
+                React.createElement('h2', null, t("todaySchedule")),
+                React.createElement('p', { className: "sub" }, t("todayScheduleSub")),
+                body
             );
         };
 
@@ -316,34 +640,39 @@
                 React.createElement(LanguageSwitcher, {
                     lang: props.lang,
                     onLangChange: props.onLangChange,
-                    className: "login-lang-switcher"
+                    className: "login-lang-switcher",
+                    t: t
                 }),
-                React.createElement('div', { className: "login-box" },
-                    React.createElement('h1', null,
-                        React.createElement('span', { className: "gold-accent" }, "SIMUST"),
-                        " PLAY IT SMART"
+                React.createElement('div', { className: "login-layout" },
+                    React.createElement('div', { className: "login-box" },
+                        React.createElement('h1', null,
+                            React.createElement('span', { className: "gold-accent" }, "SIMUST"),
+                            " PLAY IT SMART"
+                        ),
+                        React.createElement('p', { className: "subtitle" }, t("signInToAccount")),
+                        React.createElement('form', { onSubmit: handleSubmit },
+                            React.createElement('input', {
+                                type: "text",
+                                className: "login-input",
+                                placeholder: t("username"),
+                                value: username,
+                                dir: "auto",
+                                onChange: function(e) { setUsername(e.target.value); },
+                                autoFocus: true
+                            }),
+                            React.createElement('input', {
+                                type: "password",
+                                className: "login-input",
+                                placeholder: t("password"),
+                                value: password,
+                                onChange: function(e) { setPassword(e.target.value); }
+                            }),
+                            React.createElement('button', { type: "submit", className: "login-btn" }, t("signInBtn")),
+                            React.createElement('div', { className: "login-error" }, error || '')
+                        ),
+                        React.createElement('div', { className: "login-footer" }, t("allRights"))
                     ),
-                    React.createElement('p', { className: "subtitle" }, t("signInToAccount")),
-                    React.createElement('form', { onSubmit: handleSubmit },
-                        React.createElement('input', {
-                            type: "text",
-                            className: "login-input",
-                            placeholder: t("username"),
-                            value: username,
-                            onChange: function(e) { setUsername(e.target.value); },
-                            autoFocus: true
-                        }),
-                        React.createElement('input', {
-                            type: "password",
-                            className: "login-input",
-                            placeholder: t("password"),
-                            value: password,
-                            onChange: function(e) { setPassword(e.target.value); }
-                        }),
-                        React.createElement('button', { type: "submit", className: "login-btn" }, t("signInBtn")),
-                        React.createElement('div', { className: "login-error" }, error || '')
-                    ),
-                    React.createElement('div', { className: "login-footer" }, t("allRights"))
+                    React.createElement(TodaySchedulePanel, { t: t })
                 )
             );
         };
@@ -410,7 +739,8 @@
                                     if (!lvl.isUnlocked) className += " locked";
 
                                     var label = lvl.display || lvl.id;
-                                    var shortLabel = label.replace(/^[A-Z]+\s*/, '').trim();
+                                    var shortLabel = label.replace(/^(Foundation|Entry|Activated|High Performance|Elite|World Class)\s+/, '').trim() || label;
+                                    shortLabel = shortLabel.replace(/^L\d{2}-/, '');
                                     var icon = '⬜';
                                     if (lvl.isCompleted) icon = '✅';
                                     else if (lvl.isCurrent) icon = '▶️';
@@ -507,7 +837,7 @@
             }
             var subdirs = hasSubdirs ? LEVEL_SUBDIRS['L00-Foundation'] : [];
 
-            return React.createElement('div', { className: "mb-6 p-4 bg-[#0c1020] rounded-xl border border-[#ffc10720]" },
+            return React.createElement('div', { className: "mb-6 p-4 panel" },
                 React.createElement('div', { className: "flex justify-between items-center mb-3 flex-wrap gap-2" },
                     React.createElement('h3', { className: "gold-accent font-bold text-lg" }, "SEARCH & SELECT PLAYER"),
                     React.createElement('button', { onClick: function() { onAddPlayer(null); },
@@ -533,7 +863,7 @@
                         return React.createElement('div', { key: p.id, onClick: function() { onSelectPlayer(p); },
                                 className: "player-card" },
                             React.createElement('div', { className: "flex items-center gap-3" },
-                                React.createElement('div', { className: "w-10 h-10 rounded-full bg-[#1a1f2e] overflow-hidden flex-shrink-0" },
+                                React.createElement('div', { className: "w-10 h-10 rounded-full overflow-hidden flex-shrink-0", style: { background: '#1a2d4a' } },
                                     p.image ? React.createElement('img', { src: p.image, alt: p.name,
                                         className: "w-full h-full object-cover" }) :
                                     React.createElement('span', { className: "flex items-center justify-center w-full h-full text-gold text-sm font-bold" },
@@ -554,35 +884,35 @@
                 React.createElement('div', { className: "text-center text-gray-500 py-4" },
                     "No players match \"" + searchQuery + "\""),
                 showAddPlayer &&
-                React.createElement('div', { className: "mt-4 p-4 bg-[#1a1f2e] rounded-xl border border-[#ffc10730]" },
+                React.createElement('div', { className: "mt-4 p-4 panel" },
                     React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3" },
                         React.createElement('input', {
                             placeholder: t("firstName").replace(' *', ''),
                             value: newPlayer.name || '',
                             onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { name: e
                                         .target.value })); },
-                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                            className: "search-input"
                         }),
                         React.createElement('input', {
                             placeholder: t("lastName").replace(' *', ''),
                             value: newPlayer.surname || '',
                             onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { surname: e
                                         .target.value })); },
-                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                            className: "search-input"
                         }),
                         React.createElement('input', {
                             placeholder: "SIMUST ID",
                             value: newPlayer.playerId || '',
                             onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { playerId: e
                                         .target.value })); },
-                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                            className: "search-input"
                         }),
                         React.createElement('input', {
                             placeholder: t("club"),
                             value: newPlayer.club || '',
                             onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { club: e
                                         .target.value })); },
-                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                            className: "search-input"
                         }),
                         React.createElement('input', {
                             type: "date",
@@ -594,7 +924,7 @@
                                     '';
                                 onNewPlayerChange(Object.assign({}, newPlayer, { birthday: val, age: age }));
                             },
-                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                            className: "search-input"
                         }),
                         React.createElement('div', { className: "flex items-center gap-2" },
                             React.createElement('input', {
@@ -603,7 +933,7 @@
                                 value: newPlayer.age || '',
                                 onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { age: e
                                             .target.value })); },
-                                className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400 w-full"
+                                className: "search-input"
                             }),
                             React.createElement('span', { className: "text-xs text-gray-500" }, "years")
                         ),
@@ -624,7 +954,7 @@
                                         reader.readAsDataURL(file);
                                     }
                                 },
-                                className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400 w-full"
+                                className: "search-input"
                             })
                         )
                     ),
@@ -634,7 +964,7 @@
                 selectedPlayer &&
                 React.createElement('div', { className: "mt-4 p-3 bg-[#1a1f35] rounded-xl border border-yellow-500 flex flex-wrap justify-between items-center gap-2" },
                     React.createElement('div', { className: "flex items-center gap-3" },
-                        React.createElement('div', { className: "w-10 h-10 rounded-full bg-[#1a1f2e] overflow-hidden flex-shrink-0" },
+                        React.createElement('div', { className: "w-10 h-10 rounded-full overflow-hidden flex-shrink-0", style: { background: '#1a2d4a' } },
                             selectedPlayer.image ? React.createElement('img', { src: selectedPlayer.image,
                                     alt: selectedPlayer.name, className: "w-full h-full object-cover" }) :
                             React.createElement('span', { className: "flex items-center justify-center w-full h-full text-gold text-sm font-bold" },
@@ -645,7 +975,7 @@
                                 "✓ " + t("selected") + " "),
                             React.createElement('span', { className: "font-bold text-white" },
                                 selectedPlayer.name + ' ' + selectedPlayer.surname),
-                            React.createElement('span', { className: "text-gray-400 text-sm ml-2" },
+                            React.createElement('span', { className: "text-gray-400 text-sm ms-2" },
                                 "SIMUST ID: " + selectedPlayer.playerId + (selectedPlayer.club ? " · " +
                                     selectedPlayer.club : ""))
                         )
@@ -659,7 +989,7 @@
                         React.createElement('select', {
                             value: selectedLevel || '',
                             onChange: function(e) { onLevelChange(e.target.value); },
-                            className: "bg-[#1a1f2e] border border-[#ffc10740] rounded-full px-5 py-2 text-white outline-none focus:border-yellow-400 flex-1 min-w-[200px]"
+                            className: "search-input flex-1 min-w-[200px]"
                         },
                             React.createElement('option', { value: "", disabled: true }, t("selectLevel")),
                             sortedVisible.map(function(lvl) {
@@ -697,7 +1027,7 @@
                         React.createElement('select', {
                             value: selectedSubdirectory || '',
                             onChange: function(e) { onSubdirectoryChange(e.target.value); },
-                            className: "bg-[#1a1f2e] border border-[#ffc10740] rounded-full px-5 py-2 text-white outline-none focus:border-yellow-400 w-full"
+                            className: "search-input w-full"
                         },
                             React.createElement('option', { value: "", disabled: true }, "Select a subdirectory"),
                             subdirs.map(function(sub) {
@@ -729,7 +1059,7 @@
         var ResultsTable = function(props) {
             var actions = props.actions || [];
             if (!actions || actions.length === 0) {
-                return React.createElement('div', { className: "text-center py-10 text-gray-400 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                return React.createElement('div', { className: "text-center py-10 text-gray-400 panel" },
                     "No results available. Complete a session to see data."
                 );
             }
@@ -836,7 +1166,7 @@
             var stats = props.stats || {};
             var actions = props.actions || [];
             if (!stats || stats.total === 0) {
-                return React.createElement('div', { className: "text-center py-8 text-gray-400 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                return React.createElement('div', { className: "text-center py-8 text-gray-400 panel" },
                     "No summary data yet."
                 );
             }
@@ -903,94 +1233,6 @@
                 "FAC: R " + facRightPct.toFixed(0) + "% / L " + facLeftPct.toFixed(0) + "%" :
                 'FAC: No data';
 
-            var Ring = function(ringProps) {
-                var value = ringProps.value || 0;
-                var max = ringProps.max || 100;
-                var color = ringProps.color || '#ffc107';
-                var label = ringProps.label || '';
-                var sub = ringProps.sub || '';
-                var size = ringProps.size || 90;
-                var canvasRef = useRef(null);
-                var chartRef = useRef(null);
-                useEffect(function() {
-                    if (!canvasRef.current) return;
-                    if (chartRef.current) { chartRef.current.destroy();
-                        chartRef.current = null; }
-                    var ctx = canvasRef.current.getContext('2d');
-                    var pct = Math.min(100, Math.max(0, (value / max) * 100));
-                    chartRef.current = new Chart(ctx, {
-                        type: 'doughnut',
-                        data: {
-                            datasets: [{
-                                data: [pct, 100 - pct],
-                                backgroundColor: [color, '#2a2e42'],
-                                borderWidth: 0,
-                                circumference: 360,
-                                rotation: -90,
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: true,
-                            cutout: '70%',
-                            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                            animation: { duration: 400 }
-                        }
-                    });
-                    return function() { if (chartRef.current) { chartRef.current.destroy();
-                            chartRef.current = null; } };
-                }, [value, max, color]);
-                return React.createElement('div', { className: "ring-chart-wrapper" },
-                    React.createElement('canvas', { ref: canvasRef, width: size, height: size, style: { maxWidth: size,
-                            maxHeight: size } }),
-                    React.createElement('div', { className: "text-xs font-bold mt-1" }, label),
-                    React.createElement('div', { className: "text-xs text-gray-400" }, sub)
-                );
-            };
-
-            var AEPRing = function() {
-                var canvasRef = useRef(null);
-                var chartRef = useRef(null);
-                useEffect(function() {
-                    if (!canvasRef.current) return;
-                    if (chartRef.current) { chartRef.current.destroy();
-                        chartRef.current = null; }
-                    var ctx = canvasRef.current.getContext('2d');
-                    chartRef.current = new Chart(ctx, {
-                        type: 'doughnut',
-                        data: {
-                            datasets: [
-                                { data: [rightPct, 100 - rightPct], backgroundColor: ['#f87171', '#2a2e42'],
-                                    borderWidth: 0, circumference: 360, rotation: -90 },
-                                { data: [leftPct, 100 - leftPct], backgroundColor: ['#3b82f6', '#2a2e42'],
-                                    borderWidth: 0, circumference: 360, rotation: -90 }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: true,
-                            cutout: '50%',
-                            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                            animation: { duration: 400 }
-                        }
-                    });
-                    return function() { if (chartRef.current) { chartRef.current.destroy();
-                            chartRef.current = null; } };
-                }, [rightPct, leftPct]);
-                return React.createElement('div', { className: "ring-chart-wrapper" },
-                    React.createElement('canvas', { ref: canvasRef, width: 90, height: 90, style: { maxWidth: 90,
-                            maxHeight: 90 } }),
-                    React.createElement('div', { className: "text-xs font-bold mt-1" }, 'AEP'),
-                    React.createElement('div', { className: "text-xs text-gray-400" },
-                        "R " + rightPct.toFixed(0) + "% / L " + leftPct.toFixed(0) + "%"
-                    ),
-                    facTotal > 0 ?
-                    React.createElement('div', { className: "text-xs text-yellow-400 mt-0.5 font-semibold" },
-                        facDisplay) :
-                    null
-                );
-            };
-
             var aetColor = avgFinishingTime > 0 ?
                 (avgFinishingTime < 1.5 ? 'text-green-400' : avgFinishingTime < 3 ? 'text-yellow-400' :
                     'text-red-400') :
@@ -1008,11 +1250,11 @@
                         React.createElement('div', { className: "label" }, "Average Execution Time"),
                         React.createElement('div', { className: "value " + aetColor }, aetDisplay),
                         React.createElement('div', { className: "sub" }, "from " + correct + " correct"),
-                        React.createElement(Ring, {
+                        React.createElement(MetricRingChart, {
                             value: avgFinishingTime > 0 ? Math.min(100, (1 - avgFinishingTime / 5) *
                                 100) : 0,
-                            color: avgFinishingTime > 0 ? (avgFinishingTime < 1.5 ? '#4ade80' :
-                                avgFinishingTime < 3 ? '#fbbf24' : '#f87171') : '#4a5568',
+                            color: avgFinishingTime > 0 ? (avgFinishingTime < 1.5 ? '#2ecc71' :
+                                avgFinishingTime < 3 ? '#fbbf24' : '#e74c3c') : '#1a2d4a',
                             label: '',
                             sub: ''
                         })
@@ -1021,22 +1263,22 @@
                         React.createElement('div', { className: "label" }, "Body Displacement"),
                         React.createElement('div', { className: "value text-cyan-400" }, bdpDisplay),
                         React.createElement('div', { className: "sub" }, total + " actions"),
-                        React.createElement(Ring, { value: Math.min(100, (totalDistance / 120) * 100),
+                        React.createElement(MetricRingChart, { value: Math.min(100, (totalDistance / 120) * 100),
                             color: '#22d3ee', label: '', sub: '' })
                     ),
                     React.createElement('div', { className: "metric-ring" },
                         React.createElement('div', { className: "label" }, "Action Efficiency"),
                         React.createElement('div', { className: "value " + aeColor }, aeDisplay),
                         React.createElement('div', { className: "sub" }, "from " + total + " actions"),
-                        React.createElement(Ring, { value: avgAe, color: avgAe >= 70 ? '#4ade80' : avgAe >=
-                                50 ? '#fbbf24' : '#f87171', label: '', sub: '' })
+                        React.createElement(MetricRingChart, { value: avgAe, color: avgAe >= 70 ? '#2ecc71' : avgAe >=
+                                50 ? '#fbbf24' : '#e74c3c', label: '', sub: '' })
                     ),
                     React.createElement('div', { className: "metric-ring" },
                         React.createElement('div', { className: "label" }, "Action Accuracy"),
                         React.createElement('div', { className: "value text-green-400" }, aac.toFixed(0) +
                             "%"),
                         React.createElement('div', { className: "sub" }, "(Correct+Late)/Total"),
-                        React.createElement(Ring, { value: aac, color: '#4ade80', label: '', sub: '' })
+                        React.createElement(MetricRingChart, { value: aac, color: '#2ecc71', label: '', sub: '' })
                     ),
                     React.createElement('div', { className: "metric-ring" },
                         React.createElement('div', { className: "label" }, "AEP (Left / Right)"),
@@ -1048,16 +1290,16 @@
                                 "%")
                         ),
                         React.createElement('div', { className: "sub" }, totalGoals + " goals"),
-                        React.createElement(AEPRing, null)
+                        React.createElement(AEPRingChart, { rightPct: rightPct, leftPct: leftPct, facTotal: facTotal, facDisplay: facDisplay })
                     )
                 ),
                 React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" },
-                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                    React.createElement('div', { className: "panel p-3 text-center" },
                         React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
                             "Total Actions"),
                         React.createElement('div', { className: "text-2xl font-bold text-white" }, total)
                     ),
-                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                    React.createElement('div', { className: "panel p-3 text-center" },
                         React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
                             "Correct / Late / Wrong / Miss"),
                         React.createElement('div', { className: "text-lg font-bold" },
@@ -1070,13 +1312,13 @@
                             React.createElement('span', { className: "text-blue-400" }, miss)
                         )
                     ),
-                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                    React.createElement('div', { className: "panel p-3 text-center" },
                         React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
                             "Avg Distance / Action"),
                         React.createElement('div', { className: "text-2xl font-bold text-cyan-400" },
                             avgDistDisplay)
                     ),
-                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                    React.createElement('div', { className: "panel p-3 text-center" },
                         React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
                             "AET Performance"),
                         React.createElement('div', { className: "text-2xl font-bold " + aetColor },
@@ -1084,7 +1326,7 @@
                     )
                 ),
                 facTotal > 0 ?
-                React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10720] mb-4" },
+                React.createElement('div', { className: "panel p-3 text-center mb-4" },
                     React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
                         "First Action Choice (FAC)"),
                     React.createElement('div', { className: "text-lg font-bold" },
@@ -1093,7 +1335,7 @@
                         ' / ',
                         React.createElement('span', { className: "text-blue-400" }, facLeftPct.toFixed(0) +
                             "% Left"),
-                        React.createElement('span', { className: "text-gray-500 text-sm ml-3 font-normal" },
+                        React.createElement('span', { className: "text-gray-500 text-sm ms-3 font-normal" },
                             "(" + facTotal + " first actions)")
                     )
                 ) :
@@ -1179,7 +1421,7 @@
                     React.createElement('table', null,
                         React.createElement('thead', null,
                             React.createElement('tr', null,
-                                ['Name', 'SIMUST ID', 'Club', 'Age', 'Sessions', 'Score', 'Actions'].map(
+                                ['Name', 'SIMUST ID', 'Club', 'Age', 'AE Avg', 'ACC Avg', 'Actions'].map(
                                     function(h) {
                                         return React.createElement('th', { key: h }, h);
                                     })
@@ -1192,23 +1434,21 @@
                                     className: "text-center text-gray-400 py-4" }, "No players found")
                             ) :
                             filtered.map(function(p) {
-                                var sessionsLen = p.sessions ? p.sessions.length : 0;
-                                var score = p.simustScore || 0;
+                                var avgs = computePlayerAeAcc(p);
                                 return React.createElement('tr', { key: p.id },
                                     React.createElement('td', null, p.name + ' ' + p.surname),
                                     React.createElement('td', null, p.playerId),
                                     React.createElement('td', null, p.club || '—'),
                                     React.createElement('td', null, p.age || '—'),
-                                    React.createElement('td', null, sessionsLen),
-                                    React.createElement('td', null, score.toFixed(1) + '%'),
+                                    React.createElement('td', null, avgs.ae > 0 ? avgs.ae.toFixed(1) + '%' : '—'),
+                                    React.createElement('td', null, avgs.acc > 0 ? avgs.acc.toFixed(0) + '%' : '—'),
                                     React.createElement('td', null,
                                         React.createElement('button', { onClick: function() { onEdit(
                                                     p); },
-                                            className: "text-yellow-400 hover:text-yellow-300 mr-2" },
+                                            className: "text-yellow-400 hover:text-yellow-300 me-2" },
                                             "Edit"),
                                         React.createElement('button', { onClick: function() {
-                                                if (window.confirm('Delete player ' + p.name +
-                                                    ' ' + p.surname + '?')) { onDelete(p.id); } },
+                                                onDelete(p.id, (p.name || '') + ' ' + (p.surname || '')); },
                                             className: "text-red-400 hover:text-red-300" },
                                             "Delete")
                                     )
@@ -1341,13 +1581,33 @@
             var editFormState = useState({});
             var editForm = editFormState[0];
             var setEditForm = editFormState[1];
+            var pendingDeleteState = useState(null);
+            var pendingDelete = pendingDeleteState[0];
+            var setPendingDelete = pendingDeleteState[1];
+            var deletePassState = useState('');
+            var deletePass = deletePassState[0];
+            var setDeletePass = deletePassState[1];
+            var deleteErrorState = useState('');
+            var deleteError = deleteErrorState[0];
+            var setDeleteError = deleteErrorState[1];
 
             var liveIntervalRef = useRef(null);
             var realtimeMonitorInterval = useRef(null);
             var sessionSavedRef = useRef(false);
             var autoStopTimeoutRef = useRef(null);
+            var realtimeRunningRef = useRef(false);
+            var activeTabRef = useRef(activeTab);
+            var resultsEpochRef = useRef(0);
 
             var REPORTS_BASE = "C:/Users/siama/Documents/simust_reports";
+
+            var clearResultsDisplay = function() {
+                resultsEpochRef.current += 1;
+                setReportData(null);
+                setAnalysisResults([]);
+                setCurrentDirectory(null);
+                setLastUpdateTime(null);
+            };
 
             // ----- LOGIN -----
             var handleLogin = function(uname, pwd) {
@@ -1408,6 +1668,8 @@
                                 age: p.age || '',
                                 image: p.image || null,
                                 simustScore: p.simustScore || 0,
+                                avgAe: p.avgAe != null ? p.avgAe : 0,
+                                avgAcc: p.avgAcc != null ? p.avgAcc : 0,
                                 sessions: p.sessions || [],
                                 progress: p.progress || { current_level: "L00-Foundation",
                                     unlocked_levels: ["L00-Foundation"], completed_levels: [] }
@@ -1453,6 +1715,8 @@
                                     age: p.age || '',
                                     image: p.image || null,
                                     simustScore: p.simustScore || 0,
+                                    avgAe: p.avgAe != null ? p.avgAe : 0,
+                                    avgAcc: p.avgAcc != null ? p.avgAcc : 0,
                                     sessions: p.sessions || [],
                                     progress: p.progress || { current_level: "L00-Foundation",
                                         unlocked_levels: ["L00-Foundation"], completed_levels: [] }
@@ -1512,6 +1776,9 @@
                 setShowSearchResults(true);
                 var exact = players.find(function(p) { return p.playerId.toLowerCase() === lower; });
                 if (exact) {
+                    if (selectedPlayerId === exact.id) {
+                        clearResultsDisplay();
+                    }
                     setSelectedPlayerId(exact.id);
                     setShowSearchResults(false);
                     setSearchQuery(exact.playerId);
@@ -1522,6 +1789,9 @@
             };
 
             var selectPlayerFromSearch = function(player) {
+                if (selectedPlayerId === player.id) {
+                    clearResultsDisplay();
+                }
                 setSelectedPlayerId(player.id);
                 setSearchQuery(player.playerId);
                 setShowSearchResults(false);
@@ -1542,6 +1812,7 @@
                 setCurrentLevel("");
                 setSelectedLevel("");
                 setSelectedSubdirectory("");
+                clearResultsDisplay();
                 showToast("Selection cleared", 'info');
             };
 
@@ -1567,6 +1838,8 @@
                     age: newPlayer.age || '',
                     image: newPlayer.image || null,
                     simustScore: 0,
+                    avgAe: 0,
+                    avgAcc: 0,
                     sessions: [],
                     progress: { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"],
                         completed_levels: [] },
@@ -1626,6 +1899,23 @@
                     setSearchQuery("");
                     setPlayerSessions([]); }
                 showToast("Player deleted", 'info');
+            };
+            var requestDelete = function(playerId, playerName) {
+                setPendingDelete({ id: playerId, name: playerName || '' });
+                setDeletePass('');
+                setDeleteError('');
+            };
+            var confirmDeleteWithPassword = function() {
+                if (!pendingDelete) return;
+                if (deletePass !== 'sina27') {
+                    setDeleteError(t('deleteWrongPassword'));
+                    return;
+                }
+                deletePlayer(pendingDelete.id);
+                setPendingDelete(null);
+                setDeletePass('');
+                setDeleteError('');
+                closeEditModal();
             };
 
             var loadPlayerSessionsFromBackend = function(playerId) {
@@ -1757,10 +2047,18 @@
             };
 
             // ----- FETCH RESULTS -----
-            var fetchRealtimeResults = function(showLoading) {
+            var fetchRealtimeResults = function(showLoading, forceApply) {
                 if (showLoading === undefined) showLoading = true;
+                if (!forceApply && !showLoading && activeTabRef.current === 'results') {
+                    return Promise.resolve(false);
+                }
+                var epoch = resultsEpochRef.current;
                 if (showLoading) setLoadingAnalysis(true);
                 return axios.get("/realtime-results").then(function(res) {
+                    if (epoch !== resultsEpochRef.current) {
+                        if (showLoading) setLoadingAnalysis(false);
+                        return false;
+                    }
                     if (res.data && res.data.status === "success" && res.data.report) {
                         var report = res.data.report;
                         var actions = report.actions || [];
@@ -2004,6 +2302,7 @@
                 return saveSessionToPlayerFolder(
                     player.id, player.name, player.surname, player.playerId, sessionData
                 ).then(function() {
+                    fetchRealtimeResults(false, true);
                     return loadPlayers().then(function() {
                         var updatedPlayer = getSelectedPlayer();
                         if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
@@ -2045,6 +2344,7 @@
                 }
 
                 setError("");
+                realtimeRunningRef.current = true;
                 setRealtimeRunning(true);
                 setVisualizationEnabled(false);
                 setActiveTab("main");
@@ -2070,97 +2370,93 @@
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
                     if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
 
-                    liveIntervalRef.current = setInterval(function() { fetchRealtimeResults(false); },
-                    800);
+                    liveIntervalRef.current = setInterval(function() {
+                        if (activeTabRef.current === 'results') return;
+                        fetchRealtimeResults(false);
+                    }, 800);
 
                     autoStopTimeoutRef.current = setTimeout(function() {
-                        if (realtimeRunning && !sessionSavedRef.current) {
-                            showToast("Auto‑stopping after 120s (safety timeout)", 'info');
+                        if (realtimeRunningRef.current && !sessionSavedRef.current) {
+                            showToast("Auto‑stopping after safety timeout", 'info');
                             stopPlayback();
                         }
-                    }, 120000);
+                    }, 45 * 60 * 1000);
+
+                    var sawActivePlayback = false;
+                    var finishFromStatus = function() {
+                        if (!realtimeRunningRef.current && sessionSavedRef.current) return;
+                        realtimeRunningRef.current = false;
+                        setRealtimeRunning(false);
+                        if (liveIntervalRef.current) {
+                            clearInterval(liveIntervalRef.current);
+                            liveIntervalRef.current = null;
+                        }
+                        if (autoStopTimeoutRef.current) {
+                            clearTimeout(autoStopTimeoutRef.current);
+                            autoStopTimeoutRef.current = null;
+                        }
+                        if (realtimeMonitorInterval.current) {
+                            clearTimeout(realtimeMonitorInterval.current);
+                            realtimeMonitorInterval.current = null;
+                        }
+                        if (!sessionSavedRef.current) {
+                            sessionSavedRef.current = true;
+                            showToast("Playback finished, saving session…", 'info');
+                            handlePlaybackComplete().then(function() {
+                                showToast("Session saved successfully!", 'success');
+                            }).catch(function() {});
+                        }
+                    };
 
                     var checkStatus = function() {
-                        if (sessionSavedRef.current) return;
+                        if (!realtimeRunningRef.current || sessionSavedRef.current) return;
                         axios.get("/playback-status").then(function(statusRes) {
-                            if (!statusRes.data || !statusRes.data.state) {
-                                sessionSavedRef.current = true;
-                                setRealtimeRunning(false);
-                                if (liveIntervalRef.current) { clearInterval(
-                                        liveIntervalRef.current);
-                                    liveIntervalRef.current = null; }
-                                if (autoStopTimeoutRef.current) { clearTimeout(
-                                        autoStopTimeoutRef.current);
-                                    autoStopTimeoutRef.current = null; }
-                                if (reportData && reportData.actions && reportData.actions
-                                    .length) {
-                                    showToast("Playback finished, saving session…", 'info');
-                                    handlePlaybackComplete().then(function() {
-                                        showToast("Session saved successfully!",
-                                            'success');
-                                    });
-                                }
+                            if (!realtimeRunningRef.current || sessionSavedRef.current) return;
+                            var state = statusRes.data && statusRes.data.state ? statusRes.data.state : '';
+                            if (state === "playing" || state === "playing_final" || state === "loading") {
+                                sawActivePlayback = true;
+                            }
+                            if (state === "completed" || state === "closed") {
+                                finishFromStatus();
                                 return;
                             }
-                            var state = statusRes.data.state;
-                            if (state === "completed" || state === "closed") {
-                                sessionSavedRef.current = true;
+                            if (state === "error") {
+                                realtimeRunningRef.current = false;
                                 setRealtimeRunning(false);
-                                if (liveIntervalRef.current) { clearInterval(
-                                        liveIntervalRef.current);
-                                    liveIntervalRef.current = null; }
-                                if (autoStopTimeoutRef.current) { clearTimeout(
-                                        autoStopTimeoutRef.current);
-                                    autoStopTimeoutRef.current = null; }
-                                showToast("Playback finished, saving session…", 'info');
-                                handlePlaybackComplete().then(function() {
-                                    showToast("Session saved successfully!", 'success');
-                                });
-                                return;
-                            } else if (state === "error") {
                                 sessionSavedRef.current = true;
-                                setRealtimeRunning(false);
-                                if (liveIntervalRef.current) { clearInterval(
-                                        liveIntervalRef.current);
-                                    liveIntervalRef.current = null; }
-                                if (autoStopTimeoutRef.current) { clearTimeout(
-                                        autoStopTimeoutRef.current);
-                                    autoStopTimeoutRef.current = null; }
+                                if (liveIntervalRef.current) {
+                                    clearInterval(liveIntervalRef.current);
+                                    liveIntervalRef.current = null;
+                                }
+                                if (autoStopTimeoutRef.current) {
+                                    clearTimeout(autoStopTimeoutRef.current);
+                                    autoStopTimeoutRef.current = null;
+                                }
                                 setError("Playback error occurred");
                                 return;
                             }
-                            if (realtimeRunning && !sessionSavedRef.current) {
-                                realtimeMonitorInterval.current = setTimeout(checkStatus,
-                                2000);
+                            if (state === "idle" && sawActivePlayback) {
+                                finishFromStatus();
+                                return;
                             }
+                            realtimeMonitorInterval.current = setTimeout(checkStatus, 1500);
                         }).catch(function(e) {
                             console.warn("Playback status check failed:", e);
-                            sessionSavedRef.current = true;
-                            setRealtimeRunning(false);
-                            if (liveIntervalRef.current) { clearInterval(liveIntervalRef
-                                    .current);
-                                liveIntervalRef.current = null; }
-                            if (autoStopTimeoutRef.current) { clearTimeout(
-                                    autoStopTimeoutRef.current);
-                                autoStopTimeoutRef.current = null; }
-                            if (reportData && reportData.actions && reportData.actions
-                                .length) {
-                                showToast("Playback finished, saving session…", 'info');
-                                handlePlaybackComplete().then(function() {
-                                    showToast("Session saved successfully!", 'success');
-                                });
+                            if (realtimeRunningRef.current && !sessionSavedRef.current) {
+                                realtimeMonitorInterval.current = setTimeout(checkStatus, 2000);
                             }
                         });
                     };
                     realtimeMonitorInterval.current = setTimeout(checkStatus, 2000);
                 }).catch(function(e) {
                     setError("Failed to start: " + (e.response ? e.response.data.detail : e.message));
+                    realtimeRunningRef.current = false;
                     setRealtimeRunning(false);
                 });
             };
 
             var stopPlayback = function() {
-                if (realtimeRunning && !sessionSavedRef.current && reportData && reportData.actions && reportData
+                if (realtimeRunningRef.current && !sessionSavedRef.current && reportData && reportData.actions && reportData
                     .actions.length) {
                     showToast("Saving session before stopping…", 'info');
                     handlePlaybackComplete().then(function() {
@@ -2168,9 +2464,10 @@
                         showToast("Session saved", 'success');
                     });
                 }
-                if (realtimeRunning) {
+                if (realtimeRunningRef.current || realtimeRunning) {
                     axios.post("/stop-realtime").catch(function(e) { console.error(e); });
                 }
+                realtimeRunningRef.current = false;
                 setRealtimeRunning(false);
                 if (realtimeMonitorInterval.current) { clearTimeout(realtimeMonitorInterval.current);
                     realtimeMonitorInterval.current = null; }
@@ -2217,26 +2514,22 @@
             };
 
             var forceRefreshReport = function() {
-                if (currentDirectory) {
-                    showToast("Refreshing report…", 'info');
-                    fetchRealtimeResults(true);
-                } else {
-                    showToast("No directory loaded", 'error');
-                }
+                showToast("Refreshing report…", 'info');
+                fetchRealtimeResults(true, true);
             };
 
             // ----- EFFECTS -----
             useEffect(function() {
-                fetchRealtimeResults(false);
-                var interval = setInterval(function() { fetchRealtimeResults(false); }, 1500);
-                var live = setInterval(function() { if (realtimeRunning) fetchRealtimeResults(false); }, 800);
-                return function() {
-                    clearInterval(interval);
-                    clearInterval(live);
-                    if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
-                    if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
-                };
-            }, [realtimeRunning]);
+                activeTabRef.current = activeTab;
+            }, [activeTab]);
+
+            useEffect(function() {
+                clearResultsDisplay();
+                if (liveIntervalRef.current) {
+                    clearInterval(liveIntervalRef.current);
+                    liveIntervalRef.current = null;
+                }
+            }, [selectedPlayerId]);
 
             useEffect(function() {
                 fetchLevels();
@@ -2254,6 +2547,7 @@
                 return function() {
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
                     if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+                    if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
                 };
             }, []);
 
@@ -2263,12 +2557,6 @@
                     updateProgressForPlayer(player);
                 }
             }, [selectedPlayerId, players, allLevels]);
-
-            useEffect(function() {
-                if (activeTab === 'results' && loggedIn && role === 'admin') {
-                    fetchRealtimeResults(true);
-                }
-            }, [activeTab, loggedIn, role]);
 
             // Reset subdirectory when level changes
             useEffect(function() {
@@ -2329,7 +2617,7 @@
                         )
                     ),
                     React.createElement('div', { className: "flex items-center gap-4" },
-                        React.createElement(LanguageSwitcher, { lang: lang, onLangChange: changeLang }),
+                        React.createElement(LanguageSwitcher, { lang: lang, onLangChange: changeLang, t: t }),
                         React.createElement('span', { className: "live-dot" + (realtimeRunning ?
                                 ' active' : ' inactive') }),
                         React.createElement('span', { className: "text-xs text-gray-400" },
@@ -2341,7 +2629,7 @@
                 ),
 
                 // TABS
-                React.createElement('div', { className: "flex gap-1 px-6 border-b border-[#ffc10720] overflow-x-auto" },
+                React.createElement('div', { className: "simust-tabs" },
                     React.createElement('button', {
                         onClick: function() { setActiveTab('main'); },
                         className: "tab-button" + (activeTab === 'main' ? ' active' : '')
@@ -2361,12 +2649,12 @@
                 ),
 
                 // CONTENT
-                React.createElement('div', { className: "p-6" },
+                React.createElement('div', { className: "simust-body" },
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
                         players: players,
                         onEdit: openEditModal,
-                        onDelete: deletePlayer,
+                        onDelete: requestDelete,
                         searchQuery: searchQuery,
                         setSearchQuery: setSearchQuery
                     }) :
@@ -2396,7 +2684,7 @@
                                 React.createElement(ResultsTable, { actions: analysisResults })
                             )
                         ) :
-                        React.createElement('div', { className: "text-center p-10 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                        React.createElement('div', { className: "text-center p-10 panel" },
                             React.createElement('p', { className: "text-gray-400" },
                                 "No results yet. Start a training session."
                             )
@@ -2476,7 +2764,7 @@
                                         }
                                         return false;
                                     })(),
-                                className: "btn-primary btn-realtime px-6 py-2 rounded-full font-bold" +
+                                className: "btn-primary btn-realtime px-6 py-2 font-bold" +
                                     (!selectedPlayerId || !selectedLevel || realtimeRunning ||
                                         unlockedLevels.indexOf(selectedLevel) === -1 ||
                                         (function() {
@@ -2498,12 +2786,12 @@
                             realtimeRunning ?
                             React.createElement('button', {
                                 onClick: stopPlayback,
-                                className: "btn-primary btn-danger px-6 py-2 rounded-full font-bold"
+                                className: "btn-primary btn-danger px-6 py-2 font-bold"
                             }, t("stop")) :
                             null,
                             React.createElement('button', {
                                 onClick: displayResultsOnScreen2,
-                                className: "btn-primary btn-results px-6 py-2 rounded-full font-bold",
+                                className: "btn-primary btn-results px-6 py-2 font-bold",
                                 disabled: !reportData || !reportData.actions || reportData.actions
                                     .length === 0
                             }, t("showResults"))
@@ -2529,7 +2817,7 @@
                         )
                     )
                 ),
-                React.createElement('div', { className: "text-center text-[10px] text-gray-600 border-t border-[#ffc10720] py-4" },
+                React.createElement('div', { className: "simust-footer" },
                     t("allRights") + "  •  " + username
                 ),
                 toastMessage ? React.createElement('div', { className: "toast" }, toastMessage.message) : null,
@@ -2590,14 +2878,38 @@
                             React.createElement('button', { onClick: closeEditModal, className: "cancel-btn" },
                                 "Cancel"),
                             React.createElement('button', { onClick: function() {
-                                    if (window.confirm("Delete " + editForm.name + " " + editForm
-                                        .surname + "?")) {
-                                        deletePlayer(editForm.id);
-                                        closeEditModal();
-                                    }
+                                    requestDelete(editForm.id, (editForm.name || '') + ' ' + (editForm.surname || ''));
                                 }, className: "delete-btn" }, "Delete"),
                             React.createElement('button', { onClick: saveEdit, className: "save-btn" },
                                 "Save")
+                        )
+                    )
+                ) :
+                null,
+                pendingDelete ?
+                React.createElement('div', { className: "modal-overlay", style: { zIndex: 3100 } },
+                    React.createElement('div', { className: "modal-box" },
+                        React.createElement('h2', null, t('confirmDelete')),
+                        React.createElement('p', { style: { color: '#8fa0b6', fontSize: '14px', marginBottom: '16px' } },
+                            t('deleteNeedPassword') + (pendingDelete.name ? ' (' + pendingDelete.name.trim() + ')' : '')
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, t('password')),
+                            React.createElement('input', {
+                                type: 'password',
+                                value: deletePass,
+                                placeholder: t('deletePasswordPlaceholder'),
+                                onChange: function(e) { setDeletePass(e.target.value); setDeleteError(''); },
+                                onKeyDown: function(e) { if (e.key === 'Enter') confirmDeleteWithPassword(); }
+                            })
+                        ),
+                        deleteError ? React.createElement('div', { className: 'login-error', style: { marginTop: 0, marginBottom: '8px' } }, deleteError) : null,
+                        React.createElement('div', { className: "btn-row" },
+                            React.createElement('button', {
+                                className: "cancel-btn",
+                                onClick: function() { setPendingDelete(null); setDeletePass(''); setDeleteError(''); }
+                            }, t('reservationCancel')),
+                            React.createElement('button', { className: "delete-btn", onClick: confirmDeleteWithPassword }, t('confirmDelete'))
                         )
                     )
                 ) :

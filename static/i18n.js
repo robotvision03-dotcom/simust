@@ -1,6 +1,14 @@
 (function (global) {
     var LANG_KEY = "simust_lang";
-    var SUPPORTED = ["en", "de", "es", "it"];
+    var SUPPORTED = ["en", "de", "es", "it", "ar", "nl"];
+    var LANG_OPTIONS = [
+        { id: "en", nameKey: "langEn", fallback: "English" },
+        { id: "de", nameKey: "langDe", fallback: "German" },
+        { id: "es", nameKey: "langEs", fallback: "Spanish" },
+        { id: "it", nameKey: "langIt", fallback: "Italian" },
+        { id: "ar", nameKey: "langAr", fallback: "Arabic" },
+        { id: "nl", nameKey: "langNl", fallback: "Dutch" }
+    ];
 
     var COUNTRY_CODES = [
         { code: "+49", label: "Germany (+49)" },
@@ -48,6 +56,9 @@
             langDe: "German",
             langEs: "Spanish",
             langIt: "Italian",
+            langAr: "Arabic",
+            langNl: "Dutch",
+            language: "Language",
             publicWebsite: "Public website ↗",
             securePortal: "SECURE PORTAL",
             roleBasedAccess: "Role-based access to development data",
@@ -119,13 +130,61 @@
             unlock: "Unlock",
             searchPlaceholder: "Search by SIMUST ID or Name...",
             selected: "SELECTED:",
-            invalidLogin: "Invalid username or password"
+            invalidLogin: "Invalid username or password",
+            reservationNav: "Calendar",
+            reservationKicker: "TRAINING PLACE",
+            reservationTitle: "Reservation / Calendar",
+            reservationIntro: "Shared calendar for the training place. Booked intervals are blocked for everyone else. Slots are 30 minutes to 3 hours, 07:00–22:00.",
+            reservationHours: "Operating hours 07:00–22:00 · 30 min grid",
+            reservationPrev: "← Week",
+            reservationToday: "Today",
+            reservationNext: "Week →",
+            reservationFree: "Free",
+            reservationBooked: "Booked",
+            reservationYours: "Your reservation",
+            reservationBookTitle: "Reserve a slot",
+            reservationBookSub: "Pick a free time on the grid or set date, start and duration. Overlapping times cannot be booked.",
+            reservationDate: "Date",
+            reservationStart: "Start",
+            reservationDuration: "Duration",
+            reservationConfirm: "Confirm reservation",
+            reservationYourBookings: "Your upcoming bookings",
+            reservationMinutes: "min",
+            reservationHour: "hour",
+            reservationHoursShort: "hours",
+            reservationEnds: "Ends at",
+            reservationUnavailable: "This start time has no free duration.",
+            reservationNoneYours: "No upcoming reservations.",
+            reservationCancel: "Cancel",
+            reservationSuccess: "Reservation confirmed.",
+            reservationFailed: "Reservation failed.",
+            reservationConflict: "That time overlaps an existing reservation.",
+            reservationNeedLogin: "Sign in to reserve a slot.",
+            reservationCancelFailed: "Could not cancel reservation.",
+            reservationCancelled: "Reservation cancelled.",
+            todaySchedule: "Today's schedule",
+            todayScheduleSub: "Training place · who is booked today",
+            noReservationsToday: "No reservations today",
+            reservationCol: "Reservation",
+            noReservation: "None",
+            payOnline: "Online payment",
+            payNow: "Pay",
+            paymentSub: "Complete online payment to confirm this reservation. This step is a simulation.",
+            paymentApproved: "Payment approved (simulation).",
+            paymentFailedContact: "Payment could not be completed. Please contact administration.",
+            deleteNeedPassword: "Enter the admin password to delete this player.",
+            deleteWrongPassword: "Incorrect password. Player was not deleted.",
+            deletePasswordPlaceholder: "Admin password",
+            confirmDelete: "Confirm delete"
         },
         de: {
             langEn: "Englisch",
             langDe: "Deutsch",
             langEs: "Spanisch",
             langIt: "Italienisch",
+            langAr: "Arabisch",
+            langNl: "Niederländisch",
+            language: "Sprache",
             publicWebsite: "Öffentliche Website ↗",
             securePortal: "SICHERES PORTAL",
             roleBasedAccess: "Rollenbasierter Zugriff auf Entwicklungsdaten",
@@ -197,13 +256,61 @@
             unlock: "Freischalten",
             searchPlaceholder: "Suche nach SIMUST-ID oder Name...",
             selected: "AUSGEWÄHLT:",
-            invalidLogin: "Ungültiger Benutzername oder Passwort"
+            invalidLogin: "Ungültiger Benutzername oder Passwort",
+            reservationNav: "Kalender",
+            reservationKicker: "TRAININGSORT",
+            reservationTitle: "Reservierung / Kalender",
+            reservationIntro: "Gemeinsamer Kalender des Trainingsorts. Gebuchte Zeiten sind für alle anderen gesperrt. Slots von 30 Minuten bis 3 Stunden, 07:00–22:00.",
+            reservationHours: "Öffnungszeiten 07:00–22:00 · 30-Minuten-Raster",
+            reservationPrev: "← Woche",
+            reservationToday: "Heute",
+            reservationNext: "Woche →",
+            reservationFree: "Frei",
+            reservationBooked: "Gebucht",
+            reservationYours: "Ihre Reservierung",
+            reservationBookTitle: "Zeit reservieren",
+            reservationBookSub: "Wählen Sie eine freie Zeit im Raster oder Datum, Start und Dauer. Überlappungen sind nicht möglich.",
+            reservationDate: "Datum",
+            reservationStart: "Start",
+            reservationDuration: "Dauer",
+            reservationConfirm: "Reservierung bestätigen",
+            reservationYourBookings: "Ihre kommenden Buchungen",
+            reservationMinutes: "Min.",
+            reservationHour: "Stunde",
+            reservationHoursShort: "Stunden",
+            reservationEnds: "Endet um",
+            reservationUnavailable: "Für diese Startzeit ist keine freie Dauer verfügbar.",
+            reservationNoneYours: "Keine kommenden Reservierungen.",
+            reservationCancel: "Stornieren",
+            reservationSuccess: "Reservierung bestätigt.",
+            reservationFailed: "Reservierung fehlgeschlagen.",
+            reservationConflict: "Diese Zeit überschneidet sich mit einer bestehenden Reservierung.",
+            reservationNeedLogin: "Melden Sie sich an, um zu reservieren.",
+            reservationCancelFailed: "Reservierung konnte nicht storniert werden.",
+            reservationCancelled: "Reservierung storniert.",
+            todaySchedule: "Heutiger Zeitplan",
+            todayScheduleSub: "Trainingsort · wer heute gebucht hat",
+            noReservationsToday: "Heute keine Reservierungen",
+            reservationCol: "Reservierung",
+            noReservation: "Keine",
+            payOnline: "Online-Zahlung",
+            payNow: "Bezahlen",
+            paymentSub: "Schließen Sie die Online-Zahlung ab, um die Reservierung zu bestätigen. Dieser Schritt ist eine Simulation.",
+            paymentApproved: "Zahlung genehmigt (Simulation).",
+            paymentFailedContact: "Zahlung nicht möglich. Bitte kontaktieren Sie die Verwaltung.",
+            deleteNeedPassword: "Geben Sie das Admin-Passwort ein, um diesen Spieler zu löschen.",
+            deleteWrongPassword: "Falsches Passwort. Der Spieler wurde nicht gelöscht.",
+            deletePasswordPlaceholder: "Admin-Passwort",
+            confirmDelete: "Löschen bestätigen"
         },
         es: {
             langEn: "Inglés",
             langDe: "Alemán",
             langEs: "Español",
             langIt: "Italiano",
+            langAr: "Árabe",
+            langNl: "Neerlandés",
+            language: "Idioma",
             publicWebsite: "Sitio público ↗",
             securePortal: "PORTAL SEGURO",
             roleBasedAccess: "Acceso por rol a los datos de desarrollo",
@@ -275,13 +382,61 @@
             unlock: "Desbloquear",
             searchPlaceholder: "Buscar por ID SIMUST o nombre...",
             selected: "SELECCIONADO:",
-            invalidLogin: "Usuario o contraseña no válidos"
+            invalidLogin: "Usuario o contraseña no válidos",
+            reservationNav: "Calendario",
+            reservationKicker: "LUGAR DE ENTRENAMIENTO",
+            reservationTitle: "Reserva / Calendario",
+            reservationIntro: "Calendario compartido del lugar de entrenamiento. Los intervalos reservados quedan bloqueados para los demás. Franjas de 30 minutos a 3 horas, 07:00–22:00.",
+            reservationHours: "Horario 07:00–22:00 · rejilla de 30 min",
+            reservationPrev: "← Semana",
+            reservationToday: "Hoy",
+            reservationNext: "Semana →",
+            reservationFree: "Libre",
+            reservationBooked: "Reservado",
+            reservationYours: "Su reserva",
+            reservationBookTitle: "Reservar una franja",
+            reservationBookSub: "Elija una hora libre en la rejilla o fecha, inicio y duración. No se permiten solapamientos.",
+            reservationDate: "Fecha",
+            reservationStart: "Inicio",
+            reservationDuration: "Duración",
+            reservationConfirm: "Confirmar reserva",
+            reservationYourBookings: "Sus próximas reservas",
+            reservationMinutes: "min",
+            reservationHour: "hora",
+            reservationHoursShort: "horas",
+            reservationEnds: "Termina a las",
+            reservationUnavailable: "Esta hora de inicio no tiene duración libre.",
+            reservationNoneYours: "No hay reservas próximas.",
+            reservationCancel: "Cancelar",
+            reservationSuccess: "Reserva confirmada.",
+            reservationFailed: "La reserva ha fallado.",
+            reservationConflict: "Esa hora se solapa con una reserva existente.",
+            reservationNeedLogin: "Inicie sesión para reservar.",
+            reservationCancelFailed: "No se pudo cancelar la reserva.",
+            reservationCancelled: "Reserva cancelada.",
+            todaySchedule: "Horario de hoy",
+            todayScheduleSub: "Lugar de entrenamiento · quién está reservado hoy",
+            noReservationsToday: "No hay reservas hoy",
+            reservationCol: "Reserva",
+            noReservation: "Ninguna",
+            payOnline: "Pago en línea",
+            payNow: "Pagar",
+            paymentSub: "Complete el pago en línea para confirmar esta reserva. Este paso es una simulación.",
+            paymentApproved: "Pago aprobado (simulación).",
+            paymentFailedContact: "No se pudo completar el pago. Contacte con administración.",
+            deleteNeedPassword: "Introduzca la contraseña de administrador para eliminar este jugador.",
+            deleteWrongPassword: "Contraseña incorrecta. El jugador no se ha eliminado.",
+            deletePasswordPlaceholder: "Contraseña de administrador",
+            confirmDelete: "Confirmar eliminación"
         },
         it: {
             langEn: "Inglese",
             langDe: "Tedesco",
             langEs: "Spagnolo",
             langIt: "Italiano",
+            langAr: "Arabo",
+            langNl: "Olandese",
+            language: "Lingua",
             publicWebsite: "Sito pubblico ↗",
             securePortal: "PORTALE SICURO",
             roleBasedAccess: "Accesso in base al ruolo ai dati di sviluppo",
@@ -353,7 +508,304 @@
             unlock: "Sblocca",
             searchPlaceholder: "Cerca per ID SIMUST o nome...",
             selected: "SELEZIONATO:",
-            invalidLogin: "Nome utente o password non validi"
+            invalidLogin: "Nome utente o password non validi",
+            reservationNav: "Calendario",
+            reservationKicker: "LUOGO DI ALLENAMENTO",
+            reservationTitle: "Prenotazione / Calendario",
+            reservationIntro: "Calendario condiviso del luogo di allenamento. Gli intervalli prenotati sono bloccati per gli altri. Slot da 30 minuti a 3 ore, 07:00–22:00.",
+            reservationHours: "Orario 07:00–22:00 · griglia da 30 min",
+            reservationPrev: "← Settimana",
+            reservationToday: "Oggi",
+            reservationNext: "Settimana →",
+            reservationFree: "Libero",
+            reservationBooked: "Prenotato",
+            reservationYours: "La tua prenotazione",
+            reservationBookTitle: "Prenota uno slot",
+            reservationBookSub: "Scegli un orario libero nella griglia oppure data, inizio e durata. Le sovrapposizioni non sono ammesse.",
+            reservationDate: "Data",
+            reservationStart: "Inizio",
+            reservationDuration: "Durata",
+            reservationConfirm: "Conferma prenotazione",
+            reservationYourBookings: "Le tue prossime prenotazioni",
+            reservationMinutes: "min",
+            reservationHour: "ora",
+            reservationHoursShort: "ore",
+            reservationEnds: "Termina alle",
+            reservationUnavailable: "Questo orario di inizio non ha una durata libera.",
+            reservationNoneYours: "Nessuna prenotazione in arrivo.",
+            reservationCancel: "Annulla",
+            reservationSuccess: "Prenotazione confermata.",
+            reservationFailed: "Prenotazione non riuscita.",
+            reservationConflict: "Questo orario si sovrappone a una prenotazione esistente.",
+            reservationNeedLogin: "Accedi per prenotare uno slot.",
+            reservationCancelFailed: "Impossibile annullare la prenotazione.",
+            reservationCancelled: "Prenotazione annullata.",
+            todaySchedule: "Programma di oggi",
+            todayScheduleSub: "Luogo di allenamento · chi è prenotato oggi",
+            noReservationsToday: "Nessuna prenotazione oggi",
+            reservationCol: "Prenotazione",
+            noReservation: "Nessuna",
+            payOnline: "Pagamento online",
+            payNow: "Paga",
+            paymentSub: "Completa il pagamento online per confermare la prenotazione. Questo passaggio è una simulazione.",
+            paymentApproved: "Pagamento approvato (simulazione).",
+            paymentFailedContact: "Impossibile completare il pagamento. Contatta l'amministrazione.",
+            deleteNeedPassword: "Inserisci la password admin per eliminare questo giocatore.",
+            deleteWrongPassword: "Password errata. Il giocatore non è stato eliminato.",
+            deletePasswordPlaceholder: "Password admin",
+            confirmDelete: "Conferma eliminazione"
+        },
+        ar: {
+            langEn: "الإنجليزية",
+            langDe: "الألمانية",
+            langEs: "الإسبانية",
+            langIt: "الإيطالية",
+            langAr: "العربية",
+            langNl: "الهولندية",
+            language: "اللغة",
+            publicWebsite: "الموقع العام ↗",
+            securePortal: "بوابة آمنة",
+            roleBasedAccess: "وصول حسب الدور إلى بيانات التطوير",
+            kicker: "بيئة مستخدم خاصة",
+            intro: "يربط My SIMUST اللاعب وولي الأمر والمدرب والأكاديمية بالمعلومات المجمّعة داخل تطبيق SIMUST.",
+            signIn: "تسجيل الدخول",
+            signInSub: "أدخل بياناتك للوصول إلى لوحة التحكم.",
+            signInToAccount: "سجّل الدخول إلى حسابك",
+            username: "اسم المستخدم",
+            password: "كلمة المرور",
+            usernamePlaceholder: "مثال player0142",
+            signInBtn: "دخول",
+            noAccount: "ليس لديك حساب؟ سجّل ←",
+            createAccount: "إنشاء حساب",
+            registerSub: "سجّل للوصول إلى لوحة التحكم حسب دورك.",
+            firstName: "الاسم *",
+            lastName: "اسم العائلة *",
+            age: "العمر",
+            gender: "الجنس",
+            male: "ذكر",
+            female: "أنثى",
+            other: "آخر",
+            club: "النادي",
+            team: "اسم الفريق",
+            personType: "نوع الشخص *",
+            player: "لاعب",
+            coach: "مدرب",
+            academyManager: "مدير الأكاديمية",
+            email: "البريد الإلكتروني *",
+            emailPlaceholder: "مثال name@email.com",
+            phone: "رقم الهاتف *",
+            phonePlaceholder: "الهاتف بدون رمز الدولة",
+            countryCode: "رمز الدولة *",
+            profileImage: "صورة الملف",
+            imageLoaded: "تم تحميل الصورة",
+            registerBtn: "تسجيل",
+            backToSignIn: "→ العودة لتسجيل الدخول",
+            fillRequired: "يرجى ملء جميع الحقول المطلوبة (*).",
+            passwordMin: "يجب أن تتكون كلمة المرور من 4 أحرف على الأقل.",
+            invalidEmail: "يرجى إدخال بريد إلكتروني صالح.",
+            invalidPhone: "يرجى إدخال رقم هاتف مع رمز الدولة.",
+            registering: "جاري التسجيل…",
+            registerSuccess: "تم التسجيل بنجاح. يرجى تسجيل الدخول.",
+            accountCreated: "تم إنشاء الحساب. يرجى تسجيل الدخول.",
+            registerFailed: "فشل التسجيل.",
+            networkError: "خطأ في الشبكة. هل الخادم يعمل؟",
+            enterCredentials: "يرجى إدخال اسم المستخدم وكلمة المرور.",
+            signingIn: "جاري تسجيل الدخول…",
+            invalidCredentials: "بيانات الدخول غير صحيحة.",
+            forPlayerParent: "للاعب وولي الأمر",
+            quote: "يجب أن تبدأ النتائج حوار تطوير أفضل — لا أن تختصر اللاعب في رقم.",
+            parentNote: "يجعل SIMUST تغيّرات السلوك الكروي مرئية. يربط المدرب هذه النتائج بالتدريب والسياق واللاعب.",
+            footer1: "نموذج أولي · متصل ببيانات SIMUST",
+            footer2: "خصوصية حسب الدور · حماية بيانات الشباب",
+            allRights: "© 2025 SIMUST. جميع الحقوق محفوظة.",
+            smartControl: "التحكم الذكي",
+            results: "النتائج",
+            managePlayers: "إدارة اللاعبين",
+            logout: "خروج",
+            live: "مباشر",
+            idle: "جاهز",
+            visualization: "العرض",
+            realtimePlay: "تشغيل فوري",
+            playing: "قيد التشغيل…",
+            stop: "إيقاف",
+            showResults: "عرض النتائج على الشاشة 2",
+            trainingLevel: "مستوى التدريب",
+            selectLevel: "اختر المستوى",
+            unlock: "فتح",
+            searchPlaceholder: "البحث بمعرّف SIMUST أو الاسم...",
+            selected: "المحدد:",
+            invalidLogin: "اسم المستخدم أو كلمة المرور غير صحيحة",
+            reservationNav: "التقويم",
+            reservationKicker: "مكان التدريب",
+            reservationTitle: "الحجز / التقويم",
+            reservationIntro: "تقويم مشترك لمكان التدريب. الأوقات المحجوزة محظورة على الآخرين. فترات من 30 دقيقة إلى 3 ساعات، 07:00–22:00.",
+            reservationHours: "ساعات العمل 07:00–22:00 · شبكة 30 دقيقة",
+            reservationPrev: "أسبوع →",
+            reservationToday: "اليوم",
+            reservationNext: "← أسبوع",
+            reservationFree: "متاح",
+            reservationBooked: "محجوز",
+            reservationYours: "حجزك",
+            reservationBookTitle: "احجز فترة",
+            reservationBookSub: "اختر وقتاً متاحاً من الشبكة أو حدد التاريخ والبداية والمدة. لا يُسمح بالتداخل.",
+            reservationDate: "التاريخ",
+            reservationStart: "البداية",
+            reservationDuration: "المدة",
+            reservationConfirm: "تأكيد الحجز",
+            reservationYourBookings: "حجوزاتك القادمة",
+            reservationMinutes: "د",
+            reservationHour: "ساعة",
+            reservationHoursShort: "ساعات",
+            reservationEnds: "ينتهي عند",
+            reservationUnavailable: "لا توجد مدة متاحة لهذا وقت البداية.",
+            reservationNoneYours: "لا توجد حجوزات قادمة.",
+            reservationCancel: "إلغاء",
+            reservationSuccess: "تم تأكيد الحجز.",
+            reservationFailed: "فشل الحجز.",
+            reservationConflict: "يتداخل هذا الوقت مع حجز موجود.",
+            reservationNeedLogin: "سجّل الدخول لحجز فترة.",
+            reservationCancelFailed: "تعذر إلغاء الحجز.",
+            reservationCancelled: "تم إلغاء الحجز.",
+            todaySchedule: "جدول اليوم",
+            todayScheduleSub: "مكان التدريب · من لديه حجز اليوم",
+            noReservationsToday: "لا حجوزات اليوم",
+            reservationCol: "الحجز",
+            noReservation: "لا يوجد",
+            payOnline: "دفع إلكتروني",
+            payNow: "ادفع",
+            paymentSub: "أكمل الدفع الإلكتروني لتأكيد هذا الحجز. هذه الخطوة محاكاة فقط.",
+            paymentApproved: "تمت الموافقة على الدفع (محاكاة).",
+            paymentFailedContact: "تعذر إتمام الدفع. يرجى التواصل مع الإدارة.",
+            deleteNeedPassword: "أدخل كلمة مرور المسؤول لحذف هذا اللاعب.",
+            deleteWrongPassword: "كلمة مرور غير صحيحة. لم يُحذف اللاعب.",
+            deletePasswordPlaceholder: "كلمة مرور المسؤول",
+            confirmDelete: "تأكيد الحذف"
+        },
+        nl: {
+            langEn: "Engels",
+            langDe: "Duits",
+            langEs: "Spaans",
+            langIt: "Italiaans",
+            langAr: "Arabisch",
+            langNl: "Nederlands",
+            language: "Taal",
+            publicWebsite: "Openbare website ↗",
+            securePortal: "BEVEILIGD PORTAAL",
+            roleBasedAccess: "Toegang tot ontwikkeldata op basis van rol",
+            kicker: "PRIVÉ GEBRUIKERSOMGEVING",
+            intro: "My SIMUST verbindt speler, ouder, coach en academie met de informatie die al in de SIMUST-applicatie is verzameld.",
+            signIn: "Aanmelden",
+            signInSub: "Voer je gegevens in om het dashboard te openen.",
+            signInToAccount: "Meld je aan bij je account",
+            username: "Gebruikersnaam",
+            password: "Wachtwoord",
+            usernamePlaceholder: "bijv. player0142",
+            signInBtn: "Aanmelden",
+            noAccount: "Nog geen account? Registreren →",
+            createAccount: "Account aanmaken",
+            registerSub: "Registreer voor toegang tot je dashboard op basis van rol.",
+            firstName: "Voornaam *",
+            lastName: "Achternaam *",
+            age: "Leeftijd",
+            gender: "Geslacht",
+            male: "Man",
+            female: "Vrouw",
+            other: "Anders",
+            club: "Club",
+            team: "Teamnaam",
+            personType: "Persoonstype *",
+            player: "Speler",
+            coach: "Coach",
+            academyManager: "Academiemanager",
+            email: "E-mail *",
+            emailPlaceholder: "bijv. naam@email.com",
+            phone: "Telefoonnummer *",
+            phonePlaceholder: "Nummer zonder landcode",
+            countryCode: "Landcode *",
+            profileImage: "Profielfoto",
+            imageLoaded: "Afbeelding geladen",
+            registerBtn: "Registreren",
+            backToSignIn: "← Terug naar aanmelden",
+            fillRequired: "Vul alle verplichte velden (*) in.",
+            passwordMin: "Wachtwoord moet minstens 4 tekens hebben.",
+            invalidEmail: "Voer een geldig e-mailadres in.",
+            invalidPhone: "Voer een telefoonnummer met landcode in.",
+            registering: "Bezig met registreren…",
+            registerSuccess: "Registratie gelukt. Meld je aan.",
+            accountCreated: "Account aangemaakt. Meld je aan.",
+            registerFailed: "Registratie mislukt.",
+            networkError: "Netwerkfout. Draait de server?",
+            enterCredentials: "Voer gebruikersnaam en wachtwoord in.",
+            signingIn: "Bezig met aanmelden…",
+            invalidCredentials: "Ongeldige inloggegevens.",
+            forPlayerParent: "VOOR SPELER EN OUDER",
+            quote: "Resultaten moeten een beter ontwikkelgesprek starten — niet een speler tot één score reduceren.",
+            parentNote: "SIMUST maakt veranderingen in voetbalgedrag zichtbaar. De coach verbindt die resultaten met training, context en de speler.",
+            footer1: "PROTOTYPE · VERBONDEN MET JE SIMUST-DATA",
+            footer2: "Privacy per rol · Jeugddata beschermd",
+            allRights: "© 2025 SIMUST. Alle rechten voorbehouden.",
+            smartControl: "SMART CONTROL",
+            results: "RESULTATEN",
+            managePlayers: "SPELERS BEHEREN",
+            logout: "Uitloggen",
+            live: "LIVE",
+            idle: "KLAAR",
+            visualization: "Visualisatie",
+            realtimePlay: "REALTIME AFSPELEN",
+            playing: "Afspelen…",
+            stop: "Stop",
+            showResults: "RESULTATEN OP SCHERM 2 TONEN",
+            trainingLevel: "Trainingsniveau",
+            selectLevel: "Kies niveau",
+            unlock: "Ontgrendelen",
+            searchPlaceholder: "Zoek op SIMUST-ID of naam...",
+            selected: "GESELECTEERD:",
+            invalidLogin: "Ongeldige gebruikersnaam of wachtwoord",
+            reservationNav: "Kalender",
+            reservationKicker: "TRAININGSPLEK",
+            reservationTitle: "Reservering / Kalender",
+            reservationIntro: "Gedeelde kalender van de trainingsplek. Geboekte tijden zijn geblokkeerd voor anderen. Slots van 30 minuten tot 3 uur, 07:00–22:00.",
+            reservationHours: "Openingstijden 07:00–22:00 · raster van 30 min",
+            reservationPrev: "← Week",
+            reservationToday: "Vandaag",
+            reservationNext: "Week →",
+            reservationFree: "Vrij",
+            reservationBooked: "Geboekt",
+            reservationYours: "Jouw reservering",
+            reservationBookTitle: "Slot reserveren",
+            reservationBookSub: "Kies een vrije tijd in het raster of datum, start en duur. Overlapping is niet mogelijk.",
+            reservationDate: "Datum",
+            reservationStart: "Start",
+            reservationDuration: "Duur",
+            reservationConfirm: "Reservering bevestigen",
+            reservationYourBookings: "Jouw komende boekingen",
+            reservationMinutes: "min",
+            reservationHour: "uur",
+            reservationHoursShort: "uur",
+            reservationEnds: "Eindigt om",
+            reservationUnavailable: "Deze starttijd heeft geen vrije duur.",
+            reservationNoneYours: "Geen komende reserveringen.",
+            reservationCancel: "Annuleren",
+            reservationSuccess: "Reservering bevestigd.",
+            reservationFailed: "Reservering mislukt.",
+            reservationConflict: "Die tijd overlapt een bestaande reservering.",
+            reservationNeedLogin: "Meld je aan om een slot te reserveren.",
+            reservationCancelFailed: "Reservering kon niet worden geannuleerd.",
+            reservationCancelled: "Reservering geannuleerd.",
+            todaySchedule: "Schema van vandaag",
+            todayScheduleSub: "Trainingsplek · wie er vandaag is geboekt",
+            noReservationsToday: "Geen reserveringen vandaag",
+            reservationCol: "Reservering",
+            noReservation: "Geen",
+            payOnline: "Online betaling",
+            payNow: "Betalen",
+            paymentSub: "Rond de online betaling af om deze reservering te bevestigen. Deze stap is een simulatie.",
+            paymentApproved: "Betaling goedgekeurd (simulatie).",
+            paymentFailedContact: "Betaling kon niet worden afgerond. Neem contact op met de administratie.",
+            deleteNeedPassword: "Voer het adminwachtwoord in om deze speler te verwijderen.",
+            deleteWrongPassword: "Onjuist wachtwoord. De speler is niet verwijderd.",
+            deletePasswordPlaceholder: "Adminwachtwoord",
+            confirmDelete: "Verwijderen bevestigen"
         }
     };
 
@@ -379,9 +831,25 @@
         return (I18N.en[key] || key);
     }
 
+    function applyDocumentDir(lang) {
+        if (!document.documentElement) return;
+        document.documentElement.lang = lang;
+        document.documentElement.setAttribute("dir", lang === "ar" ? "rtl" : "ltr");
+    }
+
+    function closeLangMenus(exceptRoot) {
+        var menus = document.querySelectorAll(".lang-dropdown");
+        for (var i = 0; i < menus.length; i++) {
+            if (exceptRoot && menus[i] === exceptRoot) continue;
+            menus[i].classList.remove("open");
+            var toggle = menus[i].querySelector(".lang-dropdown-toggle");
+            if (toggle) toggle.setAttribute("aria-expanded", "false");
+        }
+    }
+
     function applyI18n(lang) {
         var code = lang || getLang();
-        if (document.documentElement) document.documentElement.lang = code;
+        applyDocumentDir(code);
         var nodes = document.querySelectorAll("[data-i18n]");
         for (var i = 0; i < nodes.length; i++) {
             nodes[i].textContent = t(nodes[i].getAttribute("data-i18n"), code);
@@ -390,13 +858,18 @@
         for (var j = 0; j < ph.length; j++) {
             ph[j].placeholder = t(ph[j].getAttribute("data-i18n-placeholder"), code);
         }
-        var buttons = document.querySelectorAll(".lang-btn[data-lang]");
+        var buttons = document.querySelectorAll("[data-lang]");
         for (var k = 0; k < buttons.length; k++) {
             if (buttons[k].getAttribute("data-lang") === code) {
                 buttons[k].classList.add("active");
             } else {
                 buttons[k].classList.remove("active");
             }
+        }
+        var titles = document.querySelectorAll(".lang-dropdown-toggle");
+        for (var n = 0; n < titles.length; n++) {
+            titles[n].setAttribute("title", t("language", code));
+            titles[n].setAttribute("aria-label", t("language", code));
         }
         if (typeof global.dispatchEvent === "function") {
             try {
@@ -421,11 +894,46 @@
 
     function bindLangSwitcher(root) {
         var scope = root || document;
+        var dropdowns = scope.querySelectorAll(".lang-dropdown");
+        for (var d = 0; d < dropdowns.length; d++) {
+            (function (box) {
+                if (box.getAttribute("data-lang-bound") === "1") return;
+                box.setAttribute("data-lang-bound", "1");
+                var toggle = box.querySelector(".lang-dropdown-toggle");
+                if (toggle) {
+                    toggle.addEventListener("click", function (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var open = !box.classList.contains("open");
+                        closeLangMenus(open ? box : null);
+                        box.classList.toggle("open", open);
+                        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+                    });
+                }
+                var items = box.querySelectorAll("[data-lang]");
+                for (var i = 0; i < items.length; i++) {
+                    items[i].addEventListener("click", function (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setLang(this.getAttribute("data-lang"));
+                        closeLangMenus();
+                    });
+                }
+            })(dropdowns[d]);
+        }
         var buttons = scope.querySelectorAll(".lang-btn[data-lang]");
-        for (var i = 0; i < buttons.length; i++) {
-            buttons[i].addEventListener("click", function (e) {
+        for (var b = 0; b < buttons.length; b++) {
+            if (buttons[b].closest(".lang-dropdown")) continue;
+            buttons[b].addEventListener("click", function (e) {
                 e.preventDefault();
                 setLang(this.getAttribute("data-lang"));
+            });
+        }
+        if (!global.__simustLangDocBound) {
+            global.__simustLangDocBound = true;
+            document.addEventListener("click", function () { closeLangMenus(); });
+            document.addEventListener("keydown", function (e) {
+                if (e.key === "Escape") closeLangMenus();
             });
         }
         applyI18n(getLang());
@@ -433,10 +941,12 @@
 
     global.SIMUST_I18N = I18N;
     global.SIMUST_COUNTRY_CODES = COUNTRY_CODES;
+    global.SIMUST_LANG_OPTIONS = LANG_OPTIONS;
     global.simustGetLang = getLang;
     global.simustSetLang = setLang;
     global.simustT = t;
     global.simustApplyI18n = applyI18n;
     global.simustFillCountrySelect = fillCountrySelect;
     global.simustBindLangSwitcher = bindLangSwitcher;
+    applyDocumentDir(getLang());
 })(window);

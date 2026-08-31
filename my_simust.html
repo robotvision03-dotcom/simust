@@ -285,6 +285,7 @@
             --portal-panel: #0b192d;
             --red: #e74c3c;
             --green: #2ecc71;
+            --res-unavailable: #7dffa8;
         }
 
         * {
@@ -328,30 +329,63 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            margin-right: 24px;
+            margin-inline-end: 24px;
         }
-        .lang-switcher {
+        .lang-dropdown {
+            position: relative;
+        }
+        .lang-dropdown-toggle {
             display: flex;
-            gap: 2px;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
             background: #07111f;
             border: 1px solid var(--line);
             border-radius: 8px;
-            padding: 4px;
+            color: var(--gold);
+            cursor: pointer;
+            padding: 0;
         }
-        .lang-btn {
+        .lang-dropdown-toggle:hover,
+        .lang-dropdown.open .lang-dropdown-toggle {
+            border-color: var(--gold);
+            background: rgba(214, 179, 75, 0.12);
+        }
+        .lang-dropdown-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            inset-inline-end: 0;
+            min-width: 168px;
+            margin: 0;
+            padding: 6px 0;
+            list-style: none;
+            background: var(--portal-panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            z-index: 400;
+        }
+        .lang-dropdown.open .lang-dropdown-menu {
+            display: block;
+        }
+        .lang-dropdown-menu button {
+            display: block;
+            width: 100%;
+            text-align: start;
             background: transparent;
             border: none;
-            color: #8fa0b6;
-            font-size: .62rem;
-            font-weight: 800;
-            letter-spacing: .06em;
-            padding: 8px 10px;
-            border-radius: 6px;
+            color: #dce7f5;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 9px 16px;
             cursor: pointer;
         }
-        .lang-btn.active {
-            background: rgba(214, 179, 75, 0.2);
-            color: #ead48f;
+        .lang-dropdown-menu button:hover,
+        .lang-dropdown-menu button.active {
+            background: #276ce51a;
+            color: var(--gold);
         }
         .auth-container .phone-row {
             display: grid;
@@ -363,7 +397,7 @@
             margin-top: 16px;
         }
         .portal-login-header .portal-brand {
-            border-right: 1px solid var(--line);
+            border-inline-end: 1px solid var(--line);
             align-items: center;
             gap: 18px;
             height: 100%;
@@ -387,19 +421,19 @@
             display: none;
         }
         .portal-brand i {
-            border-left: 1px solid var(--line);
+            border-inline-start: 1px solid var(--line);
             color: #8fa0b6;
             letter-spacing: .15em;
             white-space: nowrap;
-            padding-left: 16px;
+            padding-inline-start: 16px;
             font-size: .56rem;
             font-style: normal;
             font-weight: 800;
         }
         .portal-prototype {
-            border-left: 2px solid var(--gold);
+            border-inline-start: 2px solid var(--gold);
             justify-self: start;
-            margin-left: 34px;
+            margin-inline-start: 34px;
             padding: 9px 12px;
         }
         .portal-prototype b,
@@ -419,7 +453,7 @@
         .portal-back {
             border: 1px solid var(--line);
             color: #b8c5d7;
-            margin-right: 0;
+            margin-inline-end: 0;
             padding: 12px 15px;
             font-size: .65rem;
             font-weight: 800;
@@ -652,7 +686,7 @@
 
         .portal-sidebar {
             z-index: 20;
-            border-right: 1px solid var(--line);
+            border-inline-end: 1px solid var(--line);
             background: #050e1a;
             flex-direction: column;
             width: 230px;
@@ -661,7 +695,7 @@
             position: fixed;
             top: 88px;
             bottom: 0;
-            left: 0;
+            inset-inline-start: 0;
             overflow-y: auto;
         }
         .portal-sidebar nav {
@@ -677,16 +711,19 @@
             font-weight: 800;
             display: grid;
             cursor: pointer;
-            border-left: 2px solid transparent;
+            border-inline-start: 2px solid transparent;
             transition: background 0.2s, color 0.2s;
-            border-radius: 0 4px 4px 0;
+            border-start-start-radius: 0;
+            border-end-start-radius: 0;
+            border-start-end-radius: 4px;
+            border-end-end-radius: 4px;
         }
         .portal-sidebar nav a small {
             font-size: .55rem;
             opacity: 0.7;
         }
         .portal-sidebar nav a.active {
-            border-left-color: var(--gold);
+            border-inline-start-color: var(--gold);
             color: #fff;
             background: #276ce51a;
         }
@@ -875,7 +912,7 @@
         }
         .player-results-grid article strong .trend-arrow {
             font-size: 0.95rem;
-            margin-left: 2px;
+            margin-inline-start: 2px;
             flex-shrink: 0;
         }
         .player-results-grid article strong .highlight {
@@ -1151,6 +1188,12 @@
             margin: 64px auto 0;
             display: grid;
         }
+        #coach-summary {
+            grid-template-columns: repeat(5, 1fr);
+        }
+        #manager-summary {
+            grid-template-columns: repeat(3, 1fr);
+        }
         .coach-summary article {
             flex-direction: column;
             min-height: 185px;
@@ -1158,7 +1201,7 @@
             display: flex;
         }
         .coach-summary article+article {
-            border-left: 1px solid var(--line);
+            border-inline-start: 1px solid var(--line);
         }
         .coach-summary small {
             color: #708198;
@@ -1185,18 +1228,30 @@
         .coach-player-row {
             border-bottom: 1px solid var(--line);
             color: #91a0b4;
-            grid-template-columns: 1fr 1.2fr 1.3fr .7fr 1fr;
+            grid-template-columns: 1fr 1.1fr .7fr .8fr .75fr 1.5fr;
             align-items: center;
-            min-width: 900px;
+            min-width: 1080px;
             min-height: 72px;
             font-size: .68rem;
             display: grid;
+        }
+        .coach-player-row .coach-res-slots {
+            color: var(--gold);
+            font-size: .62rem;
+            font-weight: 700;
+            line-height: 1.45;
+            white-space: normal;
+        }
+        .coach-player-row .coach-res-slots .none {
+            color: #5f7086;
+            font-style: italic;
+            font-weight: 600;
         }
         .coach-player-row>* {
             padding: 0 18px;
         }
         .coach-player-row>*+* {
-            border-left: 1px solid var(--line);
+            border-inline-start: 1px solid var(--line);
         }
         .coach-player-row strong {
             color: #edf2f8;
@@ -1240,7 +1295,7 @@
             padding: 0 18px;
         }
         .manager-team-row>*+* {
-            border-left: 1px solid var(--line);
+            border-inline-start: 1px solid var(--line);
         }
         .manager-team-row strong {
             color: #edf2f8;
@@ -1375,8 +1430,8 @@
             line-height: 1.45;
         }
         .coach-team-focus>div span+span {
-            border-left: 1px solid var(--line);
-            padding-left: 16px;
+            border-inline-start: 1px solid var(--line);
+            padding-inline-start: 16px;
         }
         .coach-team-focus>div b {
             color: var(--gold);
@@ -1400,6 +1455,371 @@
         }
         .dashboard-panel.active {
             display: block;
+        }
+
+        /* ---- training place reservation calendar ---- */
+        .res-cal {
+            margin-top: 48px;
+        }
+        .res-cal .portal-kicker {
+            color: var(--gold);
+            letter-spacing: .16em;
+            margin-bottom: 10px;
+            font-size: .6rem;
+            font-weight: 800;
+        }
+        .res-cal-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.95fr);
+            gap: 22px;
+            align-items: start;
+        }
+        .res-cal-board,
+        .res-cal-book {
+            background: var(--portal-panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .res-cal-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--line);
+            background: #050e1a;
+        }
+        .res-cal-toolbar h3 {
+            margin: 0;
+            font-size: 1.05rem;
+            letter-spacing: -0.03em;
+            font-weight: 800;
+        }
+        .res-cal-toolbar .res-cal-hours {
+            color: #8fa0b6;
+            font-size: .72rem;
+            font-weight: 700;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+        .res-cal-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .res-cal-nav button,
+        .res-cal-book button {
+            background: #07111f;
+            color: #dce7f5;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: .78rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .res-cal-nav button:hover,
+        .res-cal-book button:hover {
+            border-color: var(--gold);
+            color: var(--gold);
+        }
+        .res-week-strip {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 6px;
+            padding: 14px 14px 8px;
+        }
+        .res-day-chip {
+            background: #07111f;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 10px 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .res-day-chip:hover {
+            border-color: var(--gold);
+            background: #10243f;
+        }
+        .res-day-chip.active {
+            border-color: var(--gold);
+            background: rgba(214, 179, 75, 0.14);
+        }
+        .res-day-chip.today .res-day-num {
+            color: var(--gold);
+        }
+        .res-day-chip small {
+            display: block;
+            color: #8fa0b6;
+            font-size: .58rem;
+            font-weight: 800;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .res-day-chip .res-day-num {
+            display: block;
+            margin-top: 4px;
+            font-size: 1.15rem;
+            font-weight: 800;
+        }
+        .res-day-chip .res-day-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--gold);
+            margin-top: 6px;
+            opacity: 0;
+        }
+        .res-day-chip.has-booking .res-day-dot {
+            opacity: 1;
+        }
+        .res-grid-wrap {
+            max-height: 560px;
+            overflow: auto;
+            border-top: 1px solid var(--line);
+        }
+        .res-grid-wrap::-webkit-scrollbar {
+            width: 6px;
+        }
+        .res-grid-wrap::-webkit-scrollbar-thumb {
+            background: var(--gold);
+            border-radius: 4px;
+        }
+        .res-time-grid {
+            display: grid;
+            grid-template-columns: 64px 1fr;
+        }
+        .res-slot-time {
+            color: #8fa0b6;
+            font-size: .68rem;
+            font-weight: 700;
+            padding: 0 8px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: end;
+            border-bottom: 1px solid #ffffff0f;
+            background: #050e1a;
+        }
+        .res-slot {
+            min-height: 28px;
+            border-bottom: 1px solid #ffffff0f;
+            padding: 3px 8px;
+            font-size: .72rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .res-slot.free:hover {
+            background: rgba(214, 179, 75, 0.12);
+        }
+        .res-slot.booked {
+            background: rgba(39, 108, 229, 0.18);
+            color: #c5d8fb;
+            cursor: default;
+            border-inline-start: 3px solid #276ce5;
+        }
+        .res-slot.mine {
+            background: rgba(214, 179, 75, 0.18);
+            color: #ead48f;
+            border-inline-start: 3px solid var(--gold);
+            cursor: pointer;
+        }
+        .res-slot.past {
+            opacity: 0.42;
+            cursor: not-allowed;
+        }
+        .res-slot.selected {
+            outline: 1px solid var(--gold);
+            background: rgba(214, 179, 75, 0.22);
+        }
+        .res-slot-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .res-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            padding: 12px 16px 16px;
+            color: #8fa0b6;
+            font-size: .7rem;
+            font-weight: 700;
+        }
+        .res-legend span::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-inline-end: 6px;
+            vertical-align: -1px;
+        }
+        .res-legend .lg-free::before { background: #07111f; border: 1px solid var(--line); }
+        .res-legend .lg-booked::before { background: rgba(39, 108, 229, 0.7); }
+        .res-legend .lg-mine::before { background: var(--gold); }
+        .res-cal-book {
+            padding: 20px 20px 22px;
+        }
+        .res-cal-book h3 {
+            margin: 0 0 6px;
+            font-size: 1.05rem;
+            letter-spacing: -0.03em;
+        }
+        .res-cal-book .res-book-sub {
+            color: #8fa0b6;
+            font-size: .78rem;
+            line-height: 1.5;
+            margin-bottom: 18px;
+        }
+        .res-cal-book label {
+            display: block;
+            font-size: .68rem;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: #a9b4c5;
+            margin-bottom: 4px;
+        }
+        .res-cal-book .res-field {
+            margin-bottom: 14px;
+        }
+        .res-cal-book input,
+        .res-cal-book select {
+            width: 100%;
+            background: #07111f;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: #fff;
+            font-size: .9rem;
+            outline: none;
+            color-scheme: dark;
+        }
+        .res-cal-book input:focus,
+        .res-cal-book select:focus {
+            border-color: var(--gold);
+        }
+        .res-end-preview {
+            color: #ead48f;
+            font-size: .85rem;
+            font-weight: 800;
+            margin: 4px 0 16px;
+        }
+        .res-end-preview.unavailable {
+            color: var(--res-unavailable);
+        }
+        .res-pay-step {
+            display: none;
+            margin-top: 8px;
+            padding: 14px 14px 4px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #07111f;
+        }
+        .res-pay-step.show { display: block; }
+        .res-pay-step h4 {
+            margin: 0 0 8px;
+            color: var(--gold);
+            font-size: .78rem;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .res-pay-note {
+            color: #8fa0b6;
+            font-size: .72rem;
+            line-height: 1.45;
+            margin: 10px 0 8px;
+        }
+        .res-pay-back {
+            width: 100%;
+            margin: 8px 0 12px;
+            padding: 8px;
+            background: transparent;
+            color: #a8c6ff;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+        .res-cal-book .res-submit {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(105deg, var(--gold), #d6b34b);
+            color: #07111f;
+            font-weight: 800;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: .92rem;
+        }
+        .res-cal-book .res-submit:hover {
+            box-shadow: 0 0 24px rgba(214, 179, 75, 0.25);
+        }
+        .res-cal-book .res-submit:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .res-confirm {
+            display: none;
+            margin-top: 14px;
+            padding: 12px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(46, 204, 113, 0.35);
+            background: rgba(46, 204, 113, 0.12);
+            color: #7dffa8;
+            font-size: .82rem;
+            font-weight: 700;
+            line-height: 1.45;
+        }
+        .res-confirm.show { display: block; }
+        .res-error {
+            display: none;
+            margin-top: 12px;
+            color: #e74c3c;
+            font-size: .8rem;
+            font-weight: 700;
+        }
+        .res-error.show { display: block; }
+        .res-mine-list {
+            margin-top: 18px;
+            border-top: 1px solid var(--line);
+            padding-top: 14px;
+        }
+        .res-mine-list h4 {
+            margin: 0 0 10px;
+            font-size: .72rem;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--gold);
+        }
+        .res-mine-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #ffffff12;
+            font-size: .8rem;
+        }
+        .res-mine-row button {
+            padding: 5px 10px;
+            font-size: .68rem;
+            color: #e74c3c;
+            border-color: rgba(231, 76, 60, 0.35);
+        }
+        .res-empty {
+            color: #8fa0b6;
+            font-size: .78rem;
+            font-style: italic;
         }
 
         .search-modal-overlay {
@@ -1458,7 +1878,7 @@
         .search-modal .player-list button {
             display: block;
             width: 100%;
-            text-align: left;
+            text-align: start;
             padding: 14px 12px;
             border-bottom: 1px solid var(--line);
             background: transparent;
@@ -1474,7 +1894,9 @@
         .search-modal .player-list button .player-id {
             color: #8fa0b6;
             font-size: .7rem;
-            margin-left: 12px;
+            margin-inline-start: 12px;
+            direction: ltr;
+            unicode-bidi: isolate;
         }
         .search-modal .close-modal {
             margin-top: 20px;
@@ -1657,7 +2079,7 @@
         }
 
         .portal-profile {
-            border-left: 1px solid var(--line);
+            border-inline-start: 1px solid var(--line);
             align-items: center;
             gap: 14px;
             height: 100%;
@@ -1719,8 +2141,7 @@
             flex-wrap: wrap;
             align-items: center;
             max-width: 1400px;
-            margin-left: auto;
-            margin-right: auto;
+            margin-inline: auto;
         }
         .dashboard-view-switcher button {
             background: #0b192d;
@@ -1811,8 +2232,7 @@
             padding: 50px max(30px, 6vw, 90px);
             margin-top: 60px;
             max-width: 1400px;
-            margin-left: auto;
-            margin-right: auto;
+            margin-inline: auto;
         }
         .manager-access .portal-section-heading {
             color: #071324;
@@ -1846,7 +2266,7 @@
         }
         .manager-team-row>* {
             padding: 8px 4px;
-            text-align: left;
+            text-align: start;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -1896,7 +2316,7 @@
             font-weight: 800;
         }
         .access-role-line span+span {
-            border-left: 1px solid #cbd2db;
+            border-inline-start: 1px solid #cbd2db;
         }
 
         /* Team trends section (single team chart) */
@@ -2008,6 +2428,28 @@
         .level-progress-scale strong {
             color: #9dbcf5;
         }
+        /* Keep lock/unlock/check beside the name — never over the first letter */
+        .level-progress-scale > * {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            min-width: 0;
+            position: relative;
+        }
+        .level-progress-scale .level-status-icon {
+            flex: 0 0 auto;
+            width: 10px;
+            height: 10px;
+            display: block;
+            position: static;
+            overflow: visible;
+        }
+        .level-progress-scale .level-scale-name {
+            min-width: 0;
+            flex: 1 1 auto;
+            overflow: visible;
+            line-height: 1.3;
+        }
 
         /* override for the new code's progression container */
         #player-progression .portal-level-card {
@@ -2017,6 +2459,9 @@
 
         /* responsive overrides (keep existing) */
         @media (width <= 1000px) {
+            .res-cal-layout {
+                grid-template-columns: 1fr;
+            }
             .portal-login-header {
                 grid-template-columns: 1fr auto;
             }
@@ -2053,7 +2498,7 @@
                 height: 82px;
             }
             .portal-brand {
-                border-right: 0;
+                border-inline-end: 0;
             }
             .portal-prototype,
             .portal-sidebar {
@@ -2066,11 +2511,14 @@
             .coach-summary {
                 grid-template-columns: 1fr 1fr;
             }
-            .coach-summary article:nth-child(3) {
-                border-left: 0;
-                border-top: 1px solid var(--line);
+            #coach-summary,
+            #manager-summary {
+                grid-template-columns: 1fr 1fr;
             }
-            .coach-summary article:nth-child(4) {
+            .coach-summary article:nth-child(odd) {
+                border-inline-start: 0;
+            }
+            .coach-summary article:nth-child(n+3) {
                 border-top: 1px solid var(--line);
             }
             .coach-team-grid {
@@ -2086,7 +2534,7 @@
                 grid-template-columns: repeat(2, 1fr);
             }
             .portal-metric-grid article:nth-child(odd) {
-                border-left: 0;
+                border-inline-start: 0;
             }
             .portal-metric-grid article:nth-child(n+3) {
                 border-top: 1px solid var(--line);
@@ -2133,14 +2581,14 @@
                 height: 78px;
             }
             .portal-login-header .portal-brand {
-                border-right: 0;
+                border-inline-end: 0;
                 padding: 0 18px;
             }
             .portal-login-header .portal-brand i {
                 display: none;
             }
             .portal-back {
-                margin-right: 18px;
+                margin-inline-end: 18px;
             }
             .portal-login-intro,
             .portal-role-section,
@@ -2200,8 +2648,12 @@
             .coach-summary {
                 grid-template-columns: 1fr;
             }
+            #coach-summary,
+            #manager-summary {
+                grid-template-columns: 1fr;
+            }
             .coach-summary article+article {
-                border-left: 0;
+                border-inline-start: 0;
                 border-top: 1px solid var(--line);
             }
             .coach-team-grid>article {
@@ -2215,9 +2667,9 @@
                 grid-template-columns: 1fr;
             }
             .coach-team-focus>div span+span {
-                border-left: 0;
+                border-inline-start: 0;
                 border-top: 1px solid var(--line);
-                padding-left: 8px;
+                padding-inline-start: 8px;
             }
             .coach-schedule-list article {
                 grid-template-columns: 74px 1fr;
@@ -2240,9 +2692,9 @@
             .level-progress-scale {
                 grid-template-columns: repeat(3, 1fr);
             }
-            .level-progress-scale span:nth-child(4),
-            .level-progress-scale span:nth-child(5),
-            .level-progress-scale span:nth-child(6) {
+            .level-progress-scale > :nth-child(4),
+            .level-progress-scale > :nth-child(5),
+            .level-progress-scale > :nth-child(6) {
                 display: none;
             }
             .portal-metrics,
@@ -2256,7 +2708,7 @@
             }
             .portal-metric-grid article,
             .portal-metric-grid article:last-child {
-                border-left: 0;
+                border-inline-start: 0;
                 grid-column: 1;
                 min-height: 200px;
             }
@@ -2274,9 +2726,9 @@
                 grid-template-columns: 1fr;
             }
             .focus-sequence span+span {
-                border-left: 0;
+                border-inline-start: 0;
                 border-top: 1px solid var(--line);
-                padding-left: 0;
+                padding-inline-start: 0;
             }
             .portal-action-grid>article {
                 min-height: 390px;
@@ -2367,8 +2819,8 @@
             .level-progress-scale {
                 grid-template-columns: repeat(2, 1fr);
             }
-            .level-progress-scale span:nth-child(3),
-            .level-progress-scale span:nth-child(4) {
+            .level-progress-scale > :nth-child(3),
+            .level-progress-scale > :nth-child(4) {
                 display: none;
             }
         }
@@ -2408,10 +2860,144 @@
             .level-progress-scale {
                 grid-template-columns: 1fr 1fr;
             }
-            .level-progress-scale span:nth-child(3),
-            .level-progress-scale span:nth-child(4) {
+            .level-progress-scale > :nth-child(3),
+            .level-progress-scale > :nth-child(4) {
                 display: none;
             }
+        }
+
+        /* Latin / numeric runs stay readable inside Arabic copy */
+        .num-ltr,
+        .ring-chart-wrapper,
+        .trend-single-chart,
+        .ring-metric .value,
+        .player-results-grid article strong > span:first-child,
+        .level-progress-labels b,
+        .res-day-chip .res-day-num,
+        .portal-review strong,
+        .coach-summary strong,
+        .distribution-bars strong,
+        .coach-player-row b,
+        .wordmark {
+            unicode-bidi: isolate;
+        }
+        .num-ltr,
+        .ring-chart-wrapper,
+        .trend-single-chart,
+        .ring-metric .value,
+        .player-results-grid article strong > span:first-child,
+        .level-progress-labels b,
+        .res-day-chip .res-day-num,
+        .coach-player-row b {
+            direction: ltr;
+        }
+
+        /* ============================================================
+           ARABIC RTL — logical chrome, tables, calendar; do not flip
+           charts, clocks, QR, or numeric values
+           ============================================================ */
+        html[dir="rtl"] body {
+            text-align: start;
+        }
+        html[dir="rtl"] .portal-sidebar nav a small,
+        html[dir="rtl"] .coach-player-row i,
+        html[dir="rtl"] .manager-team-row b,
+        html[dir="rtl"] .manager-team-row i,
+        html[dir="rtl"] .portal-review strong,
+        html[dir="rtl"] .coach-summary strong,
+        html[dir="rtl"] .distribution-bars strong,
+        html[dir="rtl"] .today-schedule-row .when,
+        html[dir="rtl"] #trend-page-info {
+            direction: ltr;
+            unicode-bidi: isolate;
+        }
+        html[dir="rtl"] .coach-player-table,
+        html[dir="rtl"] .manager-team-table,
+        html[dir="rtl"] .player-results-grid,
+        html[dir="rtl"] .coach-summary,
+        html[dir="rtl"] .session-table {
+            direction: rtl;
+        }
+        html[dir="rtl"] .player-results-grid article,
+        html[dir="rtl"] .coach-player-row,
+        html[dir="rtl"] .manager-team-row,
+        html[dir="rtl"] .portal-section-heading,
+        html[dir="rtl"] .portal-welcome,
+        html[dir="rtl"] .portal-level-copy,
+        html[dir="rtl"] .coach-advice-card,
+        html[dir="rtl"] .technical-coach-section .coach-message {
+            text-align: start;
+        }
+        html[dir="rtl"] .level-progress-track span {
+            margin-inline-end: auto;
+        }
+        html[dir="rtl"] .ring-metric,
+        html[dir="rtl"] .ring-chart-wrapper,
+        html[dir="rtl"] .trend-single-chart,
+        html[dir="rtl"] .team-trend-item canvas,
+        html[dir="rtl"] canvas {
+            direction: ltr;
+            unicode-bidi: isolate;
+        }
+        html[dir="rtl"] input[type="email"],
+        html[dir="rtl"] input[type="date"],
+        html[dir="rtl"] input[type="time"],
+        html[dir="rtl"] input[type="number"],
+        html[dir="rtl"] input[type="password"],
+        html[dir="rtl"] input[type="tel"],
+        html[dir="rtl"] #login-username,
+        html[dir="rtl"] #reg-username,
+        html[dir="rtl"] #res-date,
+        html[dir="rtl"] #res-start,
+        html[dir="rtl"] #res-duration {
+            direction: ltr;
+            text-align: start;
+            unicode-bidi: isolate;
+        }
+        html[dir="rtl"] .auth-container .phone-row {
+            direction: ltr;
+        }
+        html[dir="rtl"] .res-time-grid {
+            direction: rtl;
+        }
+        html[dir="rtl"] .res-slot-label {
+            text-align: start;
+            min-width: 0;
+        }
+        html[dir="rtl"] .res-slot {
+            justify-content: flex-start;
+        }
+        html[dir="rtl"] .res-mine-row span {
+            text-align: start;
+        }
+        html[dir="rtl"] .back-to-login,
+        html[dir="rtl"] .back-link,
+        html[dir="rtl"] #trend-prev-btn,
+        html[dir="rtl"] #trend-next-btn {
+            direction: ltr;
+            unicode-bidi: isolate;
+        }
+        html[dir="rtl"] .lang-dropdown-menu {
+            inset-inline-end: 0;
+            inset-inline-start: auto;
+            text-align: start;
+        }
+        html[dir="rtl"] .simust-toast {
+            inset-inline-end: 24px;
+            inset-inline-start: auto;
+        }
+        html[dir="rtl"] .portal-kicker,
+        html[dir="rtl"] .res-cal-toolbar .res-cal-hours,
+        html[dir="rtl"] .level-progress-labels,
+        html[dir="rtl"] .coach-player-head,
+        html[dir="rtl"] .manager-team-head {
+            letter-spacing: 0.04em;
+        }
+        html[dir="rtl"] .portal-login-intro .left-col h1,
+        html[dir="rtl"] .portal-welcome h1,
+        html[dir="rtl"] .portal-section-heading h2,
+        html[dir="rtl"] .portal-level-copy h2 {
+            letter-spacing: -0.02em;
         }
     </style>
 </head>
@@ -2432,11 +3018,21 @@
                 <span data-i18n="roleBasedAccess">Role‑based access to development data</span>
             </div>
             <div class="portal-header-actions">
-                <div class="lang-switcher" id="lang-switcher" aria-label="Language">
-                    <button type="button" class="lang-btn" data-lang="en" title="English">EN</button>
-                    <button type="button" class="lang-btn" data-lang="de" title="German">DE</button>
-                    <button type="button" class="lang-btn" data-lang="es" title="Spanish">ES</button>
-                    <button type="button" class="lang-btn" data-lang="it" title="Italian">IT</button>
+                <div class="lang-dropdown" id="lang-switcher">
+                    <button type="button" class="lang-dropdown-toggle" aria-haspopup="listbox" aria-expanded="false" title="Language" aria-label="Language">
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                            <path d="M3 12h18M12 3c2.6 3 3.8 6 3.8 9s-1.2 6-3.8 9c-2.6-3-3.8-6-3.8-9s1.2-6 3.8-9z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                        </svg>
+                    </button>
+                    <ul class="lang-dropdown-menu" role="listbox">
+                        <li><button type="button" data-lang="en" data-i18n="langEn">English</button></li>
+                        <li><button type="button" data-lang="de" data-i18n="langDe">German</button></li>
+                        <li><button type="button" data-lang="es" data-i18n="langEs">Spanish</button></li>
+                        <li><button type="button" data-lang="it" data-i18n="langIt">Italian</button></li>
+                        <li><button type="button" data-lang="ar" data-i18n="langAr">Arabic</button></li>
+                        <li><button type="button" data-lang="nl" data-i18n="langNl">Dutch</button></li>
+                    </ul>
                 </div>
                 <a href="#" class="portal-back" id="public-website-link" data-i18n="publicWebsite">Public website ↗</a>
             </div>
@@ -2457,7 +3053,7 @@
                     <p class="sub" data-i18n="signInSub">Enter your credentials to access your dashboard.</p>
                     <div class="form-group">
                         <label for="login-username" data-i18n="username">Username</label>
-                        <input type="text" id="login-username" data-i18n-placeholder="usernamePlaceholder" placeholder="e.g. player0142" autofocus>
+                        <input type="text" id="login-username" data-i18n-placeholder="usernamePlaceholder" placeholder="e.g. player0142" dir="auto" autofocus>
                     </div>
                     <div class="form-group">
                         <label for="login-password" data-i18n="password">Password</label>
@@ -2475,7 +3071,7 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label for="reg-username" data-i18n="username">Username</label>
-                            <input type="text" id="reg-username" data-i18n-placeholder="usernamePlaceholder" placeholder="e.g. player0142">
+                            <input type="text" id="reg-username" data-i18n-placeholder="usernamePlaceholder" placeholder="e.g. player0142" dir="auto">
                         </div>
                         <div class="form-group">
                             <label for="reg-password" data-i18n="password">Password</label>
@@ -2494,7 +3090,7 @@
                     </div>
                     <div class="form-group">
                         <label for="reg-email" data-i18n="email">Email *</label>
-                        <input type="email" id="reg-email" data-i18n-placeholder="emailPlaceholder" placeholder="e.g. name@email.com">
+                        <input type="email" id="reg-email" data-i18n-placeholder="emailPlaceholder" placeholder="e.g. name@email.com" dir="ltr">
                     </div>
                     <div class="phone-row">
                         <div class="form-group">
@@ -2503,7 +3099,7 @@
                         </div>
                         <div class="form-group">
                             <label for="reg-phone" data-i18n="phone">Phone number *</label>
-                            <input type="tel" id="reg-phone" data-i18n-placeholder="phonePlaceholder" placeholder="Phone without country code" inputmode="tel" autocomplete="tel-national">
+                            <input type="tel" id="reg-phone" data-i18n-placeholder="phonePlaceholder" placeholder="Phone without country code" inputmode="tel" autocomplete="tel-national" dir="ltr">
                         </div>
                     </div>
                     <div class="form-row">
@@ -2652,7 +3248,23 @@
                 <b id="dashboard-role-label">PLAYER DASHBOARD</b>
                 <span id="dashboard-sub-label">Connected to your SIMUST data</span>
             </div>
-            <div style="display:flex;align-items:center;gap:14px;padding-right:28px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:14px;padding-inline-end:28px;flex-wrap:wrap;">
+                <div class="lang-dropdown" id="dash-lang-switcher">
+                    <button type="button" class="lang-dropdown-toggle" aria-haspopup="listbox" aria-expanded="false" title="Language" aria-label="Language">
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                            <path d="M3 12h18M12 3c2.6 3 3.8 6 3.8 9s-1.2 6-3.8 9c-2.6-3-3.8-6-3.8-9s1.2-6 3.8-9z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                        </svg>
+                    </button>
+                    <ul class="lang-dropdown-menu" role="listbox">
+                        <li><button type="button" data-lang="en" data-i18n="langEn">English</button></li>
+                        <li><button type="button" data-lang="de" data-i18n="langDe">German</button></li>
+                        <li><button type="button" data-lang="es" data-i18n="langEs">Spanish</button></li>
+                        <li><button type="button" data-lang="it" data-i18n="langIt">Italian</button></li>
+                        <li><button type="button" data-lang="ar" data-i18n="langAr">Arabic</button></li>
+                        <li><button type="button" data-lang="nl" data-i18n="langNl">Dutch</button></li>
+                    </ul>
+                </div>
                 <button class="logout-btn" id="logout-btn">Logout</button>
                 <div class="portal-profile" id="profile-badge" title="Click to edit profile">
                     <span id="profile-label">PLAYER</span>
@@ -2671,6 +3283,7 @@
                 <a data-view="player" data-section="development"><small>02</small>Development</a>
                 <a data-view="player" data-section="sessions"><small>03</small>Sessions</a>
                 <a data-view="player" data-section="report"><small>04</small>Report</a>
+                <a data-view="player" data-section="reservation"><small>05</small><span data-i18n="reservationNav">Calendar</span></a>
                 <!-- Coach links -->
                 <a data-view="coach" data-section="overview" class="hidden"><small>05</small>Coach overview</a>
                 <a data-view="coach" data-section="players" class="hidden"><small>06</small>Players</a>
@@ -2698,7 +3311,7 @@
                 <button class="active" data-view="player">👤 Player</button>
                 <button data-view="coach">🧑‍🏫 Coach</button>
                 <button data-view="manager">🏛️ Academy Manager</button>
-                <button style="margin-left:auto;" id="content-back-btn" class="back-to-login">← Back to access</button>
+                <button style="margin-inline-start:auto;" id="content-back-btn" class="back-to-login">← Back to access</button>
             </div>
 
             <!-- ============================================================
@@ -2819,6 +3432,73 @@
                     </div>
                 </div>
 
+                <!-- ========== TRAINING PLACE CALENDAR ========== -->
+                <div id="player-reservation" class="section-container res-cal" style="margin-top:40px;">
+                    <div class="portal-section-heading">
+                        <div>
+                            <p class="portal-kicker" data-i18n="reservationKicker">TRAINING PLACE</p>
+                            <h2 data-i18n="reservationTitle">Reservation / Calendar</h2>
+                        </div>
+                        <p data-i18n="reservationIntro">Shared calendar for the training place. Booked intervals are blocked for everyone else. Slots are 30 minutes to 3 hours, 07:00–22:00.</p>
+                    </div>
+                    <div class="res-cal-layout">
+                        <div class="res-cal-board">
+                            <div class="res-cal-toolbar">
+                                <div>
+                                    <h3 id="res-week-label">This week</h3>
+                                    <div class="res-cal-hours" data-i18n="reservationHours">Operating hours 07:00–22:00 · 30 min grid</div>
+                                </div>
+                                <div class="res-cal-nav">
+                                    <button type="button" id="res-prev-week" data-i18n="reservationPrev">← Week</button>
+                                    <button type="button" id="res-today-btn" data-i18n="reservationToday">Today</button>
+                                    <button type="button" id="res-next-week" data-i18n="reservationNext">Week →</button>
+                                </div>
+                            </div>
+                            <div class="res-week-strip" id="res-week-strip"></div>
+                            <div class="res-grid-wrap">
+                                <div class="res-time-grid" id="res-time-grid"></div>
+                            </div>
+                            <div class="res-legend">
+                                <span class="lg-free" data-i18n="reservationFree">Free</span>
+                                <span class="lg-booked" data-i18n="reservationBooked">Booked</span>
+                                <span class="lg-mine" data-i18n="reservationYours">Your reservation</span>
+                            </div>
+                        </div>
+                        <aside class="res-cal-book">
+                            <h3 data-i18n="reservationBookTitle">Reserve a slot</h3>
+                            <p class="res-book-sub" data-i18n="reservationBookSub">Pick a free time on the grid or set date, start and duration. Overlapping times cannot be booked.</p>
+                            <div id="res-book-fields">
+                                <div class="res-field">
+                                    <label for="res-date" data-i18n="reservationDate">Date</label>
+                                    <input type="date" id="res-date">
+                                </div>
+                                <div class="res-field">
+                                    <label for="res-start" data-i18n="reservationStart">Start</label>
+                                    <select id="res-start"></select>
+                                </div>
+                                <div class="res-field">
+                                    <label for="res-duration" data-i18n="reservationDuration">Duration</label>
+                                    <select id="res-duration"></select>
+                                </div>
+                                <div class="res-end-preview" id="res-end-preview"></div>
+                                <button type="button" class="res-submit" id="res-submit" data-i18n="reservationConfirm">Confirm reservation</button>
+                            </div>
+                            <div class="res-pay-step" id="res-pay-step">
+                                <h4 data-i18n="payOnline">Online payment</h4>
+                                <p class="res-book-sub" data-i18n="paymentSub">Complete online payment to confirm this reservation. This step is a simulation.</p>
+                                <button type="button" class="res-submit" id="res-pay-btn" data-i18n="payNow">Pay</button>
+                                <button type="button" class="res-pay-back" id="res-pay-cancel" data-i18n="reservationCancel">Cancel</button>
+                            </div>
+                            <div class="res-confirm" id="res-confirm"></div>
+                            <div class="res-error" id="res-error"></div>
+                            <div class="res-mine-list">
+                                <h4 data-i18n="reservationYourBookings">Your upcoming bookings</h4>
+                                <div id="res-mine-rows"></div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+
             </div>
 
             <!-- ============================================================
@@ -2843,6 +3523,11 @@
                         <small>PLAYERS</small>
                         <strong id="coach-player-count">0</strong>
                         <span>Across assigned teams</span>
+                    </article>
+                    <article>
+                        <small>TEAMS</small>
+                        <strong id="coach-team-count">0</strong>
+                        <span>Assigned squads</span>
                     </article>
                     <article>
                         <small>AVG. AE</small>
@@ -2901,6 +3586,7 @@
                             <span>LATEST AE</span>
                             <span>TREND</span>
                             <span>PRIORITY</span>
+                            <span>RESERVATION</span>
                         </div>
                     </div>
                 </div>
@@ -2957,11 +3643,6 @@
                         <small>TESTING COVERAGE</small>
                         <strong id="manager-test-coverage">0%</strong>
                         <span>Players with baseline</span>
-                    </article>
-                    <article>
-                        <small>COACH RATIO</small>
-                        <strong id="manager-coach-ratio">0:1</strong>
-                        <span>Players per coach</span>
                     </article>
                 </div>
 
@@ -3856,7 +4537,7 @@
             ];
 
             const LEVEL_COLORS = {
-                "L00-Foundation": { light: "#F1F3F5", dark: "#D0D4D9", ribbon: "#E8ECF0" },
+                "L00-Foundation": { light: "#7dffa8", dark: "#2ecc71", ribbon: "#7dffa8" },
                 "L01-Entry": { light: "#AFC3D5", dark: "#7A94B0", ribbon: "#AFC3D5" },
                 "L02-Activated": { light: "#315F91", dark: "#1E3F5E", ribbon: "#315F91" },
                 "L03-HighPerformance": { light: "#4B1F78", dark: "#2F124A", ribbon: "#4B1F78" },
@@ -3869,6 +4550,19 @@
                 return LEVEL_COLORS[main] || LEVEL_COLORS["L00-Foundation"];
             }
 
+            function applyRingFillColor(color) {
+                activeLevelFill = color || activeLevelFill;
+                Object.keys(ringChartInstances).forEach(function(id) {
+                    var chart = ringChartInstances[id];
+                    if (!chart || !chart.data || !chart.data.datasets || !chart.data.datasets[0]) return;
+                    var bg = chart.data.datasets[0].backgroundColor;
+                    if (Array.isArray(bg) && bg.length) {
+                        bg[0] = activeLevelFill;
+                        chart.update('none');
+                    }
+                });
+            }
+
             function getMainLevelId(levelId) {
                 if (levelId === "L00-Foundation") return "L00-Foundation";
                 return levelId.split('/')[0];
@@ -3877,6 +4571,18 @@
             function getMainLevelIndex(levelId) {
                 var main = getMainLevelId(levelId);
                 return MAIN_LEVELS.findIndex(function(l) { return l.id === main; });
+            }
+
+            function levelStatusIconSvg(kind) {
+                var open = '<svg class="level-status-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">';
+                var close = '</svg>';
+                if (kind === 'completed') {
+                    return open + '<path fill="currentColor" d="M6.1 10.7 3.4 8l.9-.9 1.8 1.8 5.6-5.6.9.9z"/>' + close;
+                }
+                if (kind === 'unlocked') {
+                    return open + '<path fill="currentColor" d="M12 7H6.2V5.2A2.8 2.8 0 0 1 11 4.1l.7-.7A3.8 3.8 0 0 0 4.2 5.2V7H3.5A1.5 1.5 0 0 0 2 8.5v5A1.5 1.5 0 0 0 3.5 15h8A1.5 1.5 0 0 0 13 13.5v-5A1.5 1.5 0 0 0 12 7z"/>' + close;
+                }
+                return open + '<path fill="currentColor" d="M12 7h-1V5.2a3 3 0 0 0-6 0V7H4.5A1.5 1.5 0 0 0 3 8.5v5A1.5 1.5 0 0 0 4.5 15h7A1.5 1.5 0 0 0 13 13.5v-5A1.5 1.5 0 0 0 12 7zM6.5 5.2a1.5 1.5 0 0 1 3 0V7h-3z"/>' + close;
             }
 
             function renderProgressionBar(progress) {
@@ -3892,6 +4598,7 @@
                 var currentMain = getMainLevelId(current);
                 var currentIndex = getMainLevelIndex(current);
                 var colorSet = getLevelColor(current);
+                activeLevelFill = colorSet.light;
 
                 var mainName = "Entry";
                 var description = "Track your journey through the SIMUST levels.";
@@ -3933,7 +4640,7 @@
                                 <div class="portal-level-progress">
                                     <div class="level-progress-labels" style="color: ${ribbonColor};">
                                         <span>${levelNumber ? `LEVEL ${levelNumber}` : ''}</span>
-                                        <b>${pct.toFixed(0)}%</b>
+                                        <b class="num-ltr">${pct.toFixed(0)}%</b>
                                     </div>
                                     <div class="level-progress-track" aria-label="${pct.toFixed(0)} percent progress within ${mainName} level">
                                         <span style="width: ${pct}%; background: linear-gradient(90deg, ${colorSet.light}, ${colorSet.dark});"></span>
@@ -3942,9 +4649,20 @@
                                         ${MAIN_LEVELS.map(function(level, idx) {
                                             var isActive = idx === currentIndex;
                                             var isPast = idx < currentIndex;
+                                            var isUnlocked = unlocked.some(function(id) {
+                                                return getMainLevelId(id) === level.id;
+                                            });
+                                            var isDone = isPast || completed.some(function(id) {
+                                                return getMainLevelId(id) === level.id;
+                                            });
+                                            var kind = isDone ? 'completed' : ((isUnlocked || isActive) ? 'unlocked' : 'locked');
                                             var tag = isActive ? 'strong' : 'span';
                                             var color = isActive ? ribbonColor : (isPast ? '#9dbcf5' : '#52637a');
-                                            return '<' + tag + ' style="' + (isActive ? 'color:' + color + ';' : (isPast ? 'color:' + color + ';' : '')) + '">' + level.label + '</' + tag + '>';
+                                            var colorStyle = (isActive || isPast) ? ('color:' + color + ';') : '';
+                                            return '<' + tag + ' style="' + colorStyle + '">' +
+                                                levelStatusIconSvg(kind) +
+                                                '<span class="level-scale-name">' + level.label + '</span>' +
+                                                '</' + tag + '>';
                                         }).join('')}
                                     </div>
                                 </div>
@@ -3952,6 +4670,7 @@
                         `;
                 container.innerHTML = html;
                 document.getElementById('player-progression').style.display = 'block';
+                applyRingFillColor(colorSet.light);
             }
 
             // ============================================================
@@ -3996,6 +4715,7 @@
             }
             if (typeof simustBindLangSwitcher === 'function') {
                 simustBindLangSwitcher(document.getElementById('login-shell'));
+                simustBindLangSwitcher(document.getElementById('dashboard-shell'));
             }
 
             // Profile modal
@@ -4059,6 +4779,7 @@
             var coachTodaySessions = document.getElementById('coach-today-sessions');
             var coachTodayDesc = document.getElementById('coach-today-desc');
             var coachPlayerCount = document.getElementById('coach-player-count');
+            var coachTeamCount = document.getElementById('coach-team-count');
             var coachAvgAe = document.getElementById('coach-avg-ae');
             var coachAcc = document.getElementById('coach-acc');
             var coachTotalSessions = document.getElementById('coach-total-sessions');
@@ -4071,7 +4792,6 @@
             var managerTotalPlayers = document.getElementById('manager-total-players');
             var managerWeeklyActive = document.getElementById('manager-weekly-active');
             var managerTestCoverage = document.getElementById('manager-test-coverage');
-            var managerCoachRatio = document.getElementById('manager-coach-ratio');
             var managerTeamTable = document.getElementById('manager-team-table');
             var teamTrendsContainer = document.getElementById('team-trends-container');
             var teamTrendPlaceholder = document.getElementById('team-trend-placeholder');
@@ -4099,6 +4819,7 @@
             var trendChartCombined = null;
             var ringChartInstances = {};
             var teamChartInstance = null;
+            var activeLevelFill = '#7dffa8';
 
             var trendPage = 0;
             var PAGE_SIZE = 10;
@@ -4158,6 +4879,10 @@
                         btn.style.display = 'inline-block';
                     } else {
                         btn.classList.add('disabled');
+                        btn.style.display = 'none';
+                    }
+                    // Hide the "👤 Player" view-as-player switch on the coach dashboard
+                    if (view === 'coach' && btnView === 'player') {
                         btn.style.display = 'none';
                     }
                     btn.classList.toggle('active', btnView === view && available.includes(btnView));
@@ -4307,7 +5032,7 @@
                 filtered.forEach(function(p) {
                     html += '<button data-player-id="' + p.id + '" class="player-select-btn">' +
                         '<strong>' + p.name + ' ' + p.surname + '</strong>' +
-                        '<span class="player-id">' + p.playerId + '</span>' +
+                        '<span class="player-id num-ltr">' + p.playerId + '</span>' +
                         '</button>';
                 });
                 playerListContainer.innerHTML = html;
@@ -4612,7 +5337,7 @@
                         var highlightClass = item.highlight ? item.highlight : '';
                         return '<article>' +
                             '<small>' + item.label + '</small>' +
-                            '<strong><span class="' + highlightClass + '">' + item.value + '</span> ' + arrowHtml +
+                            '<strong><span class="' + highlightClass + ' num-ltr">' + item.value + '</span> ' + arrowHtml +
                             '</strong>' +
                             (item.sub ? '<span>' + item.sub + '</span>' : '') +
                             '</article>';
@@ -4675,23 +5400,22 @@
                     var aac = metrics.aac;
 
                     var aetNumeric = avgFinishingTime > 0 ? Math.min(100, (1 - avgFinishingTime / 5) * 100) : 0;
-                    var aetColor = avgFinishingTime > 0 ? (avgFinishingTime < 1.5 ? '#4ade80' : avgFinishingTime < 3 ?
-                        '#fbbf24' : '#f87171') : '#4a5568';
                     var aetDisplay = avgFinishingTime > 0 ? avgFinishingTime.toFixed(2) + 's' : '–';
-                    updateRingChart('ring-aet', 'ring-aet-value', aetNumeric, aetDisplay, 100, aetColor);
+                    var levelFill = getLevelColor((player.progress && player.progress.current_level) || (currentUser && currentUser.progress && currentUser.progress.current_level) || 'L00-Foundation').light;
+                    activeLevelFill = levelFill;
+                    updateRingChart('ring-aet', 'ring-aet-value', aetNumeric, aetDisplay, 100, levelFill);
 
                     var aeNumeric = avgAe > 0 ? avgAe : 0;
-                    var aeColor = avgAe >= 70 ? '#4ade80' : avgAe >= 50 ? '#fbbf24' : '#f87171';
                     var aeDisplay = avgAe > 0 ? avgAe.toFixed(1) + '%' : '–';
-                    updateRingChart('ring-ae', 'ring-ae-value', aeNumeric, aeDisplay, 100, aeColor);
+                    updateRingChart('ring-ae', 'ring-ae-value', aeNumeric, aeDisplay, 100, levelFill);
 
                     var aacNumeric = aac > 0 ? aac : 0;
                     var aacDisplay = aac > 0 ? aac.toFixed(0) + '%' : '–';
-                    updateRingChart('ring-aac', 'ring-aac-value', aacNumeric, aacDisplay, 100, '#4ade80');
+                    updateRingChart('ring-aac', 'ring-aac-value', aacNumeric, aacDisplay, 100, levelFill);
 
                     var bdpNumeric = Math.min(100, (totalDistance / 120) * 100);
                     var bdpDisplay = totalDistance > 0 ? totalDistance.toFixed(1) + ' m' : '–';
-                    updateRingChart('ring-bdp', 'ring-bdp-value', bdpNumeric, bdpDisplay, 100, '#22d3ee');
+                    updateRingChart('ring-bdp', 'ring-bdp-value', bdpNumeric, bdpDisplay, 100, levelFill);
 
                     // ----- TECHNICAL COACH ADVICE (using the coach data) -----
                     var coachAdviceObj = window._currentCoachAdvice || null;
@@ -4918,7 +5642,7 @@
                 var toast = document.createElement('div');
                 toast.className = 'simust-toast';
                 toast.style.cssText =
-                    'position:fixed;bottom:24px;right:24px;background:#0b192d;border-left:4px solid ' + (type ===
+                    'position:fixed;bottom:24px;inset-inline-end:24px;background:#0b192d;border-inline-start:4px solid ' + (type ===
                         'error' ? '#dc2626' : '#4ade80') +
                     ';padding:14px 24px;border-radius:14px;z-index:1100;box-shadow:0 10px 40px rgba(0,0,0,0.6);border:1px solid rgba(255,193,7,0.15);color:#f5f8fb;font-size:14px;';
                 toast.textContent = msg;
@@ -5145,6 +5869,38 @@
                 var players = authorisedPlayers;
                 var totalPlayers = players.length || 0;
                 coachPlayerCount.textContent = totalPlayers;
+                var teamNames = {};
+                players.forEach(function(p) {
+                    var tn = (p.team || '').trim();
+                    if (tn) teamNames[tn] = true;
+                });
+                if (coachTeamCount) coachTeamCount.textContent = Object.keys(teamNames).length;
+
+                var upcomingByPlayer = {};
+                try {
+                    var from = ymdLocal(new Date());
+                    var until = new Date();
+                    until.setDate(until.getDate() + 90);
+                    var to = ymdLocal(until);
+                    var resResp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+                    if (resResp.ok) {
+                        var resData = await resResp.json();
+                        var now = new Date();
+                        (resData.reservations || []).forEach(function(b) {
+                            var pid = b.player_id || '';
+                            if (!pid) return;
+                            var start = parseLocalDateTime(b.start);
+                            if (start && start < now) return;
+                            if (!upcomingByPlayer[pid]) upcomingByPlayer[pid] = [];
+                            upcomingByPlayer[pid].push(b);
+                        });
+                        Object.keys(upcomingByPlayer).forEach(function(pid) {
+                            upcomingByPlayer[pid].sort(function(a, b) {
+                                return String(a.start).localeCompare(String(b.start));
+                            });
+                        });
+                    }
+                } catch (e) { /* ignore reservation load */ }
 
                 var totalAe = 0,
                     count = 0,
@@ -5154,8 +5910,9 @@
                 var levelCounts = { 'Entry': 0, 'Activated': 0, 'High Performance': 0, 'Elite': 0, 'World-Class': 0 };
 
                 var tableHtml =
-                    '<div class="coach-player-row coach-player-head"><span>PLAYER</span><span>Current Player Level</span><span>LATEST AE</span><span>TREND</span><span>PRIORITY</span></div>';
-                var displayPlayers = players.slice(0, 20);
+                    '<div class="coach-player-row coach-player-head"><span>PLAYER</span><span>Current Player Level</span><span>LATEST AE</span><span>TREND</span><span>PRIORITY</span><span>RESERVATION</span></div>';
+                var displayPlayers = players.slice();
+                var rowData = [];
 
                 for (var i = 0; i < displayPlayers.length; i++) {
                     var p = displayPlayers[i];
@@ -5256,21 +6013,68 @@
                     }
 
                     var aeDisplay = (sessions.length > 0 && latestAe > 0) ? latestAe.toFixed(0) + '%' : '—';
+                    var slots = (upcomingByPlayer[p.id] || []).concat(upcomingByPlayer[p.playerId] || []);
+                    var seenIds = {};
+                    var uniqueSlots = [];
+                    slots.forEach(function(b) {
+                        if (!b || seenIds[b.id]) return;
+                        seenIds[b.id] = true;
+                        uniqueSlots.push(b);
+                    });
+                    uniqueSlots.sort(function(a, b) { return String(a.start).localeCompare(String(b.start)); });
+                    rowData.push({
+                        p: p,
+                        level: level,
+                        aeDisplay: aeDisplay,
+                        trend: trend,
+                        priority: priority,
+                        slots: uniqueSlots
+                    });
+                }
+
+                var priRank = { High: 0, New: 1, Medium: 2, Low: 3 };
+                rowData.sort(function(a, b) {
+                    var ra = priRank[a.priority] !== undefined ? priRank[a.priority] : 9;
+                    var rb = priRank[b.priority] !== undefined ? priRank[b.priority] : 9;
+                    if (ra !== rb) return ra - rb;
+                    return 0;
+                });
+
+                function formatCoachSlot(b) {
+                    var s = parseLocalDateTime(b.start);
+                    var e = parseLocalDateTime(b.end);
+                    if (!s) return '';
+                    var date = s.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+                    var t1 = pad2(s.getHours()) + ':' + pad2(s.getMinutes());
+                    var t2 = e ? pad2(e.getHours()) + ':' + pad2(e.getMinutes()) : '';
+                    return date + ' ' + t1 + (t2 ? '–' + t2 : '');
+                }
+
+                rowData.forEach(function(row) {
+                    var p = row.p;
+                    var priority = row.priority;
+                    var resHtml = row.slots.length
+                        ? row.slots.map(function(b) {
+                            var slot = formatCoachSlot(b);
+                            return slot ? '<span class="num-ltr">' + slot + '</span>' : '';
+                        }).filter(Boolean).join('<br>')
+                        : '<span class="none">' + (typeof simustT === 'function' ? simustT('noReservation') : 'None') + '</span>';
                     tableHtml +=
                         '<div class="coach-player-row" style="cursor:pointer;" data-player-id="' + p.id + '">' +
                         '<strong>' + p.name + ' ' + p.surname + '</strong>' +
-                        '<span>' + level + '</span>' +
-                        '<b>' + aeDisplay + '</b>' +
-                        '<i>' + trend + '</i>' +
+                        '<span>' + row.level + '</span>' +
+                        '<b class="num-ltr">' + row.aeDisplay + '</b>' +
+                        '<i>' + row.trend + '</i>' +
                         '<i style="border-color:' + (priority === 'High' ? '#e74c3c' : priority === 'Medium' ?
                             '#f39c12' : '#2ecc71') + '40;color:' + (priority === 'High' ? '#e74c3c' : priority ===
                             'Medium' ? '#f39c12' : '#2ecc71') + ';">' + priority + '</i>' +
+                        '<span class="coach-res-slots">' + resHtml + '</span>' +
                         '</div>';
-                }
+                });
 
                 if (displayPlayers.length === 0) {
                     tableHtml +=
-                        '<div class="coach-player-row"><span colspan="5" style="color:#5f7086;">No players assigned yet.</span></div>';
+                        '<div class="coach-player-row"><span style="color:#5f7086;">No players assigned yet.</span></div>';
                 }
                 coachPlayerTable.innerHTML = tableHtml;
 
@@ -5349,8 +6153,6 @@
                 managerWeeklyActive.textContent = activePct.toFixed(0) + '%';
                 var coveragePct = totalPlayers > 0 ? (playersWithSessions / totalPlayers * 100) : 0;
                 managerTestCoverage.textContent = coveragePct.toFixed(0) + '%';
-                var coachRatio = totalPlayers > 0 ? Math.max(1, Math.round(totalPlayers / 3)) : 0;
-                managerCoachRatio.textContent = coachRatio + ':1';
 
                 var teamHtml =
                     '<div class="manager-team-row manager-team-head"><span>TEAM</span><span>PLAYERS</span><span>SESSIONS</span><span>AVG. AE</span><span>COVERAGE</span><span>STATUS</span></div>';
@@ -5428,11 +6230,8 @@
                         teamChartInstance = null;
                     }
                     activeTeamName = null;
-                } else {
-                    if (activeTeamName && managerTeamData[activeTeamName]) {
-                        showTeamTrend(activeTeamName);
-                    }
                 }
+                // keepTrend: leave the existing chart in place (do not destroy/recreate).
             }
 
             // ----- Show trend for a specific team (does not refresh on auto-refresh) -----
@@ -5685,6 +6484,471 @@
             });
 
             // ================================================================
+            // TRAINING PLACE RESERVATION CALENDAR
+            // ================================================================
+            var RES_OPEN_HOUR = 7;
+            var RES_CLOSE_HOUR = 22;
+            var RES_SLOT_MIN = 30;
+            var reservationBookings = [];
+            var reservationWeekStart = startOfWeek(new Date());
+            var reservationSelectedDate = ymdLocal(new Date());
+            var reservationBound = false;
+
+            function resT(key, fallback) {
+                return typeof simustT === 'function' ? simustT(key) : (fallback || key);
+            }
+
+            function pad2(n) {
+                return (n < 10 ? '0' : '') + n;
+            }
+
+            function ymdLocal(d) {
+                return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+            }
+
+            function startOfWeek(d) {
+                var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                var day = x.getDay();
+                var diff = day === 0 ? -6 : 1 - day;
+                x.setDate(x.getDate() + diff);
+                return x;
+            }
+
+            function parseLocalDateTime(iso) {
+                if (!iso) return null;
+                var raw = String(iso).replace('T', ' ').replace('Z', '');
+                var m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+                if (!m) return new Date(iso);
+                return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0);
+            }
+
+            function hmFromDate(d) {
+                return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+            }
+
+            function minutesOfDay(d) {
+                return d.getHours() * 60 + d.getMinutes();
+            }
+
+            function escapeHtml(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+
+            function slotTimes() {
+                var out = [];
+                for (var h = RES_OPEN_HOUR; h < RES_CLOSE_HOUR; h++) {
+                    out.push(pad2(h) + ':00');
+                    out.push(pad2(h) + ':30');
+                }
+                return out;
+            }
+
+            function addMinutesHm(hm, minutes) {
+                var parts = hm.split(':');
+                var total = Number(parts[0]) * 60 + Number(parts[1]) + minutes;
+                return pad2(Math.floor(total / 60)) + ':' + pad2(total % 60);
+            }
+
+            function localIso(dateStr, hm) {
+                return dateStr + 'T' + hm + ':00';
+            }
+
+            function bookingCovers(booking, dateStr, hm) {
+                var start = parseLocalDateTime(booking.start);
+                var end = parseLocalDateTime(booking.end);
+                var slot = parseLocalDateTime(localIso(dateStr, hm));
+                if (!start || !end || !slot) return false;
+                return slot >= start && slot < end;
+            }
+
+            function overlapExists(dateStr, startHm, durationMin, ignoreId) {
+                var start = parseLocalDateTime(localIso(dateStr, startHm));
+                var end = parseLocalDateTime(localIso(dateStr, addMinutesHm(startHm, durationMin)));
+                if (!start || !end) return true;
+                for (var i = 0; i < reservationBookings.length; i++) {
+                    var b = reservationBookings[i];
+                    if (ignoreId && b.id === ignoreId) continue;
+                    var bs = parseLocalDateTime(b.start);
+                    var be = parseLocalDateTime(b.end);
+                    if (!bs || !be) continue;
+                    if (start < be && bs < end) return true;
+                }
+                return false;
+            }
+
+            function populateReservationSelects() {
+                var startSel = document.getElementById('res-start');
+                var durSel = document.getElementById('res-duration');
+                if (!startSel || !durSel) return;
+                var times = slotTimes();
+                var startVal = startSel.value;
+                startSel.innerHTML = times.map(function(t) {
+                    return '<option value="' + t + '">' + t + '</option>';
+                }).join('');
+                if (startVal && times.indexOf(startVal) !== -1) startSel.value = startVal;
+                var durations = [30, 60, 90, 120, 150, 180];
+                var durVal = durSel.value || '60';
+                durSel.innerHTML = durations.map(function(m) {
+                    var label = m < 60 ? m + ' ' + resT('reservationMinutes', 'min')
+                        : (m === 60 ? '1 ' + resT('reservationHour', 'hour')
+                            : (m / 60) + ' ' + resT('reservationHoursShort', 'hours'));
+                    if (m > 60 && m % 60) label = (m / 60) + ' ' + resT('reservationHoursShort', 'hours');
+                    if (m === 90) label = '1.5 ' + resT('reservationHoursShort', 'hours');
+                    if (m === 150) label = '2.5 ' + resT('reservationHoursShort', 'hours');
+                    return '<option value="' + m + '">' + label + '</option>';
+                }).join('');
+                if (String(durations).indexOf(String(Number(durVal))) !== -1) durSel.value = durVal;
+            }
+
+            function updateDurationAvailability() {
+                var dateEl = document.getElementById('res-date');
+                var startSel = document.getElementById('res-start');
+                var durSel = document.getElementById('res-duration');
+                var submit = document.getElementById('res-submit');
+                var preview = document.getElementById('res-end-preview');
+                if (!dateEl || !startSel || !durSel) return;
+                var dateStr = dateEl.value;
+                var startHm = startSel.value;
+                var options = durSel.querySelectorAll('option');
+                var firstOk = null;
+                for (var i = 0; i < options.length; i++) {
+                    var mins = Number(options[i].value);
+                    var endHm = addMinutesHm(startHm, mins);
+                    var endParts = endHm.split(':');
+                    var pastClose = Number(endParts[0]) > RES_CLOSE_HOUR || (Number(endParts[0]) === RES_CLOSE_HOUR && Number(endParts[1]) > 0);
+                    var blocked = !dateStr || pastClose || overlapExists(dateStr, startHm, mins);
+                    var startDt = dateStr ? parseLocalDateTime(localIso(dateStr, startHm)) : null;
+                    if (startDt && startDt < new Date()) blocked = true;
+                    options[i].disabled = blocked;
+                    if (!blocked && firstOk === null) firstOk = options[i].value;
+                }
+                if (durSel.options[durSel.selectedIndex] && durSel.options[durSel.selectedIndex].disabled) {
+                    if (firstOk) durSel.value = firstOk;
+                }
+                var chosen = Number(durSel.value);
+                var endLabel = addMinutesHm(startHm, chosen);
+                var invalid = !dateStr || (durSel.options[durSel.selectedIndex] && durSel.options[durSel.selectedIndex].disabled);
+                if (preview) {
+                    if (invalid) {
+                        preview.textContent = resT('reservationUnavailable', 'This start time has no free duration.');
+                    } else {
+                        preview.innerHTML = escapeHtml(resT('reservationEnds', 'Ends at')) + ' <span class="num-ltr">' + escapeHtml(endLabel) + '</span>';
+                    }
+                    preview.classList.toggle('unavailable', !!invalid);
+                }
+                if (submit) submit.disabled = !!invalid || !currentUser;
+            }
+
+            function renderReservationCalendar() {
+                var strip = document.getElementById('res-week-strip');
+                var grid = document.getElementById('res-time-grid');
+                var weekLabel = document.getElementById('res-week-label');
+                var dateEl = document.getElementById('res-date');
+                if (!strip || !grid) return;
+                var todayStr = ymdLocal(new Date());
+                var days = [];
+                for (var i = 0; i < 7; i++) {
+                    var d = new Date(reservationWeekStart.getFullYear(), reservationWeekStart.getMonth(), reservationWeekStart.getDate() + i);
+                    days.push(d);
+                }
+                var loc = document.documentElement.lang || undefined;
+                if (weekLabel) {
+                    var last = days[6];
+                    weekLabel.innerHTML = '<span class="num-ltr">'
+                        + days[0].toLocaleDateString(loc, { day: 'numeric', month: 'short' })
+                        + ' – ' + last.toLocaleDateString(loc, { day: 'numeric', month: 'short', year: 'numeric' })
+                        + '</span>';
+                }
+                strip.innerHTML = days.map(function(d) {
+                    var key = ymdLocal(d);
+                    var has = reservationBookings.some(function(b) {
+                        var s = parseLocalDateTime(b.start);
+                        return s && ymdLocal(s) === key;
+                    });
+                    var cls = 'res-day-chip'
+                        + (key === reservationSelectedDate ? ' active' : '')
+                        + (key === todayStr ? ' today' : '')
+                        + (has ? ' has-booking' : '');
+                    return '<button type="button" class="' + cls + '" data-date="' + key + '">'
+                        + '<small>' + d.toLocaleDateString(loc, { weekday: 'short' }) + '</small>'
+                        + '<span class="res-day-num num-ltr">' + d.getDate() + '</span>'
+                        + '<span class="res-day-dot"></span>'
+                        + '</button>';
+                }).join('');
+                strip.querySelectorAll('.res-day-chip').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        reservationSelectedDate = this.getAttribute('data-date');
+                        if (dateEl) dateEl.value = reservationSelectedDate;
+                        renderReservationCalendar();
+                        updateDurationAvailability();
+                    });
+                });
+                if (dateEl && dateEl.value !== reservationSelectedDate) {
+                    dateEl.value = reservationSelectedDate;
+                }
+                var times = slotTimes();
+                var me = currentUser ? currentUser.username : '';
+                var now = new Date();
+                grid.innerHTML = times.map(function(hm) {
+                    var booking = null;
+                    for (var i = 0; i < reservationBookings.length; i++) {
+                        if (bookingCovers(reservationBookings[i], reservationSelectedDate, hm)) {
+                            booking = reservationBookings[i];
+                            break;
+                        }
+                    }
+                    var slotStart = parseLocalDateTime(localIso(reservationSelectedDate, hm));
+                    var isPast = slotStart && slotStart < now;
+                    var isStart = false;
+                    var label = '';
+                    var cls = 'res-slot';
+                    if (booking) {
+                        var bStart = parseLocalDateTime(booking.start);
+                        isStart = bStart && ymdLocal(bStart) === reservationSelectedDate && hmFromDate(bStart) === hm;
+                        var mine = booking.player_id === me;
+                        cls += mine ? ' mine' : ' booked';
+                        if (isStart) {
+                            var bEnd = parseLocalDateTime(booking.end);
+                            label = escapeHtml(booking.player_name || resT('reservationBooked', 'Booked'))
+                                + '  <span class="num-ltr">' + hmFromDate(bStart) + '–' + (bEnd ? hmFromDate(bEnd) : '') + '</span>';
+                        }
+                    } else {
+                        cls += ' free';
+                        if (isPast) cls += ' past';
+                    }
+                    return '<div class="res-slot-time"><span class="num-ltr">' + (hm.slice(-2) === '00' ? hm : '') + '</span></div>'
+                        + '<div class="' + cls + '" data-hm="' + hm + '" data-id="' + (booking ? escapeHtml(booking.id) : '') + '">'
+                        + '<span class="res-slot-label">' + label + '</span></div>';
+                }).join('');
+                grid.querySelectorAll('.res-slot.free:not(.past)').forEach(function(el) {
+                    el.addEventListener('click', function() {
+                        var hm = this.getAttribute('data-hm');
+                        var startSel = document.getElementById('res-start');
+                        if (startSel) startSel.value = hm;
+                        if (dateEl) dateEl.value = reservationSelectedDate;
+                        updateDurationAvailability();
+                        grid.querySelectorAll('.res-slot.selected').forEach(function(s) { s.classList.remove('selected'); });
+                        this.classList.add('selected');
+                    });
+                });
+                renderMyReservations();
+                updateDurationAvailability();
+            }
+
+            function renderMyReservations() {
+                var box = document.getElementById('res-mine-rows');
+                if (!box) return;
+                var me = currentUser ? currentUser.username : '';
+                var now = new Date();
+                var staff = currentUser && (currentUser.role === 'coach' || currentUser.role === 'manager' || currentUser.role === 'admin');
+                var mine = reservationBookings.filter(function(b) {
+                    var end = parseLocalDateTime(b.end);
+                    if (!end || end <= now) return false;
+                    if (staff) return true;
+                    return b.player_id === me;
+                }).sort(function(a, b) { return String(a.start).localeCompare(String(b.start)); });
+                if (!mine.length) {
+                    box.innerHTML = '<div class="res-empty">' + escapeHtml(resT('reservationNoneYours', 'No upcoming reservations.')) + '</div>';
+                    return;
+                }
+                box.innerHTML = mine.map(function(b) {
+                    var s = parseLocalDateTime(b.start);
+                    var e = parseLocalDateTime(b.end);
+                    var when = s ? s.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+                    var who = staff && b.player_id !== me ? (' · ' + escapeHtml(b.player_name || '')) : '';
+                    var canCancel = staff || b.player_id === me;
+                    return '<div class="res-mine-row"><span>' + escapeHtml(when)
+                        + ' · <span class="num-ltr">' + (s ? hmFromDate(s) : '') + '–' + (e ? hmFromDate(e) : '') + '</span>' + who
+                        + '</span>' + (canCancel ? '<button type="button" data-cancel-id="' + escapeHtml(b.id) + '">'
+                        + escapeHtml(resT('reservationCancel', 'Cancel')) + '</button>' : '') + '</div>';
+                }).join('');
+                box.querySelectorAll('button[data-cancel-id]').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        cancelReservation(this.getAttribute('data-cancel-id'));
+                    });
+                });
+            }
+
+            async function loadReservationsAndRender() {
+                var from = ymdLocal(reservationWeekStart);
+                var end = new Date(reservationWeekStart.getFullYear(), reservationWeekStart.getMonth(), reservationWeekStart.getDate() + 6);
+                var to = ymdLocal(end);
+                try {
+                    var resp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+                    if (!resp.ok) throw new Error('Failed to load reservations');
+                    var data = await resp.json();
+                    reservationBookings = data.reservations || [];
+                } catch (e) {
+                    console.warn('Reservation load failed:', e);
+                    reservationBookings = reservationBookings || [];
+                }
+                renderReservationCalendar();
+            }
+
+            function showResMessage(okText, errText) {
+                var ok = document.getElementById('res-confirm');
+                var err = document.getElementById('res-error');
+                if (ok) {
+                    ok.textContent = okText || '';
+                    ok.classList.toggle('show', !!okText);
+                }
+                if (err) {
+                    err.textContent = errText || '';
+                    err.classList.toggle('show', !!errText);
+                }
+            }
+
+            function setPaymentStep(on) {
+                var fields = document.getElementById('res-book-fields');
+                var pay = document.getElementById('res-pay-step');
+                if (fields) fields.style.display = on ? 'none' : '';
+                if (pay) pay.classList.toggle('show', !!on);
+            }
+
+            async function submitReservation() {
+                var dateEl = document.getElementById('res-date');
+                var startSel = document.getElementById('res-start');
+                var durSel = document.getElementById('res-duration');
+                var payBtn = document.getElementById('res-pay-btn');
+                if (!currentUser) {
+                    showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
+                    setPaymentStep(false);
+                    return;
+                }
+                var dateStr = dateEl.value;
+                var startHm = startSel.value;
+                var mins = Number(durSel.value);
+                var endHm = addMinutesHm(startHm, mins);
+                if (overlapExists(dateStr, startHm, mins)) {
+                    showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation.'));
+                    setPaymentStep(false);
+                    return;
+                }
+                if (payBtn) payBtn.disabled = true;
+                try {
+                    var resp = await fetch(API_BASE + '/reservations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            player_id: currentUser.username,
+                            start: localIso(dateStr, startHm),
+                            end: localIso(dateStr, endHm),
+                            payment_status: 'simulated'
+                        })
+                    });
+                    var data = await resp.json().catch(function() { return {}; });
+                    if (!resp.ok) {
+                        var detail = data.detail || resT('reservationFailed', 'Reservation failed.');
+                        if (Array.isArray(detail)) detail = detail.map(function(d) { return d.msg || d; }).join(' ');
+                        showResMessage('', detail);
+                        setPaymentStep(false);
+                        return;
+                    }
+                    var when = dateStr + '  ' + startHm + '–' + endHm;
+                    showResMessage(resT('paymentApproved', 'Payment approved (simulation).') + ' ' + resT('reservationSuccess', 'Reservation confirmed.') + ' ' + when, '');
+                    showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
+                    setPaymentStep(false);
+                    await loadReservationsAndRender();
+                } catch (e) {
+                    showResMessage('', resT('networkError', 'Network error. Is the backend running?'));
+                    setPaymentStep(false);
+                } finally {
+                    if (payBtn) payBtn.disabled = false;
+                    updateDurationAvailability();
+                }
+            }
+
+            async function cancelReservation(id) {
+                if (!currentUser || !id) return;
+                try {
+                    var resp = await fetch(API_BASE + '/reservations/' + encodeURIComponent(id) + '?username=' + encodeURIComponent(currentUser.username), {
+                        method: 'DELETE'
+                    });
+                    var data = await resp.json().catch(function() { return {}; });
+                    if (!resp.ok) {
+                        showResMessage('', data.detail || resT('reservationCancelFailed', 'Could not cancel reservation.'));
+                        return;
+                    }
+                    showResMessage(resT('reservationCancelled', 'Reservation cancelled.'), '');
+                    await loadReservationsAndRender();
+                } catch (e) {
+                    showResMessage('', resT('networkError', 'Network error. Is the backend running?'));
+                }
+            }
+
+            function bindReservationUi() {
+                if (reservationBound) return;
+                var dateEl = document.getElementById('res-date');
+                var startSel = document.getElementById('res-start');
+                var durSel = document.getElementById('res-duration');
+                var submit = document.getElementById('res-submit');
+                var payBtn = document.getElementById('res-pay-btn');
+                var payCancel = document.getElementById('res-pay-cancel');
+                var prev = document.getElementById('res-prev-week');
+                var next = document.getElementById('res-next-week');
+                var todayBtn = document.getElementById('res-today-btn');
+                if (!dateEl || !submit) return;
+                reservationBound = true;
+                populateReservationSelects();
+                dateEl.value = reservationSelectedDate;
+                dateEl.addEventListener('change', function() {
+                    if (!this.value) return;
+                    reservationSelectedDate = this.value;
+                    reservationWeekStart = startOfWeek(parseLocalDateTime(this.value + 'T12:00:00') || new Date(this.value));
+                    loadReservationsAndRender();
+                });
+                startSel.addEventListener('change', updateDurationAvailability);
+                durSel.addEventListener('change', updateDurationAvailability);
+                submit.addEventListener('click', function() {
+                    if (!currentUser) {
+                        showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
+                        return;
+                    }
+                    var dateEl2 = document.getElementById('res-date');
+                    var startSel2 = document.getElementById('res-start');
+                    var durSel2 = document.getElementById('res-duration');
+                    if (!dateEl2 || !dateEl2.value || (durSel2 && durSel2.options[durSel2.selectedIndex] && durSel2.options[durSel2.selectedIndex].disabled)) {
+                        showResMessage('', resT('reservationUnavailable', 'This start time has no free duration.'));
+                        return;
+                    }
+                    if (overlapExists(dateEl2.value, startSel2.value, Number(durSel2.value))) {
+                        showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation.'));
+                        return;
+                    }
+                    showResMessage('', '');
+                    setPaymentStep(true);
+                });
+                if (payBtn) payBtn.addEventListener('click', submitReservation);
+                if (payCancel) payCancel.addEventListener('click', function() { setPaymentStep(false); });
+                prev.addEventListener('click', function() {
+                    reservationWeekStart.setDate(reservationWeekStart.getDate() - 7);
+                    reservationSelectedDate = ymdLocal(reservationWeekStart);
+                    loadReservationsAndRender();
+                });
+                next.addEventListener('click', function() {
+                    reservationWeekStart.setDate(reservationWeekStart.getDate() + 7);
+                    reservationSelectedDate = ymdLocal(reservationWeekStart);
+                    loadReservationsAndRender();
+                });
+                todayBtn.addEventListener('click', function() {
+                    var now = new Date();
+                    reservationWeekStart = startOfWeek(now);
+                    reservationSelectedDate = ymdLocal(now);
+                    loadReservationsAndRender();
+                });
+                if (typeof window.addEventListener === 'function') {
+                    window.addEventListener('simust-lang-change', function() {
+                        populateReservationSelects();
+                        renderReservationCalendar();
+                    });
+                }
+            }
+
+            // ================================================================
             // AUTO-REFRESH LOGIC (keep trend stable)
             // ================================================================
             var refreshInterval = null;
@@ -5708,9 +6972,8 @@
                             authorisedPlayers = filterPlayersByRole();
                             if (currentView === 'coach') {
                                 loadCoachData();
-                            } else if (currentView === 'manager') {
-                                loadManagerData(true);
                             }
+                            // Manager team trends load once on click; do not poll/redraw them.
                         }
                     } catch (e) {
                         console.warn('Auto-refresh failed:', e);
@@ -5729,6 +6992,8 @@
             showDashboard = function(view) {
                 originalShowDashboard(view);
                 startAutoRefresh();
+                bindReservationUi();
+                loadReservationsAndRender();
             };
 
             var originalShowLogin = showLogin;
@@ -5797,6 +7062,15 @@
                         return;
                     }
                     if (view === 'player') {
+                        if (this.dataset.section === 'reservation') {
+                            setView(view);
+                            sidebarLinks.forEach(function(l) { l.classList.toggle('active', l === this); }.bind(this));
+                            bindReservationUi();
+                            loadReservationsAndRender();
+                            var cal = document.getElementById('player-reservation');
+                            if (cal) cal.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            return;
+                        }
                         if (!selectedPlayerId) {
                             openSearchModal();
                             return;

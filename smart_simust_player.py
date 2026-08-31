@@ -337,6 +337,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.is_first_video = True
         self.total_videos = 0
         self._realtime_stopped = False
+        self._status_completed = False
+        self._final_play_started_at = 0
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -468,7 +470,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         self._is_closing = True
         logger.info("Cleaning up resources...")
-        if not self._realtime_stopped:
+        try:
+            if self._status_completed or self.playlist_finished:
+                self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed")
+            else:
+                self._update_status_file("closed", self.current_video_index + 1, len(self.video_files), "Player closed")
+        except:
+            pass
+        if not self._realtime_stopped and not self._status_completed:
             self._stop_realtime()
         try:
             self.check_timer.stop()
@@ -495,13 +504,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if self.videoframe:
                 self.videoframe.deleteLater()
                 self.videoframe = None
-        except:
-            pass
-        try:
-            self._update_status_file("closed", self.current_video_index + 1, len(self.video_files), "Player closed")
-            time.sleep(0.1)
-            if os.path.exists(self.status_file):
-                os.remove(self.status_file)
         except:
             pass
         try:
@@ -762,6 +764,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _force_close_with_completion(self):
         """Fallback: close player and set status to completed."""
         if not self._is_closing:
+            self._status_completed = True
             self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed (timeout)")
             self.close()
 
@@ -787,6 +790,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
             # Indicate that we are in final video mode
             self.playlist_finished = True
+            self._final_play_started_at = time.time()
             self.check_timer.start()
 
             # Fallback: close after 60 seconds (in case the video never ends)
@@ -932,8 +936,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
             # If we're playing the final video (playlist_finished is True)
             if self.playlist_finished:
-                if state == vlc.State.Ended:
+                if self._final_play_started_at and (time.time() - self._final_play_started_at) < 2.0:
+                    return
+                length = 0
+                play_time = 0
+                try:
+                    length = self.player.get_length() or 0
+                    play_time = self.player.get_time() or 0
+                except Exception:
+                    pass
+                ended = state in (vlc.State.Ended, vlc.State.Error)
+                stopped_after_play = state == vlc.State.Stopped and play_time > 800
+                near_end = length > 1000 and play_time >= max(0, length - 400)
+                if ended or stopped_after_play or near_end:
                     logger.info("Final video finished – updating status and closing.")
+                    self._status_completed = True
                     self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed")
                     self.close()
                 return

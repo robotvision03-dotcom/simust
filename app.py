@@ -33,6 +33,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import hashlib
 import json
+import uuid
 import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -114,6 +115,193 @@ def send_registration_email(user_info: dict) -> bool:
     except Exception as e:
         log.error("Failed to send registration email: %s", e, exc_info=True)
         return False
+
+
+# ============================================================
+# TRAINING PLACE RESERVATIONS
+# Shared calendar: 30-minute grid, 07:00–22:00 local, 30–180 min slots
+# ============================================================
+
+RESERVATIONS_FILE = "reservations.json"
+RESERVATION_LOCK = threading.Lock()
+RESERVATION_OPEN_HOUR = 7
+RESERVATION_CLOSE_HOUR = 22
+RESERVATION_SLOT_MINUTES = 30
+RESERVATION_MIN_MINUTES = 30
+RESERVATION_MAX_MINUTES = 180
+RESERVATION_STAFF_ROLES = {"coach", "manager", "admin"}
+
+
+def load_reservations():
+    if not os.path.exists(RESERVATIONS_FILE):
+        return []
+    try:
+        with open(RESERVATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            items = data.get("reservations", [])
+            return items if isinstance(items, list) else []
+    except (json.JSONDecodeError, OSError) as e:
+        logging.getLogger(__name__).error("Failed to load reservations.json: %s", e)
+    return []
+
+
+def save_reservations(items):
+    tmp = RESERVATIONS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, RESERVATIONS_FILE)
+
+
+def _parse_iso_dt(value: str, field: str = "datetime") -> datetime:
+    if not value or not str(value).strip():
+        raise HTTPException(400, f"{field} is required")
+    raw = str(value).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(400, f"Invalid {field}")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.replace(microsecond=0)
+
+
+def _parse_range_bound(value: str, end_of_day: bool = False) -> Optional[datetime]:
+    if not value or not str(value).strip():
+        return None
+    raw = str(value).strip()
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        try:
+            day = datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "Invalid date range")
+        if end_of_day:
+            return day + timedelta(days=1)
+        return day
+    return _parse_iso_dt(raw, "date range")
+
+
+def _on_half_hour_grid(dt: datetime) -> bool:
+    return dt.second == 0 and dt.minute in (0, 30)
+
+
+def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and start_b < end_a
+
+
+def _player_display_name(user: dict, username: str) -> str:
+    name = " ".join(
+        part for part in [(user or {}).get("name", ""), (user or {}).get("surname", "")] if part
+    ).strip()
+    return name or username
+
+
+def _public_reservation(item: dict) -> dict:
+    start = _parse_iso_dt(item.get("start", ""), "start")
+    end = _parse_iso_dt(item.get("end", ""), "end")
+    duration = int((end - start).total_seconds() // 60)
+    public = {
+        "id": item.get("id"),
+        "player_id": item.get("player_id", ""),
+        "player_name": item.get("player_name") or "Booked",
+        "start": start.isoformat(timespec="seconds"),
+        "end": end.isoformat(timespec="seconds"),
+        "duration_minutes": duration,
+    }
+    if item.get("payment_status"):
+        public["payment_status"] = item.get("payment_status")
+    return public
+
+
+def _format_duration_label(minutes: int) -> str:
+    hours, mins = divmod(int(minutes), 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour" if hours == 1 else f"{hours} hours")
+    if mins:
+        parts.append(f"{mins} minutes")
+    return " ".join(parts) if parts else f"{minutes} minutes"
+
+
+def send_reservation_email(booking: dict, user_info: dict) -> bool:
+    """Notify admin of a new training-place reservation. Same SMTP pattern as registration."""
+    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER", os.environ.get("SMTP_USERNAME", "")).strip()
+    smtp_pass = os.environ.get("SMTP_PASSWORD", os.environ.get("SMTP_PASS", "")).strip()
+    smtp_from = os.environ.get("SMTP_FROM", smtp_user).strip()
+    admin_to = ADMIN_NOTIFY_EMAIL
+
+    log = logging.getLogger(__name__)
+    if not smtp_user or not smtp_pass:
+        log.warning(
+            "SMTP_USER / SMTP_PASSWORD are not set. Reservation email to %s was not sent.",
+            admin_to,
+        )
+        return False
+
+    start = _parse_iso_dt(booking.get("start", ""), "start")
+    end = _parse_iso_dt(booking.get("end", ""), "end")
+    duration = int((end - start).total_seconds() // 60)
+    player_email = (user_info or {}).get("email", "")
+    lines = [
+        "A training-place reservation was confirmed on My SIMUST.",
+        "",
+        f"Player: {booking.get('player_name', '')}",
+        f"Username: {booking.get('player_id', '')}",
+        f"Email: {player_email}",
+        f"Date: {start.strftime('%A, %d %B %Y')}",
+        f"Start: {start.strftime('%H:%M')}",
+        f"End: {end.strftime('%H:%M')}",
+        f"Duration: {_format_duration_label(duration)} ({duration} minutes)",
+        f"Reservation ID: {booking.get('id', '')}",
+        f"Time: {datetime.now().isoformat(timespec='seconds')}",
+    ]
+    msg = MIMEText("\n".join(lines), "plain", "utf-8")
+    msg["Subject"] = f"SIMUST reservation: {booking.get('player_name', booking.get('player_id', ''))} {start.strftime('%Y-%m-%d %H:%M')}"
+    msg["From"] = formataddr(("SIMUST", smtp_from or smtp_user))
+    msg["To"] = admin_to
+    if player_email:
+        msg["Reply-To"] = player_email
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_from or smtp_user, [admin_to], msg.as_string())
+        log.info("Reservation email sent to %s for %s", admin_to, booking.get("player_id"))
+        return True
+    except Exception as e:
+        log.error("Failed to send reservation email: %s", e, exc_info=True)
+        return False
+
+
+def _validate_reservation_window(start: datetime, end: datetime) -> int:
+    now = datetime.now().replace(microsecond=0)
+    if end <= start:
+        raise HTTPException(400, "End time must be after start time")
+    if start < now:
+        raise HTTPException(400, "Reservations cannot start in the past")
+    duration = int((end - start).total_seconds() // 60)
+    if (end - start).total_seconds() % 60:
+        raise HTTPException(400, "Reservations must use whole minutes")
+    if duration < RESERVATION_MIN_MINUTES or duration > RESERVATION_MAX_MINUTES:
+        raise HTTPException(400, "Slot length must be between 30 minutes and 3 hours")
+    if duration % RESERVATION_SLOT_MINUTES != 0:
+        raise HTTPException(400, "Slot length must be a multiple of 30 minutes")
+    if start.date() != end.date():
+        raise HTTPException(400, "Reservations must stay within a single day")
+    open_t = datetime.combine(start.date(), datetime.min.time()).replace(hour=RESERVATION_OPEN_HOUR)
+    close_t = datetime.combine(start.date(), datetime.min.time()).replace(hour=RESERVATION_CLOSE_HOUR)
+    if start < open_t or end > close_t:
+        raise HTTPException(400, "Reservations are only available from 07:00 to 22:00")
+    if not _on_half_hour_grid(start) or not _on_half_hour_grid(end):
+        raise HTTPException(400, "Start and end must align to the 30-minute grid")
+    return duration
         
 # ============================================================
 # PROGRESSION SYSTEM (UPDATED for Foundation thresholds)
@@ -755,6 +943,20 @@ async def start_realtime_playback(req: Request):
             raise HTTPException(400, f"Level directory not found: {level_path}")
 
         force_kill_smart_player()
+        try:
+            status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            with open(status_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "state": "playing",
+                    "current_video": 0,
+                    "total_videos": 0,
+                    "progress": 0,
+                    "message": "Starting playback",
+                    "timestamp": time.time()
+                }, f)
+        except Exception as e:
+            logger.warning(f"Could not reset playback status file: {e}")
         if realtime_camera_process:
             try:
                 if realtime_camera_process.poll() is None:
@@ -2132,6 +2334,79 @@ async def save_session_to_player(req: Request):
         logger.error(f"Failed to save session to player: {e}")
         raise HTTPException(500, f"Failed to save session: {str(e)}")
 
+def compute_player_ae_acc(player_id):
+    """AE and ACC averages across all saved sessions for a player (same defs as the UI)."""
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, str(player_id))
+    index_file = os.path.join(player_dir, "index.json")
+    if not os.path.exists(index_file):
+        return 0.0, 0.0
+    try:
+        with open(index_file, 'r', encoding='utf-8') as f:
+            index = json.load(f)
+    except Exception:
+        return 0.0, 0.0
+
+    total_correct = 0
+    total_late = 0
+    total_wrong = 0
+    total_miss = 0
+    ae_weighted = 0.0
+    ae_weight = 0
+
+    for entry in index or []:
+        report_name = entry.get("file") or ""
+        report_file = os.path.join(player_dir, report_name)
+        if os.path.exists(report_file):
+            try:
+                with open(report_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+            except Exception:
+                session_data = None
+        else:
+            session_data = None
+
+        if session_data:
+            stats = session_data.get("statistics") or {}
+            actions = session_data.get("actions") or []
+            correct = stats.get("correct", 0) or 0
+            late = stats.get("late", 0) or 0
+            wrong = stats.get("wrong", 0) or 0
+            miss = stats.get("miss", 0) or 0
+            total = stats.get("total") or session_data.get("total_actions") or (
+                correct + late + wrong + miss) or len(actions)
+            avg_ae = stats.get("avg_ae") or 0
+            if not avg_ae and actions:
+                ae_vals = []
+                for a in actions:
+                    v = a.get("ae")
+                    if v is not None and v != 'N/A':
+                        try:
+                            ae_vals.append(float(v))
+                        except (TypeError, ValueError):
+                            pass
+                avg_ae = sum(ae_vals) / len(ae_vals) if ae_vals else 0
+        else:
+            correct = entry.get("correct", 0) or 0
+            late = entry.get("late", 0) or 0
+            wrong = entry.get("wrong", 0) or 0
+            miss = 0
+            total = entry.get("total_actions", 0) or (correct + late + wrong)
+            avg_ae = 0
+
+        total_correct += correct
+        total_late += late
+        total_wrong += wrong
+        total_miss += miss
+        if avg_ae and total:
+            ae_weighted += float(avg_ae) * total
+            ae_weight += total
+
+    pooled = total_correct + total_late + total_wrong + total_miss
+    avg_acc = ((total_correct + total_late) / pooled * 100) if pooled > 0 else 0.0
+    avg_ae = (ae_weighted / ae_weight) if ae_weight > 0 else 0.0
+    return round(avg_ae, 1), round(avg_acc, 1)
+
+
 @app.get("/get-player-reports/{player_id}")
 async def get_player_reports(player_id: str):
     try:
@@ -2370,6 +2645,7 @@ async def get_players():
                 save_users(users)
 
             progress = user_data.get("progress", {})
+            avg_ae, avg_acc = compute_player_ae_acc(player_id)
             players.append({
                 "id": player_id,
                 "name": user_data.get("name", player_id),
@@ -2380,6 +2656,8 @@ async def get_players():
                 "age": user_data.get("age", ""),
                 "image": user_data.get("image", ""),
                 "progress": progress,
+                "avgAe": avg_ae,
+                "avgAcc": avg_acc,
                 "sessions": []   # will be loaded separately
             })
             seen.add(player_id)
@@ -2431,6 +2709,7 @@ async def get_players():
                         progress = json.load(f)
                 except:
                     pass
+            avg_ae, avg_acc = compute_player_ae_acc(folder)
             players.append({
                 "id": folder,
                 "name": player_name,
@@ -2441,6 +2720,8 @@ async def get_players():
                 "age": age,
                 "image": image,
                 "progress": progress,
+                "avgAe": avg_ae,
+                "avgAcc": avg_acc,
                 "sessions": []
             })
 
@@ -2719,7 +3000,169 @@ async def update_profile(req: Request):
         users[username]["image"] = image
 
     save_users(users)
-    return {"status": "success", "message": "Profile updated"}   
+    return {"status": "success", "message": "Profile updated"}
+
+
+# ============================================================
+# RESERVATION ENDPOINTS (training place shared calendar)
+# ============================================================
+
+@app.get("/reservations/today")
+async def reservations_today():
+    """Public compact list of today's bookings (names + times only)."""
+    today = datetime.now().date()
+    day_start = datetime.combine(today, datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+    items = []
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+    for item in bookings:
+        try:
+            start = _parse_iso_dt(item.get("start", ""), "start")
+            end = _parse_iso_dt(item.get("end", ""), "end")
+        except HTTPException:
+            continue
+        if not _intervals_overlap(start, end, day_start, day_end):
+            continue
+        items.append({
+            "id": item.get("id"),
+            "player_name": item.get("player_name") or "Booked",
+            "start": start.strftime("%H:%M"),
+            "end": end.strftime("%H:%M"),
+            "start_iso": start.isoformat(timespec="seconds"),
+            "end_iso": end.isoformat(timespec="seconds"),
+        })
+    items.sort(key=lambda row: row.get("start_iso", ""))
+    return {
+        "date": today.isoformat(),
+        "open": f"{RESERVATION_OPEN_HOUR:02d}:00",
+        "close": f"{RESERVATION_CLOSE_HOUR:02d}:00",
+        "reservations": items,
+    }
+
+
+@app.get("/reservations")
+async def list_reservations(request: Request):
+    """List bookings in a date range. No emails or passwords."""
+    range_from = _parse_range_bound(request.query_params.get("from", ""), end_of_day=False)
+    range_to = _parse_range_bound(request.query_params.get("to", ""), end_of_day=True)
+    if range_from is None:
+        range_from = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if range_to is None:
+        range_to = range_from + timedelta(days=14)
+    if range_to <= range_from:
+        raise HTTPException(400, "Invalid date range")
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+    results = []
+    for item in bookings:
+        try:
+            start = _parse_iso_dt(item.get("start", ""), "start")
+            end = _parse_iso_dt(item.get("end", ""), "end")
+        except HTTPException:
+            continue
+        if _intervals_overlap(start, end, range_from, range_to):
+            results.append(_public_reservation(item))
+    results.sort(key=lambda row: row.get("start", ""))
+    return {"reservations": results}
+
+
+@app.post("/reservations")
+async def create_reservation(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    username = (data.get("player_id") or data.get("username") or "").strip()
+    if not username:
+        raise HTTPException(400, "player_id or username is required")
+
+    start = _parse_iso_dt(data.get("start", ""), "start")
+    end = _parse_iso_dt(data.get("end", ""), "end")
+    duration = _validate_reservation_window(start, end)
+
+    users = load_users()
+    user = users.get(username)
+    if not user:
+        raise HTTPException(404, "Player not found")
+
+    display_name = _player_display_name(user, username)
+    created = None
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+        for item in bookings:
+            try:
+                existing_start = _parse_iso_dt(item.get("start", ""), "start")
+                existing_end = _parse_iso_dt(item.get("end", ""), "end")
+            except HTTPException:
+                continue
+            if _intervals_overlap(start, end, existing_start, existing_end):
+                raise HTTPException(409, "That time overlaps an existing reservation")
+        payment_status = str(data.get("payment_status") or "").strip() or "simulated"
+        created = {
+            "id": str(uuid.uuid4()),
+            "player_id": username,
+            "player_name": display_name,
+            "start": start.isoformat(timespec="seconds"),
+            "end": end.isoformat(timespec="seconds"),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "payment_status": payment_status,
+        }
+        bookings.append(created)
+        save_reservations(bookings)
+
+    email_user = {
+        "email": user.get("email", ""),
+        "name": user.get("name", ""),
+        "surname": user.get("surname", ""),
+    }
+    threading.Thread(
+        target=send_reservation_email,
+        args=(created, email_user),
+        daemon=True,
+    ).start()
+    public = _public_reservation(created)
+    public["duration_minutes"] = duration
+    return public
+
+
+@app.delete("/reservations/{id}")
+async def delete_reservation(id: str, request: Request):
+    username = request.query_params.get("username", "").strip()
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            username = username or (body.get("username") or body.get("player_id") or "").strip()
+    except Exception:
+        pass
+    if not username:
+        raise HTTPException(400, "username is required")
+
+    users = load_users()
+    actor = users.get(username)
+    if not actor:
+        raise HTTPException(404, "User not found")
+    staff = str(actor.get("role", "")).strip().lower() in RESERVATION_STAFF_ROLES
+
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+        found = None
+        remaining = []
+        for item in bookings:
+            if item.get("id") == id:
+                found = item
+            else:
+                remaining.append(item)
+        if not found:
+            raise HTTPException(404, "Reservation not found")
+        owner = found.get("player_id", "")
+        if owner != username and not staff:
+            raise HTTPException(403, "You can only cancel your own reservation")
+        save_reservations(remaining)
+
+    return {"status": "success", "id": id}
+
 
 # ============================================================
 # Main Entry Point
