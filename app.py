@@ -45,7 +45,14 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 os.makedirs("static", exist_ok=True)   
 
@@ -3170,21 +3177,13 @@ async def delete_reservation(id: str, request: Request):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    if is_frozen():
-        uvicorn.run(
-            "app:app",
-            host="127.0.0.1",
-            port=8000,
-            timeout_keep_alive=300,
-            timeout_graceful_shutdown=60,
-            log_level="info",
-        )
-    else:
-        uvicorn.run(
-            "app:app",
-            host="127.0.0.1",
-            port=8000,
-            timeout_keep_alive=300,
-            timeout_graceful_shutdown=60,
-            log_level="info",
-        )
+    host = os.environ.get("SIMUST_HOST", "0.0.0.0")
+    port = int(os.environ.get("SIMUST_PORT", "8000"))
+    uvicorn.run(
+        "app:app",
+        host=host,
+        port=port,
+        timeout_keep_alive=300,
+        timeout_graceful_shutdown=60,
+        log_level="info",
+    )

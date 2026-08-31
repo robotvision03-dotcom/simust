@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">SIMUST Analyzer</string>
+    <string name="settings_title">Server</string>
+    <string name="server_url_hint">http://192.168.1.10:8000</string>
+    <string name="server_url_label">SIMUST server URL</string>
+    <string name="save">Save and open GUI</string>
+    <string name="reload">Reload</string>
+    <string name="settings">Server settings</string>
+    <string name="help_text">Run app.py on the PC (listens on port 8000). Phone and PC must be on the same Wi‑Fi. Use the PC LAN IP, for example http://192.168.1.10:8000. Android emulator: http://10.0.2.2:8000</string>
+    <string name="load_error">Could not load the SIMUST GUI. Check the server URL and that app.py is running.</string>
+    <string name="retry">Retry</string>
+</resources>

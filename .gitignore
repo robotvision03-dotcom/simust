@@ -7,6 +7,13 @@ __pycache__/
 users.json
 .vscode/
 .idea/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.cxx/
+android/.idea/
 .DS_Store
 Thumbs.db
 *.mp4
