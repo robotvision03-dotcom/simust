@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Test Coach Image</title>
+</head>
+<body>
+    <h1>Coach Image Test</h1>
+    <p>Image source: <code>/static/coach.jpeg</code></p>
+    <img src="coach.jpeg" alt="Coach" style="max-width:300px; border:2px solid gold; border-radius:50%;">
+    <p>If the image doesn't appear, check that:</p>
+    <ul>
+        <li>The file <code>coach.jpeg</code> exists inside the <code>static/</code> folder.</li>
+        <li>Your FastAPI app is mounted with <code>app.mount("/static", StaticFiles(directory="static"), name="static")</code>.</li>
+        <li>You are running the backend on <code>http://127.0.0.1:8000</code> and accessing this page via the same origin.</li>
+    </ul>
+</body>
+</html>

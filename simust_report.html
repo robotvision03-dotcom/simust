@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIMUST Play It Smart - Report</title>
+    <style>
+        :root {
+            --bg-color: #f4f6f9;
+            --card-bg: #ffffff;
+            --text-main: #1a1a1a;
+            --text-muted: #666;
+            --accent-yellow: #F9A825;
+            --accent-blue: #1976D2;
+            --accent-green: #388E3C;
+            --accent-red: #D32F2F;
+            --border-color: #e0e0e0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+
+        body {
+            background: var(--bg-color);
+            padding: 40px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .report-container {
+            max-width: 900px;
+            width: 100%;
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        }
+
+        h1 { font-size: 24px; letter-spacing: 1px; color: var(--text-main); margin-bottom: 4px; }
+        .sub-header { display: flex; justify-content: space-between; color: var(--text-muted); font-size: 14px; font-weight: 600; border-bottom: 2px solid var(--border-color); padding-bottom: 15px; margin-bottom: 25px; }
+        .section-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text-main); }
+        .btn-refresh { color: var(--accent-blue); font-weight: 600; cursor: default; }
+
+        /* --- TOP GRID (Ring + Summary) --- */
+        .top-grid {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+            align-items: center;
+        }
+
+        /* 1. THE RING - FIXED WITH FLAT ENDS */
+        .ring-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .ring-wrapper svg {
+            width: 140px;
+            height: 140px;
+            transform: rotate(-90deg); /* Start from top */
+        }
+        .ring-bg { fill: none; stroke: #eaeaea; stroke-width: 12; }
+        .ring-progress { 
+            fill: none; 
+            stroke: var(--accent-yellow); 
+            stroke-width: 12; 
+            stroke-linecap: butt; /* <--- FIX: REMOVED THE CURVED CAPS */
+            stroke-dasharray: 376.99; /* Circumference of r=60 */
+            stroke-dashoffset: 271.43; /* 28% filled */
+        }
+        .ring-text {
+            transform: rotate(90deg); /* Counteract the SVG rotation */
+            font-size: 28px;
+            font-weight: 700;
+            fill: var(--text-main);
+        }
+
+        /* 2. SUMMARY STATS */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px 20px;
+        }
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
+        .stat-value { font-size: 18px; font-weight: 700; color: var(--text-main); }
+        .stat-sub { font-size: 12px; color: var(--text-muted); }
+
+        /* --- CHARTS SECTION --- */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            background: #fafafa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+        }
+        .chart-box h4 { font-size: 13px; color: var(--text-muted); font-weight: 600; margin-bottom: 10px; }
+        .bar-track { width: 100%; height: 10px; background: #e0e0e0; border-radius: 6px; overflow: hidden; margin: 4px 0; }
+        .bar-fill { height: 100%; border-radius: 6px; }
+        .bar-fill.green { background: var(--accent-green); }
+        .bar-fill.blue { background: var(--accent-blue); }
+        .bar-fill.yellow { background: var(--accent-yellow); }
+        .chart-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .chart-row span { font-size: 14px; font-weight: 600; color: var(--text-main); }
+
+        /* AEP Mini Donut */
+        .aep-donut-wrapper { display: flex; align-items: center; gap: 15px; }
+        .mini-donut {
+            width: 60px; height: 60px;
+            border-radius: 50%;
+            background: conic-gradient(var(--accent-green) 0% 100%, #e0e0e0 100% 100%);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .mini-donut-inner { width: 40px; height: 40px; background: #fafafa; border-radius: 50%; }
+        .aep-text { font-size: 14px; font-weight: 700; color: var(--text-main); }
+
+        /* --- TABLE --- */
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        thead tr { background: #f8f9fa; border-bottom: 2px solid var(--border-color); }
+        th { text-align: left; padding: 12px 10px; color: var(--text-muted); font-weight: 600; }
+        td { padding: 12px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-main); }
+        .highlight-row { background: #fff8e1; } /* Light yellow to highlight S1 */
+
+        /* --- FOOTER --- */
+        .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #999;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+            padding-top: 20px;
+        }
+
+        /* --- PRINT STYLES FOR PDF --- */
+        @media print {
+            body { background: white; padding: 0; }
+            .report-container { box-shadow: none; border-radius: 0; padding: 20px; }
+            .charts-grid { background: #fafafa; break-inside: avoid; }
+            table { break-inside: avoid; }
+            .btn-refresh { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="report-container">
+    
+    <!-- HEADER -->
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
+        <span style="font-size: 20px;">☰</span>
+        <h1>SIMUST PLAY IT SMART</h1>
+    </div>
+    <div class="sub-header">
+        <span>SMART CONTROL &nbsp;|&nbsp; IDLE</span>
+        <span class="btn-refresh">REFRESH</span>
+    </div>
+
+    <!-- TOP SECTION -->
+    <h2 class="section-title">RESULTS – Summary & Training Details</h2>
+    
+    <div class="top-grid">
+        <!-- RING WITH FLAT CAPS -->
+        <div class="ring-wrapper">
+            <svg viewBox="0 0 140 140">
+                <circle class="ring-bg" cx="70" cy="70" r="60"></circle>
+                <circle class="ring-progress" cx="70" cy="70" r="60" stroke-dashoffset="271.43"></circle> <!-- 28% -->
+                <text class="ring-text" x="70" y="75" text-anchor="middle">28%</text>
+            </svg>
+        </div>
+
+        <!-- SUMMARY STATS -->
+        <div class="summary-grid">
+            <div class="stat-item">
+                <span class="stat-label">Average Execution Time</span>
+                <span class="stat-value">1.68s</span>
+                <span class="stat-sub">from 1 correct</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Body Displacement</span>
+                <span class="stat-value">0.0 m</span>
+                <span class="stat-sub">1 actions</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Action Efficiency</span>
+                <span class="stat-value">76.8%</span>
+                <span class="stat-sub">from 1 actions</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Action Accuracy</span>
+                <span class="stat-value" style="color: var(--accent-green);">100%</span>
+                <span class="stat-sub">(Correct+Late)/Total</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- COLORED CHARTS SECTION -->
+    <div class="charts-grid">
+        <!-- Efficiency & Accuracy Bars -->
+        <div>
+            <div class="chart-box">
+                <h4>Action Efficiency</h4>
+                <div class="chart-row"><span>76.8%</span></div>
+                <div class="bar-track"><div class="bar-fill yellow" style="width: 76.8%;"></div></div>
+            </div>
+            <div class="chart-box" style="margin-top: 15px;">
+                <h4>Action Accuracy</h4>
+                <div class="chart-row"><span>100%</span></div>
+                <div class="bar-track"><div class="bar-fill green" style="width: 100%;"></div></div>
+            </div>
+        </div>
+
+        <!-- AEP Data & Mini Donut -->
+        <div>
+            <h4>AEP (Left / Right)</h4>
+            <div class="aep-donut-wrapper">
+                <div class="mini-donut">
+                    <div class="mini-donut-inner"></div>
+                </div>
+                <div>
+                    <div class="aep-text" style="color:var(--accent-green);">L: 100% / R: 0%</div>
+                    <div style="font-size: 13px; color: var(--text-muted); margin-top: 5px;">1 goals</div>
+                </div>
+            </div>
+            <div style="margin-top: 12px;">
+                <div class="chart-row"><span>Total Actions</span> <span style="font-weight:700;">1</span></div>
+                <div class="chart-row" style="font-size: 13px; color: var(--text-muted);">
+                    <span>Correct / Late / Wrong / Miss</span>
+                    <span style="color: var(--text-main); font-weight:700;">1 / 0 / 0 / 0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DETAILS TABLE -->
+    <h3 style="font-size: 15px; margin-bottom: 10px; color: var(--text-main);">Training Details</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Series ID</th>
+                <th>Action</th>
+                <th>Screens</th>
+                <th>Result</th>
+                <th>Winning Screen</th>
+                <th>Session Dur (s)</th>
+                <th>AEP</th>
+                <th>AE</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr class="highlight-row">
+                <td><strong>S1</strong></td>
+                <td>PASS</td>
+                <td>2, 14</td>
+                <td style="color: var(--accent-green); font-weight:600;">Correct</td>
+                <td>14</td>
+                <td>1.719</td>
+                <td>Left</td>
+                <td>76.8</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="footer">
+        © 2025 SIMUST. All rights reserved.
+    </div>
+
+</div>
+
+</body>
+</html>

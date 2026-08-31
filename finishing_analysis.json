@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "generated_at": "2026-06-05T15:49:23.719002",
+    "total_sessions": 9,
+    "total_goals": 1,
+    "video_width": 3840,
+    "video_height": 1080,
+    "goal_area_depth": 150,
+    "ball_threshold": 100
+  },
+  "sessions": [
+    {
+      "session_id": "A2",
+      "action": "PASS",
+      "screens": [
+        "14",
+        "4"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A3",
+      "action": "TARGET",
+      "screens": [
+        "9L"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A4",
+      "action": "PASS",
+      "screens": [
+        "3"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A5",
+      "action": "GOAL",
+      "screens": [
+        "8"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A6",
+      "action": "PRESS",
+      "screens": [
+        "2",
+        "13"
+      ],
+      "has_goal": true,
+      "goal_time": "12:28:24.585",
+      "goal_time_seconds": 3.257,
+      "goal_distance_px": 168.4,
+      "action_time_seconds": 3.26,
+      "goal_screen": "13"
+    },
+    {
+      "session_id": "A7",
+      "action": "PASS",
+      "screens": [
+        "14",
+        "4"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A8",
+      "action": "PASS",
+      "screens": [
+        "13"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A9",
+      "action": "GOAL",
+      "screens": [
+        "8"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    },
+    {
+      "session_id": "A10",
+      "action": "TARGET",
+      "screens": [
+        "6L"
+      ],
+      "has_goal": false,
+      "goal_time": null,
+      "goal_time_seconds": null,
+      "goal_distance_px": null,
+      "action_time_seconds": null,
+      "goal_screen": null
+    }
+  ]
+}

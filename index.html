@@ -1,0 +1,2611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SIMUST PLAY IT SMART · Professional</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* ----- GLOBAL THEME (unchanged) ----- */
+        :root { --bg-deep: #0a0c12; --bg-card: #10131f; --bg-card-light: #0c1020; --gold: #ffc107; --gold-light: #ffd700; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --white: #ffffff; --gray: #c8c8c8; --gray-dark: #969696; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg-deep); font-family: 'Inter', 'Segoe UI', system-ui, monospace; color: var(--white); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .simust-card { background: var(--bg-card); border-radius: 28px; border: 1px solid rgba(255,193,7,0.25); box-shadow: 0 20px 35px -12px rgba(0,0,0,0.5); max-width: 1400px; width: 100%; overflow: hidden; }
+        .simust-header { background: linear-gradient(145deg, #0b0e17 0%, #07090f 100%); border-bottom: 2px solid var(--gold); padding: 20px 28px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        .gold-accent { color: var(--gold); }
+        .stat-number { font-size: 2.4rem; font-weight: 800; background: linear-gradient(135deg, #ffd966, #ffb347); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .btn-primary { background: linear-gradient(105deg, var(--gold), #ffae00); color: var(--bg-deep); font-weight: bold; padding: 10px 24px; border-radius: 40px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-primary:hover { transform: scale(1.02); box-shadow: 0 0 20px rgba(255,193,7,0.3); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-realtime { background: linear-gradient(105deg, #10b981, #059669); color: white; }
+        .btn-realtime:disabled { background: #4a5568; color: #9ca3af; }
+        .btn-danger { background: var(--red); color: white; }
+        .btn-results { background: linear-gradient(105deg, #8b5cf6, #6d28d9); color: white; }
+        .btn-logout { background: linear-gradient(105deg, #ef4444, #b91c1c); color: white; padding: 8px 18px; border-radius: 40px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-logout:hover { transform: scale(1.04); box-shadow: 0 0 20px rgba(239,68,68,0.3); }
+        .live-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; animation: pulse 1.5s infinite; }
+        .live-dot.active { background: var(--green); }
+        .live-dot.inactive { background: #6b7280; animation: none; }
+        @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
+        .tab-button { background: transparent; color: #9ca3af; border-bottom: 2px solid transparent; padding: 12px 24px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-size: 14px; }
+        .tab-button.active { color: var(--gold); border-bottom-color: var(--gold); background: rgba(255,193,7,0.05); }
+        .tab-button:hover { color: var(--white); }
+        .player-card { background: var(--bg-card-light); border-radius: 16px; border: 1px solid rgba(255,193,7,0.25); padding: 12px 18px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
+        .player-card:hover { border-color: var(--gold); background: #12162a; }
+        .player-card.active { border-color: var(--gold); background: #1a1f35; }
+        .search-input { background: #1a1f2e; border: 1px solid rgba(255,193,7,0.25); border-radius: 40px; padding: 12px 20px; color: white; outline: none; width: 100%; transition: border 0.2s; }
+        .search-input:focus { border-color: var(--gold); }
+        .toggle-switch { position: relative; display: inline-block; width: 56px; height: 28px; margin: 0 10px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #4a5568; border-radius: 34px; transition: 0.3s; }
+        .slider::before { content: ''; position: absolute; height: 22px; width: 22px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s; }
+        input:checked + .slider { background: #10b981; }
+        input:checked + .slider::before { transform: translateX(28px); }
+        .viz-status-on { color: var(--green); font-weight: bold; }
+        .viz-status-off { color: var(--red); font-weight: bold; }
+        .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg-card); border-left: 4px solid var(--green); padding: 14px 24px; border-radius: 14px; z-index: 1100; box-shadow: 0 10px 40px rgba(0,0,0,0.6); animation: slideIn 0.3s ease; border: 1px solid rgba(255,193,7,0.15); }
+        @keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
+        .loading-spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--gold); border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .clear-selection-btn { background: #374151; color: var(--red); border: none; padding: 6px 16px; border-radius: 40px; cursor: pointer; font-size: 13px; transition: 0.2s; }
+        .clear-selection-btn:hover { background: #4a5568; }
+        .refresh-btn { background: #2a2e42; padding: 4px 14px; border-radius: 20px; font-size: 11px; cursor: pointer; border: none; color: #e2e8f0; transition: 0.2s; }
+        .refresh-btn:hover { background: #3a3e52; }
+        .auto-badge { background: #10b981; border-radius: 20px; padding: 2px 10px; font-size: 10px; font-weight: bold; margin-left: 8px; animation: pulse 1s infinite; }
+        .metric-ring { background: var(--bg-card-light); border-radius: 20px; border: 1px solid rgba(255,193,7,0.15); padding: 14px 10px 10px 10px; text-align: center; transition: border-color 0.2s; display: flex; flex-direction: column; align-items: center; }
+        .metric-ring:hover { border-color: rgba(255,193,7,0.4); }
+        .metric-ring .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #9ca3af; margin-bottom: 4px; }
+        .metric-ring .value { font-size: 22px; font-weight: 800; }
+        .metric-ring .sub { font-size: 11px; color: #9ca3af; }
+        .ring-chart-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; }
+        .ring-chart-wrapper canvas { max-height: 110px; max-width: 110px; margin: 0 auto; display: block; }
+        .table-wrap { overflow-x: auto; margin-top: 12px; border-radius: 16px; border: 1px solid #1f2538; }
+        .table-wrap table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 780px; }
+        .table-wrap th { background: #07090f; color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.4px; padding: 10px 8px; text-align: left; border-bottom: 1px solid #2a2e42; white-space: nowrap; }
+        .table-wrap td { padding: 7px 8px; border-bottom: 1px solid #1a1f2e; color: #e2e8f0; white-space: nowrap; }
+        .table-wrap tr:hover td { background: #141a2a; }
+        .table-wrap .result-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-weight: 600; font-size: 10px; }
+        .result-badge.correct { background: rgba(74,222,128,0.2); color: var(--green); }
+        .result-badge.late { background: rgba(251,191,36,0.2); color: var(--yellow); }
+        .result-badge.wrong { background: rgba(248,113,113,0.2); color: var(--red); }
+        .result-badge.miss { background: rgba(96,165,250,0.2); color: #60a5fa; }
+        .fac-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-weight: 700; font-size: 10px; background: rgba(255,193,7,0.15); color: var(--gold); border: 1px solid rgba(255,193,7,0.25); }
+        .fac-badge.right { background: rgba(248,113,113,0.2); color: #f87171; border-color: rgba(248,113,113,0.3); }
+        .fac-badge.left { background: rgba(96,165,250,0.2); color: #60a5fa; border-color: rgba(96,165,250,0.3); }
+        .hamburger-menu { position: relative; display: inline-block; }
+        .hamburger-btn { background: transparent; border: none; color: var(--gold); font-size: 28px; cursor: pointer; padding: 4px 12px; border-radius: 8px; transition: 0.2s; }
+        .hamburger-btn:hover { background: rgba(255,193,7,0.1); }
+        .dropdown-menu { position: absolute; top: 40px; left: 0; background: var(--bg-card); border: 1px solid rgba(255,193,7,0.2); border-radius: 16px; padding: 8px 0; min-width: 180px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); z-index: 200; display: none; }
+        .dropdown-menu.open { display: block; }
+        .dropdown-menu button { display: block; width: 100%; text-align: left; padding: 10px 20px; background: transparent; border: none; color: #e2e8f0; font-size: 14px; cursor: pointer; transition: 0.2s; }
+        .dropdown-menu button:hover { background: rgba(255,193,7,0.1); color: var(--gold); }
+        .player-profile { background: var(--bg-card-light); border-radius: 20px; border: 1px solid rgba(255,193,7,0.2); padding: 20px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; transition: 0.2s; cursor: pointer; }
+        .player-profile:hover { border-color: rgba(255,193,7,0.4); }
+        .player-avatar { width: 100px; height: 100px; border-radius: 50%; background: #1a1f2e; border: 3px solid var(--gold); display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; color: var(--gold); flex-shrink: 0; overflow: hidden; }
+        .player-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .player-info h2 { font-size: 24px; font-weight: 800; color: white; margin-bottom: 4px; }
+        .player-info .player-id { font-size: 14px; color: var(--gray-dark); font-family: monospace; margin-bottom: 8px; }
+        .player-info .player-details { display: flex; flex-wrap: wrap; gap: 16px 24px; font-size: 14px; }
+        .player-info .player-details span { color: var(--gray); }
+        .player-info .player-details strong { color: white; font-weight: 600; }
+        .player-info .player-details .label { color: var(--gray-dark); margin-right: 4px; }
+        .score-badge { display: inline-block; padding: 2px 12px; border-radius: 20px; font-weight: bold; font-size: 13px; }
+        .score-high { background: rgba(74,222,128,0.2); color: var(--green); border: 1px solid rgba(74,222,128,0.3); }
+        .score-mid { background: rgba(251,191,36,0.2); color: var(--yellow); border: 1px solid rgba(251,191,36,0.3); }
+        .score-low { background: rgba(248,113,113,0.2); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+        .level-progress { background: #0c1020; border-radius: 12px; padding: 12px 16px; border: 1px solid rgba(255,193,7,0.15); margin: 8px 0; }
+        .level-progress .level-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-height: 320px; overflow-y: auto; padding: 4px 2px; }
+        .level-progress .level-bar::-webkit-scrollbar { width: 4px; }
+        .level-progress .level-bar::-webkit-scrollbar-track { background: var(--bg-deep); border-radius: 2px; }
+        .level-progress .level-bar::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 2px; }
+        .level-progress .level-item { display: inline-flex; align-items: center; gap: 4px; background: #1a1f2e; padding: 3px 10px; border-radius: 16px; font-size: 11px; color: #9ca3af; border: 1px solid transparent; transition: all 0.2s; white-space: nowrap; }
+        .level-progress .level-item.unlocked { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.55); font-weight: 600; }
+        .level-progress .level-item.completed { background: rgba(74,222,128,0.22); color: var(--green); border-color: rgba(74,222,128,0.45); }
+        .level-progress .level-item.current { background: rgba(255,193,7,0.15); color: var(--gold); border-color: rgba(255,193,7,0.4); font-weight: bold; box-shadow: 0 0 12px rgba(255,193,7,0.08); }
+        .level-progress .level-item.locked { opacity: 0.55; cursor: not-allowed; background: #141927; border-color: rgba(255,255,255,0.05); color: #9ca3af; font-weight: 400; }
+        .level-progress .level-item .level-label { font-size: 10px; font-weight: 500; }
+        .level-progress .level-item .level-badge { font-size: 12px; }
+        .level-progress .level-category { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 0; border-bottom: 1px solid rgba(255,193,7,0.06); margin-bottom: 4px; width: 100%; }
+        .level-progress .level-category .cat-label { font-size: 10px; font-weight: 700; color: var(--gold); letter-spacing: 0.5px; text-transform: uppercase; min-width: 80px; opacity: 0.7; }
+        .level-progress .level-category .cat-items { display: flex; flex-wrap: wrap; gap: 4px; }
+        .level-progress .level-summary { font-size: 10px; color: var(--gray-dark); margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.04); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+        .unlock-btn, .lock-btn { background: transparent; border: none; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 6px; transition: 0.2s; }
+        .unlock-btn { color: #4ade80; background: rgba(16,185,129,0.2); border: 1px solid rgba(74,222,128,0.5); }
+        .unlock-btn:hover { background: rgba(16,185,129,0.35); transform: scale(1.1); }
+        .lock-btn { color: var(--red); }
+        .lock-btn:hover { background: rgba(248,113,113,0.15); transform: scale(1.1); }
+        .btn-unlock { background: linear-gradient(105deg, #34d399, #059669); color: #052e16; font-weight: bold; padding: 10px 24px; border-radius: 40px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-unlock:hover { transform: scale(1.02); box-shadow: 0 0 20px rgba(52,211,153,0.4); }
+        .btn-unlock:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; background: #374151; color: #9ca3af; }
+        .login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 2000; backdrop-filter: blur(6px); }
+        .lang-switcher { display: flex; gap: 2px; background: #0c1020; border: 1px solid rgba(255,193,7,0.25); border-radius: 8px; padding: 4px; }
+        .lang-btn { background: transparent; border: none; color: #9ca3af; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+        .lang-btn.active { background: rgba(255,193,7,0.18); color: var(--gold); }
+        .login-lang-switcher { position: absolute; top: 20px; right: 24px; }
+        .login-box { background: var(--bg-card); border-radius: 28px; border: 1px solid rgba(255,193,7,0.3); padding: 48px 40px; max-width: 420px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+        .login-box h1 { font-size: 32px; font-weight: 900; text-align: center; margin-bottom: 8px; }
+        .login-box .subtitle { text-align: center; color: var(--gray-dark); font-size: 14px; margin-bottom: 28px; }
+        .login-input { background: #1a1f2e; border: 1px solid rgba(255,193,7,0.25); border-radius: 40px; padding: 14px 20px; color: white; outline: none; width: 100%; transition: border 0.2s; font-size: 15px; margin-bottom: 16px; }
+        .login-input:focus { border-color: var(--gold); }
+        .login-input::placeholder { color: #6b7280; }
+        .login-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 40px; border: none; background: linear-gradient(105deg, var(--gold), #ffae00); color: var(--bg-deep); cursor: pointer; transition: 0.2s; margin-top: 8px; }
+        .login-btn:hover { transform: scale(1.02); box-shadow: 0 0 30px rgba(255,193,7,0.25); }
+        .login-error { color: var(--red); font-size: 13px; text-align: center; margin-top: 12px; min-height: 20px; }
+        .login-footer { text-align: center; margin-top: 24px; font-size: 12px; color: #4a5568; }
+        .modal-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center; z-index:3000; backdrop-filter:blur(4px); }
+        .modal-box { background: var(--bg-card); border-radius: 28px; border:1px solid rgba(255,193,7,0.3); padding: 32px; max-width: 600px; width:90%; max-height:90vh; overflow-y:auto; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+        .modal-box h2 { font-size:24px; font-weight:800; color:var(--gold); margin-bottom:16px; }
+        .modal-box .form-group { margin-bottom:12px; }
+        .modal-box .form-group label { display:block; font-size:12px; color:var(--gray-dark); margin-bottom:4px; }
+        .modal-box .form-group input { width:100%; background:#1a1f2e; border:1px solid rgba(255,193,7,0.25); border-radius:40px; padding:10px 16px; color:white; outline:none; font-size:14px; }
+        .modal-box .form-group input:focus { border-color:var(--gold); }
+        .modal-box .btn-row { display:flex; gap:12px; justify-content:flex-end; margin-top:20px; }
+        .modal-box .btn-row button { padding:8px 24px; border-radius:40px; border:none; font-weight:bold; cursor:pointer; }
+        .modal-box .btn-row .save-btn { background:var(--green); color:var(--bg-deep); }
+        .modal-box .btn-row .cancel-btn { background:#4a5568; color:white; }
+        .modal-box .btn-row .delete-btn { background:var(--red); color:white; }
+        @media (max-width:768px) { .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
+        @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/static/i18n.js"></script>
+
+    <script>
+        // Replace all optional chaining (?.) with safe checks to avoid syntax errors
+        const { useState, useEffect, useRef } = React;
+
+        // Helper functions (unchanged)
+        const parseScreens = function(screens) {
+            if (!screens) return [];
+            if (Array.isArray(screens)) return screens;
+            if (typeof screens === 'string') {
+                return screens.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+            }
+            return [];
+        };
+
+        var getVideoIndexFromId = function(id) {
+            if (!id) return null;
+            var match = id.match(/S(\d+)/i);
+            if (match) {
+                var num = parseInt(match[1], 10);
+                return Math.floor((num - 1) / 4) + 1;
+            }
+            return null;
+        };
+
+        var sanitizeDisplay = function(val) {
+            if (val === undefined || val === null || val === 'N/A' || val === '') return '–';
+            return val;
+        };
+
+        // Category order and sorting
+        var CATEGORY_ORDER = {
+            'Foundation': 0,
+            'Entry': 1,
+            'Activated': 2,
+            'High Performance': 3,
+            'Elite': 4,
+            'World Class': 5
+        };
+
+        var getCategoryFromId = function(id) {
+            if (!id) return 'Other';
+            if (id.indexOf('Foundation') !== -1) return 'Foundation';
+            if (id.indexOf('Entry') !== -1) return 'Entry';
+            if (id.indexOf('Activated') !== -1) return 'Activated';
+            if (id.indexOf('High Performance') !== -1) return 'High Performance';
+            if (id.indexOf('Elite') !== -1) return 'Elite';
+            if (id.indexOf('World Class') !== -1) return 'World Class';
+            return 'Other';
+        };
+
+        var getTNumber = function(id) {
+            if (!id) return 0;
+            var match = id.match(/T(\d+)/i);
+            if (match) return parseInt(match[1], 10);
+            return 0;
+        };
+
+        var getCNumber = function(id) {
+            if (!id) return 0;
+            var match = id.match(/C(\d+)/i);
+            if (match) return parseInt(match[1], 10);
+            return 0;
+        };
+
+        var sortLevels = function(levels) {
+            if (!levels || levels.length === 0) return [];
+            return levels.slice().sort(function(a, b) {
+                var catA = getCategoryFromId(a.id);
+                var catB = getCategoryFromId(b.id);
+                var orderA = CATEGORY_ORDER[catA] !== undefined ? CATEGORY_ORDER[catA] : 999;
+                var orderB = CATEGORY_ORDER[catB] !== undefined ? CATEGORY_ORDER[catB] : 999;
+                if (orderA !== orderB) return orderA - orderB;
+                var tA = getTNumber(a.id);
+                var tB = getTNumber(b.id);
+                if (tA !== tB) return tA - tB;
+                var cA = getCNumber(a.id);
+                var cB = getCNumber(b.id);
+                return cA - cB;
+            });
+        };
+
+        var getHighestUnlockedLevel = function(levels, unlocked) {
+            if (!levels || levels.length === 0) return null;
+            var sorted = sortLevels(levels);
+            for (var i = sorted.length - 1; i >= 0; i--) {
+                if (unlocked.indexOf(sorted[i].id) !== -1) {
+                    return sorted[i].id;
+                }
+            }
+            return sorted[0] ? sorted[0].id : null;
+        };
+
+        // Get next level ID based on sorted order
+        var getNextLevelId = function(currentLevelId, allLevels) {
+            if (!currentLevelId || !allLevels || allLevels.length === 0) return null;
+            var sorted = sortLevels(allLevels);
+            for (var i = 0; i < sorted.length; i++) {
+                if (sorted[i].id === currentLevelId) {
+                    if (i + 1 < sorted.length) {
+                        return sorted[i + 1].id;
+                    }
+                    return null; // last level
+                }
+            }
+            return null;
+        };
+
+        // Subdirectories for Foundation (all unlocked)
+        var LEVEL_SUBDIRS = {
+            'L00-Foundation': ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N']
+        };
+        // No locked subdirectories anymore
+        var LOCKED_SUBDIRS = {};
+
+        // =====================================================================
+        // LOGIN COMPONENT
+        // =====================================================================
+        var LanguageSwitcher = function(props) {
+            var lang = props.lang || 'en';
+            var onChange = props.onLangChange || function() {};
+            var langs = [
+                { id: 'en', label: 'EN', title: 'English' },
+                { id: 'de', label: 'DE', title: 'German' },
+                { id: 'es', label: 'ES', title: 'Spanish' },
+                { id: 'it', label: 'IT', title: 'Italian' }
+            ];
+            return React.createElement('div', { className: 'lang-switcher' + (props.className ? ' ' + props.className : '') },
+                langs.map(function(item) {
+                    return React.createElement('button', {
+                        key: item.id,
+                        type: 'button',
+                        className: 'lang-btn' + (lang === item.id ? ' active' : ''),
+                        title: item.title,
+                        onClick: function() { onChange(item.id); }
+                    }, item.label);
+                })
+            );
+        };
+
+        var LoginScreen = function(props) {
+            var onLogin = props.onLogin;
+            var error = props.error || '';
+            var t = props.t || function(k) { return k; };
+            var usernameState = useState('');
+            var passwordState = useState('');
+            var username = usernameState[0];
+            var setUsername = usernameState[1];
+            var password = passwordState[0];
+            var setPassword = passwordState[1];
+
+            var handleSubmit = function(e) {
+                e.preventDefault();
+                onLogin(username, password);
+            };
+
+            return React.createElement('div', { className: "login-overlay" },
+                React.createElement(LanguageSwitcher, {
+                    lang: props.lang,
+                    onLangChange: props.onLangChange,
+                    className: "login-lang-switcher"
+                }),
+                React.createElement('div', { className: "login-box" },
+                    React.createElement('h1', null,
+                        React.createElement('span', { className: "gold-accent" }, "SIMUST"),
+                        " PLAY IT SMART"
+                    ),
+                    React.createElement('p', { className: "subtitle" }, t("signInToAccount")),
+                    React.createElement('form', { onSubmit: handleSubmit },
+                        React.createElement('input', {
+                            type: "text",
+                            className: "login-input",
+                            placeholder: t("username"),
+                            value: username,
+                            onChange: function(e) { setUsername(e.target.value); },
+                            autoFocus: true
+                        }),
+                        React.createElement('input', {
+                            type: "password",
+                            className: "login-input",
+                            placeholder: t("password"),
+                            value: password,
+                            onChange: function(e) { setPassword(e.target.value); }
+                        }),
+                        React.createElement('button', { type: "submit", className: "login-btn" }, t("signInBtn")),
+                        React.createElement('div', { className: "login-error" }, error || '')
+                    ),
+                    React.createElement('div', { className: "login-footer" }, t("allRights"))
+                )
+            );
+        };
+
+        // =====================================================================
+        // LEVEL PROGRESS COMPONENT (with ordered categories)
+        // =====================================================================
+        var LevelProgress = function(props) {
+            var allLevels = props.allLevels || [];
+            var unlocked = props.unlocked || [];
+            var completed = props.completed || [];
+            var current = props.current || '';
+            var isAdmin = props.isAdmin || false;
+            var onUnlock = props.onUnlock || function() {};
+            var onLock = props.onLock || function() {};
+
+            if (!allLevels || allLevels.length === 0) return null;
+
+            var sortedLevels = sortLevels(allLevels);
+            var grouped = {};
+            sortedLevels.forEach(function(lvl) {
+                var cat = getCategoryFromId(lvl.id);
+                if (!grouped[cat]) grouped[cat] = [];
+                var isUnlocked = unlocked.indexOf(lvl.id) !== -1;
+                var isCompleted = completed.indexOf(lvl.id) !== -1;
+                var isCurrent = lvl.id === current;
+                grouped[cat].push({ id: lvl.id, display: lvl.display, isUnlocked: isUnlocked, isCompleted: isCompleted,
+                    isCurrent: isCurrent });
+            });
+
+            var categoryKeys = Object.keys(grouped).sort(function(a, b) {
+                return (CATEGORY_ORDER[a] !== undefined ? CATEGORY_ORDER[a] : 999) -
+                    (CATEGORY_ORDER[b] !== undefined ? CATEGORY_ORDER[b] : 999);
+            });
+
+            var displayGrouped = {};
+            categoryKeys.forEach(function(cat) {
+                var items = grouped[cat];
+                if (isAdmin) {
+                    displayGrouped[cat] = items;
+                } else {
+                    displayGrouped[cat] = items.filter(function(item) { return item.isUnlocked; });
+                }
+            });
+
+            var displayKeys = Object.keys(displayGrouped).filter(function(cat) { return displayGrouped[cat].length > 0; });
+
+            if (displayKeys.length === 0) return null;
+
+            var totalLevels = allLevels.length;
+
+            return React.createElement('div', { className: "level-progress" },
+                React.createElement('div', { className: "text-xs text-gray-400 mb-1 font-semibold" }, "PROGRESS"),
+                React.createElement('div', { className: "level-bar" },
+                    displayKeys.map(function(cat) {
+                        return React.createElement('div', { key: cat, className: "level-category" },
+                            React.createElement('span', { className: "cat-label" }, cat),
+                            React.createElement('div', { className: "cat-items" },
+                                displayGrouped[cat].map(function(lvl) {
+                                    var className = "level-item";
+                                    if (lvl.isUnlocked) className += " unlocked";
+                                    if (lvl.isCompleted) className += " completed";
+                                    if (lvl.isCurrent) className += " current";
+                                    if (!lvl.isUnlocked) className += " locked";
+
+                                    var label = lvl.display || lvl.id;
+                                    var shortLabel = label.replace(/^[A-Z]+\s*/, '').trim();
+                                    var icon = '⬜';
+                                    if (lvl.isCompleted) icon = '✅';
+                                    else if (lvl.isCurrent) icon = '▶️';
+                                    else if (lvl.isUnlocked) icon = '🔓';
+                                    else icon = '🔒';
+
+                                    var lockUnlockButton = null;
+                                    if (isAdmin) {
+                                        if (lvl.isUnlocked && lvl.id !== "L00-Foundation") {
+                                            lockUnlockButton = React.createElement('button', {
+                                                className: "lock-btn",
+                                                onClick: function(e) { e.stopPropagation();
+                                                    onLock(lvl.id); },
+                                                title: "Lock this level"
+                                            }, '🔒');
+                                        } else if (!lvl.isUnlocked) {
+                                            lockUnlockButton = React.createElement('button', {
+                                                className: "unlock-btn",
+                                                onClick: function(e) { e.stopPropagation();
+                                                    onUnlock(lvl.id); },
+                                                title: "Unlock this level"
+                                            }, '🔓');
+                                        }
+                                    }
+
+                                    return React.createElement('span', { key: lvl.id, className: className,
+                                            title: lvl.id },
+                                        React.createElement('span', { className: "level-badge" }, icon),
+                                        React.createElement('span', { className: "level-label" },
+                                            shortLabel),
+                                        lockUnlockButton
+                                    );
+                                })
+                            )
+                        );
+                    })
+                ),
+                React.createElement('div', { className: "level-summary" },
+                    React.createElement('span', null, "Current: " + (current || 'None')),
+                    React.createElement('span', null, "Completed: " + completed.length + " / " + totalLevels),
+                    isAdmin ? React.createElement('span', { style: { color: '#4ade80' } }, "🔓 Unlock · 🔒 Lock") :
+                        null
+                )
+            );
+        };
+
+        // =====================================================================
+        // PLAYER SELECTOR (modified: subdirectory lock and order)
+        // =====================================================================
+        var PlayerSelector = function(props) {
+            var players = props.players || [];
+            var selectedPlayerId = props.selectedPlayerId;
+            var searchQuery = props.searchQuery || '';
+            var showSearchResults = props.showSearchResults || false;
+            var filteredPlayers = props.filteredPlayers || [];
+            var showAddPlayer = props.showAddPlayer || false;
+            var newPlayer = props.newPlayer || {};
+            var loadingSessions = props.loadingSessions || false;
+            var onSearch = props.onSearch || function() {};
+            var onSelectPlayer = props.onSelectPlayer || function() {};
+            var onClearSelection = props.onClearSelection || function() {};
+            var onAddPlayer = props.onAddPlayer || function() {};
+            var onNewPlayerChange = props.onNewPlayerChange || function() {};
+            var getSelectedPlayer = props.getSelectedPlayer || function() { return null; };
+            var allLevels = props.allLevels || [];
+            var unlockedLevels = props.unlockedLevels || [];
+            var completedLevels = props.completedLevels || [];
+            var currentLevel = props.currentLevel || '';
+            var isAdmin = props.isAdmin || false;
+            var onUnlockLevel = props.onUnlockLevel || function() {};
+            var onLockLevel = props.onLockLevel || function() {};
+            var onLevelChange = props.onLevelChange || function() {};
+            var selectedLevel = props.selectedLevel || '';
+            var selectedSubdirectory = props.selectedSubdirectory || '';
+            var onSubdirectoryChange = props.onSubdirectoryChange || function() {};
+            var t = props.t || function(k) { return k; };
+
+            var visibleLevels = isAdmin ? allLevels : allLevels.filter(function(lvl) {
+                return unlockedLevels.indexOf(lvl.id) !== -1;
+            });
+            var sortedVisible = sortLevels(visibleLevels);
+
+            var selectedPlayer = getSelectedPlayer();
+
+            // Determine if the current level has subdirectories
+            var hasSubdirs = false;
+            var lockedSubdirs = [];
+            if (selectedLevel) {
+                var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
+                if (isFoundation && LEVEL_SUBDIRS['L00-Foundation']) {
+                    hasSubdirs = true;
+                    lockedSubdirs = LOCKED_SUBDIRS['L00-Foundation'] || [];
+                }
+            }
+            var subdirs = hasSubdirs ? LEVEL_SUBDIRS['L00-Foundation'] : [];
+
+            return React.createElement('div', { className: "mb-6 p-4 bg-[#0c1020] rounded-xl border border-[#ffc10720]" },
+                React.createElement('div', { className: "flex justify-between items-center mb-3 flex-wrap gap-2" },
+                    React.createElement('h3', { className: "gold-accent font-bold text-lg" }, "SEARCH & SELECT PLAYER"),
+                    React.createElement('button', { onClick: function() { onAddPlayer(null); },
+                            className: "text-yellow-400 text-sm hover:text-yellow-300 transition" },
+                        showAddPlayer ? "✕ Cancel" : "+ New Player")
+                ),
+                React.createElement('div', { className: "flex gap-3 flex-wrap" },
+                    React.createElement('input', {
+                        type: "text",
+                        className: "search-input flex-1 min-w-[200px]",
+                        placeholder: t("searchPlaceholder"),
+                        value: searchQuery,
+                        onChange: function(e) { onSearch(e.target.value); }
+                    }),
+                    React.createElement('button', { onClick: onClearSelection, className: "clear-selection-btn" },
+                        "✕ Clear")
+                ),
+                showSearchResults && filteredPlayers.length > 0 &&
+                React.createElement('div', { className: "mt-3 space-y-2 max-h-60 overflow-y-auto" },
+                    filteredPlayers.map(function(p) {
+                        var initial = p.name ? p.name.charAt(0) : '';
+                        var sessionsCount = p.sessions ? p.sessions.length : 0;
+                        return React.createElement('div', { key: p.id, onClick: function() { onSelectPlayer(p); },
+                                className: "player-card" },
+                            React.createElement('div', { className: "flex items-center gap-3" },
+                                React.createElement('div', { className: "w-10 h-10 rounded-full bg-[#1a1f2e] overflow-hidden flex-shrink-0" },
+                                    p.image ? React.createElement('img', { src: p.image, alt: p.name,
+                                        className: "w-full h-full object-cover" }) :
+                                    React.createElement('span', { className: "flex items-center justify-center w-full h-full text-gold text-sm font-bold" },
+                                        initial)
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: "font-bold text-white" },
+                                        p.name + ' ' + p.surname),
+                                    React.createElement('div', { className: "text-xs text-gray-400" },
+                                        "SIMUST ID: " + p.playerId + " · " + sessionsCount + " sessions" +
+                                        (p.club ? " · " + p.club : ""))
+                                )
+                            )
+                        );
+                    })
+                ),
+                showSearchResults && searchQuery && filteredPlayers.length === 0 &&
+                React.createElement('div', { className: "text-center text-gray-500 py-4" },
+                    "No players match \"" + searchQuery + "\""),
+                showAddPlayer &&
+                React.createElement('div', { className: "mt-4 p-4 bg-[#1a1f2e] rounded-xl border border-[#ffc10730]" },
+                    React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3" },
+                        React.createElement('input', {
+                            placeholder: t("firstName").replace(' *', ''),
+                            value: newPlayer.name || '',
+                            onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { name: e
+                                        .target.value })); },
+                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                        }),
+                        React.createElement('input', {
+                            placeholder: t("lastName").replace(' *', ''),
+                            value: newPlayer.surname || '',
+                            onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { surname: e
+                                        .target.value })); },
+                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                        }),
+                        React.createElement('input', {
+                            placeholder: "SIMUST ID",
+                            value: newPlayer.playerId || '',
+                            onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { playerId: e
+                                        .target.value })); },
+                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                        }),
+                        React.createElement('input', {
+                            placeholder: t("club"),
+                            value: newPlayer.club || '',
+                            onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { club: e
+                                        .target.value })); },
+                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                        }),
+                        React.createElement('input', {
+                            type: "date",
+                            placeholder: "Birthday",
+                            value: newPlayer.birthday || '',
+                            onChange: function(e) {
+                                var val = e.target.value;
+                                var age = val ? (new Date().getFullYear() - new Date(val).getFullYear()) :
+                                    '';
+                                onNewPlayerChange(Object.assign({}, newPlayer, { birthday: val, age: age }));
+                            },
+                            className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400"
+                        }),
+                        React.createElement('div', { className: "flex items-center gap-2" },
+                            React.createElement('input', {
+                                type: "number",
+                                placeholder: "Age (auto)",
+                                value: newPlayer.age || '',
+                                onChange: function(e) { onNewPlayerChange(Object.assign({}, newPlayer, { age: e
+                                            .target.value })); },
+                                className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400 w-full"
+                            }),
+                            React.createElement('span', { className: "text-xs text-gray-500" }, "years")
+                        ),
+                        React.createElement('div', { className: "col-span-2" },
+                            React.createElement('label', { className: "block text-xs text-gray-400 mb-1" },
+                                "Player Image"),
+                            React.createElement('input', {
+                                type: "file",
+                                accept: "image/*",
+                                onChange: function(e) {
+                                    var file = e.target.files[0];
+                                    if (file) {
+                                        var reader = new FileReader();
+                                        reader.onload = function(ev) {
+                                            onNewPlayerChange(Object.assign({}, newPlayer, { image: ev
+                                                    .target.result }));
+                                        };
+                                        reader.readAsDataURL(file);
+                                    }
+                                },
+                                className: "bg-[#0a0c12] border border-[#ffc10730] rounded-full px-4 py-2 text-white text-sm outline-none focus:border-yellow-400 w-full"
+                            })
+                        )
+                    ),
+                    React.createElement('button', { onClick: function() { onAddPlayer(true); },
+                        className: "btn-primary w-full py-2 text-sm" }, "+ Add Player")
+                ),
+                selectedPlayer &&
+                React.createElement('div', { className: "mt-4 p-3 bg-[#1a1f35] rounded-xl border border-yellow-500 flex flex-wrap justify-between items-center gap-2" },
+                    React.createElement('div', { className: "flex items-center gap-3" },
+                        React.createElement('div', { className: "w-10 h-10 rounded-full bg-[#1a1f2e] overflow-hidden flex-shrink-0" },
+                            selectedPlayer.image ? React.createElement('img', { src: selectedPlayer.image,
+                                    alt: selectedPlayer.name, className: "w-full h-full object-cover" }) :
+                            React.createElement('span', { className: "flex items-center justify-center w-full h-full text-gold text-sm font-bold" },
+                                selectedPlayer.name ? selectedPlayer.name.charAt(0) : '')
+                        ),
+                        React.createElement('div', null,
+                            React.createElement('span', { className: "text-yellow-400 font-bold" },
+                                "✓ " + t("selected") + " "),
+                            React.createElement('span', { className: "font-bold text-white" },
+                                selectedPlayer.name + ' ' + selectedPlayer.surname),
+                            React.createElement('span', { className: "text-gray-400 text-sm ml-2" },
+                                "SIMUST ID: " + selectedPlayer.playerId + (selectedPlayer.club ? " · " +
+                                    selectedPlayer.club : ""))
+                        )
+                    )
+                ),
+                allLevels && allLevels.length > 0 && selectedPlayer &&
+                React.createElement('div', { className: "mt-4" },
+                    React.createElement('label', { className: "block text-xs text-gray-400 mb-1" },
+                        t("trainingLevel")),
+                    React.createElement('div', { className: "flex flex-wrap gap-2 items-center" },
+                        React.createElement('select', {
+                            value: selectedLevel || '',
+                            onChange: function(e) { onLevelChange(e.target.value); },
+                            className: "bg-[#1a1f2e] border border-[#ffc10740] rounded-full px-5 py-2 text-white outline-none focus:border-yellow-400 flex-1 min-w-[200px]"
+                        },
+                            React.createElement('option', { value: "", disabled: true }, t("selectLevel")),
+                            sortedVisible.map(function(lvl) {
+                                var isUnlocked = unlockedLevels.indexOf(lvl.id) !== -1;
+                                var isCompleted = completedLevels.indexOf(lvl.id) !== -1;
+                                var label = lvl.display || lvl.id;
+                                var suffix = isCompleted ? ' ✅' : isUnlocked ? '' : ' 🔒';
+                                return React.createElement('option', {
+                                    key: lvl.id,
+                                    value: lvl.id,
+                                    disabled: !isUnlocked
+                                }, label + suffix);
+                            })
+                        ),
+                        isAdmin &&
+                        React.createElement('button', {
+                            onClick: function() {
+                                if (selectedLevel && unlockedLevels.indexOf(selectedLevel) === -1) {
+                                    if (window.confirm('Unlock "' + selectedLevel + '" for this player?')) {
+                                        onUnlockLevel(selectedLevel);
+                                    }
+                                } else {
+                                    alert('Select a locked level first.');
+                                }
+                            },
+                            className: "btn-unlock text-sm py-1 px-4",
+                            disabled: !selectedLevel || unlockedLevels.indexOf(selectedLevel) !== -1
+                        }, "🔓 " + t("unlock"))
+                    ),
+                    // ---- Subdirectory selector (only for Foundation) ----
+                    hasSubdirs &&
+                    React.createElement('div', { className: "mt-3" },
+                        React.createElement('label', { className: "block text-xs text-gray-400 mb-1" },
+                            "Subdirectory (Foundation Challenge)"),
+                        React.createElement('select', {
+                            value: selectedSubdirectory || '',
+                            onChange: function(e) { onSubdirectoryChange(e.target.value); },
+                            className: "bg-[#1a1f2e] border border-[#ffc10740] rounded-full px-5 py-2 text-white outline-none focus:border-yellow-400 w-full"
+                        },
+                            React.createElement('option', { value: "", disabled: true }, "Select a subdirectory"),
+                            subdirs.map(function(sub) {
+                                var isLocked = lockedSubdirs.indexOf(sub) !== -1;
+                                return React.createElement('option', {
+                                    key: sub,
+                                    value: sub,
+                                    disabled: isLocked
+                                }, sub + (isLocked ? ' 🔒' : ''));
+                            })
+                        )
+                    ),
+                    isAdmin && React.createElement(LevelProgress, {
+                        allLevels: allLevels,
+                        unlocked: unlockedLevels,
+                        completed: completedLevels,
+                        current: currentLevel,
+                        isAdmin: isAdmin,
+                        onUnlock: onUnlockLevel,
+                        onLock: onLockLevel
+                    })
+                )
+            );
+        };
+
+        // =====================================================================
+        // RESULTS TABLE (unchanged)
+        // =====================================================================
+        var ResultsTable = function(props) {
+            var actions = props.actions || [];
+            if (!actions || actions.length === 0) {
+                return React.createElement('div', { className: "text-center py-10 text-gray-400 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                    "No results available. Complete a session to see data."
+                );
+            }
+
+            var videoGroups = {};
+            actions.forEach(function(r, idx) {
+                var vid = r.video_index;
+                if (vid === undefined || vid === null) {
+                    var fromId = getVideoIndexFromId(r.id);
+                    vid = fromId || Math.floor(idx / 4) + 1;
+                }
+                r.video_index = vid;
+                if (!videoGroups[vid]) videoGroups[vid] = [];
+                videoGroups[vid].push(Object.assign({}, r, { _idx: idx }));
+            });
+
+            var facMap = {};
+            Object.keys(videoGroups).forEach(function(vid) {
+                var group = videoGroups[vid];
+                if (group.length === 0) return;
+                group.sort(function(a, b) { return (a._idx || 0) - (b._idx || 0); });
+                var first = group[0];
+                var screens = parseScreens(first.screens);
+                if (screens.length === 2) {
+                    var aep = first.aep || 'N/A';
+                    if (aep === 'Right' || aep === 'Left') {
+                        facMap[first._idx] = aep;
+                    } else {
+                        facMap[first._idx] = 'N/A';
+                    }
+                } else {
+                    facMap[first._idx] = 'N/A';
+                }
+            });
+
+            return React.createElement('div', null,
+                React.createElement('div', { className: "table-wrap" },
+                    React.createElement('table', null,
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                ['Series ID', 'Action', 'Screens', 'Result', 'Winning Screen', 'Session Dur (s)',
+                                    'AEP', 'FAC', 'AE'
+                                ].map(function(h) {
+                                    return React.createElement('th', { key: h }, h);
+                                })
+                            )
+                        ),
+                        React.createElement('tbody', null,
+                            actions.map(function(r, idx) {
+                                var resultClass = r.result === 'Correct' ? 'correct' :
+                                    r.result === 'Late' ? 'late' :
+                                    r.result === 'Wrong' ? 'wrong' :
+                                    r.result === 'Miss' ? 'miss' : '';
+                                var resultLabel = r.result || '—';
+                                var aepDisplay = sanitizeDisplay(r.aep);
+                                var winningScreenDisplay = sanitizeDisplay(r.winning_screen);
+                                var aeDisplay = (r.ae !== undefined && r.ae !== null && !isNaN(r.ae)) ? r
+                                    .ae.toFixed(1) : '—';
+                                var sessionDur = (r.session_duration !== undefined && r.session_duration !==
+                                    null && r.session_duration !== '—' && !isNaN(r.session_duration)) ?
+                                    (typeof r.session_duration === 'number' ? r.session_duration.toFixed(
+                                    3) : r.session_duration) :
+                                    '—';
+                                var facDisplay = '—';
+                                var facClass = '';
+                                if (facMap[idx] && facMap[idx] !== 'N/A') {
+                                    facDisplay = facMap[idx];
+                                    facClass = facDisplay === 'Right' ? 'fac-badge right' :
+                                        'fac-badge left';
+                                }
+
+                                return React.createElement('tr', { key: idx },
+                                    React.createElement('td', null, r.id || '—'),
+                                    React.createElement('td', null, r.action || '—'),
+                                    React.createElement('td', null, r.screens || '—'),
+                                    React.createElement('td', null,
+                                        React.createElement('span', { className: "result-badge " + resultClass },
+                                            resultLabel)
+                                    ),
+                                    React.createElement('td', null, winningScreenDisplay),
+                                    React.createElement('td', null, sessionDur),
+                                    React.createElement('td', null, aepDisplay),
+                                    React.createElement('td', null,
+                                        facDisplay !== '—' ? React.createElement('span', { className: facClass },
+                                            facDisplay) : '—'
+                                    ),
+                                    React.createElement('td', null, aeDisplay)
+                                );
+                            })
+                        )
+                    )
+                ),
+                actions.length > 20 &&
+                React.createElement('div', { className: "text-center text-xs text-gray-500 mt-3" },
+                    "Showing " + actions.length + " actions"
+                )
+            );
+        };
+
+        // =====================================================================
+        // SUMMARY METRICS (unchanged)
+        // =====================================================================
+        var SummaryMetrics = function(props) {
+            var stats = props.stats || {};
+            var actions = props.actions || [];
+            if (!stats || stats.total === 0) {
+                return React.createElement('div', { className: "text-center py-8 text-gray-400 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                    "No summary data yet."
+                );
+            }
+
+            var correct = stats.correct || 0;
+            var late = stats.late || 0;
+            var wrong = stats.wrong || 0;
+            var miss = stats.miss || 0;
+            var total = stats.total || 0;
+
+            var avgFinishingTime = stats.avg_finishing_time || 0;
+            var totalDistance = stats.total_distance || 0;
+            var avgAe = stats.avg_ae || 0;
+
+            var aac = total > 0 ? ((correct + late) / total * 100) : 0;
+
+            var rightScreens = ['2', '3', '4', '9', '10', '11'];
+            var leftScreens = ['5', '6', '7', '12', '13', '14'];
+            var rightGoals = 0,
+                leftGoals = 0;
+            var goalsByScreen = stats.goals_by_screen || {};
+            Object.keys(goalsByScreen).forEach(function(screen) {
+                var count = goalsByScreen[screen];
+                var s = screen.replace(/[^0-9]/g, '');
+                if (rightScreens.indexOf(s) !== -1) rightGoals += count;
+                else if (leftScreens.indexOf(s) !== -1) leftGoals += count;
+            });
+            var totalGoals = rightGoals + leftGoals;
+            var rightPct = totalGoals > 0 ? (rightGoals / totalGoals * 100) : 0;
+            var leftPct = totalGoals > 0 ? (leftGoals / totalGoals * 100) : 0;
+
+            var facRight = 0,
+                facLeft = 0,
+                facTotal = 0;
+            if (actions && actions.length > 0) {
+                var videoGroups = {};
+                actions.forEach(function(r, idx) {
+                    var vid = r.video_index;
+                    if (vid === undefined || vid === null) {
+                        var fromId = getVideoIndexFromId(r.id);
+                        vid = fromId || Math.floor(idx / 4) + 1;
+                        r.video_index = vid;
+                    }
+                    if (!videoGroups[vid]) videoGroups[vid] = [];
+                    videoGroups[vid].push(Object.assign({}, r, { _idx: idx }));
+                });
+                Object.keys(videoGroups).forEach(function(vid) {
+                    var group = videoGroups[vid];
+                    if (group.length === 0) return;
+                    group.sort(function(a, b) { return (a._idx || 0) - (b._idx || 0); });
+                    var first = group[0];
+                    var screens = parseScreens(first.screens);
+                    if (screens.length === 2) {
+                        var aep = first.aep || 'N/A';
+                        if (aep === 'Right') { facRight++;
+                            facTotal++; } else if (aep === 'Left') { facLeft++;
+                            facTotal++; }
+                    }
+                });
+            }
+            var facRightPct = facTotal > 0 ? (facRight / facTotal * 100) : 0;
+            var facLeftPct = facTotal > 0 ? (facLeft / facTotal * 100) : 0;
+            var facDisplay = facTotal > 0 ?
+                "FAC: R " + facRightPct.toFixed(0) + "% / L " + facLeftPct.toFixed(0) + "%" :
+                'FAC: No data';
+
+            var Ring = function(ringProps) {
+                var value = ringProps.value || 0;
+                var max = ringProps.max || 100;
+                var color = ringProps.color || '#ffc107';
+                var label = ringProps.label || '';
+                var sub = ringProps.sub || '';
+                var size = ringProps.size || 90;
+                var canvasRef = useRef(null);
+                var chartRef = useRef(null);
+                useEffect(function() {
+                    if (!canvasRef.current) return;
+                    if (chartRef.current) { chartRef.current.destroy();
+                        chartRef.current = null; }
+                    var ctx = canvasRef.current.getContext('2d');
+                    var pct = Math.min(100, Math.max(0, (value / max) * 100));
+                    chartRef.current = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            datasets: [{
+                                data: [pct, 100 - pct],
+                                backgroundColor: [color, '#2a2e42'],
+                                borderWidth: 0,
+                                circumference: 360,
+                                rotation: -90,
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            cutout: '70%',
+                            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                            animation: { duration: 400 }
+                        }
+                    });
+                    return function() { if (chartRef.current) { chartRef.current.destroy();
+                            chartRef.current = null; } };
+                }, [value, max, color]);
+                return React.createElement('div', { className: "ring-chart-wrapper" },
+                    React.createElement('canvas', { ref: canvasRef, width: size, height: size, style: { maxWidth: size,
+                            maxHeight: size } }),
+                    React.createElement('div', { className: "text-xs font-bold mt-1" }, label),
+                    React.createElement('div', { className: "text-xs text-gray-400" }, sub)
+                );
+            };
+
+            var AEPRing = function() {
+                var canvasRef = useRef(null);
+                var chartRef = useRef(null);
+                useEffect(function() {
+                    if (!canvasRef.current) return;
+                    if (chartRef.current) { chartRef.current.destroy();
+                        chartRef.current = null; }
+                    var ctx = canvasRef.current.getContext('2d');
+                    chartRef.current = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            datasets: [
+                                { data: [rightPct, 100 - rightPct], backgroundColor: ['#f87171', '#2a2e42'],
+                                    borderWidth: 0, circumference: 360, rotation: -90 },
+                                { data: [leftPct, 100 - leftPct], backgroundColor: ['#3b82f6', '#2a2e42'],
+                                    borderWidth: 0, circumference: 360, rotation: -90 }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            cutout: '50%',
+                            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                            animation: { duration: 400 }
+                        }
+                    });
+                    return function() { if (chartRef.current) { chartRef.current.destroy();
+                            chartRef.current = null; } };
+                }, [rightPct, leftPct]);
+                return React.createElement('div', { className: "ring-chart-wrapper" },
+                    React.createElement('canvas', { ref: canvasRef, width: 90, height: 90, style: { maxWidth: 90,
+                            maxHeight: 90 } }),
+                    React.createElement('div', { className: "text-xs font-bold mt-1" }, 'AEP'),
+                    React.createElement('div', { className: "text-xs text-gray-400" },
+                        "R " + rightPct.toFixed(0) + "% / L " + leftPct.toFixed(0) + "%"
+                    ),
+                    facTotal > 0 ?
+                    React.createElement('div', { className: "text-xs text-yellow-400 mt-0.5 font-semibold" },
+                        facDisplay) :
+                    null
+                );
+            };
+
+            var aetColor = avgFinishingTime > 0 ?
+                (avgFinishingTime < 1.5 ? 'text-green-400' : avgFinishingTime < 3 ? 'text-yellow-400' :
+                    'text-red-400') :
+                'text-gray-400';
+            var aetDisplay = avgFinishingTime > 0 ? avgFinishingTime.toFixed(2) + 's' : '–';
+            var bdpDisplay = totalDistance > 0 ? totalDistance.toFixed(1) + ' m' : '–';
+            var avgDistPerAction = total > 0 ? (totalDistance / total) : 0;
+            var avgDistDisplay = avgDistPerAction > 0 ? avgDistPerAction.toFixed(1) + ' m' : '–';
+            var aeColor = avgAe >= 70 ? 'text-green-400' : avgAe >= 50 ? 'text-yellow-400' : 'text-red-400';
+            var aeDisplay = avgAe > 0 ? avgAe.toFixed(1) + '%' : '–';
+
+            return React.createElement('div', null,
+                React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-6" },
+                    React.createElement('div', { className: "metric-ring" },
+                        React.createElement('div', { className: "label" }, "Average Execution Time"),
+                        React.createElement('div', { className: "value " + aetColor }, aetDisplay),
+                        React.createElement('div', { className: "sub" }, "from " + correct + " correct"),
+                        React.createElement(Ring, {
+                            value: avgFinishingTime > 0 ? Math.min(100, (1 - avgFinishingTime / 5) *
+                                100) : 0,
+                            color: avgFinishingTime > 0 ? (avgFinishingTime < 1.5 ? '#4ade80' :
+                                avgFinishingTime < 3 ? '#fbbf24' : '#f87171') : '#4a5568',
+                            label: '',
+                            sub: ''
+                        })
+                    ),
+                    React.createElement('div', { className: "metric-ring" },
+                        React.createElement('div', { className: "label" }, "Body Displacement"),
+                        React.createElement('div', { className: "value text-cyan-400" }, bdpDisplay),
+                        React.createElement('div', { className: "sub" }, total + " actions"),
+                        React.createElement(Ring, { value: Math.min(100, (totalDistance / 120) * 100),
+                            color: '#22d3ee', label: '', sub: '' })
+                    ),
+                    React.createElement('div', { className: "metric-ring" },
+                        React.createElement('div', { className: "label" }, "Action Efficiency"),
+                        React.createElement('div', { className: "value " + aeColor }, aeDisplay),
+                        React.createElement('div', { className: "sub" }, "from " + total + " actions"),
+                        React.createElement(Ring, { value: avgAe, color: avgAe >= 70 ? '#4ade80' : avgAe >=
+                                50 ? '#fbbf24' : '#f87171', label: '', sub: '' })
+                    ),
+                    React.createElement('div', { className: "metric-ring" },
+                        React.createElement('div', { className: "label" }, "Action Accuracy"),
+                        React.createElement('div', { className: "value text-green-400" }, aac.toFixed(0) +
+                            "%"),
+                        React.createElement('div', { className: "sub" }, "(Correct+Late)/Total"),
+                        React.createElement(Ring, { value: aac, color: '#4ade80', label: '', sub: '' })
+                    ),
+                    React.createElement('div', { className: "metric-ring" },
+                        React.createElement('div', { className: "label" }, "AEP (Left / Right)"),
+                        React.createElement('div', { className: "value text-sm" },
+                            React.createElement('span', { className: "text-blue-400" }, leftPct.toFixed(0) +
+                                "%"),
+                            ' / ',
+                            React.createElement('span', { className: "text-red-400" }, rightPct.toFixed(0) +
+                                "%")
+                        ),
+                        React.createElement('div', { className: "sub" }, totalGoals + " goals"),
+                        React.createElement(AEPRing, null)
+                    )
+                ),
+                React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" },
+                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                        React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
+                            "Total Actions"),
+                        React.createElement('div', { className: "text-2xl font-bold text-white" }, total)
+                    ),
+                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                        React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
+                            "Correct / Late / Wrong / Miss"),
+                        React.createElement('div', { className: "text-lg font-bold" },
+                            React.createElement('span', { className: "text-green-400" }, correct),
+                            ' / ',
+                            React.createElement('span', { className: "text-yellow-400" }, late),
+                            ' / ',
+                            React.createElement('span', { className: "text-red-400" }, wrong),
+                            ' / ',
+                            React.createElement('span', { className: "text-blue-400" }, miss)
+                        )
+                    ),
+                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                        React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
+                            "Avg Distance / Action"),
+                        React.createElement('div', { className: "text-2xl font-bold text-cyan-400" },
+                            avgDistDisplay)
+                    ),
+                    React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10710]" },
+                        React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
+                            "AET Performance"),
+                        React.createElement('div', { className: "text-2xl font-bold " + aetColor },
+                            aetDisplay)
+                    )
+                ),
+                facTotal > 0 ?
+                React.createElement('div', { className: "bg-[#0c1020] rounded-xl p-3 text-center border border-[#ffc10720] mb-4" },
+                    React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
+                        "First Action Choice (FAC)"),
+                    React.createElement('div', { className: "text-lg font-bold" },
+                        React.createElement('span', { className: "text-red-400" }, facRightPct.toFixed(0) +
+                            "% Right"),
+                        ' / ',
+                        React.createElement('span', { className: "text-blue-400" }, facLeftPct.toFixed(0) +
+                            "% Left"),
+                        React.createElement('span', { className: "text-gray-500 text-sm ml-3 font-normal" },
+                            "(" + facTotal + " first actions)")
+                    )
+                ) :
+                null
+            );
+        };
+
+        // =====================================================================
+        // PLAYER PROFILE
+        // =====================================================================
+        var PlayerProfile = function(props) {
+            var player = props.player;
+            var sessionCount = props.sessionCount || 0;
+            var simustScore = props.simustScore || 0;
+            var isAdmin = props.isAdmin || false;
+            var onEdit = props.onEdit || function() {};
+
+            if (!player) return null;
+            var score = simustScore || 0;
+            var scoreClass = score >= 70 ? 'score-high' : score >= 50 ? 'score-mid' : 'score-low';
+            var initial = player.name ? player.name.charAt(0) : '';
+
+            return React.createElement('div', { className: "player-profile", onClick: isAdmin ? function() { onEdit(
+                        player); } : undefined, style: isAdmin ? { cursor: 'pointer' } : {} },
+                React.createElement('div', { className: "player-avatar" },
+                    player.image ? React.createElement('img', { src: player.image, alt: player.name }) :
+                    React.createElement('span', null, initial)
+                ),
+                React.createElement('div', { className: "player-info" },
+                    React.createElement('h2', null, player.name + ' ' + player.surname),
+                    React.createElement('div', { className: "player-id" }, "SIMUST ID: " + player.playerId),
+                    React.createElement('div', { className: "player-details" },
+                        React.createElement('span', null,
+                            React.createElement('span', { className: "label" }, "Age:"),
+                            React.createElement('strong', null, player.age || '—')
+                        ),
+                        React.createElement('span', null,
+                            React.createElement('span', { className: "label" }, "Club:"),
+                            React.createElement('strong', null, player.club || '—')
+                        ),
+                        React.createElement('span', null,
+                            React.createElement('span', { className: "label" }, "Sessions:"),
+                            React.createElement('strong', null, sessionCount || 0)
+                        ),
+                        React.createElement('span', null,
+                            React.createElement('span', { className: "label" }, "SIMUST Score:"),
+                            React.createElement('span', { className: "score-badge " + scoreClass }, score
+                                .toFixed(1) + "%")
+                        )
+                    ),
+                    isAdmin ? React.createElement('div', { className: "text-xs text-yellow-400 mt-2" },
+                        "(Click to edit)") : null
+                )
+            );
+        };
+
+        // =====================================================================
+        // PLAYER MANAGEMENT TABLE (admin only)
+        // =====================================================================
+        var PlayerManagement = function(props) {
+            var players = props.players || [];
+            var onEdit = props.onEdit || function() {};
+            var onDelete = props.onDelete || function() {};
+            var searchQuery = props.searchQuery || '';
+            var setSearchQuery = props.setSearchQuery || function() {};
+
+            var filtered = players.filter(function(p) {
+                var q = searchQuery.toLowerCase().trim();
+                if (!q) return true;
+                var fullName = (p.name || '') + ' ' + (p.surname || '');
+                return p.playerId.toLowerCase().indexOf(q) !== -1 ||
+                    fullName.toLowerCase().indexOf(q) !== -1;
+            });
+
+            return React.createElement('div', { className: "mt-4" },
+                React.createElement('div', { className: "flex justify-between items-center mb-4 flex-wrap gap-2" },
+                    React.createElement('h2', { className: "text-2xl font-black gold-accent" }, "Manage Players"),
+                    React.createElement('input', { type: "text", className: "search-input flex-1 max-w-sm",
+                        placeholder: "Search players...", value: searchQuery, onChange: function(e) {
+                            setSearchQuery(e.target.value); } })
+                ),
+                React.createElement('div', { className: "table-wrap" },
+                    React.createElement('table', null,
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                ['Name', 'SIMUST ID', 'Club', 'Age', 'Sessions', 'Score', 'Actions'].map(
+                                    function(h) {
+                                        return React.createElement('th', { key: h }, h);
+                                    })
+                            )
+                        ),
+                        React.createElement('tbody', null,
+                            filtered.length === 0 ?
+                            React.createElement('tr', null,
+                                React.createElement('td', { colSpan: 7,
+                                    className: "text-center text-gray-400 py-4" }, "No players found")
+                            ) :
+                            filtered.map(function(p) {
+                                var sessionsLen = p.sessions ? p.sessions.length : 0;
+                                var score = p.simustScore || 0;
+                                return React.createElement('tr', { key: p.id },
+                                    React.createElement('td', null, p.name + ' ' + p.surname),
+                                    React.createElement('td', null, p.playerId),
+                                    React.createElement('td', null, p.club || '—'),
+                                    React.createElement('td', null, p.age || '—'),
+                                    React.createElement('td', null, sessionsLen),
+                                    React.createElement('td', null, score.toFixed(1) + '%'),
+                                    React.createElement('td', null,
+                                        React.createElement('button', { onClick: function() { onEdit(
+                                                    p); },
+                                            className: "text-yellow-400 hover:text-yellow-300 mr-2" },
+                                            "Edit"),
+                                        React.createElement('button', { onClick: function() {
+                                                if (window.confirm('Delete player ' + p.name +
+                                                    ' ' + p.surname + '?')) { onDelete(p.id); } },
+                                            className: "text-red-400 hover:text-red-300" },
+                                            "Delete")
+                                    )
+                                );
+                            })
+                        )
+                    )
+                )
+            );
+        };
+
+        // =====================================================================
+        // MAIN APP
+        // =====================================================================
+        function App() {
+            // ----- AUTH -----
+            var authState = useState(false);
+            var loggedIn = authState[0];
+            var setLoggedIn = authState[1];
+            var userState = useState('');
+            var username = userState[0];
+            var setUsername = userState[1];
+            var roleState = useState('user');
+            var role = roleState[0];
+            var setRole = roleState[1];
+            var loginErrorState = useState('');
+            var loginError = loginErrorState[0];
+            var setLoginError = loginErrorState[1];
+            var langState = useState(typeof simustGetLang === 'function' ? simustGetLang() : 'en');
+            var lang = langState[0];
+            var setLang = langState[1];
+            var t = function(key) {
+                return typeof simustT === 'function' ? simustT(key, lang) : key;
+            };
+            var changeLang = function(code) {
+                if (typeof simustSetLang === 'function') simustSetLang(code);
+                setLang(code);
+            };
+
+            // ----- APP STATE -----
+            var errorState = useState("");
+            var error = errorState[0];
+            var setError = errorState[1];
+            var loadingAnalysisState = useState(false);
+            var loadingAnalysis = loadingAnalysisState[0];
+            var setLoadingAnalysis = loadingAnalysisState[1];
+            var currentDirectoryState = useState(null);
+            var currentDirectory = currentDirectoryState[0];
+            var setCurrentDirectory = currentDirectoryState[1];
+            var reportDataState = useState(null);
+            var reportData = reportDataState[0];
+            var setReportData = reportDataState[1];
+            var analysisResultsState = useState([]);
+            var analysisResults = analysisResultsState[0];
+            var setAnalysisResults = analysisResultsState[1];
+            var allLevelsState = useState([]);
+            var allLevels = allLevelsState[0];
+            var setAllLevels = allLevelsState[1];
+            var selectedLevelState = useState("");
+            var selectedLevel = selectedLevelState[0];
+            var setSelectedLevel = selectedLevelState[1];
+            // NEW: selected subdirectory state
+            var selectedSubdirectoryState = useState("");
+            var selectedSubdirectory = selectedSubdirectoryState[0];
+            var setSelectedSubdirectory = selectedSubdirectoryState[1];
+            var realtimeRunningState = useState(false);
+            var realtimeRunning = realtimeRunningState[0];
+            var setRealtimeRunning = realtimeRunningState[1];
+            var activeTabState = useState("main");
+            var activeTab = activeTabState[0];
+            var setActiveTab = activeTabState[1];
+            var toastState = useState(null);
+            var toastMessage = toastState[0];
+            var setToastMessage = toastState[1];
+            var visualizationEnabledState = useState(false);
+            var visualizationEnabled = visualizationEnabledState[0];
+            var setVisualizationEnabled = visualizationEnabledState[1];
+            var lastUpdateTimeState = useState(null);
+            var lastUpdateTime = lastUpdateTimeState[0];
+            var setLastUpdateTime = lastUpdateTimeState[1];
+
+            var playersState = useState([]);
+            var players = playersState[0];
+            var setPlayers = playersState[1];
+            var selectedPlayerIdState = useState(null);
+            var selectedPlayerId = selectedPlayerIdState[0];
+            var setSelectedPlayerId = selectedPlayerIdState[1];
+            var showAddPlayerState = useState(false);
+            var showAddPlayer = showAddPlayerState[0];
+            var setShowAddPlayer = showAddPlayerState[1];
+            var newPlayerState = useState({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "",
+                image: null });
+            var newPlayer = newPlayerState[0];
+            var setNewPlayer = newPlayerState[1];
+            var playerSessionsState = useState([]);
+            var playerSessions = playerSessionsState[0];
+            var setPlayerSessions = playerSessionsState[1];
+            var loadingSessionsState = useState(false);
+            var loadingSessions = loadingSessionsState[0];
+            var setLoadingSessions = loadingSessionsState[1];
+            var savingSessionState = useState(false);
+            var savingSession = savingSessionState[0];
+            var setSavingSession = savingSessionState[1];
+            var searchQueryState = useState("");
+            var searchQuery = searchQueryState[0];
+            var setSearchQuery = searchQueryState[1];
+            var filteredPlayersState = useState([]);
+            var filteredPlayers = filteredPlayersState[0];
+            var setFilteredPlayers = filteredPlayersState[1];
+            var showSearchResultsState = useState(false);
+            var showSearchResults = showSearchResultsState[0];
+            var setShowSearchResults = showSearchResultsState[1];
+
+            var unlockedLevelsState = useState([]);
+            var unlockedLevels = unlockedLevelsState[0];
+            var setUnlockedLevels = unlockedLevelsState[1];
+            var completedLevelsState = useState([]);
+            var completedLevels = completedLevelsState[0];
+            var setCompletedLevels = completedLevelsState[1];
+            var currentLevelState = useState("");
+            var currentLevel = currentLevelState[0];
+            var setCurrentLevel = currentLevelState[1];
+
+            var editModalState = useState(false);
+            var editModalOpen = editModalState[0];
+            var setEditModalOpen = editModalState[1];
+            var editingPlayerState = useState(null);
+            var editingPlayer = editingPlayerState[0];
+            var setEditingPlayer = editingPlayerState[1];
+            var editFormState = useState({});
+            var editForm = editFormState[0];
+            var setEditForm = editFormState[1];
+
+            var liveIntervalRef = useRef(null);
+            var realtimeMonitorInterval = useRef(null);
+            var sessionSavedRef = useRef(false);
+            var autoStopTimeoutRef = useRef(null);
+
+            var REPORTS_BASE = "C:/Users/siama/Documents/simust_reports";
+
+            // ----- LOGIN -----
+            var handleLogin = function(uname, pwd) {
+                if (uname === 'simust26' && pwd === 'sina26') {
+                    setLoggedIn(true);
+                    setUsername(uname);
+                    setRole('user');
+                    setLoginError('');
+                    return;
+                } else if (uname === 'admin' && pwd === 'sina27') {
+                    setLoggedIn(true);
+                    setUsername(uname);
+                    setRole('admin');
+                    setLoginError('');
+                    return;
+                } else {
+                    setLoginError(t('invalidLogin'));
+                }
+            };
+
+            var handleLogout = function() {
+                setLoggedIn(false);
+                setUsername('');
+                setRole('user');
+                setActiveTab("main");
+                if (realtimeRunning) {
+                    stopPlayback();
+                }
+                setAnalysisResults([]);
+                setReportData(null);
+                setSelectedPlayerId(null);
+                setSearchQuery("");
+                setFilteredPlayers([]);
+                setShowSearchResults(false);
+                setPlayerSessions([]);
+                setError("");
+                showToast("Logged out", 'info');
+            };
+
+            var showToast = function(msg, type) {
+                if (type === undefined) type = 'success';
+                setToastMessage({ message: msg, type: type });
+                setTimeout(function() { setToastMessage(null); }, 3000);
+            };
+
+            // ----- PLAYER MGMT -----
+            var loadPlayers = function() {
+                return axios.get("/get-players").then(function(res) {
+                    if (res.data && res.data.players) {
+                        var backendPlayers = res.data.players.map(function(p) {
+                            return {
+                                id: p.id || p.playerId,
+                                name: p.name || '',
+                                surname: p.surname || '',
+                                playerId: p.playerId || p.id,
+                                club: p.club || '',
+                                birthday: p.birthday || '',
+                                age: p.age || '',
+                                image: p.image || null,
+                                simustScore: p.simustScore || 0,
+                                sessions: p.sessions || [],
+                                progress: p.progress || { current_level: "L00-Foundation",
+                                    unlocked_levels: ["L00-Foundation"], completed_levels: [] }
+                            };
+                        });
+                        var stored = localStorage.getItem("simust_players");
+                        var localPlayers = [];
+                        if (stored) {
+                            try { localPlayers = JSON.parse(stored); } catch (e) {}
+                        }
+                        var existingIds = {};
+                        backendPlayers.forEach(function(p) { existingIds[p.id] = true; });
+                        var merged = backendPlayers.slice();
+                        localPlayers.forEach(function(lp) {
+                            if (!existingIds[lp.id]) {
+                                merged.push(lp);
+                            }
+                        });
+                        setPlayers(merged);
+                        localStorage.setItem("simust_players", JSON.stringify(merged));
+                        if (merged.length > 0) {
+                            if (!selectedPlayerId) {
+                                setSelectedPlayerId(merged[0].id);
+                                updateProgressForPlayer(merged[0]);
+                            } else {
+                                var player = merged.find(function(p) { return p.id === selectedPlayerId; });
+                                if (player) updateProgressForPlayer(player);
+                            }
+                        }
+                        return;
+                    }
+                }).catch(function(e) {
+                    console.warn("Could not fetch players from server, using localStorage fallback.", e);
+                    // Fallback
+                    try {
+                        var stored2 = localStorage.getItem("simust_players");
+                        if (stored2) {
+                            var parsed = JSON.parse(stored2);
+                            var updated = parsed.map(function(p) {
+                                return Object.assign({}, p, {
+                                    club: p.club || '',
+                                    birthday: p.birthday || '',
+                                    age: p.age || '',
+                                    image: p.image || null,
+                                    simustScore: p.simustScore || 0,
+                                    sessions: p.sessions || [],
+                                    progress: p.progress || { current_level: "L00-Foundation",
+                                        unlocked_levels: ["L00-Foundation"], completed_levels: [] }
+                                });
+                            });
+                            setPlayers(updated);
+                            localStorage.setItem("simust_players", JSON.stringify(updated));
+                            if (updated.length > 0 && !selectedPlayerId) {
+                                setSelectedPlayerId(updated[0].id);
+                                updateProgressForPlayer(updated[0]);
+                            } else if (selectedPlayerId) {
+                                var p2 = updated.find(function(p) { return p.id === selectedPlayerId; });
+                                if (p2) updateProgressForPlayer(p2);
+                            }
+                        }
+                    } catch (e2) { console.error(e2); }
+                });
+            };
+
+            var savePlayers = function(updated) {
+                localStorage.setItem("simust_players", JSON.stringify(updated));
+                setPlayers(updated);
+            };
+
+            var updateProgressForPlayer = function(player) {
+                if (!player) return;
+                var progress = player.progress || {};
+                var unlocked = progress.unlocked_levels || ["L00-Foundation"];
+                var completed = progress.completed_levels || [];
+                var current = progress.current_level || "L00-Foundation";
+                setUnlockedLevels(unlocked);
+                setCompletedLevels(completed);
+                setCurrentLevel(current);
+                // Set selected level to the highest unlocked level
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                if (highest) {
+                    setSelectedLevel(highest);
+                } else if (current && unlocked.indexOf(current) !== -1) {
+                    setSelectedLevel(current);
+                } else if (unlocked.length > 0) {
+                    setSelectedLevel(unlocked[0]);
+                }
+                // Reset subdirectory selection when level changes
+                setSelectedSubdirectory("");
+            };
+
+            var performSearch = function(query) {
+                setSearchQuery(query);
+                if (!query.trim()) { setFilteredPlayers([]);
+                    setShowSearchResults(false); return; }
+                var lower = query.toLowerCase().trim();
+                var filtered = players.filter(function(p) {
+                    return p.playerId.toLowerCase().indexOf(lower) !== -1 ||
+                        (p.name + ' ' + p.surname).toLowerCase().indexOf(lower) !== -1;
+                });
+                setFilteredPlayers(filtered);
+                setShowSearchResults(true);
+                var exact = players.find(function(p) { return p.playerId.toLowerCase() === lower; });
+                if (exact) {
+                    setSelectedPlayerId(exact.id);
+                    setShowSearchResults(false);
+                    setSearchQuery(exact.playerId);
+                    updateProgressForPlayer(exact);
+                    loadPlayerSessionsFromBackend(exact.id);
+                    showToast("Selected: " + exact.name + ' ' + exact.surname, 'success');
+                }
+            };
+
+            var selectPlayerFromSearch = function(player) {
+                setSelectedPlayerId(player.id);
+                setSearchQuery(player.playerId);
+                setShowSearchResults(false);
+                setFilteredPlayers([]);
+                updateProgressForPlayer(player);
+                loadPlayerSessionsFromBackend(player.id);
+                showToast("Selected: " + player.name + ' ' + player.surname, 'success');
+            };
+
+            var clearSelection = function() {
+                setSelectedPlayerId(null);
+                setSearchQuery("");
+                setFilteredPlayers([]);
+                setShowSearchResults(false);
+                setPlayerSessions([]);
+                setUnlockedLevels([]);
+                setCompletedLevels([]);
+                setCurrentLevel("");
+                setSelectedLevel("");
+                setSelectedSubdirectory("");
+                showToast("Selection cleared", 'info');
+            };
+
+            var addPlayerHandler = function(save) {
+                if (save === null) { setShowAddPlayer(!showAddPlayer); return; }
+                if (!newPlayer.name.trim() || !newPlayer.surname.trim() || !newPlayer.playerId.trim()) {
+                    setError("Please fill all required fields");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+                if (players.find(function(p) { return p.playerId === newPlayer.playerId; })) {
+                    setError("SIMUST ID " + newPlayer.playerId + " already exists");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+                var player = {
+                    id: Date.now().toString(),
+                    name: newPlayer.name.trim(),
+                    surname: newPlayer.surname.trim(),
+                    playerId: newPlayer.playerId.trim(),
+                    club: (newPlayer.club || '').trim(),
+                    birthday: newPlayer.birthday || '',
+                    age: newPlayer.age || '',
+                    image: newPlayer.image || null,
+                    simustScore: 0,
+                    sessions: [],
+                    progress: { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"],
+                        completed_levels: [] },
+                    createdAt: new Date().toISOString()
+                };
+                savePlayers(players.concat([player]));
+                setSelectedPlayerId(player.id);
+                setSearchQuery(player.playerId);
+                updateProgressForPlayer(player);
+                setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
+                setShowAddPlayer(false);
+                setError("");
+                loadPlayerSessionsFromBackend(player.id);
+                showToast("Player " + player.name + ' ' + player.surname + " created", 'success');
+            };
+
+            var getSelectedPlayer = function() {
+                return players.find(function(p) { return p.id === selectedPlayerId; });
+            };
+
+            var openEditModal = function(player) {
+                setEditingPlayer(player);
+                setEditForm(Object.assign({}, player, { image: player.image || null }));
+                setEditModalOpen(true);
+            };
+            var closeEditModal = function() { setEditModalOpen(false);
+                setEditingPlayer(null);
+                setEditForm({}); };
+            var saveEdit = function() {
+                if (!editingPlayer) return;
+                var updatedPlayers = players.map(function(p) {
+                    if (p.id === editingPlayer.id) {
+                        return Object.assign({}, p, {
+                            name: editForm.name,
+                            surname: editForm.surname,
+                            playerId: editForm.playerId,
+                            club: editForm.club,
+                            birthday: editForm.birthday,
+                            age: editForm.age,
+                            image: editForm.image
+                        });
+                    }
+                    return p;
+                });
+                savePlayers(updatedPlayers);
+                if (selectedPlayerId === editingPlayer.id) {
+                    var updated = updatedPlayers.find(function(p) { return p.id === editingPlayer.id; });
+                    if (updated) updateProgressForPlayer(updated);
+                }
+                closeEditModal();
+                showToast("Player updated", 'success');
+            };
+            var deletePlayer = function(playerId) {
+                var updated = players.filter(function(p) { return p.id !== playerId; });
+                savePlayers(updated);
+                if (selectedPlayerId === playerId) { setSelectedPlayerId(null);
+                    setSearchQuery("");
+                    setPlayerSessions([]); }
+                showToast("Player deleted", 'info');
+            };
+
+            var loadPlayerSessionsFromBackend = function(playerId) {
+                setLoadingSessions(true);
+                return axios.get("/get-player-reports/" + playerId).then(function(res) {
+                    if (res.data && res.data.sessions) {
+                        setPlayerSessions(res.data.sessions);
+                        var updatedPlayers = players.map(function(p) {
+                            if (p.id === playerId) {
+                                return Object.assign({}, p, { sessions: res.data.sessions });
+                            }
+                            return p;
+                        });
+                        setPlayers(updatedPlayers);
+                        localStorage.setItem("simust_players", JSON.stringify(updatedPlayers));
+                        return res.data.sessions;
+                    }
+                    setPlayerSessions([]);
+                    return [];
+                }).catch(function(e) {
+                    console.error(e);
+                    setPlayerSessions([]);
+                    return [];
+                }).finally(function() { setLoadingSessions(false); });
+            };
+
+            // ----- FETCH LEVELS -----
+            var fetchLevels = function() {
+                axios.get("/get-levels").then(function(res) {
+                    if (res.data && res.data.levels) {
+                        setAllLevels(res.data.levels);
+                    }
+                }).catch(function(e) { console.error("Failed to fetch levels:", e); });
+            };
+
+            // ----- UNLOCK / LOCK LEVEL (FIXED: immediate UI update) -----
+            var handleUnlockLevel = function(levelId) {
+                if (!selectedPlayerId) { showToast("No player selected", 'error'); return; }
+                if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
+                axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
+                    if (res.data.status === "success") {
+                        showToast("Level " + levelId + " unlocked!", 'success');
+                        // Immediate local update
+                        var updatedPlayers = players.map(function(p) {
+                            if (p.id === selectedPlayerId) {
+                                var progress = p.progress || { current_level: "L00-Foundation",
+                                    unlocked_levels: ["L00-Foundation"], completed_levels: [] };
+                                if (progress.unlocked_levels.indexOf(levelId) === -1) {
+                                    progress.unlocked_levels.push(levelId);
+                                    // Update current to highest unlocked not completed
+                                    var sorted = sortLevels(allLevels);
+                                    var highest = null;
+                                    for (var i = sorted.length - 1; i >= 0; i--) {
+                                        if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
+                                            progress.completed_levels.indexOf(sorted[i].id) === -1) {
+                                            highest = sorted[i].id;
+                                            break;
+                                        }
+                                    }
+                                    if (highest) progress.current_level = highest;
+                                }
+                                return Object.assign({}, p, { progress: progress });
+                            }
+                            return p;
+                        });
+                        setPlayers(updatedPlayers);
+                        var updatedPlayer = updatedPlayers.find(function(p) { return p.id === selectedPlayerId; });
+                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
+                        // Background sync
+                        loadPlayers();
+                    } else {
+                        showToast(res.data.message || "Unlock failed", 'error');
+                    }
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                });
+            };
+
+            var handleLockLevel = function(levelId) {
+                if (!selectedPlayerId) { showToast("No player selected", 'error'); return; }
+                if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
+                if (levelId === "L00-Foundation") {
+                    showToast("Foundation cannot be locked", 'error');
+                    return;
+                }
+                axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
+                    if (res.data.status === "success") {
+                        showToast("Level " + levelId + " locked!", 'info');
+                        // Immediate local update
+                        var updatedPlayers = players.map(function(p) {
+                            if (p.id === selectedPlayerId) {
+                                var progress = p.progress || { current_level: "L00-Foundation",
+                                    unlocked_levels: ["L00-Foundation"], completed_levels: [] };
+                                progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
+                                progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
+                                if (progress.unlocked_levels.indexOf("L00-Foundation") === -1) {
+                                    progress.unlocked_levels.unshift("L00-Foundation");
+                                }
+                                if (progress.current_level === levelId) {
+                                    progress.current_level = "L00-Foundation";
+                                    var sorted = sortLevels(allLevels);
+                                    var highest = null;
+                                    for (var i = sorted.length - 1; i >= 0; i--) {
+                                        if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
+                                            progress.completed_levels.indexOf(sorted[i].id) === -1) {
+                                            highest = sorted[i].id;
+                                            break;
+                                        }
+                                    }
+                                    if (highest) progress.current_level = highest;
+                                }
+                                return Object.assign({}, p, { progress: progress });
+                            }
+                            return p;
+                        });
+                        setPlayers(updatedPlayers);
+                        var updatedPlayer = updatedPlayers.find(function(p) { return p.id === selectedPlayerId; });
+                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
+                        // Background sync
+                        loadPlayers();
+                    } else {
+                        showToast(res.data.message || "Lock failed", 'error');
+                    }
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                });
+            };
+
+            // ----- FETCH RESULTS -----
+            var fetchRealtimeResults = function(showLoading) {
+                if (showLoading === undefined) showLoading = true;
+                if (showLoading) setLoadingAnalysis(true);
+                return axios.get("/realtime-results").then(function(res) {
+                    if (res.data && res.data.status === "success" && res.data.report) {
+                        var report = res.data.report;
+                        var actions = report.actions || [];
+                        var statsFromBackend = report.statistics || {};
+
+                        var formatted = actions.map(function(a, idx) {
+                            var sessionDur = (a.session_duration !== undefined && a.session_duration !==
+                                null && a.session_duration !== 'N/A' && a.session_duration !== '-') ?
+                                parseFloat(a.session_duration) : null;
+                            var ae = (a.ae !== undefined && a.ae !== null && a.ae !== 'N/A') ? parseFloat(a
+                                .ae) : null;
+                            var videoIndex = a.video_index || a.videoIndex;
+                            if (videoIndex === undefined || videoIndex === null) {
+                                var fromId = getVideoIndexFromId(a.id);
+                                videoIndex = fromId || Math.floor(idx / 4) + 1;
+                            }
+                            return {
+                                id: a.id || a.block_id || '',
+                                action: a.action || '',
+                                screens: Array.isArray(a.screens) ? a.screens.join(', ') : a.screens ||
+                                    '',
+                                result: a.result || 'N/A',
+                                winning_screen: a.winning_screen || 'N/A',
+                                session_duration: sessionDur,
+                                movement: a.movement || 0,
+                                direction: a.direction || 'NONE',
+                                aep: a.aep || 'N/A',
+                                ae: ae,
+                                video_index: videoIndex,
+                                videoIndex: videoIndex
+                            };
+                        });
+
+                        var stats = {
+                            correct: statsFromBackend.correct || formatted.filter(function(a) { return a
+                                    .result === 'Correct'; }).length,
+                            late: statsFromBackend.late || formatted.filter(function(a) { return a.result ===
+                                    'Late'; }).length,
+                            wrong: statsFromBackend.wrong || formatted.filter(function(a) { return a.result ===
+                                    'Wrong'; }).length,
+                            miss: statsFromBackend.miss || formatted.filter(function(a) { return a.result ===
+                                    'Miss'; }).length,
+                            total: statsFromBackend.total || formatted.length,
+                            avg_finishing_time: statsFromBackend.avg_finishing_time || 0,
+                            total_distance: statsFromBackend.total_distance || 0,
+                            goals_by_screen: statsFromBackend.goals_by_screen || {},
+                            avg_ae: statsFromBackend.avg_ae || 0
+                        };
+
+                        if (stats.avg_finishing_time === 0) {
+                            var correctTimes = formatted.filter(function(a) {
+                                return a.result === 'Correct' && a.time_of_min !== null && a
+                                    .time_of_min > 0;
+                            }).map(function(a) { return a.time_of_min; });
+                            if (correctTimes.length > 0) {
+                                stats.avg_finishing_time = correctTimes.reduce(function(s, v) { return s +
+                                        v; }, 0) / correctTimes.length;
+                            }
+                        }
+
+                        if (Object.keys(stats.goals_by_screen).length === 0) {
+                            formatted.filter(function(a) {
+                                return a.result === 'Correct' && a.winning_screen && a
+                                    .winning_screen !== 'N/A';
+                            }).forEach(function(a) {
+                                var screen = a.winning_screen;
+                                stats.goals_by_screen[screen] = (stats.goals_by_screen[screen] || 0) +
+                                    1;
+                            });
+                        }
+
+                        setAnalysisResults(formatted);
+                        setReportData(Object.assign({}, report, {
+                            actions: formatted,
+                            statistics: stats,
+                            total_actions: formatted.length,
+                            goals_by_screen: stats.goals_by_screen,
+                            directory: res.data.directory
+                        }));
+                        setCurrentDirectory(res.data.directory);
+                        setLastUpdateTime(new Date().toLocaleTimeString());
+                        if (showLoading) setLoadingAnalysis(false);
+                        return true;
+                    }
+                    if (showLoading) setLoadingAnalysis(false);
+                    return false;
+                }).catch(function(e) {
+                    console.error("fetchRealtimeResults error:", e);
+                    if (showLoading) setLoadingAnalysis(false);
+                    return false;
+                });
+            };
+
+            var toggleVisualization = function(enabled) {
+                setVisualizationEnabled(enabled);
+                localStorage.setItem('simust_visualization', JSON.stringify(enabled));
+                axios.post("/set-visualization", { enabled: enabled }).then(function() {
+                    showToast("Visualization " + (enabled ? 'ON' : 'OFF'), 'info');
+                }).catch(function(e) {
+                    console.error(e);
+                    setVisualizationEnabled(!enabled);
+                    localStorage.setItem('simust_visualization', JSON.stringify(!enabled));
+                });
+            };
+
+            var saveSessionToPlayerFolder = function(playerId, playerName, playerSurname, playerPlayerId,
+            sessionData) {
+                setSavingSession(true);
+                return axios.post("/save-session-to-player", {
+                    player_id: playerId,
+                    player_name: playerName,
+                    player_surname: playerSurname,
+                    player_player_id: playerPlayerId,
+                    session_data: sessionData
+                }).then(function(res) {
+                    if (res.data && res.data.status === "success") {
+                        showToast("Session saved to " + REPORTS_BASE + "/" + playerId + "/", 'success');
+                        loadPlayerSessionsFromBackend(playerId);
+                        return res.data;
+                    }
+                    return null;
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Failed to save session", 'error');
+                    return null;
+                }).finally(function() { setSavingSession(false); });
+            };
+
+            // ----- Auto-unlock based on performance (with subdirectory check) -----
+            var checkAndUnlockNextLevel = function(stats, currentLevelId, subdirectory) {
+                if (!selectedPlayerId) return;
+                if (!currentLevelId) return;
+                // Compute AE and ACC from stats
+                var total = stats.total || 0;
+                if (total === 0) return;
+                var correct = stats.correct || 0;
+                var late = stats.late || 0;
+                var acc = ((correct + late) / total) * 100;
+                var ae = stats.avg_ae || 0;
+
+                var thresholdAE = 70;
+                var thresholdACC = 70;
+
+                // Check if performance is good
+                if (ae >= thresholdAE && acc >= thresholdACC) {
+                    // For Foundation level, only unlock if subdirectory is SF-180N
+                    var isFoundation = currentLevelId.toLowerCase().indexOf('foundation') !== -1 || currentLevelId === 'L00-Foundation';
+                    if (isFoundation) {
+                        if (subdirectory !== 'SF-180N') {
+                            showToast("Performance good, but Entry level unlocks only after completing SF-180N.", 'info');
+                            return;
+                        }
+                    }
+                    // Find next level
+                    var nextLevelId = getNextLevelId(currentLevelId, allLevels);
+                    if (!nextLevelId) {
+                        showToast("You have completed all levels! Excellent performance!", 'success');
+                        return;
+                    }
+                    // Check if already unlocked
+                    if (unlockedLevels.indexOf(nextLevelId) !== -1) {
+                        showToast("Performance passed, but " + nextLevelId + " is already unlocked.", 'info');
+                        return;
+                    }
+                    // Unlock next level
+                    axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: nextLevelId }).then(function(res) {
+                        if (res.data.status === "success") {
+                            showToast("🏆 Great performance! Unlocked: " + nextLevelId, 'success');
+                            // Update local state
+                            setUnlockedLevels(unlockedLevels.concat([nextLevelId]));
+                            // Reload player progress
+                            loadPlayers().then(function() {
+                                var player = getSelectedPlayer();
+                                if (player) updateProgressForPlayer(player);
+                            });
+                        } else {
+                            showToast("Unlock failed: " + (res.data.message || 'unknown error'), 'error');
+                        }
+                    }).catch(function(e) {
+                        console.error("Auto-unlock error:", e);
+                        showToast("Auto-unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    });
+                } else {
+                    showToast("Performance: AE=" + ae.toFixed(1) + "%, ACC=" + acc.toFixed(1) + "%. Need ≥70% both to unlock next level.", 'info');
+                }
+            };
+
+            var handlePlaybackComplete = function() {
+                var player = getSelectedPlayer();
+                if (!player) { showToast("No player selected", 'error'); return Promise.resolve(null); }
+                if (!reportData || !reportData.actions || reportData.actions.length === 0) {
+                    showToast("No actions recorded", 'info');
+                    return Promise.resolve(null);
+                }
+
+                var goalsByScreen = {};
+                analysisResults.forEach(function(a) {
+                    if (a.result === 'Correct' && a.winning_screen && a.winning_screen !== 'N/A') {
+                        var s = a.winning_screen;
+                        goalsByScreen[s] = (goalsByScreen[s] || 0) + 1;
+                    }
+                });
+
+                var directory = reportData.directory || currentDirectory || '';
+
+                var sessionData = {
+                    level: selectedLevel || 'Unknown',
+                    subdirectory: selectedSubdirectory || '',
+                    total_duration_minutes: 0,
+                    video_count: 0,
+                    directory: directory,
+                    report_path: '',
+                    statistics: {
+                        correct: (reportData.statistics && reportData.statistics.correct) || 0,
+                        late: (reportData.statistics && reportData.statistics.late) || 0,
+                        wrong: (reportData.statistics && reportData.statistics.wrong) || 0,
+                        miss: (reportData.statistics && reportData.statistics.miss) || 0,
+                        avg_ae: (reportData.statistics && reportData.statistics.avg_ae) || 0
+                    },
+                    goals_by_screen: goalsByScreen,
+                    actions: analysisResults.map(function(r) {
+                        return {
+                            block_id: r.id || '',
+                            action: r.action || '',
+                            screens: r.screens ? r.screens.split(', ') : [],
+                            finishing_type: r.result === 'Correct' ? 'CORRECT' : r.result === 'Late' ?
+                                'LATE' : r.result === 'Wrong' ? 'WRONG' : r.result === 'Miss' ?
+                                'MISS' : 'WRONG',
+                            goal_screen: r.winning_screen || 'N/A',
+                            action_time: r.session_duration !== null ? r.session_duration : null,
+                            aep: r.aep || '-',
+                            ae: r.ae || 0,
+                            video_index: r.video_index || 0
+                        };
+                    }),
+                    total_actions: reportData.total_actions || 0,
+                    avg_finishing_time: (reportData.statistics && reportData.statistics
+                        .avg_finishing_time) || 0
+                };
+
+                return saveSessionToPlayerFolder(
+                    player.id, player.name, player.surname, player.playerId, sessionData
+                ).then(function() {
+                    return loadPlayers().then(function() {
+                        var updatedPlayer = getSelectedPlayer();
+                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
+                        // After saving and reloading, check for auto-unlock
+                        var stats = reportData.statistics || {};
+                        var currentLevelId = selectedLevel; // the level just played
+                        var subdir = selectedSubdirectory; // the subdirectory used
+                        checkAndUnlockNextLevel(stats, currentLevelId, subdir);
+                    });
+                });
+            };
+
+            var startRealtimePlayback = function() {
+                var player = getSelectedPlayer();
+                if (!player) { setError("Please select a player first");
+                    setTimeout(function() { setError(""); }, 3000); return; }
+                if (!selectedLevel) { setError("Please select a training level");
+                    setTimeout(function() { setError(""); }, 3000); return; }
+                if (unlockedLevels.indexOf(selectedLevel) === -1) {
+                    setError("This level is locked. Please select an unlocked level.");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+
+                // Check if subdirectory is required and selected
+                var hasSubdirs = false;
+                var isLockedSubdir = false;
+                if (selectedLevel) {
+                    var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
+                    if (isFoundation && LEVEL_SUBDIRS['L00-Foundation']) {
+                        hasSubdirs = true;
+                        // No subdirectories are locked
+                    }
+                }
+                if (hasSubdirs && !selectedSubdirectory) {
+                    setError("Please select a subdirectory for this level.");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+
+                setError("");
+                setRealtimeRunning(true);
+                setVisualizationEnabled(false);
+                setActiveTab("main");
+                sessionSavedRef.current = false;
+
+                var payload = {
+                    level: selectedLevel,
+                    speed: 1.0,
+                    player_id: player.id,
+                    player_name: player.name,
+                    player_surname: player.surname,
+                    player_player_id: player.playerId
+                };
+                if (selectedSubdirectory) {
+                    payload.subdirectory = selectedSubdirectory;
+                }
+
+                axios.post("/start-realtime-playback", payload).then(function() {
+                    showToast("Realtime playback started for " + player.name + ' ' + player.surname +
+                        (selectedSubdirectory ? ' [' + selectedSubdirectory + ']' : ''), 'success');
+
+                    if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+                    if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
+                    if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+
+                    liveIntervalRef.current = setInterval(function() { fetchRealtimeResults(false); },
+                    800);
+
+                    autoStopTimeoutRef.current = setTimeout(function() {
+                        if (realtimeRunning && !sessionSavedRef.current) {
+                            showToast("Auto‑stopping after 120s (safety timeout)", 'info');
+                            stopPlayback();
+                        }
+                    }, 120000);
+
+                    var checkStatus = function() {
+                        if (sessionSavedRef.current) return;
+                        axios.get("/playback-status").then(function(statusRes) {
+                            if (!statusRes.data || !statusRes.data.state) {
+                                sessionSavedRef.current = true;
+                                setRealtimeRunning(false);
+                                if (liveIntervalRef.current) { clearInterval(
+                                        liveIntervalRef.current);
+                                    liveIntervalRef.current = null; }
+                                if (autoStopTimeoutRef.current) { clearTimeout(
+                                        autoStopTimeoutRef.current);
+                                    autoStopTimeoutRef.current = null; }
+                                if (reportData && reportData.actions && reportData.actions
+                                    .length) {
+                                    showToast("Playback finished, saving session…", 'info');
+                                    handlePlaybackComplete().then(function() {
+                                        showToast("Session saved successfully!",
+                                            'success');
+                                    });
+                                }
+                                return;
+                            }
+                            var state = statusRes.data.state;
+                            if (state === "completed" || state === "closed") {
+                                sessionSavedRef.current = true;
+                                setRealtimeRunning(false);
+                                if (liveIntervalRef.current) { clearInterval(
+                                        liveIntervalRef.current);
+                                    liveIntervalRef.current = null; }
+                                if (autoStopTimeoutRef.current) { clearTimeout(
+                                        autoStopTimeoutRef.current);
+                                    autoStopTimeoutRef.current = null; }
+                                showToast("Playback finished, saving session…", 'info');
+                                handlePlaybackComplete().then(function() {
+                                    showToast("Session saved successfully!", 'success');
+                                });
+                                return;
+                            } else if (state === "error") {
+                                sessionSavedRef.current = true;
+                                setRealtimeRunning(false);
+                                if (liveIntervalRef.current) { clearInterval(
+                                        liveIntervalRef.current);
+                                    liveIntervalRef.current = null; }
+                                if (autoStopTimeoutRef.current) { clearTimeout(
+                                        autoStopTimeoutRef.current);
+                                    autoStopTimeoutRef.current = null; }
+                                setError("Playback error occurred");
+                                return;
+                            }
+                            if (realtimeRunning && !sessionSavedRef.current) {
+                                realtimeMonitorInterval.current = setTimeout(checkStatus,
+                                2000);
+                            }
+                        }).catch(function(e) {
+                            console.warn("Playback status check failed:", e);
+                            sessionSavedRef.current = true;
+                            setRealtimeRunning(false);
+                            if (liveIntervalRef.current) { clearInterval(liveIntervalRef
+                                    .current);
+                                liveIntervalRef.current = null; }
+                            if (autoStopTimeoutRef.current) { clearTimeout(
+                                    autoStopTimeoutRef.current);
+                                autoStopTimeoutRef.current = null; }
+                            if (reportData && reportData.actions && reportData.actions
+                                .length) {
+                                showToast("Playback finished, saving session…", 'info');
+                                handlePlaybackComplete().then(function() {
+                                    showToast("Session saved successfully!", 'success');
+                                });
+                            }
+                        });
+                    };
+                    realtimeMonitorInterval.current = setTimeout(checkStatus, 2000);
+                }).catch(function(e) {
+                    setError("Failed to start: " + (e.response ? e.response.data.detail : e.message));
+                    setRealtimeRunning(false);
+                });
+            };
+
+            var stopPlayback = function() {
+                if (realtimeRunning && !sessionSavedRef.current && reportData && reportData.actions && reportData
+                    .actions.length) {
+                    showToast("Saving session before stopping…", 'info');
+                    handlePlaybackComplete().then(function() {
+                        sessionSavedRef.current = true;
+                        showToast("Session saved", 'success');
+                    });
+                }
+                if (realtimeRunning) {
+                    axios.post("/stop-realtime").catch(function(e) { console.error(e); });
+                }
+                setRealtimeRunning(false);
+                if (realtimeMonitorInterval.current) { clearTimeout(realtimeMonitorInterval.current);
+                    realtimeMonitorInterval.current = null; }
+                if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current);
+                    liveIntervalRef.current = null; }
+                if (autoStopTimeoutRef.current) { clearTimeout(autoStopTimeoutRef.current);
+                    autoStopTimeoutRef.current = null; }
+                setVisualizationEnabled(false);
+                showToast("Realtime stopped", 'info');
+            };
+
+            var displayResultsOnScreen2 = function() {
+                showToast("Searching for results…", 'info');
+                var directory = null;
+                if (reportData && reportData.directory) {
+                    directory = reportData.directory;
+                } else if (currentDirectory) {
+                    directory = currentDirectory;
+                }
+                if (!directory) {
+                    axios.get("/results").then(function(res) {
+                        if (res.data && res.data.directory) directory = res.data.directory;
+                    }).catch(function() {});
+                }
+                if (directory) {
+                    axios.post("/create-results-video", { directory: directory, video_index: 1 }).then(function(
+                    res) {
+                        if (res.data && res.data.status === "success") {
+                            showToast("Results video created and displayed on Screen 2", 'success');
+                            if (realtimeRunning) {
+                                showToast("Auto-stopping playback after video generation", 'info');
+                                stopPlayback();
+                            }
+                        } else {
+                            showToast("Could not display results on Screen 2", 'error');
+                        }
+                    }).catch(function(e) {
+                        console.error(e);
+                        showToast("Failed to display results on Screen 2", 'error');
+                    });
+                } else {
+                    showToast("No results available", 'error');
+                }
+            };
+
+            var forceRefreshReport = function() {
+                if (currentDirectory) {
+                    showToast("Refreshing report…", 'info');
+                    fetchRealtimeResults(true);
+                } else {
+                    showToast("No directory loaded", 'error');
+                }
+            };
+
+            // ----- EFFECTS -----
+            useEffect(function() {
+                fetchRealtimeResults(false);
+                var interval = setInterval(function() { fetchRealtimeResults(false); }, 1500);
+                var live = setInterval(function() { if (realtimeRunning) fetchRealtimeResults(false); }, 800);
+                return function() {
+                    clearInterval(interval);
+                    clearInterval(live);
+                    if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
+                    if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+                };
+            }, [realtimeRunning]);
+
+            useEffect(function() {
+                fetchLevels();
+                loadPlayers();
+                var stored = localStorage.getItem('simust_visualization');
+                if (stored !== null) {
+                    var val = JSON.parse(stored);
+                    setVisualizationEnabled(val);
+                    axios.post("/set-visualization", { enabled: val }).catch(function() {});
+                } else {
+                    setVisualizationEnabled(false);
+                    localStorage.setItem('simust_visualization', JSON.stringify(false));
+                    axios.post("/set-visualization", { enabled: false }).catch(function() {});
+                }
+                return function() {
+                    if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
+                    if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+                };
+            }, []);
+
+            useEffect(function() {
+                var player = getSelectedPlayer();
+                if (player) {
+                    updateProgressForPlayer(player);
+                }
+            }, [selectedPlayerId, players, allLevels]);
+
+            useEffect(function() {
+                if (activeTab === 'results' && loggedIn && role === 'admin') {
+                    fetchRealtimeResults(true);
+                }
+            }, [activeTab, loggedIn, role]);
+
+            // Reset subdirectory when level changes
+            useEffect(function() {
+                if (selectedLevel) {
+                    var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
+                    if (!isFoundation || !LEVEL_SUBDIRS['L00-Foundation']) {
+                        setSelectedSubdirectory("");
+                    }
+                } else {
+                    setSelectedSubdirectory("");
+                }
+            }, [selectedLevel]);
+
+            var isAdmin = role === 'admin';
+            var menuState = useState(false);
+            var menuOpen = menuState[0];
+            var setMenuOpen = menuState[1];
+            var toggleMenu = function() { setMenuOpen(!menuOpen); };
+            var closeMenu = function() { setMenuOpen(false); };
+
+            // =====================================================================
+            // RENDER
+            // =====================================================================
+
+            if (!loggedIn) {
+                return React.createElement(LoginScreen, {
+                    onLogin: handleLogin,
+                    error: loginError,
+                    lang: lang,
+                    onLangChange: changeLang,
+                    t: t
+                });
+            }
+
+            return React.createElement('div', { className: "simust-card" },
+                // HEADER
+                React.createElement('div', { className: "simust-header" },
+                    React.createElement('div', { className: "flex items-center gap-4" },
+                        React.createElement('div', { className: "hamburger-menu" },
+                            React.createElement('button', { onClick: toggleMenu, className: "hamburger-btn" },
+                                '☰'),
+                            React.createElement('div', { className: "dropdown-menu" + (menuOpen ?
+                                    ' open' : '') },
+                                React.createElement('button', { onClick: function() { setActiveTab(
+                                        'main');
+                                        closeMenu(); } }, t('smartControl')),
+                                isAdmin ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('results');
+                                        closeMenu(); } }, t('results')) : null,
+                                isAdmin ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('manage');
+                                        closeMenu(); } }, t('managePlayers')) : null
+                            )
+                        ),
+                        React.createElement('h1', { className: "text-3xl font-black" },
+                            React.createElement('span', { className: "gold-accent" }, "SIMUST"),
+                            React.createElement('span', { className: "text-white" }, " PLAY IT SMART")
+                        )
+                    ),
+                    React.createElement('div', { className: "flex items-center gap-4" },
+                        React.createElement(LanguageSwitcher, { lang: lang, onLangChange: changeLang }),
+                        React.createElement('span', { className: "live-dot" + (realtimeRunning ?
+                                ' active' : ' inactive') }),
+                        React.createElement('span', { className: "text-xs text-gray-400" },
+                            realtimeRunning ? t("live") : t("idle")
+                        ),
+                        React.createElement('button', { onClick: handleLogout, className: "btn-logout" },
+                            t("logout"))
+                    )
+                ),
+
+                // TABS
+                React.createElement('div', { className: "flex gap-1 px-6 border-b border-[#ffc10720] overflow-x-auto" },
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('main'); },
+                        className: "tab-button" + (activeTab === 'main' ? ' active' : '')
+                    }, t("smartControl")),
+                    isAdmin ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('results'); },
+                        className: "tab-button" + (activeTab === 'results' ? ' active' : '')
+                    }, t("results")) :
+                    null,
+                    isAdmin ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('manage'); },
+                        className: "tab-button" + (activeTab === 'manage' ? ' active' : '')
+                    }, t("managePlayers")) :
+                    null
+                ),
+
+                // CONTENT
+                React.createElement('div', { className: "p-6" },
+                    activeTab === 'manage' && isAdmin ?
+                    React.createElement(PlayerManagement, {
+                        players: players,
+                        onEdit: openEditModal,
+                        onDelete: deletePlayer,
+                        searchQuery: searchQuery,
+                        setSearchQuery: setSearchQuery
+                    }) :
+                    activeTab === 'results' && isAdmin ?
+                    React.createElement(React.Fragment, null,
+                        React.createElement('div', { className: "flex justify-between items-center mb-4 flex-wrap gap-2" },
+                            React.createElement('h2', { className: "text-2xl font-black gold-accent" },
+                                "RESULTS – Summary & Training Details"),
+                            React.createElement('div', { className: "flex items-center gap-2" },
+                                React.createElement('button', { onClick: forceRefreshReport,
+                                    className: "refresh-btn" }, "Refresh"),
+                                lastUpdateTime ? React.createElement('span', { className: "text-xs text-gray-500" },
+                                    "Last update: " + lastUpdateTime) : null
+                            )
+                        ),
+                        loadingAnalysis ?
+                        React.createElement('div', { className: "flex justify-center items-center py-20" },
+                            React.createElement('div', { className: "loading-spinner" })
+                        ) :
+                        reportData && reportData.actions && reportData.actions.length ?
+                        React.createElement(React.Fragment, null,
+                            React.createElement(SummaryMetrics, { stats: reportData.statistics || {},
+                                actions: analysisResults }),
+                            React.createElement('div', { className: "mt-6" },
+                                React.createElement('h3', { className: "gold-accent font-bold mb-3 text-sm" },
+                                    "Training Details"),
+                                React.createElement(ResultsTable, { actions: analysisResults })
+                            )
+                        ) :
+                        React.createElement('div', { className: "text-center p-10 bg-[#0c1020] rounded-2xl border border-[#ffc10710]" },
+                            React.createElement('p', { className: "text-gray-400" },
+                                "No results yet. Start a training session."
+                            )
+                        )
+                    ) :
+                    // MAIN TAB
+                    React.createElement(React.Fragment, null,
+                        React.createElement(PlayerSelector, {
+                            players: players,
+                            selectedPlayerId: selectedPlayerId,
+                            searchQuery: searchQuery,
+                            showSearchResults: showSearchResults,
+                            filteredPlayers: filteredPlayers,
+                            showAddPlayer: showAddPlayer,
+                            newPlayer: newPlayer,
+                            loadingSessions: loadingSessions,
+                            onSearch: performSearch,
+                            onSelectPlayer: selectPlayerFromSearch,
+                            onClearSelection: clearSelection,
+                            onAddPlayer: addPlayerHandler,
+                            onNewPlayerChange: setNewPlayer,
+                            getSelectedPlayer: getSelectedPlayer,
+                            allLevels: allLevels,
+                            unlockedLevels: unlockedLevels,
+                            completedLevels: completedLevels,
+                            currentLevel: currentLevel,
+                            isAdmin: isAdmin,
+                            onUnlockLevel: handleUnlockLevel,
+                            onLockLevel: handleLockLevel,
+                            onLevelChange: function(level) {
+                                setSelectedLevel(level);
+                                setSelectedSubdirectory(""); // reset subdir when level changes
+                            },
+                            selectedLevel: selectedLevel,
+                            selectedSubdirectory: selectedSubdirectory,
+                            onSubdirectoryChange: setSelectedSubdirectory,
+                            t: t
+                        }),
+                        getSelectedPlayer() ?
+                        React.createElement(PlayerProfile, {
+                            player: getSelectedPlayer(),
+                            sessionCount: playerSessions.length,
+                            simustScore: getSelectedPlayer().simustScore || 0,
+                            isAdmin: isAdmin,
+                            onEdit: openEditModal
+                        }) :
+                        null,
+                        React.createElement('div', { className: "flex items-center gap-4 mb-4" },
+                            React.createElement('span', { className: "text-white font-bold" },
+                                t("visualization")),
+                            React.createElement('label', { className: "toggle-switch" },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: visualizationEnabled,
+                                    onChange: function(e) { toggleVisualization(e.target
+                                            .checked); }
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            ),
+                            React.createElement('span', { className: "text-sm" + (visualizationEnabled ?
+                                    ' viz-status-on' : ' text-gray-400') },
+                                visualizationEnabled ? 'ON' : 'OFF'
+                            )
+                        ),
+                        React.createElement('div', { className: "flex flex-wrap gap-4 items-center mb-6" },
+                            React.createElement('button', {
+                                onClick: startRealtimePlayback,
+                                disabled: !selectedPlayerId || !selectedLevel || realtimeRunning ||
+                                    unlockedLevels.indexOf(selectedLevel) === -1 ||
+                                    (function() {
+                                        if (!selectedLevel) return false;
+                                        var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
+                                        if (isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0) {
+                                            if (!selectedSubdirectory) return true;
+                                            // No subdirectories are locked
+                                            return false;
+                                        }
+                                        return false;
+                                    })(),
+                                className: "btn-primary btn-realtime px-6 py-2 rounded-full font-bold" +
+                                    (!selectedPlayerId || !selectedLevel || realtimeRunning ||
+                                        unlockedLevels.indexOf(selectedLevel) === -1 ||
+                                        (function() {
+                                            if (!selectedLevel) return true;
+                                            var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
+                                            if (isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0) {
+                                                if (!selectedSubdirectory) return true;
+                                                // No locked subdirs
+                                                return false;
+                                            }
+                                            return false;
+                                        })() ?
+                                        ' opacity-50' : '')
+                            },
+                                realtimeRunning ? t("playing") : t("realtimePlay"),
+                                !realtimeRunning ? React.createElement('span', { className: "auto-badge" },
+                                    "AUTO") : null
+                            ),
+                            realtimeRunning ?
+                            React.createElement('button', {
+                                onClick: stopPlayback,
+                                className: "btn-primary btn-danger px-6 py-2 rounded-full font-bold"
+                            }, t("stop")) :
+                            null,
+                            React.createElement('button', {
+                                onClick: displayResultsOnScreen2,
+                                className: "btn-primary btn-results px-6 py-2 rounded-full font-bold",
+                                disabled: !reportData || !reportData.actions || reportData.actions
+                                    .length === 0
+                            }, t("showResults"))
+                        ),
+                        savingSession ?
+                        React.createElement('div', { className: "mb-4 p-2 bg-blue-600/20 rounded-xl text-center" },
+                            React.createElement('p', { className: "text-blue-300 text-sm" },
+                                "Saving session…")
+                        ) :
+                        null,
+                        error ?
+                        React.createElement('div', { className: "mb-6 p-3 bg-red-900/50 rounded-xl" },
+                            React.createElement('p', { className: "text-red-300" }, error)
+                        ) :
+                        null,
+                        React.createElement('div', { className: "flex justify-center my-4" },
+                            React.createElement('img', {
+                                src: "/arena.png",
+                                alt: "Arena",
+                                className: "arena-image max-h-[280px] object-contain",
+                                onError: function(e) { e.target.style.display = 'none'; }
+                            })
+                        )
+                    )
+                ),
+                React.createElement('div', { className: "text-center text-[10px] text-gray-600 border-t border-[#ffc10720] py-4" },
+                    t("allRights") + "  •  " + username
+                ),
+                toastMessage ? React.createElement('div', { className: "toast" }, toastMessage.message) : null,
+
+                // Edit Modal
+                editModalOpen ?
+                React.createElement('div', { className: "modal-overlay" },
+                    React.createElement('div', { className: "modal-box" },
+                        React.createElement('h2', null, "Edit Player"),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "First Name"),
+                            React.createElement('input', { value: editForm.name || '', onChange: function(
+                                    e) { setEditForm(Object.assign({}, editForm, { name: e.target
+                                        .value })); } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "Last Name"),
+                            React.createElement('input', { value: editForm.surname || '', onChange: function(
+                                    e) { setEditForm(Object.assign({}, editForm, { surname: e.target
+                                        .value })); } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "SIMUST ID"),
+                            React.createElement('input', { value: editForm.playerId || '', onChange: function(
+                                    e) { setEditForm(Object.assign({}, editForm, { playerId: e.target
+                                        .value })); } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "Club"),
+                            React.createElement('input', { value: editForm.club || '', onChange: function(
+                                    e) { setEditForm(Object.assign({}, editForm, { club: e.target
+                                        .value })); } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "Birthday"),
+                            React.createElement('input', { type: "date", value: editForm.birthday || '',
+                                onChange: function(e) {
+                                    var val = e.target.value;
+                                    var age = val ? (new Date().getFullYear() - new Date(val)
+                                        .getFullYear()) : '';
+                                    setEditForm(Object.assign({}, editForm, { birthday: val,
+                                        age: age }));
+                                } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "Age"),
+                            React.createElement('input', { type: "number", value: editForm.age || '',
+                                onChange: function(e) { setEditForm(Object.assign({}, editForm, { age: e
+                                            .target.value })); } })
+                        ),
+                        React.createElement('div', { className: "form-group" },
+                            React.createElement('label', null, "Image URL (or base64)"),
+                            React.createElement('input', { value: editForm.image || '', onChange: function(
+                                    e) { setEditForm(Object.assign({}, editForm, { image: e.target
+                                        .value })); } })
+                        ),
+                        React.createElement('div', { className: "btn-row" },
+                            React.createElement('button', { onClick: closeEditModal, className: "cancel-btn" },
+                                "Cancel"),
+                            React.createElement('button', { onClick: function() {
+                                    if (window.confirm("Delete " + editForm.name + " " + editForm
+                                        .surname + "?")) {
+                                        deletePlayer(editForm.id);
+                                        closeEditModal();
+                                    }
+                                }, className: "delete-btn" }, "Delete"),
+                            React.createElement('button', { onClick: saveEdit, className: "save-btn" },
+                                "Save")
+                        )
+                    )
+                ) :
+                null
+            );
+        }
+
+        ReactDOM.render(React.createElement(App), document.getElementById('root'));
+    </script>
+</body>
+</html>
