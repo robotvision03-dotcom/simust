@@ -831,10 +831,89 @@
         return (I18N.en[key] || key);
     }
 
+    var ARABIC_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+    var BIDI_SKIP_CLOSEST = "script, style, canvas, svg, textarea, select, option, .num-ltr, [data-bidi-skip]";
+    var BIDI_TEXT_SEL = [
+        "[data-i18n]",
+        "h1", "h2", "h3", "h4",
+        "p", "small", "label", "blockquote",
+        "th", "td",
+        ".coach-player-head > *",
+        ".coach-player-row > *",
+        ".manager-team-head > *",
+        ".manager-team-row > *",
+        ".player-results-grid article small",
+        ".player-results-grid article span",
+        ".coach-summary article small",
+        ".coach-summary article span",
+        ".portal-kicker",
+        ".portal-sidebar nav a span",
+        ".today-schedule-row .who",
+        ".res-book-sub",
+        ".res-slot-label",
+        ".coach-res-slots .none",
+        "#profile-label"
+    ].join(",");
+    var BIDI_TABLE_SEL = ".coach-player-table, .manager-team-table, .session-table, .table-wrap";
+
     function applyDocumentDir(lang) {
         if (!document.documentElement) return;
         document.documentElement.lang = lang;
         document.documentElement.setAttribute("dir", lang === "ar" ? "rtl" : "ltr");
+    }
+
+    function inferTextDir(text) {
+        return ARABIC_RE.test(String(text || "")) ? "rtl" : "ltr";
+    }
+
+    function applyElementBidi(el, pageDir) {
+        if (!el || el.nodeType !== 1) return;
+        if (el.matches && el.matches(BIDI_SKIP_CLOSEST)) return;
+        if (el.closest && el.closest(BIDI_SKIP_CLOSEST)) return;
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+            if (el.getAttribute("data-bidi")) {
+                el.removeAttribute("data-bidi");
+            }
+            return;
+        }
+        var text = (el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text) return;
+        var dir = inferTextDir(text);
+        if (pageDir === "ltr" && dir === "ltr") {
+            if (el.getAttribute("data-bidi")) {
+                el.removeAttribute("dir");
+                el.removeAttribute("data-bidi");
+            }
+            return;
+        }
+        el.setAttribute("dir", dir);
+        el.setAttribute("data-bidi", dir);
+    }
+
+    function applyBidi(root) {
+        var scope = root || document;
+        if (!scope.querySelectorAll) return;
+        var pageDir = (document.documentElement && document.documentElement.getAttribute("dir")) || "ltr";
+        var nodes = scope.querySelectorAll(BIDI_TEXT_SEL);
+        for (var i = 0; i < nodes.length; i++) {
+            applyElementBidi(nodes[i], pageDir);
+        }
+        var tables = scope.querySelectorAll(BIDI_TABLE_SEL);
+        for (var t = 0; t < tables.length; t++) {
+            var table = tables[t];
+            var head = table.querySelector(".coach-player-head, .manager-team-head, thead, th");
+            var sample = head ? head.textContent : "";
+            var tableDir = inferTextDir(sample);
+            if (pageDir === "ltr" && tableDir === "ltr") {
+                if (table.getAttribute("data-bidi")) {
+                    table.removeAttribute("dir");
+                    table.removeAttribute("data-bidi");
+                }
+            } else {
+                table.setAttribute("dir", tableDir);
+                table.setAttribute("data-bidi", tableDir);
+            }
+        }
     }
 
     function closeLangMenus(exceptRoot) {
@@ -871,6 +950,7 @@
             titles[n].setAttribute("title", t("language", code));
             titles[n].setAttribute("aria-label", t("language", code));
         }
+        applyBidi(document);
         if (typeof global.dispatchEvent === "function") {
             try {
                 global.dispatchEvent(new CustomEvent("simust-lang-change", { detail: code }));
@@ -946,6 +1026,8 @@
     global.simustSetLang = setLang;
     global.simustT = t;
     global.simustApplyI18n = applyI18n;
+    global.simustApplyBidi = applyBidi;
+    global.simustTextDir = inferTextDir;
     global.simustFillCountrySelect = fillCountrySelect;
     global.simustBindLangSwitcher = bindLangSwitcher;
     applyDocumentDir(getLang());

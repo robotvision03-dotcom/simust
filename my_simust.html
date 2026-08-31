@@ -2900,9 +2900,6 @@
             text-align: start;
         }
         html[dir="rtl"] .portal-sidebar nav a small,
-        html[dir="rtl"] .coach-player-row i,
-        html[dir="rtl"] .manager-team-row b,
-        html[dir="rtl"] .manager-team-row i,
         html[dir="rtl"] .portal-review strong,
         html[dir="rtl"] .coach-summary strong,
         html[dir="rtl"] .distribution-bars strong,
@@ -2911,12 +2908,15 @@
             direction: ltr;
             unicode-bidi: isolate;
         }
-        html[dir="rtl"] .coach-player-table,
-        html[dir="rtl"] .manager-team-table,
-        html[dir="rtl"] .player-results-grid,
-        html[dir="rtl"] .coach-summary,
-        html[dir="rtl"] .session-table {
+        html[dir="rtl"] [data-bidi="ltr"]:not(input):not(textarea) {
+            direction: ltr;
+            unicode-bidi: isolate;
+            text-align: start;
+        }
+        html[dir="rtl"] [data-bidi="rtl"]:not(input):not(textarea) {
             direction: rtl;
+            unicode-bidi: isolate;
+            text-align: start;
         }
         html[dir="rtl"] .player-results-grid article,
         html[dir="rtl"] .coach-player-row,
@@ -3581,12 +3581,12 @@
                     </div>
                     <div class="coach-player-table" id="coach-player-table">
                         <div class="coach-player-row coach-player-head">
-                            <span>PLAYER</span>
-                            <span>Current Player Level</span>
-                            <span>LATEST AE</span>
-                            <span>TREND</span>
-                            <span>PRIORITY</span>
-                            <span>RESERVATION</span>
+                            <span dir="ltr">PLAYER</span>
+                            <span dir="ltr">Current Player Level</span>
+                            <span dir="ltr">LATEST AE</span>
+                            <span dir="ltr">TREND</span>
+                            <span dir="ltr">PRIORITY</span>
+                            <span dir="ltr">RESERVATION</span>
                         </div>
                     </div>
                 </div>
@@ -3656,12 +3656,12 @@
                     </div>
                     <div class="manager-team-table" id="manager-team-table">
                         <div class="manager-team-row manager-team-head">
-                            <span>TEAM</span>
-                            <span>PLAYERS</span>
-                            <span>SESSIONS</span>
-                            <span>AVG. AE</span>
-                            <span>COVERAGE</span>
-                            <span>STATUS</span>
+                            <span dir="ltr">TEAM</span>
+                            <span dir="ltr">PLAYERS</span>
+                            <span dir="ltr">SESSIONS</span>
+                            <span dir="ltr">AVG. AE</span>
+                            <span dir="ltr">COVERAGE</span>
+                            <span dir="ltr">STATUS</span>
                         </div>
                     </div>
                     <div class="access-role-line">
@@ -5344,6 +5344,7 @@
                     }).join('');
                 }
                 resultsSummaryGrid.innerHTML = summaryHtml;
+                if (typeof simustApplyBidi === 'function') simustApplyBidi(resultsSummaryGrid);
 
                 // ----- 2. RING CHARTS -----
                 Object.values(ringChartInstances).forEach(function(chart) { chart.destroy(); });
@@ -5910,7 +5911,7 @@
                 var levelCounts = { 'Entry': 0, 'Activated': 0, 'High Performance': 0, 'Elite': 0, 'World-Class': 0 };
 
                 var tableHtml =
-                    '<div class="coach-player-row coach-player-head"><span>PLAYER</span><span>Current Player Level</span><span>LATEST AE</span><span>TREND</span><span>PRIORITY</span><span>RESERVATION</span></div>';
+                    '<div class="coach-player-row coach-player-head"><span dir="ltr">PLAYER</span><span dir="ltr">Current Player Level</span><span dir="ltr">LATEST AE</span><span dir="ltr">TREND</span><span dir="ltr">PRIORITY</span><span dir="ltr">RESERVATION</span></div>';
                 var displayPlayers = players.slice();
                 var rowData = [];
 
@@ -6077,6 +6078,7 @@
                         '<div class="coach-player-row"><span style="color:#5f7086;">No players assigned yet.</span></div>';
                 }
                 coachPlayerTable.innerHTML = tableHtml;
+                if (typeof simustApplyBidi === 'function') simustApplyBidi(coachPlayerTable);
 
                 coachPlayerTable.querySelectorAll('[data-player-id]').forEach(function(row) {
                     row.addEventListener('click', function() {
@@ -6155,7 +6157,7 @@
                 managerTestCoverage.textContent = coveragePct.toFixed(0) + '%';
 
                 var teamHtml =
-                    '<div class="manager-team-row manager-team-head"><span>TEAM</span><span>PLAYERS</span><span>SESSIONS</span><span>AVG. AE</span><span>COVERAGE</span><span>STATUS</span></div>';
+                    '<div class="manager-team-row manager-team-head"><span dir="ltr">TEAM</span><span dir="ltr">PLAYERS</span><span dir="ltr">SESSIONS</span><span dir="ltr">AVG. AE</span><span dir="ltr">COVERAGE</span><span dir="ltr">STATUS</span></div>';
                 var teamNames = Object.keys(teamMap).sort();
 
                 managerTeamData = {};
@@ -6203,6 +6205,7 @@
                         '<div class="manager-team-row"><span colspan="6" style="color:#5f7086; text-align:center; padding:20px;">No teams found.</span></div>';
                 }
                 managerTeamTable.innerHTML = teamHtml;
+                if (typeof simustApplyBidi === 'function') simustApplyBidi(managerTeamTable);
 
                 managerTeamTable.querySelectorAll('.manager-team-row[data-team]').forEach(function(row) {
                     row.addEventListener('click', function() {
@@ -6944,6 +6947,7 @@
                     window.addEventListener('simust-lang-change', function() {
                         populateReservationSelects();
                         renderReservationCalendar();
+                        if (typeof simustApplyBidi === 'function') simustApplyBidi(document);
                     });
                 }
             }

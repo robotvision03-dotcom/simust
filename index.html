@@ -214,7 +214,16 @@
         html[dir="rtl"] .today-schedule-panel {
             text-align: start;
         }
-        html[dir="rtl"] .table-wrap { direction: rtl; }
+        html[dir="rtl"] [data-bidi="ltr"]:not(input):not(textarea) {
+            direction: ltr;
+            unicode-bidi: isolate;
+            text-align: start;
+        }
+        html[dir="rtl"] [data-bidi="rtl"]:not(input):not(textarea) {
+            direction: rtl;
+            unicode-bidi: isolate;
+            text-align: start;
+        }
         html[dir="rtl"] .table-wrap th,
         html[dir="rtl"] .table-wrap td { text-align: start; }
         html[dir="rtl"] .metric-ring,
@@ -245,9 +254,7 @@
             text-align: start;
             unicode-bidi: isolate;
         }
-        html[dir="rtl"] .gold-accent,
-        html[dir="rtl"] .simust-header h1,
-        html[dir="rtl"] .login-box h1 { direction: ltr; unicode-bidi: isolate; }
+        html[dir="rtl"] .gold-accent { unicode-bidi: isolate; }
     </style>
 </head>
 <body>
@@ -1103,7 +1110,10 @@
                                 ['Series ID', 'Action', 'Screens', 'Result', 'Winning Screen', 'Session Dur (s)',
                                     'AEP', 'FAC', 'AE'
                                 ].map(function(h) {
-                                    return React.createElement('th', { key: h }, h);
+                                    return React.createElement('th', {
+                                        key: h,
+                                        dir: typeof simustTextDir === 'function' ? simustTextDir(h) : 'auto'
+                                    }, h);
                                 })
                             )
                         ),
@@ -1423,7 +1433,10 @@
                             React.createElement('tr', null,
                                 ['Name', 'SIMUST ID', 'Club', 'Age', 'AE Avg', 'ACC Avg', 'Actions'].map(
                                     function(h) {
-                                        return React.createElement('th', { key: h }, h);
+                                        return React.createElement('th', {
+                                            key: h,
+                                            dir: typeof simustTextDir === 'function' ? simustTextDir(h) : 'auto'
+                                        }, h);
                                     })
                             )
                         ),
@@ -2519,6 +2532,13 @@
             };
 
             // ----- EFFECTS -----
+            useEffect(function() {
+                var id = requestAnimationFrame(function() {
+                    if (typeof simustApplyBidi === 'function') simustApplyBidi(document);
+                });
+                return function() { cancelAnimationFrame(id); };
+            }, [lang, loggedIn, activeTab]);
+
             useEffect(function() {
                 activeTabRef.current = activeTab;
             }, [activeTab]);
