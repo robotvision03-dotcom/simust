@@ -1783,6 +1783,29 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 draw.text((x_pos, y_pos), line, font=font, fill=color)
                 y_pos += th + 8
 
+        def draw_metric_label(draw, text, center_x, rect_y):
+            """Draw a metric name centered in the label rectangle, wrapping long names."""
+            words = text.split()
+            if len(words) >= 2:
+                lines = [words[0], " ".join(words[1:])]
+            else:
+                lines = [text]
+            font_size = 15 if max(len(line) for line in lines) > 6 else 22
+            line_gap = 4
+            font = get_segoe_font(font_size, True)
+            heights = []
+            widths = []
+            for line in lines:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                widths.append(bbox[2] - bbox[0])
+                heights.append(bbox[3] - bbox[1])
+            total_h = sum(heights) + line_gap * (len(lines) - 1)
+            y = rect_y + 35 + LABEL_TEXT_Y_OFFSET - total_h // 2
+            for i, line in enumerate(lines):
+                x = center_x - widths[i] // 2
+                draw.text((x, y), line, font=font, fill=(255, 255, 255))
+                y += heights[i] + line_gap
+
         def draw_label_rectangle(img, center_x, tile_width, rect_y, text,
                                  color=(255,255,255), bg=(0,165,255)):
             rect_h = 70
@@ -1859,16 +1882,16 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
                     if num == 12:
                         draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aet_percent, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "AET")
+                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Reaction Time")
                     elif num == 3:
                         draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, avg_ae, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "AE")
+                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
                     elif num == 13:
                         draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aac, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "AAC")
+                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Accuracy")
                     elif num == 4:
                         draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, economy_percent, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "BDP")
+                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Displacement")
 
                 # Convert to PIL and draw text
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -1883,19 +1906,19 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     if num == 12:
                         aet_text = aet_display if aet_display != "-" else "-"
                         draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aet_text])
-                        draw_text_on_pil(draw, "AET", center_x, rect_y + 35 + LABEL_TEXT_Y_OFFSET, font_size=28, color=(255,255,255), bold=True, anchor='mm')
+                        draw_metric_label(draw, "Reaction Time", center_x, rect_y)
                     elif num == 3:
                         ae_text = ae_display if ae_display != "-" else "-"
                         draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ae_text])
-                        draw_text_on_pil(draw, "AE", center_x, rect_y + 35 + LABEL_TEXT_Y_OFFSET, font_size=28, color=(255,255,255), bold=True, anchor='mm')
+                        draw_metric_label(draw, "Efficiency", center_x, rect_y)
                     elif num == 13:
                         aac_text = f"{aac:.0f}%" if aac > 0 else "-"
                         draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aac_text])
-                        draw_text_on_pil(draw, "AAC", center_x, rect_y + 35 + LABEL_TEXT_Y_OFFSET, font_size=28, color=(255,255,255), bold=True, anchor='mm')
+                        draw_metric_label(draw, "Accuracy", center_x, rect_y)
                     elif num == 4:
                         bdp_text = f"{total_distance:.1f} m" if total_distance > 0 else "-"
                         draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [bdp_text])
-                        draw_text_on_pil(draw, "BDP", center_x, rect_y + 35 + LABEL_TEXT_Y_OFFSET, font_size=28, color=(255,255,255), bold=True, anchor='mm')
+                        draw_metric_label(draw, "Displacement", center_x, rect_y)
                     elif num == 14 and is_final:
                         pass
 

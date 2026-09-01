@@ -616,7 +616,7 @@
                 body = React.createElement('div', { className: "today-schedule-list" },
                     items.map(function(row) {
                         return React.createElement('div', { className: "today-schedule-row", key: row.id || (row.player_name + row.start) },
-                            React.createElement('span', { className: "who" }, row.player_name || t("reservationBooked")),
+                            React.createElement('span', { className: "who" }, "Simust Player"),
                             React.createElement('span', { className: "when" }, (row.start || "") + "–" + (row.end || ""))
                         );
                     })

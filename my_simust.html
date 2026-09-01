@@ -864,15 +864,24 @@
             line-height: 1.65;
         }
 
-        /* ---- summary cards (2 rows of 4) ---- */
+        /* ---- summary cards (3 cols + stacked AEP/FAC column) ---- */
         .player-results-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: 3fr 1fr;
             gap: 1px;
             background: var(--line);
             border: 1px solid var(--line);
             border-radius: 8px;
             overflow: hidden;
+        }
+        .player-results-grid > article:only-child {
+            grid-column: 1 / -1;
+        }
+        .player-results-main {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            background: var(--line);
         }
         .player-results-grid article {
             background: var(--portal-panel);
@@ -883,6 +892,22 @@
             min-height: 85px;
             transition: background 0.15s;
             border: 0;
+        }
+        .player-results-grid article.aep-fac-col {
+            justify-content: space-between;
+            gap: 10px;
+            min-height: 0;
+        }
+        .player-results-grid .aep-fac-block {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            flex: 1;
+            min-height: 0;
+        }
+        .player-results-grid .aep-fac-block + .aep-fac-block {
+            border-top: 1px solid var(--line);
+            padding-top: 10px;
         }
         .player-results-grid article:hover {
             background: #10243f;
@@ -2426,7 +2451,8 @@
             display: grid;
         }
         .level-progress-scale strong {
-            color: #9dbcf5;
+            color: inherit;
+            font-weight: 800;
         }
         /* Keep lock/unlock/check beside the name — never over the first letter */
         .level-progress-scale > * {
@@ -2546,7 +2572,21 @@
                 grid-template-columns: 100px 1fr 110px 120px;
             }
             .player-results-grid {
+                grid-template-columns: 1fr;
+            }
+            .player-results-main {
                 grid-template-columns: repeat(2, 1fr);
+            }
+            .player-results-grid article.aep-fac-col {
+                flex-direction: row;
+                align-items: stretch;
+                gap: 16px;
+            }
+            .player-results-grid .aep-fac-block + .aep-fac-block {
+                border-top: 0;
+                border-inline-start: 1px solid var(--line);
+                padding-top: 0;
+                padding-inline-start: 16px;
             }
             .ring-metrics-container {
                 grid-template-columns: repeat(2, 1fr);
@@ -2761,6 +2801,9 @@
                 font-size: 15px;
             }
             .player-results-grid {
+                grid-template-columns: 1fr;
+            }
+            .player-results-main {
                 grid-template-columns: repeat(2, 1fr);
             }
             .player-results-grid article {
@@ -2830,6 +2873,9 @@
                 grid-template-columns: 1fr 1fr;
             }
             .player-results-grid {
+                grid-template-columns: 1fr;
+            }
+            .player-results-main {
                 grid-template-columns: repeat(2, 1fr);
             }
             .player-results-grid article {
@@ -4589,7 +4635,6 @@
                 var container = document.getElementById('progression-container');
                 if (!container) return;
 
-                var unlocked = progress.unlocked_levels || [];
                 var completed = progress.completed_levels || [];
                 var current = progress.current_level || "L00-Foundation";
 
@@ -4649,17 +4694,13 @@
                                         ${MAIN_LEVELS.map(function(level, idx) {
                                             var isActive = idx === currentIndex;
                                             var isPast = idx < currentIndex;
-                                            var isUnlocked = unlocked.some(function(id) {
-                                                return getMainLevelId(id) === level.id;
-                                            });
                                             var isDone = isPast || completed.some(function(id) {
                                                 return getMainLevelId(id) === level.id;
                                             });
-                                            var kind = isDone ? 'completed' : ((isUnlocked || isActive) ? 'unlocked' : 'locked');
+                                            var kind = isActive ? (isDone ? 'completed' : 'unlocked') : 'locked';
                                             var tag = isActive ? 'strong' : 'span';
-                                            var color = isActive ? ribbonColor : (isPast ? '#9dbcf5' : '#52637a');
-                                            var colorStyle = (isActive || isPast) ? ('color:' + color + ';') : '';
-                                            return '<' + tag + ' style="' + colorStyle + '">' +
+                                            var color = isActive ? ribbonColor : '#52637a';
+                                            return '<' + tag + ' style="color:' + color + ';">' +
                                                 levelStatusIconSvg(kind) +
                                                 '<span class="level-scale-name">' + level.label + '</span>' +
                                                 '</' + tag + '>';
@@ -5112,18 +5153,19 @@
                     avgAe = sumAe / total;
                 }
                 var aac = total > 0 ? ((correct + late) / total * 100) : 0;
+                var aepRightCount = 0,
+                    aepLeftCount = 0;
+                actions.forEach(function(a) {
+                    var aep = a.aep || 'N/A';
+                    if (aep === 'Right') aepRightCount++;
+                    else if (aep === 'Left') aepLeftCount++;
+                });
+                var aepGoalCount = aepRightCount + aepLeftCount;
                 var aepRight = stats.aep_right || 0;
                 var aepLeft = stats.aep_left || 0;
-                if (aepRight === 0 && aepLeft === 0 && actions.length > 0) {
-                    var r = 0,
-                        l = 0;
-                    actions.forEach(function(a) {
-                        var aep = a.aep || 'N/A';
-                        if (aep === 'Right') r++;
-                        else if (aep === 'Left') l++;
-                    });
-                    aepRight = r;
-                    aepLeft = l;
+                if ((!aepRight && !aepLeft) && aepGoalCount > 0) {
+                    aepRight = aepRightCount / aepGoalCount * 100;
+                    aepLeft = aepLeftCount / aepGoalCount * 100;
                 }
                 var videoGroups = {};
                 actions.forEach(function(a, idx) {
@@ -5162,6 +5204,7 @@
                     aac: aac,
                     aepRight: aepRight,
                     aepLeft: aepLeft,
+                    aepGoalCount: aepGoalCount,
                     facRightPct: facRightPct,
                     facLeftPct: facLeftPct,
                     facTotal: facT,
@@ -5250,7 +5293,7 @@
                     var aac = latest.aac;
                     var aepRight = latest.aepRight;
                     var aepLeft = latest.aepLeft;
-                    var totalGoals = aepRight + aepLeft;
+                    var totalGoals = latest.aepGoalCount || 0;
                     var facRightPct = latest.facRightPct;
                     var facLeftPct = latest.facLeftPct;
                     var facTotal = latest.facTotal;
@@ -5290,14 +5333,6 @@
                     });
 
                     items.push({
-                        label: 'AEP (L / R)',
-                        value: aepLeft.toFixed(0) + '% / ' + aepRight.toFixed(0) + '%',
-                        arrow: '',
-                        sub: totalGoals + ' goals',
-                        highlight: ''
-                    });
-
-                    items.push({
                         label: 'C / L / W / M',
                         value: correct + ' / ' + late + ' / ' + wrong + ' / ' + miss,
                         arrow: '',
@@ -5314,25 +5349,25 @@
                         highlight: ''
                     });
 
-                    if (facTotal > 0) {
-                        items.push({
-                            label: 'First Action Choice',
-                            value: facRightPct.toFixed(0) + '% R / ' + facLeftPct.toFixed(0) + '% L',
-                            arrow: '',
-                            sub: '(' + facTotal + ' first actions)',
-                            highlight: ''
-                        });
-                    } else {
-                        items.push({
-                            label: 'First Action Choice',
-                            value: '—',
-                            arrow: '',
-                            sub: '',
-                            highlight: ''
-                        });
-                    }
+                    var aepValue = (aepRight > 0 || aepLeft > 0) ?
+                        ('R ' + aepRight.toFixed(0) + '% / L ' + aepLeft.toFixed(0) + '%') : '—';
+                    var facValue = facTotal > 0 ?
+                        ('R ' + facRightPct.toFixed(0) + '% / L ' + facLeftPct.toFixed(0) + '%') : '—';
 
-                    summaryHtml = items.map(function(item) {
+                    var stackedCol = '<article class="aep-fac-col">' +
+                        '<div class="aep-fac-block">' +
+                            '<small>AEP</small>' +
+                            '<strong><span class="num-ltr">' + aepValue + '</span></strong>' +
+                            '<span>' + (totalGoals > 0 ? (totalGoals + ' goals') : 'No data') + '</span>' +
+                        '</div>' +
+                        '<div class="aep-fac-block">' +
+                            '<small>FAC</small>' +
+                            '<strong><span class="num-ltr">' + facValue + '</span></strong>' +
+                            '<span>' + (facTotal > 0 ? ('(' + facTotal + ' first actions)') : 'No data') + '</span>' +
+                        '</div>' +
+                        '</article>';
+
+                    summaryHtml = '<div class="player-results-main">' + items.map(function(item) {
                         var arrowHtml = item.arrow ? '<span class="trend-arrow">' + item.arrow + '</span>' : '';
                         var highlightClass = item.highlight ? item.highlight : '';
                         return '<article>' +
@@ -5341,7 +5376,7 @@
                             '</strong>' +
                             (item.sub ? '<span>' + item.sub + '</span>' : '') +
                             '</article>';
-                    }).join('');
+                    }).join('') + '</div>' + stackedCol;
                 }
                 resultsSummaryGrid.innerHTML = summaryHtml;
                 if (typeof simustApplyBidi === 'function') simustApplyBidi(resultsSummaryGrid);
