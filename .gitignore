@@ -8,6 +8,7 @@ users.json
 simust_reports/
 simust_player/
 simust_realtime_recordings/
+push_queue/
 .vscode/
 .idea/
 android/.gradle/

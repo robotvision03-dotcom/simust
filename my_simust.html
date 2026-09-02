@@ -4878,6 +4878,17 @@
 
             var PORTAL_ROOT = '/my-simust';
             var SESSION_KEY = 'simust-user';
+            var SESSION_TOKEN_KEY = 'simust-token';
+            var sessionToken = '';
+
+            function apiHeaders(extra) {
+                var headers = { 'Content-Type': 'application/json' };
+                if (sessionToken) headers.Authorization = 'Bearer ' + sessionToken;
+                if (extra) {
+                    Object.keys(extra).forEach(function(k) { headers[k] = extra[k]; });
+                }
+                return headers;
+            }
 
             function portalPageFromLocation() {
                 var path = (location.pathname || '').replace(/\/+$/, '') || '/';
@@ -4933,19 +4944,28 @@
                 };
             }
 
-            function saveSessionUser(user) {
+            function saveSessionUser(user, token) {
                 try {
                     var slim = sessionSnapshot(user);
                     if (slim) sessionStorage.setItem(SESSION_KEY, JSON.stringify(slim));
+                    if (token) {
+                        sessionToken = token;
+                        sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+                    }
                 } catch (_) {}
             }
 
             function clearSessionUser() {
-                try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+                try {
+                    sessionStorage.removeItem(SESSION_KEY);
+                    sessionStorage.removeItem(SESSION_TOKEN_KEY);
+                } catch (_) {}
+                sessionToken = '';
             }
 
             function readSessionUser() {
                 try {
+                    sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY) || '';
                     var saved = sessionStorage.getItem(SESSION_KEY);
                     if (!saved) return null;
                     var user = JSON.parse(saved);
@@ -5130,7 +5150,7 @@
             // ----- fetch players from backend -----
             async function fetchPlayers() {
                 try {
-                    var resp = await fetch(API_BASE + '/get-players');
+                    var resp = await fetch(API_BASE + '/get-players', { headers: apiHeaders() });
                     if (!resp.ok) throw new Error('Failed to fetch players');
                     var data = await resp.json();
                     allPlayers = data.players || [];
@@ -5192,7 +5212,7 @@
                 searchModal.style.display = 'none';
                 var sessions = [];
                 try {
-                    var resp = await fetch(API_BASE + '/get-player-reports/' + player.id);
+                    var resp = await fetch(API_BASE + '/get-player-reports/' + player.id, { headers: apiHeaders() });
                     if (!resp.ok) throw new Error('Failed to load player data');
                     var data = await resp.json();
                     sessions = data.sessions || [];
@@ -5852,7 +5872,7 @@
                 try {
                     var resp = await fetch(API_BASE + '/register', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: apiHeaders(),
                         body: JSON.stringify({
                             username: username, password: password, name: name, surname: surname,
                             email: email, country_code: countryCode, phone: phone,
@@ -5910,7 +5930,7 @@
                 try {
                     var resp = await fetch(API_BASE + '/login', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: apiHeaders(),
                         body: JSON.stringify({ username: username, password: password })
                     });
                     var data = await resp.json();
@@ -5929,7 +5949,7 @@
                             progress: data.progress || {}
                         };
                         userRole = data.role;
-                        saveSessionUser(currentUser);
+                        saveSessionUser(currentUser, data.token);
                         if (data.role === 'player') {
                             // Public player view: load only this player's reports from the server.
                             // Do not download the academy player list into the browser.
@@ -5996,7 +6016,7 @@
                     var until = new Date();
                     until.setDate(until.getDate() + 90);
                     var to = ymdLocal(until);
-                    var resResp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+                    var resResp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to), { headers: apiHeaders() });
                     if (resResp.ok) {
                         var resData = await resResp.json();
                         var now = new Date();
@@ -6037,7 +6057,7 @@
                     var sessions = [];
 
                     try {
-                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id);
+                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id, { headers: apiHeaders() });
                         if (resp.ok) {
                             var data = await resp.json();
                             sessions = data.sessions || [];
@@ -6237,7 +6257,7 @@
                     var p = players[i];
                     var sessions = [];
                     try {
-                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id);
+                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id, { headers: apiHeaders() });
                         if (resp.ok) {
                             var data = await resp.json();
                             sessions = data.sessions || [];
@@ -6555,7 +6575,7 @@
                 try {
                     var resp = await fetch(API_BASE + '/update-profile', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: apiHeaders(),
                         body: JSON.stringify(payload)
                     });
                     if (resp.ok) {
@@ -6892,7 +6912,7 @@
                 var end = new Date(reservationWeekStart.getFullYear(), reservationWeekStart.getMonth(), reservationWeekStart.getDate() + 6);
                 var to = ymdLocal(end);
                 try {
-                    var resp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+                    var resp = await fetch(API_BASE + '/reservations?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to), { headers: apiHeaders() });
                     if (!resp.ok) throw new Error('Failed to load reservations');
                     var data = await resp.json();
                     reservationBookings = data.reservations || [];
@@ -6946,7 +6966,7 @@
                 try {
                     var resp = await fetch(API_BASE + '/reservations', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: apiHeaders(),
                         body: JSON.stringify({
                             player_id: currentUser.username,
                             start: localIso(dateStr, startHm),
@@ -6980,7 +7000,8 @@
                 if (!currentUser || !id) return;
                 try {
                     var resp = await fetch(API_BASE + '/reservations/' + encodeURIComponent(id) + '?username=' + encodeURIComponent(currentUser.username), {
-                        method: 'DELETE'
+                        method: 'DELETE',
+                        headers: apiHeaders()
                     });
                     var data = await resp.json().catch(function() { return {}; });
                     if (!resp.ok) {
@@ -7074,7 +7095,7 @@
                     if (!isDashboardVisible || !currentUser) return;
                     try {
                         if (currentUser.role === 'player' && selectedPlayerId) {
-                            var reportResp = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(selectedPlayerId));
+                            var reportResp = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(selectedPlayerId), { headers: apiHeaders() });
                             if (reportResp.ok) {
                                 var reportData = await reportResp.json();
                                 var incoming = reportData.sessions || [];
@@ -7085,7 +7106,7 @@
                             }
                             return;
                         }
-                        var resp = await fetch(API_BASE + '/get-players');
+                        var resp = await fetch(API_BASE + '/get-players', { headers: apiHeaders() });
                         if (resp.ok) {
                             var data = await resp.json();
                             allPlayers = data.players || [];
