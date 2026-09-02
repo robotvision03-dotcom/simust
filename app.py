@@ -448,10 +448,25 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 # Directory Configuration
 # ============================================================
-SIMUST_PLAYER_DIRECTORY = "C:/Users/siama/Documents/simust_player"
-PLAYER_REPORTS_DIR = "C:/Users/siama/Documents/simust_reports"
-REALTIME_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
-ANIMATIONS_DIR = "C:/Users/siama/Documents/_Sia/Animations"
+# Training-lab Windows paths stay the default on Windows.
+# On a public Linux host (simust.com) use local folders unless env vars are set,
+# so player reports are not expected at C:\Users\siama\...
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if os.name == "nt":
+    _DEFAULT_PLAYER_DIR = "C:/Users/siama/Documents/simust_player"
+    _DEFAULT_REPORTS_DIR = "C:/Users/siama/Documents/simust_reports"
+    _DEFAULT_REALTIME_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
+    _DEFAULT_ANIMATIONS_DIR = "C:/Users/siama/Documents/_Sia/Animations"
+else:
+    _DEFAULT_PLAYER_DIR = os.path.join(_APP_DIR, "simust_player")
+    _DEFAULT_REPORTS_DIR = os.path.join(_APP_DIR, "simust_reports")
+    _DEFAULT_REALTIME_DIR = os.path.join(_APP_DIR, "simust_realtime_recordings")
+    _DEFAULT_ANIMATIONS_DIR = os.path.join(_APP_DIR, "animations")
+
+SIMUST_PLAYER_DIRECTORY = os.environ.get("SIMUST_PLAYER_DIRECTORY", _DEFAULT_PLAYER_DIR)
+PLAYER_REPORTS_DIR = os.environ.get("SIMUST_REPORTS_DIR", _DEFAULT_REPORTS_DIR)
+REALTIME_RECORDINGS_DIR = os.environ.get("SIMUST_REALTIME_DIR", _DEFAULT_REALTIME_DIR)
+ANIMATIONS_DIR = os.environ.get("SIMUST_ANIMATIONS_DIR", _DEFAULT_ANIMATIONS_DIR)
 
 # Ensure directories exist
 os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
@@ -2647,9 +2662,24 @@ async def open_directory(req: Request):
 # ============================================================
 # NEW: Create PDF Report Endpoint
 # ============================================================
+def _my_simust_page():
+    return FileResponse("my_simust.html")
+
 @app.get("/my_simust.html", response_class=FileResponse)
 async def my_simust():
-    return FileResponse("my_simust.html")
+    return _my_simust_page()
+
+@app.get("/my-simust", response_class=FileResponse)
+async def my_simust_root():
+    """Public My SIMUST portal."""
+    return _my_simust_page()
+
+@app.get("/my-simust/{page}", response_class=FileResponse)
+async def my_simust_view(page: str):
+    """Public views: /my-simust/login, /register, /dashboard."""
+    if page not in ("login", "register", "dashboard"):
+        raise HTTPException(404, "Not found")
+    return _my_simust_page()
 
 @app.get("/get-players")
 async def get_players():
@@ -2994,6 +3024,7 @@ async def login(req: Request):
         "club": user["club"],
         "team": user["team"],
         "age": user["age"],
+        "gender": user.get("gender", "Male"),
         "image": user["image"],
         "progress": user.get("progress", {})
     }

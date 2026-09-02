@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>My SIMUST — Player Dashboard</title>
+    <title>Sign in · My SIMUST</title>
     <style>
         /* ============================================================
            tailwindcss v4.2.1 (condensed) + SIMUST custom styles
@@ -3055,7 +3055,7 @@
     <div id="login-shell" class="portal-login-shell">
 
         <header class="portal-login-header">
-            <a href="#" class="portal-brand" aria-label="SIMUST home">
+            <a href="/my-simust/login" class="portal-brand" aria-label="SIMUST home">
                 <span class="wordmark">SIMUST <span>.</span></span>
                 <i>MY SIMUST</i>
             </a>
@@ -3080,7 +3080,7 @@
                         <li><button type="button" data-lang="nl" data-i18n="langNl">Dutch</button></li>
                     </ul>
                 </div>
-                <a href="#" class="portal-back" id="public-website-link" data-i18n="publicWebsite">Public website ↗</a>
+                <a href="https://simust.com/" class="portal-back" id="public-website-link" data-i18n="publicWebsite">Public website ↗</a>
             </div>
         </header>
 
@@ -3286,7 +3286,7 @@
 
         <!-- TOPBAR -->
         <header class="portal-topbar">
-            <a href="#" class="portal-brand" aria-label="SIMUST home">
+            <a href="/my-simust/dashboard" class="portal-brand" aria-label="SIMUST home">
                 <span class="wordmark">SIMUST <span>.</span></span>
                 <i>MY SIMUST</i>
             </a>
@@ -4869,10 +4869,95 @@
             var managerTeamData = {};
             var selectedTeamRow = null;
 
-            var API_BASE = 'http://127.0.0.1:8000';
+            // Same-origin on simust.com / FastAPI. Local file:// still talks to the lab API.
+            var API_BASE = (function() {
+                if (window.SIMUST_API_BASE) return String(window.SIMUST_API_BASE);
+                if (location.protocol === 'file:') return 'http://127.0.0.1:8000';
+                return '';
+            })();
+
+            var PORTAL_ROOT = '/my-simust';
+            var SESSION_KEY = 'simust-user';
+
+            function portalPageFromLocation() {
+                var path = (location.pathname || '').replace(/\/+$/, '') || '/';
+                if (path.indexOf('/register') !== -1 || location.hash === '#register') return 'register';
+                if (path.indexOf('/dashboard') !== -1 || location.hash === '#dashboard') return 'dashboard';
+                if (path.indexOf('/login') !== -1 || location.hash === '#login') return 'login';
+                return 'home';
+            }
+
+            function setPortalUrl(page, replace) {
+                var next = PORTAL_ROOT;
+                if (page === 'login') next = PORTAL_ROOT + '/login';
+                else if (page === 'register') next = PORTAL_ROOT + '/register';
+                else if (page === 'dashboard') next = PORTAL_ROOT + '/dashboard';
+                var current = (location.pathname || '').replace(/\/+$/, '') || '/';
+                var targetNorm = next.replace(/\/+$/, '');
+                if (current === targetNorm) return;
+                try {
+                    if (replace) history.replaceState({ page: page }, '', next);
+                    else history.pushState({ page: page }, '', next);
+                } catch (_) {}
+                document.title = page === 'login' ? 'Sign in · My SIMUST'
+                    : page === 'register' ? 'Register · My SIMUST'
+                    : page === 'dashboard' ? 'Dashboard · My SIMUST'
+                    : 'My SIMUST';
+            }
+
+            function showPortalAuth(which) {
+                if (which === 'register') {
+                    loginForm.style.display = 'none';
+                    registerForm.style.display = 'block';
+                    setPortalUrl('register', false);
+                } else {
+                    registerForm.style.display = 'none';
+                    loginForm.style.display = 'block';
+                    setPortalUrl('login', false);
+                }
+            }
+
+            // Session holds identity only — never player reports, never other players.
+            function sessionSnapshot(user) {
+                if (!user) return null;
+                return {
+                    username: user.username,
+                    role: user.role,
+                    name: user.name || '',
+                    surname: user.surname || '',
+                    club: user.club || '',
+                    team: user.team || '',
+                    age: user.age || '',
+                    gender: user.gender || 'Male',
+                    progress: user.progress || {}
+                };
+            }
+
+            function saveSessionUser(user) {
+                try {
+                    var slim = sessionSnapshot(user);
+                    if (slim) sessionStorage.setItem(SESSION_KEY, JSON.stringify(slim));
+                } catch (_) {}
+            }
+
+            function clearSessionUser() {
+                try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+            }
+
+            function readSessionUser() {
+                try {
+                    var saved = sessionStorage.getItem(SESSION_KEY);
+                    if (!saved) return null;
+                    var user = JSON.parse(saved);
+                    return (user && user.username) ? user : null;
+                } catch (_) {
+                    return null;
+                }
+            }
 
             // ----- helper: show login / dashboard -----
             function showLogin() {
+                stopAutoRefreshSafe();
                 loginShell.classList.remove('login-shell-hidden');
                 dashboardShell.classList.remove('active');
                 isDashboardVisible = false;
@@ -4880,6 +4965,12 @@
                 profileModal.style.display = 'none';
                 currentUser = null;
                 authorisedPlayers = [];
+                allPlayers = [];
+                selectedPlayerId = null;
+                sessionsData = [];
+                clearSessionUser();
+                setPortalUrl('login', false);
+                document.title = 'Sign in · My SIMUST';
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
@@ -4888,7 +4979,14 @@
                 dashboardShell.classList.add('active');
                 isDashboardVisible = true;
                 setView(view);
-                document.querySelector('.portal-content').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setPortalUrl('dashboard', false);
+                document.title = 'Dashboard · My SIMUST';
+                var content = document.querySelector('.portal-content');
+                if (content) content.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+
+            function stopAutoRefreshSafe() {
+                try { if (typeof stopAutoRefresh === 'function') stopAutoRefresh(); } catch (_) {}
             }
 
             // ----- Role-based access control -----
@@ -5705,15 +5803,14 @@
             });
 
             showRegisterBtn.addEventListener('click', function() {
-                loginForm.style.display = 'none';
-                registerForm.style.display = 'block';
+                loginError.textContent = '';
                 registerError.textContent = '';
                 registerSuccess.textContent = '';
+                showPortalAuth('register');
             });
             showLoginBtn.addEventListener('click', function() {
-                registerForm.style.display = 'none';
-                loginForm.style.display = 'block';
                 loginError.textContent = '';
+                showPortalAuth('login');
             });
 
             registerBtn.addEventListener('click', async function() {
@@ -5782,12 +5879,11 @@
                         imagePreview.style.display = 'none';
                         previewImg.src = '';
                         setTimeout(function() {
-                            registerForm.style.display = 'none';
-                            loginForm.style.display = 'block';
                             loginUsername.value = username;
                             loginPassword.value = '';
                             loginError.textContent = t('accountCreated');
                             loginError.style.color = '#2ecc71';
+                            showPortalAuth('login');
                         }, 1200);
                     } else {
                         registerError.textContent = data.detail || t('registerFailed');
@@ -5833,54 +5929,36 @@
                             progress: data.progress || {}
                         };
                         userRole = data.role;
-                        await fetchPlayers();
-                        authorisedPlayers = filterPlayersByRole();
+                        saveSessionUser(currentUser);
                         if (data.role === 'player') {
-                            var self = authorisedPlayers[0];
-                            if (self) {
-                                await selectPlayer(self);
-                            } else {
-                                var virtualPlayer = {
-                                    id: username,
-                                    name: data.name || username,
-                                    surname: data.surname || '',
-                                    playerId: username,
-                                    image: data.image || '',
-                                    age: data.age || '',
-                                    gender: data.gender || 'Male',
-                                    sessions: [],
-                                    progress: data.progress || {}
-                                };
-                                selectedPlayerId = username;
-                                renderEnhancedPlayerDashboard(virtualPlayer, []);
-                                if (data.progress) {
-                                    renderProgressionBar(data.progress);
-                                } else {
-                                    document.getElementById('player-progression').style.display = 'none';
-                                }
-                                showDashboard('player');
-                                profileLabel.textContent = 'PLAYER ' + username;
-                                if (data.image) {
-                                    profileAvatar.innerHTML = '<img src="' + data.image +
-                                        '" style="width:100%;height:100%;object-fit:cover;">';
-                                } else {
-                                    profileAvatar.textContent = (data.name || 'P').charAt(0).toUpperCase();
-                                    profileAvatar.style.background = '#1a2d4a';
-                                    profileAvatar.style.color = '#a8c6ff';
-                                }
-                                if (data.age) {
-                                    setCoachAvatar(data.age, data.gender);
-                                }
-                                setSiaAvatar();
-                            }
-                        } else if (data.role === 'coach') {
-                            showDashboard('coach');
-                            loadCoachData();
-                        } else if (data.role === 'manager') {
-                            showDashboard('manager');
-                            loadManagerData();
+                            // Public player view: load only this player's reports from the server.
+                            // Do not download the academy player list into the browser.
+                            var selfPlayer = {
+                                id: username,
+                                name: data.name || username,
+                                surname: data.surname || '',
+                                playerId: username,
+                                image: data.image || '',
+                                age: data.age || '',
+                                gender: data.gender || 'Male',
+                                club: data.club || '',
+                                team: data.team || '',
+                                progress: data.progress || {}
+                            };
+                            authorisedPlayers = [selfPlayer];
+                            await selectPlayer(selfPlayer);
                         } else {
-                            showDashboard('player');
+                            await fetchPlayers();
+                            authorisedPlayers = filterPlayersByRole();
+                            if (data.role === 'coach') {
+                                showDashboard('coach');
+                                loadCoachData();
+                            } else if (data.role === 'manager') {
+                                showDashboard('manager');
+                                loadManagerData();
+                            } else {
+                                showDashboard('player');
+                            }
                         }
                     } else {
                         loginError.textContent = data.detail || t('invalidCredentials');
@@ -6489,9 +6567,7 @@
                         currentUser.club = club;
                         currentUser.team = team;
                         currentUser.image = image;
-                        try {
-                            sessionStorage.setItem('simust-user', JSON.stringify(currentUser));
-                        } catch (_) {}
+                        saveSessionUser(currentUser);
                         profileSuccess.textContent = 'Profile updated successfully!';
                         profileError.textContent = '';
                         setView(currentView);
@@ -6997,6 +7073,18 @@
                 refreshInterval = setInterval(async function() {
                     if (!isDashboardVisible || !currentUser) return;
                     try {
+                        if (currentUser.role === 'player' && selectedPlayerId) {
+                            var reportResp = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(selectedPlayerId));
+                            if (reportResp.ok) {
+                                var reportData = await reportResp.json();
+                                var incoming = reportData.sessions || [];
+                                if (incoming.length !== sessionsData.length) {
+                                    var self = authorisedPlayers[0];
+                                    if (self) renderEnhancedPlayerDashboard(self, incoming);
+                                }
+                            }
+                            return;
+                        }
                         var resp = await fetch(API_BASE + '/get-players');
                         if (resp.ok) {
                             var data = await resp.json();
@@ -7138,84 +7226,87 @@
 
             document.getElementById('public-website-link').addEventListener('click', function(e) {
                 e.preventDefault();
-                window.location.href = '/';
+                window.location.href = 'https://simust.com/';
             });
 
-            if (window.location.hash === '#player') {
-                setTimeout(function() {
-                    if (currentUser) {
-                        openSearchModal();
+            window.addEventListener('popstate', function() {
+                var page = portalPageFromLocation();
+                if (page === 'dashboard' && currentUser) {
+                    if (!isDashboardVisible) showDashboard(userRole === 'manager' ? 'manager' : userRole === 'coach' ? 'coach' : 'player');
+                    return;
+                }
+                if (page === 'register' && !isDashboardVisible) {
+                    loginForm.style.display = 'none';
+                    registerForm.style.display = 'block';
+                    document.title = 'Register · My SIMUST';
+                    return;
+                }
+                if (!isDashboardVisible) {
+                    registerForm.style.display = 'none';
+                    loginForm.style.display = 'block';
+                    document.title = 'Sign in · My SIMUST';
+                    return;
+                }
+                showLogin();
+            });
+
+            function restorePortalSession(user) {
+                currentUser = user;
+                userRole = user.role || 'player';
+                if (user.role === 'player') {
+                    var selfPlayer = {
+                        id: user.username,
+                        name: user.name || user.username,
+                        surname: user.surname || '',
+                        playerId: user.username,
+                        image: user.image || '',
+                        age: user.age || '',
+                        gender: user.gender || 'Male',
+                        club: user.club || '',
+                        team: user.team || '',
+                        progress: user.progress || {}
+                    };
+                    authorisedPlayers = [selfPlayer];
+                    selectPlayer(selfPlayer);
+                    return;
+                }
+                fetchPlayers().then(function() {
+                    authorisedPlayers = filterPlayersByRole();
+                    if (user.role === 'coach') {
+                        showDashboard('coach');
+                        loadCoachData();
+                    } else if (user.role === 'manager') {
+                        showDashboard('manager');
+                        loadManagerData(false);
+                    } else {
+                        showDashboard('player');
                     }
-                }, 400);
+                });
             }
 
-            // Restore session
-            try {
-                var saved = sessionStorage.getItem('simust-user');
-                if (saved) {
-                    var user = JSON.parse(saved);
-                    if (user && user.username) {
-                        currentUser = user;
-                        userRole = user.role || 'player';
-                        fetchPlayers().then(function() {
-                            authorisedPlayers = filterPlayersByRole();
-                            if (user.role === 'player') {
-                                var self = authorisedPlayers[0];
-                                if (self) {
-                                    selectPlayer(self);
-                                } else {
-                                    var vp = { id: user.username, name: user.name || user.username,
-                                        surname: user.surname || '', playerId: user.username,
-                                        image: user.image || '', age: user.age || '',
-                                        gender: user.gender || 'Male', sessions: [],
-                                        progress: user.progress || {} };
-                                    selectedPlayerId = user.username;
-                                    renderEnhancedPlayerDashboard(vp, []);
-                                    if (user.progress) {
-                                        renderProgressionBar(user.progress);
-                                    } else {
-                                        document.getElementById('player-progression').style.display =
-                                        'none';
-                                    }
-                                    showDashboard('player');
-                                    profileLabel.textContent = 'PLAYER ' + user.username;
-                                    if (user.image) {
-                                        profileAvatar.innerHTML = '<img src="' + user.image +
-                                            '" style="width:100%;height:100%;object-fit:cover;">';
-                                    } else {
-                                        profileAvatar.textContent = (user.name || 'P').charAt(0)
-                                        .toUpperCase();
-                                        profileAvatar.style.background = '#1a2d4a';
-                                        profileAvatar.style.color = '#a8c6ff';
-                                    }
-                                    if (user.age) {
-                                        setCoachAvatar(user.age, user.gender);
-                                    }
-                                    setSiaAvatar();
-                                }
-                            } else if (user.role === 'coach') {
-                                showDashboard('coach');
-                                loadCoachData();
-                            } else if (user.role === 'manager') {
-                                showDashboard('manager');
-                                loadManagerData(false);
-                            }
-                        });
-                    }
-                }
-            } catch (_) { /* ignore */ }
+            var openingPage = portalPageFromLocation();
+            if (location.pathname === '/my_simust.html') {
+                var dest = readSessionUser() ? (PORTAL_ROOT + '/dashboard') : (PORTAL_ROOT + '/login');
+                try { history.replaceState(null, '', dest); } catch (_) {}
+                openingPage = readSessionUser() ? 'dashboard' : 'login';
+            }
 
-            loginBtn.addEventListener('click', function() {
-                setTimeout(function() {
-                    if (currentUser) {
-                        try {
-                            sessionStorage.setItem('simust-user', JSON.stringify(currentUser));
-                        } catch (_) {}
-                    }
-                }, 500);
-            });
+            var savedUser = readSessionUser();
+            if (savedUser && openingPage !== 'register') {
+                restorePortalSession(savedUser);
+            } else if (openingPage === 'register') {
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+                document.title = 'Register · My SIMUST';
+                setPortalUrl('register', true);
+            } else {
+                registerForm.style.display = 'none';
+                loginForm.style.display = 'block';
+                document.title = 'Sign in · My SIMUST';
+                setPortalUrl('login', true);
+            }
 
-            console.log('SIMUST My Portal loaded with coach advice integration and Siamak avatar.');
+            console.log('SIMUST My Portal loaded with public login at /my-simust/login');
         })();
     </script>
 

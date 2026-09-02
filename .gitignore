@@ -5,6 +5,9 @@ __pycache__/
 .env.*
 *.log
 users.json
+simust_reports/
+simust_player/
+simust_realtime_recordings/
 .vscode/
 .idea/
 android/.gradle/
