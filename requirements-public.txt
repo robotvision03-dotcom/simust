@@ -1,0 +1,9 @@
+# Public host (my.simust.com) — no cameras or video models.
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.0
+python-multipart>=0.0.9
+opencv-python-headless>=4.8
+numpy>=1.24
+pillow>=10.0
+reportlab>=4.0
