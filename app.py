@@ -474,7 +474,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Directory Configuration
 # ============================================================
 # Training-lab Windows paths stay the default on Windows.
-# On a public Linux host (simust.com) use local folders unless env vars are set,
+# On a public Linux host (my.simust.com) use local folders unless env vars are set,
 # so player reports are not expected at C:\Users\siama\...
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 if os.name == "nt":
@@ -782,6 +782,8 @@ async def validation_exc(_: Request, exc: ValidationError):
 
 @app.get("/", response_class=FileResponse)
 async def root():
+    if PUBLIC_MODE:
+        return _my_simust_page()
     return FileResponse("index.html")
 
 @app.get("/cameras")
@@ -2739,6 +2741,13 @@ async def my_simust_view(page: str):
     """Public views: /my-simust/login, /register, /dashboard."""
     if page not in ("login", "register", "dashboard"):
         raise HTTPException(404, "Not found")
+    return _my_simust_page()
+
+@app.get("/login", response_class=FileResponse)
+@app.get("/register", response_class=FileResponse)
+@app.get("/dashboard", response_class=FileResponse)
+async def my_simust_host_pages():
+    """Short paths for my.simust.com (GET only; POST /login and POST /register stay the API)."""
     return _my_simust_page()
 
 @app.get("/get-players")

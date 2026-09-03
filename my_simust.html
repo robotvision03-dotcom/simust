@@ -4876,7 +4876,11 @@
                 return '';
             })();
 
-            var PORTAL_ROOT = '/my-simust';
+            var PORTAL_ROOT = (function() {
+                var host = (location.hostname || '').toLowerCase();
+                if (host === 'my.simust.com') return '';
+                return '/my-simust';
+            })();
             var SESSION_KEY = 'simust-user';
             var SESSION_TOKEN_KEY = 'simust-token';
             var sessionToken = '';

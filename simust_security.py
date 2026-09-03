@@ -63,7 +63,7 @@ def cors_origins() -> list:
     if raw:
         return [part.strip() for part in raw.split(",") if part.strip()]
     if PUBLIC_MODE:
-        return ["https://simust.com", "https://www.simust.com"]
+        return ["https://simust.com", "https://www.simust.com", "https://my.simust.com"]
     return ["*"]
 
 
