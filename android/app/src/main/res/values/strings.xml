@@ -3,6 +3,9 @@
     <string name="title_operator">SIMUST Operator</string>
     <string name="title_player">My SIMUST</string>
     <string name="title_lab">SIMUST Lab</string>
+    <string name="subtitle_lab_online">Lab online · worldwide</string>
+    <string name="subtitle_lab_offline">Lab offline · start app.py on the PC</string>
+    <string name="subtitle_lab_lan">Same Wi‑Fi as the lab PC</string>
     <string name="settings_title">Connection</string>
     <string name="mode_label">What this tablet controls</string>
     <string name="mode_operator">Public operator — same controls as index.html</string>
@@ -17,7 +20,7 @@
     <string name="settings">Connection</string>
     <string name="open_operator">Operator</string>
     <string name="open_player">Player</string>
-    <string name="help_text">Operator mode uses the same index.html console as the training PC. Sign in with a coach, manager, or admin account. Realtime Play is sent to the Netherlands lab through the public host. Player mode opens My SIMUST. Lab mode talks to app.py on the same Wi‑Fi.</string>
+    <string name="help_text">Use Operator from any country. The app talks to the public SIMUST host, which sends Realtime Play to the Netherlands lab. Sign in with your SIMUST account. Keep app.py running on the lab PC with lab.env so the button works and live results appear here.</string>
     <string name="load_error">Could not load the SIMUST console. Check the connection settings and that the public host or lab app.py is running.</string>
     <string name="retry">Retry</string>
 </resources>

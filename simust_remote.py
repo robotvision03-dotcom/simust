@@ -83,10 +83,30 @@ def take_pending(limit: int = 20) -> List[Dict[str, Any]]:
     with _LOCK:
         state = _load()
         pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
-        taken = pending[: max(1, int(limit))]
+        taken = pending[: max(1, int(limit))] if pending else []
         state["pending"] = pending[len(taken) :]
         _save(state)
     return taken
+
+
+def peek_pending(limit: int = 20) -> List[Dict[str, Any]]:
+    with _LOCK:
+        state = _load()
+        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+    return pending[: max(1, int(limit))] if pending else []
+
+
+def ack_ids(ids) -> int:
+    drop = {item for item in (ids or []) if item}
+    if not drop:
+        return 0
+    with _LOCK:
+        state = _load()
+        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+        kept = [row for row in pending if row.get("id") not in drop]
+        state["pending"] = kept
+        _save(state)
+        return len(pending) - len(kept)
 
 
 def set_status(status: Dict[str, Any]) -> None:

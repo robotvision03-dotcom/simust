@@ -4,9 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -27,11 +30,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var errorPanel: LinearLayout
     private lateinit var progressBar: ProgressBar
     private var lastUrl: String = ""
+    private val statusHandler = Handler(Looper.getMainLooper())
+    private val statusTick = object : Runnable {
+        override fun run() {
+            refreshLabSubtitle()
+            statusHandler.postDelayed(this, 5000)
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -110,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         loadGui()
+        statusHandler.post(statusTick)
     }
 
     override fun onResume() {
@@ -120,9 +132,12 @@ class MainActivity : AppCompatActivity() {
             loadGui()
         }
         titleForMode()
+        statusHandler.removeCallbacks(statusTick)
+        statusHandler.post(statusTick)
     }
 
     override fun onPause() {
+        statusHandler.removeCallbacks(statusTick)
         webView.onPause()
         super.onPause()
     }
@@ -173,6 +188,34 @@ class MainActivity : AppCompatActivity() {
             Prefs.MODE_LAB -> getString(R.string.title_lab)
             else -> getString(R.string.title_operator)
         }
+        if (Prefs.getMode(this) == Prefs.MODE_LAB) {
+            supportActionBar?.subtitle = getString(R.string.subtitle_lab_lan)
+        }
+    }
+
+    private fun refreshLabSubtitle() {
+        if (Prefs.getMode(this) == Prefs.MODE_LAB) {
+            runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_lab_lan) }
+            return
+        }
+        Thread {
+            try {
+                val url = java.net.URL(Prefs.getPublicHost(this) + "/app-config")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 4000
+                conn.readTimeout = 4000
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val online = text.contains("\"lab_online\": true") || text.contains("\"lab_online\":true")
+                runOnUiThread {
+                    supportActionBar?.subtitle = getString(
+                        if (online) R.string.subtitle_lab_online else R.string.subtitle_lab_offline,
+                    )
+                }
+            } catch (_: Exception) {
+                runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_lab_offline) }
+            }
+        }.start()
     }
 
     private fun loadGui() {

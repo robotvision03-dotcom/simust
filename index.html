@@ -194,6 +194,10 @@
         html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn { min-height: 48px; padding: 12px 20px; }
         html.simust-android .tab-button { min-height: 44px; }
         html.simust-android .search-input, html.simust-android .login-input { min-height: 46px; font-size: 16px; }
+        .lab-link-banner { width: 100%; padding: 8px 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-align: center; }
+        .lab-link-banner.online { background: rgba(46,204,113,0.16); color: #2ecc71; }
+        .lab-link-banner.offline { background: rgba(231,76,60,0.16); color: #e74c3c; }
+        .lab-link-banner.unknown { background: #10243f; color: #8fa0b6; }
 
         .num-ltr,
         .metric-ring .value,
@@ -747,7 +751,11 @@
                             React.createElement('span', { className: "gold-accent" }, "SIMUST"),
                             " PLAY IT SMART"
                         ),
-                        React.createElement('p', { className: "subtitle" }, t("signInToAccount")),
+                        React.createElement('p', { className: "subtitle" },
+                            window.SIMUST_PUBLIC
+                                ? 'Sign in from anywhere. Realtime Play runs on the training lab over the internet.'
+                                : t("signInToAccount")
+                        ),
                         React.createElement('form', { onSubmit: handleSubmit },
                             React.createElement('input', {
                                 type: "text",
@@ -1571,8 +1579,7 @@
             // ----- AUTH -----
             var savedOperator = null;
             try { savedOperator = JSON.parse(localStorage.getItem('simust-operator-user') || 'null'); } catch (e) { savedOperator = null; }
-            var startLoggedIn = !!(window.SIMUST_PUBLIC && window.SIMUST_TOKEN && savedOperator &&
-                ['coach', 'manager', 'admin'].indexOf(String(savedOperator.role || '').toLowerCase()) !== -1);
+            var startLoggedIn = !!(window.SIMUST_PUBLIC && window.SIMUST_TOKEN && savedOperator && savedOperator.username);
             var authState = useState(startLoggedIn);
             var loggedIn = authState[0];
             var setLoggedIn = authState[1];
@@ -1585,6 +1592,9 @@
             var loginErrorState = useState('');
             var loginError = loginErrorState[0];
             var setLoginError = loginErrorState[1];
+            var labOnlineState = useState(window.SIMUST_PUBLIC ? null : true);
+            var labOnline = labOnlineState[0];
+            var setLabOnline = labOnlineState[1];
             var langState = useState(typeof simustGetLang === 'function' ? simustGetLang() : 'en');
             var lang = langState[0];
             var setLang = langState[1];
@@ -1735,10 +1745,6 @@
                 axios.post('/login', { username: uname, password: pwd }).then(function(res) {
                     var data = res.data || {};
                     var nextRole = String(data.role || 'player').toLowerCase();
-                    if (window.SIMUST_PUBLIC && ['coach', 'manager', 'admin'].indexOf(nextRole) === -1) {
-                        setLoginError('This console is for coach, manager, or admin. Players use My SIMUST.');
-                        return;
-                    }
                     if (data.token) {
                         window.SIMUST_TOKEN = data.token;
                         axios.defaults.headers.common.Authorization = 'Bearer ' + data.token;
@@ -2523,6 +2529,11 @@
                         // No subdirectories are locked
                     }
                 }
+                if (window.SIMUST_PUBLIC && labOnline === false) {
+                    setError("The training lab is offline. Realtime Play cannot start until the lab PC is connected.");
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
                 if (hasSubdirs && !selectedSubdirectory) {
                     setError("Please select a subdirectory for this level.");
                     setTimeout(function() { setError(""); }, 3000);
@@ -2550,7 +2561,9 @@
                 }
 
                 axios.post("/start-realtime-playback", payload).then(function() {
-                    showToast("Realtime playback started for " + player.name + ' ' + player.surname +
+                    showToast((window.SIMUST_PUBLIC
+                        ? "Sent to the lab over the internet: "
+                        : "Realtime playback started for ") + player.name + ' ' + player.surname +
                         (selectedSubdirectory ? ' [' + selectedSubdirectory + ']' : ''), 'success');
 
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
@@ -2773,6 +2786,20 @@
             }, []);
 
             useEffect(function() {
+                if (!window.SIMUST_PUBLIC || !loggedIn) return;
+                var tick = function() {
+                    axios.get('/remote/status').then(function(res) {
+                        setLabOnline(!!(res.data && res.data.lab_online));
+                    }).catch(function() {
+                        setLabOnline(false);
+                    });
+                };
+                tick();
+                var id = setInterval(tick, 2000);
+                return function() { clearInterval(id); };
+            }, [loggedIn]);
+
+            useEffect(function() {
                 var player = getSelectedPlayer();
                 if (player) {
                     updateProgressForPlayer(player);
@@ -2812,7 +2839,16 @@
                 });
             }
 
+            var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false);
+
             return React.createElement('div', { className: "simust-card" },
+                window.SIMUST_PUBLIC ? React.createElement('div', {
+                    className: 'lab-link-banner ' + (labOnline === true ? 'online' : labOnline === false ? 'offline' : 'unknown')
+                }, labOnline === true
+                    ? 'Lab online — Realtime Play from this tablet runs on the training machine over the internet.'
+                    : labOnline === false
+                        ? 'Lab offline — keep app.py running on the Netherlands PC with lab.env so this tablet can start tests.'
+                        : 'Connecting to the training lab…') : null,
                 // HEADER
                 React.createElement('div', { className: "simust-header" },
                     React.createElement('div', { className: "flex items-center gap-4" },
@@ -2987,7 +3023,7 @@
                         React.createElement('div', { className: "flex flex-wrap gap-4 items-center mb-6" },
                             React.createElement('button', {
                                 onClick: startRealtimePlayback,
-                                disabled: !selectedPlayerId || !selectedLevel || realtimeRunning ||
+                                disabled: labBlocked || !selectedPlayerId || !selectedLevel || realtimeRunning ||
                                     unlockedLevels.indexOf(selectedLevel) === -1 ||
                                     (function() {
                                         if (!selectedLevel) return false;

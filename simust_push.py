@@ -540,6 +540,15 @@ def pull_remote_commands() -> list:
     return commands if isinstance(commands, list) else []
 
 
+def ack_remote_commands(ids: list) -> None:
+    if not push_configured() or not ids:
+        return
+    try:
+        _post({"kind": "ack_commands", "ids": list(ids)})
+    except Exception as exc:
+        logger.warning("Remote command ack failed: %s", exc)
+
+
 def push_lab_status(status: Dict[str, Any]) -> None:
     if not push_configured():
         return

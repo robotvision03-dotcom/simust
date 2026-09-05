@@ -37,6 +37,15 @@ class RemoteQueueTests(unittest.TestCase):
         self.assertEqual(taken[0]["payload"]["subdirectory"], "SF-30N")
         self.assertEqual(simust_remote.take_pending(), [])
 
+    def test_peek_then_ack(self):
+        item = simust_remote.enqueue("stop-realtime", {}, "james")
+        peeked = simust_remote.peek_pending()
+        self.assertEqual(len(peeked), 1)
+        self.assertEqual(peeked[0]["id"], item["id"])
+        self.assertEqual(len(simust_remote.peek_pending()), 1)
+        self.assertEqual(simust_remote.ack_ids([item["id"]]), 1)
+        self.assertEqual(simust_remote.peek_pending(), [])
+
     def test_rejects_unknown_action(self):
         with self.assertRaises(ValueError):
             simust_remote.enqueue("cameras", {}, "coach1")

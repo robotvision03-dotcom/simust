@@ -967,6 +967,8 @@ async def app_config():
         "player_path": "/login",
         "foundation_subdirs": ["SF-30N", "SF-60N", "SF-110N", "SF-180N"],
         "levels": levels,
+        "worldwide": True,
+        "lab_online": True if not PUBLIC_MODE else bool((simust_remote.get_status() or {}).get("lab_online")),
     }
 
 @app.get("/cameras")
@@ -3153,6 +3155,9 @@ async def ingest_player_data(request: Request):
     if kind == "lab_status":
         simust_remote.set_status(data.get("status") or {})
         return {"status": "success"}
+    if kind == "ack_commands":
+        removed = simust_remote.ack_ids(data.get("ids") or [])
+        return {"status": "success", "acked": removed}
     users = load_users()
 
     def _merge_account(username: str, account: dict) -> None:
@@ -3312,28 +3317,36 @@ async def export_accounts(request: Request):
     return {"status": "success", "accounts": accounts, "reservations": reservations}
 
 
-def _require_operator(request: Request):
+REMOTE_STAFF_ONLY_ACTIONS = {"lab-upsert-player", "unlock-level", "lock-level"}
+
+
+def _require_remote_user(request: Request):
     users = load_users()
-    viewer = current_user(request, users, required=True)
-    role = str(viewer.get("role") or "").strip().lower()
-    if role not in RESERVATION_STAFF_ROLES:
-        raise HTTPException(403, "Operator access requires a coach, manager, or admin account")
-    return viewer
+    return current_user(request, users, required=True)
 
 
 @app.post("/remote/command")
 async def remote_command(request: Request):
-    """Tablet / public operator: queue a lab action. The training PC pulls and runs it."""
+    """Internet tablet: queue a lab action. The training PC pulls and runs it."""
     if not PUBLIC_MODE:
         raise HTTPException(404, "Use the lab APIs on the training machine")
-    viewer = _require_operator(request)
+    viewer = _require_remote_user(request)
+    role = str(viewer.get("role") or "player").strip().lower()
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(400, "Invalid JSON")
     action = (data.get("action") or data.get("path") or "").strip().lstrip("/")
+    payload = dict(data.get("payload") or {})
+    if action in REMOTE_STAFF_ONLY_ACTIONS and role not in RESERVATION_STAFF_ROLES:
+        raise HTTPException(403, "Only coach, manager, or admin can change unlocks")
+    if role == "player" and action == "start-realtime-playback":
+        payload["player_id"] = viewer["username"]
+        payload["player_player_id"] = viewer["username"]
+        payload["player_name"] = viewer.get("name") or payload.get("player_name") or viewer["username"]
+        payload["player_surname"] = viewer.get("surname") or payload.get("player_surname") or ""
     try:
-        item = simust_remote.enqueue(action, data.get("payload") or {}, viewer.get("username") or "")
+        item = simust_remote.enqueue(action, payload, viewer.get("username") or "")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"status": "queued", "id": item["id"], "action": item["action"]}
@@ -3343,7 +3356,7 @@ async def remote_command(request: Request):
 async def remote_status(request: Request):
     if not PUBLIC_MODE:
         raise HTTPException(404, "Use the lab APIs on the training machine")
-    _require_operator(request)
+    _require_remote_user(request)
     return simust_remote.get_status()
 
 
@@ -3359,7 +3372,7 @@ async def export_remote_commands(request: Request):
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
-    commands = simust_remote.take_pending()
+    commands = simust_remote.peek_pending()
     return {"status": "success", "commands": commands}
 
 
@@ -3376,7 +3389,7 @@ def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -
         method=method,
         headers={"Content-Type": "application/json"} if body is not None else {},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         raw = resp.read().decode("utf-8")
     return json.loads(raw) if raw else {}
 
@@ -3388,7 +3401,11 @@ def _publish_lab_status() -> None:
     except Exception:
         status["playback-status"] = {"state": "unknown"}
     try:
-        status["realtime-results"] = _lab_local_request("GET", "/realtime-results")
+        live = _lab_local_request("GET", "/realtime-results")
+        if isinstance(live, dict):
+            live = dict(live)
+            live.pop("directory", None)
+        status["realtime-results"] = live
     except Exception:
         status["realtime-results"] = {"status": "waiting"}
     try:
@@ -3410,13 +3427,18 @@ def _run_queued_operator_command(command: dict) -> None:
 
 def _remote_operator_loop() -> None:
     while True:
-        time.sleep(2)
+        time.sleep(1)
         try:
+            done = []
             for command in simust_push.pull_remote_commands():
                 try:
                     _run_queued_operator_command(command)
+                    if command.get("id"):
+                        done.append(command["id"])
                 except Exception as exc:
                     logger.warning("Remote operator command failed: %s", exc)
+            if done:
+                simust_push.ack_remote_commands(done)
             _publish_lab_status()
         except Exception as exc:
             logger.warning("Remote operator loop: %s", exc)
