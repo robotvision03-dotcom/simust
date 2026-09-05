@@ -28,23 +28,30 @@ def _load_local_env() -> None:
     if os.environ.get("SIMUST_PUBLIC_MODE", "").strip().lower() in ("1", "true", "yes"):
         return
     here = os.path.dirname(os.path.abspath(__file__))
-    for name in ("lab.env", ".env"):
-        path = os.path.join(here, name)
-        if not os.path.isfile(path):
+    search = [here, os.getcwd()]
+    seen = set()
+    for folder in search:
+        folder = os.path.abspath(folder)
+        if folder in seen:
             continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for raw in f:
-                    line = raw.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")
-                    if key and key not in os.environ:
-                        os.environ[key] = value
-        except OSError as exc:
-            logger.warning("Could not read %s: %s", path, exc)
+        seen.add(folder)
+        for name in ("lab.env", ".env"):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        key, value = line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key and key not in os.environ:
+                            os.environ[key] = value
+            except OSError as exc:
+                logger.warning("Could not read %s: %s", path, exc)
 
 
 _load_local_env()
