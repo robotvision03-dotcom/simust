@@ -2905,6 +2905,23 @@ async def create_results_video(req: Request):
         video_path = os.path.join(directory, "final_results_video.mp4")
         logger.info(f"Generating final summary video: {video_path}")
 
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        player_script = os.path.join(script_dir, "play_results_video.py")
+        if not os.path.exists(player_script):
+            player_script = os.path.join(os.getcwd(), "play_results_video.py")
+        wait_proc = None
+        wait_started = time.time()
+        if os.path.exists(player_script):
+            wait_cmd = [sys.executable, player_script, "--processing", "1"]
+            if sys.platform == "win32":
+                wait_proc = subprocess.Popen(
+                    wait_cmd, shell=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                wait_proc = subprocess.Popen(wait_cmd, shell=False)
+            logger.info("Showing processing-results animation on Screen 2")
+
         success = generate_results_video_from_results(
             all_results,
             video_path,
@@ -2914,22 +2931,29 @@ async def create_results_video(req: Request):
             session_folder=directory
         )
 
+        leftover = 5.0 - (time.time() - wait_started)
+        if leftover > 0:
+            await asyncio.sleep(leftover)
+        if wait_proc:
+            kill_process_tree(wait_proc)
+
         if not success:
             return {"status": "error", "message": "Video generation failed"}
 
         if not os.path.exists(video_path):
             return {"status": "error", "message": "Video file not created"}
 
-        # Play the video on Screen 2
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        player_script = os.path.join(script_dir, "play_results_video.py")
-        if not os.path.exists(player_script):
-            player_script = os.path.join(os.getcwd(), "play_results_video.py")
         if os.path.exists(player_script):
-            subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
+            play_cmd = [sys.executable, player_script, video_path, "1"]
+            if sys.platform == "win32":
+                subprocess.Popen(
+                    play_cmd, shell=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                subprocess.Popen(play_cmd, shell=False)
             return {"status": "success", "video_path": video_path}
-        else:
-            return {"status": "error", "message": "Player script not found"}
+        return {"status": "error", "message": "Player script not found"}
 
     except Exception as e:
         logger.error(f"create-results-video error: {e}", exc_info=True)
