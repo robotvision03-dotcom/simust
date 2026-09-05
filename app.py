@@ -16,8 +16,6 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import uvicorn
 import asyncio
-import cv2
-import numpy as np
 import math
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
@@ -29,7 +27,6 @@ import time
 import atexit
 import gc
 import re
-from PIL import Image, ImageDraw, ImageFont
 
 import hashlib
 import json
@@ -38,12 +35,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
-# --- NEW: PDF generation imports ---
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from simust_security import (
@@ -58,6 +49,20 @@ from simust_security import (
     verify_password,
 )
 import simust_push
+
+if PUBLIC_MODE:
+    cv2 = None
+    np = None
+    Image = ImageDraw = ImageFont = None
+else:
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
 
 app = FastAPI()
 _CORS_ORIGINS = cors_origins()
@@ -507,8 +512,17 @@ PIXEL_TO_METER_SCALE = 0.0259
 # ============================================================
 # Local imports
 # ============================================================
-from recorder.main import prepare_video_recorders, capture_videos
-from recorder import settings as recorder_settings
+if PUBLIC_MODE:
+    prepare_video_recorders = None
+    capture_videos = None
+
+    class _PublicRecorderSettings:
+        CAMERAS: Dict[str, dict] = {}
+
+    recorder_settings = _PublicRecorderSettings()
+else:
+    from recorder.main import prepare_video_recorders, capture_videos
+    from recorder import settings as recorder_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -747,15 +761,18 @@ async def check_all_cameras_status() -> List[Dict[str, str]]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global current_selections, current_results_dir, output_path
-    logger.info("App start – checking cameras")
-    await check_all_cameras_status()
-    current_selections = {c: False for c in recorder_settings.CAMERAS.keys()}
-    current_results_dir = None
-    logger.info(f"Initialized selections: {list(current_selections.keys())}")
+    if PUBLIC_MODE:
+        current_selections = {}
+        current_results_dir = None
+        logger.info("Public host mode: training-machine APIs are blocked; player data requires sign-in")
+    else:
+        logger.info("App start – checking cameras")
+        await check_all_cameras_status()
+        current_selections = {c: False for c in recorder_settings.CAMERAS.keys()}
+        current_results_dir = None
+        logger.info(f"Initialized selections: {list(current_selections.keys())}")
     logger.info(f"SIMUST_PLAYER directory: {SIMUST_PLAYER_DIRECTORY}")
     logger.info(f"Player reports directory: {PLAYER_REPORTS_DIR}")
-    if PUBLIC_MODE:
-        logger.info("Public host mode: training-machine APIs are blocked; player data requires sign-in")
     if not os.environ.get("SIMUST_SESSION_SECRET"):
         logger.warning("SIMUST_SESSION_SECRET is not set; login sessions reset when the app restarts")
     if simust_push.push_configured():
