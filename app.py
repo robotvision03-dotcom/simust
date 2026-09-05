@@ -3236,8 +3236,8 @@ async def ingest_player_data(request: Request):
 
     account = data.get("account") or {}
     _merge_account(player_id, account)
-    save_users(users)
     session_id = _store_session(player_id, data.get("session") or {}, data.get("index_entry") or {})
+    save_users(users)
     if not session_id:
         logger.info("Ingested account %s with no session payload", player_id)
         return {"status": "success", "player_id": player_id, "session_id": None}
