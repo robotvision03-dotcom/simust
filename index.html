@@ -2423,9 +2423,18 @@
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
                     if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
 
+                    var hostSyncTick = 0;
                     liveIntervalRef.current = setInterval(function() {
                         if (activeTabRef.current === 'results') return;
                         fetchRealtimeResults(false);
+                        hostSyncTick += 1;
+                        if (hostSyncTick % 6 === 0) {
+                            axios.post("/sync-live-to-host", {
+                                player_id: player.id,
+                                level: selectedLevel,
+                                subdirectory: selectedSubdirectory || ""
+                            }).catch(function() {});
+                        }
                     }, 800);
 
                     autoStopTimeoutRef.current = setTimeout(function() {

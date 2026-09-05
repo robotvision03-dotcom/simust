@@ -97,6 +97,11 @@ def load_users():
 def save_users(users):
     with open(USERS_FILE, 'w', encoding='utf-8') as f:
         json.dump(users, f, indent=2, ensure_ascii=False)
+    if not PUBLIC_MODE:
+        try:
+            simust_push.push_accounts_async(users)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Could not sync accounts to host: %s", exc)
 
 
 ADMIN_NOTIFY_EMAIL = os.environ.get("ADMIN_NOTIFY_EMAIL", "robotvision03@gmail.com")
@@ -806,6 +811,11 @@ async def lifespan(app: FastAPI):
                 logger.info("Flushed %s queued player JSON payloads to the host", flushed)
         except Exception as exc:
             logger.warning("Could not flush push queue: %s", exc)
+        if not PUBLIC_MODE:
+            try:
+                simust_push.push_accounts_async(load_users())
+            except Exception as exc:
+                logger.warning("Could not sync accounts on startup: %s", exc)
     yield
     logger.info("App shutdown")
     force_kill_smart_player()
@@ -1174,6 +1184,67 @@ async def stop_realtime():
     except Exception as e:
         logger.error(f"Failed to stop realtime: {e}")
         raise HTTPException(500, f"Failed to stop: {str(e)}")
+
+
+@app.post("/sync-live-to-host")
+async def sync_live_to_host(req: Request):
+    """Lab only: push the current realtime snapshot + player account to My SIMUST."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "This action is only available on the training machine.")
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    player_id = (data.get("player_id") or "").strip()
+    if not simust_push.PLAYER_ID_RE.match(player_id):
+        raise HTTPException(400, "Invalid player_id")
+    if not simust_push.push_configured():
+        return {"status": "skipped", "detail": "Set lab.env SIMUST_PUSH_URL and SIMUST_PUSH_KEY"}
+
+    snapshot = await get_realtime_results()
+    report = (snapshot or {}).get("report") or {}
+    stats = report.get("statistics") or {}
+    users = load_users()
+    user = users.get(player_id) or {}
+    session_report = {
+        "player": {
+            "id": player_id,
+            "name": user.get("name", ""),
+            "surname": user.get("surname", ""),
+            "playerId": player_id,
+            "club": user.get("club", ""),
+            "team": user.get("team", ""),
+            "age": user.get("age", ""),
+        },
+        "session": {
+            "id": f"live_{player_id}",
+            "timestamp": datetime.now().isoformat(),
+            "level": data.get("level") or "live",
+            "subdirectory": data.get("subdirectory") or "",
+            "live": True,
+        },
+        "statistics": stats,
+        "goals_by_screen": stats.get("goals_by_screen") or {},
+        "actions": report.get("actions") or [],
+        "total_actions": report.get("total_actions") or 0,
+    }
+    threading.Thread(
+        target=simust_push.push_live_session,
+        args=(player_id, session_report, user),
+        daemon=True,
+        name="simust-live-push",
+    ).start()
+    return {"status": "success", "player_id": player_id, "actions": session_report["total_actions"]}
+
+
+@app.post("/sync-accounts-to-host")
+async def sync_accounts_to_host():
+    if PUBLIC_MODE:
+        raise HTTPException(403, "This action is only available on the training machine.")
+    if not simust_push.push_configured():
+        return {"status": "skipped", "detail": "Set lab.env SIMUST_PUSH_URL and SIMUST_PUSH_KEY"}
+    simust_push.push_accounts_async(load_users())
+    return {"status": "success"}
 
 @app.post("/stop-realtime-camera")
 async def stop_realtime_camera():
@@ -2938,6 +3009,42 @@ async def ingest_player_data(request: Request):
     except Exception:
         raise HTTPException(400, "Invalid JSON")
 
+    kind = (data.get("kind") or "session").strip()
+    users = load_users()
+
+    def _merge_account(username: str, account: dict) -> None:
+        existing = users.get(username) or {}
+        merged = dict(existing)
+        for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
+            value = account.get(field)
+            if value not in (None, ""):
+                merged[field] = value
+        if account.get("progress"):
+            merged["progress"] = account.get("progress")
+        if account.get("password_hash"):
+            merged["password"] = account["password_hash"]
+        merged.setdefault("role", account.get("role") or "player")
+        if not merged.get("progress"):
+            merged["progress"] = {
+                "current_level": "L00-Foundation",
+                "unlocked_levels": ["L00-Foundation"],
+                "completed_levels": [],
+                "challenge_results": {},
+            }
+        users[username] = merged
+
+    if kind == "accounts":
+        imported = 0
+        for username, account in (data.get("accounts") or {}).items():
+            username = (username or "").strip()
+            if not simust_push.PLAYER_ID_RE.match(username):
+                continue
+            _merge_account(username, account or {})
+            imported += 1
+        save_users(users)
+        logger.info("Ingested %s lab accounts", imported)
+        return {"status": "success", "accounts": imported}
+
     player_id = (data.get("player_id") or "").strip()
     if not simust_push.PLAYER_ID_RE.match(player_id):
         raise HTTPException(400, "Invalid player_id")
@@ -2945,30 +3052,15 @@ async def ingest_player_data(request: Request):
     account = data.get("account") or {}
     session_report = simust_push.sanitize_session(data.get("session") or {})
     index_entry = data.get("index_entry") or {}
-
-    users = load_users()
-    existing = users.get(player_id) or {}
-    merged = dict(existing)
-    for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
-        value = account.get(field)
-        if value not in (None, ""):
-            merged[field] = value
-    if account.get("progress"):
-        merged["progress"] = account.get("progress")
-    if not existing and account.get("password_hash"):
-        merged["password"] = account.get("password_hash")
-        merged.setdefault("role", "player")
-    if not merged.get("progress"):
-        merged["progress"] = {
-            "current_level": "L00-Foundation",
-            "unlocked_levels": ["L00-Foundation"],
-            "completed_levels": [],
-            "challenge_results": {},
-        }
-    users[player_id] = merged
+    _merge_account(player_id, account)
     save_users(users)
 
-    session_id = (session_report.get("session") or {}).get("id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    has_actions = bool(session_report.get("actions") or session_report.get("statistics"))
+    session_id = (session_report.get("session") or {}).get("id")
+    if not session_id and not has_actions:
+        logger.info("Ingested account %s with no session payload", player_id)
+        return {"status": "success", "player_id": player_id, "session_id": None}
+    session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
     os.makedirs(player_dir, exist_ok=True)
     session_file = os.path.join(player_dir, f"{session_id}.json")

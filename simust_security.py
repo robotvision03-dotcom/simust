@@ -50,6 +50,8 @@ LAB_ONLY_PREFIXES = (
     "/create-video-results",
     "/create-results-video",
     "/save-session-to-player",
+    "/sync-live-to-host",
+    "/sync-accounts-to-host",
     "/unlock-level",
     "/lock-level",
     "/stitch",

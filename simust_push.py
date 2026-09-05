@@ -22,8 +22,36 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _load_local_env() -> None:
+    """Lab PC: read lab.env / .env next to this file. Public host uses systemd env."""
+    if os.environ.get("SIMUST_PUBLIC_MODE", "").strip().lower() in ("1", "true", "yes"):
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("lab.env", ".env"):
+        path = os.path.join(here, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+        except OSError as exc:
+            logger.warning("Could not read %s: %s", path, exc)
+
+
+_load_local_env()
 PUSH_URL = os.environ.get("SIMUST_PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("SIMUST_PUSH_KEY", "").strip()
+_users_push_lock = threading.Lock()
+_users_push_at = 0.0
 PLAYER_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 QUEUE_DIR = os.environ.get("SIMUST_PUSH_QUEUE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_queue"))
 
@@ -111,7 +139,9 @@ def _queue_path(session_id: str) -> str:
 
 
 def enqueue(payload: Dict[str, Any]) -> None:
-    path = _queue_path((payload.get("session") or {}).get("session", {}).get("id") or str(int(time.time())))
+    kind = payload.get("kind") or "session"
+    session_id = (payload.get("session") or {}).get("session", {}).get("id") if kind != "accounts" else "accounts"
+    path = _queue_path(session_id or str(int(time.time())))
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
     logger.warning("Queued player JSON for later push: %s", path)
@@ -165,3 +195,55 @@ def push_session_async(player_id: str, session_report: Dict[str, Any], user: Opt
         daemon=True,
         name="simust-push",
     ).start()
+
+
+def push_accounts(users: Dict[str, Any]) -> None:
+    """Send hashed accounts (not raw passwords) so My SIMUST can sign in."""
+    if not push_configured():
+        logger.info("SIMUST_PUSH_URL / SIMUST_PUSH_KEY not set; accounts stay on this PC only")
+        return
+    accounts = {}
+    for username, user in (users or {}).items():
+        if PLAYER_ID_RE.match(username or ""):
+            accounts[username] = public_account_payload(username, user or {})
+    if not accounts:
+        return
+    payload = {"kind": "accounts", "accounts": accounts}
+    try:
+        flush_queue()
+        _post(payload)
+        logger.info("Pushed %s accounts to the public host", len(accounts))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, OSError) as exc:
+        logger.warning("Account push failed (%s); will retry from queue", exc)
+        enqueue(payload)
+
+
+def push_accounts_async(users: Dict[str, Any]) -> None:
+    global _users_push_at
+    now = time.time()
+    with _users_push_lock:
+        if now - _users_push_at < 2:
+            return
+        _users_push_at = now
+    threading.Thread(target=push_accounts, args=(users,), daemon=True, name="simust-push-users").start()
+
+
+def push_live_session(player_id: str, session_report: Dict[str, Any], user: Optional[Dict[str, Any]]) -> None:
+    """Overwrite one live_{player} session on the host while a test is running."""
+    live = sanitize_session(session_report)
+    session = dict(live.get("session") or {})
+    session["id"] = f"live_{player_id}"
+    session["live"] = True
+    live["session"] = session
+    index_entry = {
+        "session_id": session["id"],
+        "timestamp": session.get("timestamp") or "",
+        "level": session.get("level") or "live",
+        "live": True,
+        "total_actions": live.get("total_actions") or 0,
+        "correct": (live.get("statistics") or {}).get("correct", 0),
+        "late": (live.get("statistics") or {}).get("late", 0),
+        "wrong": (live.get("statistics") or {}).get("wrong", 0),
+        "file": f"{session['id']}.json",
+    }
+    push_session(player_id, live, user, index_entry)

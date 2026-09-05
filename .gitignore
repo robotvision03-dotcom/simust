@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .env
 .env.*
+lab.env
 *.log
 users.json
 simust_reports/
