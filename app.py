@@ -991,15 +991,15 @@ def _parse_queued_at(value) -> Optional[float]:
 
 
 def should_ignore_remote_stop(data: Optional[dict]) -> bool:
-    """Leftover tablet Stop commands must not abort the next test."""
+    """Leftover Stop commands must not abort the next test."""
     payload = data or {}
-    if not payload.get("_remote"):
-        return False
     abort = bool(payload.get("abort") or payload.get("discard") or payload.get("operator_stop"))
     if not abort:
         return False
     if not _realtime_is_running():
         return True
+    if not payload.get("_remote"):
+        return False
     queued_at = _parse_queued_at(payload.get("_queued_at"))
     if queued_at and _realtime_session_started_at and queued_at < (_realtime_session_started_at - 5):
         return True
@@ -3405,13 +3405,6 @@ async def my_simust_host_pages():
 @app.get("/get-players")
 async def get_players(request: Request):
     """Return players visible to the caller. Public host: own record only for players."""
-    if not PUBLIC_MODE:
-        try:
-            simust_push.pull_and_merge_accounts(
-                load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
-            )
-        except Exception as exc:
-            logger.warning("Could not pull My SIMUST registrations: %s", exc)
     users = load_users()
     viewer = current_user(request, users, required=PUBLIC_MODE)
     players = []
@@ -3583,6 +3576,7 @@ async def ingest_player_data(request: Request):
             request.headers.get("x-simust-ts", ""),
             request.headers.get("x-simust-sign", ""),
             body,
+            path=str(request.url.path or ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -3744,6 +3738,7 @@ async def export_accounts(request: Request):
             request.headers.get("x-simust-ts", ""),
             request.headers.get("x-simust-sign", ""),
             body,
+            path=str(request.url.path or ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -3822,6 +3817,7 @@ async def export_remote_commands(request: Request):
             request.headers.get("x-simust-ts", ""),
             request.headers.get("x-simust-sign", ""),
             body,
+            path=str(request.url.path or ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4554,10 +4550,50 @@ async def delete_reservation(id: str, request: Request):
 # Main Entry Point
 # ============================================================
 
+def _pids_listening_on_port(port: int) -> list:
+    pids = []
+    try:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, timeout=10
+            )
+            seen = set()
+            for line in (result.stdout or "").splitlines():
+                if f":{port}" not in line or "LISTENING" not in line.upper():
+                    continue
+                pid = line.split()[-1]
+                if pid.isdigit() and pid not in seen:
+                    seen.add(pid)
+                    pids.append(pid)
+        else:
+            result = subprocess.run(
+                ["ss", "-lptn", f"sport = :{port}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for match in re.findall(r"pid=(\d+)", result.stdout or ""):
+                if match not in pids:
+                    pids.append(match)
+    except Exception:
+        pass
+    return pids
+
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     host = os.environ.get("SIMUST_HOST", "0.0.0.0")
     port = int(os.environ.get("SIMUST_PORT", "8000"))
+    occupants = _pids_listening_on_port(port)
+    if occupants:
+        pid_list = ", ".join(occupants)
+        print(f"Port {port} is already in use by PID {pid_list}.")
+        print("The previous app.py is still running. Close that window or run:")
+        if os.name == "nt":
+            for pid in occupants:
+                print(f"  taskkill /PID {pid} /F")
+        else:
+            print(f"  kill {' '.join(occupants)}")
+        print("Then start again:  python .\\app.py")
+        sys.exit(1)
     uvicorn.run(
         "app:app",
         host=host,

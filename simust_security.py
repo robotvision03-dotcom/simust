@@ -215,10 +215,17 @@ def current_user(request: Request, users: Dict[str, Any], required: bool = False
         if required or PUBLIC_MODE:
             raise HTTPException(401, "Sign in required")
         return None
-    ident = parse_token(token)
+    try:
+        ident = parse_token(token)
+    except HTTPException:
+        if required or PUBLIC_MODE:
+            raise
+        return None
     record = users.get(ident["username"])
     if not record:
-        raise HTTPException(401, "Sign in required")
+        if required or PUBLIC_MODE:
+            raise HTTPException(401, "Sign in required")
+        return None
     return {
         "username": ident["username"],
         "role": record.get("role") or ident["role"],

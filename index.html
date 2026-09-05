@@ -347,7 +347,7 @@
                 'get-levels': true
             };
             axios.interceptors.request.use(function(config) {
-                if (window.SIMUST_TOKEN) {
+                if (window.SIMUST_PUBLIC && window.SIMUST_TOKEN) {
                     config.headers = config.headers || {};
                     config.headers.Authorization = 'Bearer ' + window.SIMUST_TOKEN;
                 }

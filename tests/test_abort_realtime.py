@@ -110,6 +110,9 @@ class StaleRemoteStopTests(unittest.TestCase):
             "_queued_at": "2020-01-01T00:00:00",
         }))
 
+    def test_idle_abort_without_remote_flag_is_ignored(self):
+        self.assertTrue(simust_app.should_ignore_remote_stop({"abort": True}))
+
     def test_local_operator_stop_is_not_ignored(self):
         simust_app._realtime_session_active = True
         self.assertFalse(simust_app.should_ignore_remote_stop({"abort": True}))

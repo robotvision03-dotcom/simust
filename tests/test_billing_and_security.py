@@ -107,5 +107,22 @@ class PublicReservationPayTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 402)
 
 
+class IngestReplayTests(unittest.TestCase):
+    def test_empty_gets_to_different_paths_are_not_replays(self):
+        import simust_push
+        prev = simust_push.PUSH_KEY
+        simust_push.PUSH_KEY = "test-push-key"
+        simust_push._seen_ingest.clear()
+        ts = str(int(__import__("time").time()))
+        body = b""
+        sign = simust_push._sign(body, ts)
+        try:
+            simust_push.verify_ingest_headers("test-push-key", ts, sign, body, path="/internal/export-accounts")
+            simust_push.verify_ingest_headers("test-push-key", ts, sign, body, path="/internal/export-remote-commands")
+        finally:
+            simust_push.PUSH_KEY = prev
+            simust_push._seen_ingest.clear()
+
+
 if __name__ == "__main__":
     unittest.main()

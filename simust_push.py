@@ -109,7 +109,7 @@ def _sign(body: bytes, ts: str) -> str:
     return hmac.new(PUSH_KEY.encode("utf-8"), f"{ts}.".encode("utf-8") + body, hashlib.sha256).hexdigest()
 
 
-def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, body: bytes) -> None:
+def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, body: bytes, path: str = "") -> None:
     if not PUSH_KEY:
         raise PermissionError("SIMUST_PUSH_KEY is not set on this host")
     if not key_header or not hmac.compare_digest(key_header, PUSH_KEY):
@@ -124,7 +124,7 @@ def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, bod
     if not sign_header or not hmac.compare_digest(sign_header, expect):
         raise PermissionError("Invalid push signature")
     digest = hashlib.sha256(body).hexdigest()
-    stamp = f"{ts}:{digest}"
+    stamp = f"{ts}:{path}:{digest}"
     now = time.time()
     with _seen_ingest_lock:
         stale = [key for key, seen_at in _seen_ingest.items() if now - seen_at > 300]
