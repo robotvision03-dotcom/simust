@@ -498,6 +498,18 @@ def push_reports_async(reports_dir: str, users: Optional[Dict[str, Any]] = None)
     ).start()
 
 
+def discard_live_session(player_id: str) -> None:
+    """Remove the in-progress live_{player} snapshot from the public host."""
+    if not player_id or not push_configured():
+        return
+    payload = {"kind": "discard_live", "player_id": player_id}
+    try:
+        flush_queue()
+        _post(payload)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, OSError) as exc:
+        logger.warning("Discard live snapshot failed (%s)", exc)
+
+
 def push_live_session(player_id: str, session_report: Dict[str, Any], user: Optional[Dict[str, Any]]) -> None:
     """Overwrite one live_{player} session on the host while a test is running."""
     live = sanitize_session(session_report)

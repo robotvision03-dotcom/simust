@@ -1740,6 +1740,7 @@
             var liveIntervalRef = useRef(null);
             var realtimeMonitorInterval = useRef(null);
             var sessionSavedRef = useRef(false);
+            var sessionAbortedRef = useRef(false);
             var autoStopTimeoutRef = useRef(null);
             var realtimeRunningRef = useRef(false);
             var activeTabRef = useRef(activeTab);
@@ -2245,6 +2246,9 @@
 
             // ----- FETCH RESULTS -----
             var fetchRealtimeResults = function(showLoading, forceApply) {
+                if (sessionAbortedRef.current) {
+                    return Promise.resolve(false);
+                }
                 if (showLoading === undefined) showLoading = true;
                 if (!forceApply && !showLoading && activeTabRef.current === 'results') {
                     return Promise.resolve(false);
@@ -2391,6 +2395,7 @@
 
             var saveSessionToPlayerFolder = function(playerId, playerName, playerSurname, playerPlayerId,
             sessionData) {
+                if (sessionAbortedRef.current) return Promise.resolve(null);
                 setSavingSession(true);
                 return axios.post("/save-session-to-player", {
                     player_id: playerId,
@@ -2472,6 +2477,7 @@
             };
 
             var handlePlaybackComplete = function() {
+                if (sessionAbortedRef.current) return Promise.resolve(null);
                 var player = getSelectedPlayer();
                 if (!player) { showToast("No player selected", 'error'); return Promise.resolve(null); }
                 if (!reportData || !reportData.actions || reportData.actions.length === 0) {
@@ -2579,6 +2585,8 @@
                 setRealtimeRunning(true);
                 setActiveTab("main");
                 sessionSavedRef.current = false;
+                sessionAbortedRef.current = false;
+                clearResultsDisplay();
 
                 var payload = {
                     level: selectedLevel,
@@ -2628,6 +2636,7 @@
 
                     var sawActivePlayback = false;
                     var finishFromStatus = function() {
+                        if (sessionAbortedRef.current) return;
                         if (!realtimeRunningRef.current && sessionSavedRef.current) return;
                         realtimeRunningRef.current = false;
                         setRealtimeRunning(false);
@@ -2653,10 +2662,18 @@
                     };
 
                     var checkStatus = function() {
-                        if (!realtimeRunningRef.current || sessionSavedRef.current) return;
+                        if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
                         axios.get("/playback-status").then(function(statusRes) {
-                            if (!realtimeRunningRef.current || sessionSavedRef.current) return;
+                            if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
                             var state = statusRes.data && statusRes.data.state ? statusRes.data.state : '';
+                            if (state === "aborted") {
+                                sessionAbortedRef.current = true;
+                                sessionSavedRef.current = true;
+                                realtimeRunningRef.current = false;
+                                setRealtimeRunning(false);
+                                clearResultsDisplay();
+                                return;
+                            }
                             if (state === "playing" || state === "playing_final" || state === "loading") {
                                 sawActivePlayback = true;
                             }
@@ -2699,8 +2716,14 @@
                 });
             };
 
-            var stopPlayback = function() {
-                if (realtimeRunningRef.current && !sessionSavedRef.current && reportData && reportData.actions && reportData
+            var stopPlayback = function(opts) {
+                opts = opts || {};
+                var abort = opts.abort !== false;
+                if (abort) {
+                    sessionAbortedRef.current = true;
+                    sessionSavedRef.current = true;
+                    clearResultsDisplay();
+                } else if (realtimeRunningRef.current && !sessionSavedRef.current && reportData && reportData.actions && reportData
                     .actions.length) {
                     showToast("Saving session before stopping…", 'info');
                     handlePlaybackComplete().then(function() {
@@ -2709,7 +2732,7 @@
                     });
                 }
                 if (realtimeRunningRef.current || realtimeRunning) {
-                    axios.post("/stop-realtime").catch(function(e) { console.error(e); });
+                    axios.post("/stop-realtime", abort ? { abort: true } : {}).catch(function(e) { console.error(e); });
                 }
                 realtimeRunningRef.current = false;
                 setRealtimeRunning(false);
@@ -2719,7 +2742,9 @@
                     liveIntervalRef.current = null; }
                 if (autoStopTimeoutRef.current) { clearTimeout(autoStopTimeoutRef.current);
                     autoStopTimeoutRef.current = null; }
-                showToast("Realtime stopped", 'info');
+                showToast(abort
+                    ? "Test stopped. Nothing was saved. Ready for the next test."
+                    : "Realtime stopped", 'info');
             };
 
             var displayResultsOnScreen2 = function() {
@@ -2742,7 +2767,7 @@
                             showToast("Results video created and displayed on Screen 2", 'success');
                             if (realtimeRunning) {
                                 showToast("Auto-stopping playback after video generation", 'info');
-                                stopPlayback();
+                                stopPlayback({ abort: false });
                             }
                         } else {
                             showToast("Could not display results on Screen 2", 'error');
@@ -3090,7 +3115,7 @@
                             ),
                             realtimeRunning ?
                             React.createElement('button', {
-                                onClick: stopPlayback,
+                                onClick: function() { stopPlayback({ abort: true }); },
                                 className: "btn-primary btn-danger px-6 py-2 font-bold"
                             }, t("stop")) :
                             null,

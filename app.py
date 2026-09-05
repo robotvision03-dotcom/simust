@@ -697,6 +697,9 @@ current_selections: Dict[str, bool] = {}
 output_path = "C:/Users/siama/Documents/record"
 smart_player_process = None
 realtime_camera_process = None
+realtime_aborted = False
+realtime_active_player_id = ""
+_realtime_dirs_at_start: set = set()
 
 # ============================================================
 # Helper Functions
@@ -727,25 +730,125 @@ def get_latest_recording_directory():
         logger.error(f"Failed to get latest directory: {e}")
         return None
 
+def _realtime_dir_names() -> set:
+    if not os.path.isdir(REALTIME_RECORDINGS_DIR):
+        return set()
+    return {
+        name for name in os.listdir(REALTIME_RECORDINGS_DIR)
+        if os.path.isdir(os.path.join(REALTIME_RECORDINGS_DIR, name))
+    }
+
+
+def write_playback_status(state: str, message: str) -> None:
+    try:
+        status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "state": state,
+                "current_video": 0,
+                "total_videos": 0,
+                "progress": 0,
+                "message": message,
+                "timestamp": time.time(),
+            }, f)
+    except Exception as exc:
+        logger.warning("Could not write playback status: %s", exc)
+
+
+def kill_process_tree(proc) -> None:
+    if not proc:
+        return
+    try:
+        if proc.poll() is not None:
+            return
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=8,
+            )
+        else:
+            proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def force_kill_smart_player():
     global smart_player_process
-    try:
-        if smart_player_process and smart_player_process.poll() is None:
-            smart_player_process.terminate()
-            time.sleep(1)
-            if smart_player_process.poll() is None:
-                smart_player_process.kill()
-            smart_player_process = None
-    except:
-        pass
+    kill_process_tree(smart_player_process)
+    smart_player_process = None
     if sys.platform == "win32":
         try:
-            subprocess.run(['taskkill', '/F', '/FI', 'WINDOWTITLE eq Smart Player*'], capture_output=True)
-            os.system('taskkill /F /IM python.exe /FI "CMDLine eq *smart_simust_player*" 2>nul')
-        except:
+            subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq Smart Player*"], capture_output=True, timeout=8)
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *smart_simust_player*"],
+                capture_output=True,
+                timeout=8,
+            )
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *simust_realtime*"],
+                capture_output=True,
+                timeout=8,
+            )
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *play_results_video*"],
+                capture_output=True,
+                timeout=8,
+            )
+        except Exception:
             pass
     gc.collect()
-    time.sleep(1)
+
+
+def clear_live_snapshot(player_id: str) -> None:
+    player_id = (player_id or "").strip()
+    if not player_id:
+        return
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+    index_file = os.path.join(player_dir, "index.json")
+    index = []
+    if os.path.isfile(index_file):
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                index = json.load(f)
+        except Exception:
+            index = []
+    index = drop_live_snapshot(player_id, index)
+    if os.path.isdir(player_dir):
+        try:
+            with open(index_file, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("Could not update index after dropping live snapshot: %s", exc)
+    if PUBLIC_MODE:
+        return
+    try:
+        if simust_push.push_configured():
+            simust_push.discard_live_session(player_id)
+    except Exception as exc:
+        logger.warning("Could not discard live snapshot on host: %s", exc)
+
+
+def discard_aborted_realtime_folders() -> list:
+    """Delete session folders created after the current Realtime Play started."""
+    global current_results_dir
+    current_results_dir = None
+    removed = []
+    extra = _realtime_dir_names() - set(_realtime_dirs_at_start or ())
+    for name in extra:
+        path = os.path.join(REALTIME_RECORDINGS_DIR, name)
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(name)
+            logger.info("Discarded aborted realtime folder %s", path)
+        except Exception as exc:
+            logger.warning("Could not discard %s: %s", path, exc)
+    return removed
 
 atexit.register(force_kill_smart_player)
 
@@ -1161,6 +1264,8 @@ async def get_levels():
         
 @app.get("/playback-status")
 async def get_playback_status():
+    if realtime_aborted:
+        return {"state": "aborted", "message": "Operator stopped. Session discarded."}
     status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
     if os.path.exists(status_file):
         try:
@@ -1177,6 +1282,8 @@ async def get_playback_status():
 @app.post("/start-realtime-playback")
 async def start_realtime_playback(req: Request):
     global smart_player_process, realtime_camera_process, current_results_dir
+    global realtime_aborted, realtime_active_player_id, _realtime_dirs_at_start
+    realtime_aborted = False
     try:
         data = await req.json()
         level_id = data.get("level")  # e.g., "L00-Foundation" or "L01-Entry/A-T1/A.T1.C1"
@@ -1237,6 +1344,8 @@ async def start_realtime_playback(req: Request):
         write_visualization_setting(bool(data.get("visualization_enabled", False)))
         write_simulation_setting(bool(data.get("simulation_enabled", False)))
 
+        realtime_active_player_id = (player_id or "").strip()
+        _realtime_dirs_at_start = _realtime_dir_names()
         force_kill_smart_player()
         try:
             status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
@@ -1335,33 +1444,43 @@ async def start_realtime_playback(req: Request):
         raise HTTPException(500, f"Failed to start: {str(e)}")
 
 @app.post("/stop-realtime")
-async def stop_realtime():
-    global smart_player_process, realtime_camera_process
+async def stop_realtime(req: Request):
+    global smart_player_process, realtime_camera_process, realtime_aborted, realtime_active_player_id
     try:
-        logger.info("Stopping realtime playback...")
+        try:
+            data = await req.json()
+        except Exception:
+            data = {}
+        abort = bool((data or {}).get("abort") or (data or {}).get("discard") or (data or {}).get("operator_stop"))
+        logger.info("Stopping realtime playback (abort=%s)...", abort)
+        if abort:
+            realtime_aborted = True
+            write_playback_status("aborted", "Operator stopped. Session discarded.")
         force_kill_smart_player()
-        if realtime_camera_process:
-            try:
-                if realtime_camera_process.poll() is None:
-                    realtime_camera_process.terminate()
-                    for _ in range(50):
-                        if realtime_camera_process.poll() is not None:
-                            break
-                        time.sleep(0.1)
-                    if realtime_camera_process.poll() is None:
-                        realtime_camera_process.kill()
-                        realtime_camera_process.wait(timeout=2)
-            except Exception as e:
-                logger.warning(f"Error stopping realtime camera process: {e}")
-            finally:
-                realtime_camera_process = None
+        kill_process_tree(realtime_camera_process)
+        realtime_camera_process = None
+        discarded = []
+        if abort:
+            discarded = discard_aborted_realtime_folders()
+            clear_live_snapshot(realtime_active_player_id)
+            write_playback_status("idle", "Ready for the next test")
         try:
             speed_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "simust_speed.txt")
             if os.path.exists(speed_file):
                 os.remove(speed_file)
-        except:
+        except Exception:
             pass
-        return {"status": "success", "message": "Realtime playback stopped"}
+        if abort:
+            try:
+                _publish_lab_status()
+            except Exception:
+                pass
+        return {
+            "status": "success",
+            "aborted": abort,
+            "discarded": discarded,
+            "message": "Test stopped. Nothing was saved." if abort else "Realtime playback stopped",
+        }
     except Exception as e:
         logger.error(f"Failed to stop realtime: {e}")
         raise HTTPException(500, f"Failed to stop: {str(e)}")
@@ -1382,6 +1501,8 @@ async def sync_live_to_host(req: Request):
     if not simust_push.push_configured():
         return {"status": "skipped", "detail": "Set lab.env SIMUST_PUSH_URL and SIMUST_PUSH_KEY"}
 
+    if realtime_aborted:
+        return {"status": "aborted", "message": "Test was stopped"}
     snapshot = await get_realtime_results()
     report = (snapshot or {}).get("report") or {}
     stats = report.get("statistics") or {}
@@ -1540,6 +1661,8 @@ async def video_results(req: Request):
 
 @app.get("/realtime-results")
 async def get_realtime_results():
+    if realtime_aborted:
+        return {"status": "aborted", "message": "Test was stopped", "report": None, "directory": None}
     try:
         realtime_folder = get_newest_realtime_session_folder()
         if realtime_folder:
@@ -1632,6 +1755,8 @@ async def get_realtime_results():
 
 @app.post("/save-results-to-json")
 async def save_results_to_json(req: Request):
+    if realtime_aborted:
+        return {"status": "aborted", "message": "Test was stopped; result was not saved"}
     try:
         data = await req.json()
         session_folder = data.get("session_folder")
@@ -2488,6 +2613,8 @@ async def create_video_results(req: Request):
 
 @app.post("/create-results-video")
 async def create_results_video(req: Request):
+    if realtime_aborted:
+        return {"status": "aborted", "message": "Test was stopped; results video was not generated"}
     try:
         data = await req.json()
         directory = data.get("directory")
@@ -2550,6 +2677,8 @@ async def create_results_video(req: Request):
 
 @app.post("/save-session-to-player")
 async def save_session_to_player(req: Request):
+    if realtime_aborted:
+        return {"status": "aborted", "message": "Test was stopped; session was not saved"}
     try:
         data = await req.json()
         player_id = data.get("player_id")
@@ -3201,6 +3330,11 @@ async def ingest_player_data(request: Request):
     if kind == "lab_status":
         simust_remote.set_status(data.get("status") or {})
         return {"status": "success"}
+    if kind == "discard_live":
+        player_id = (data.get("player_id") or "").strip()
+        if player_id:
+            clear_live_snapshot(player_id)
+        return {"status": "success", "discarded": player_id}
     if kind == "ack_commands":
         removed = simust_remote.ack_ids(data.get("ids") or [])
         return {"status": "success", "acked": removed}
