@@ -87,6 +87,8 @@ fi
 mkdir -p "$APP_DIR/simust_reports" "$APP_DIR/simust_player"
 chown -R simust:simust "$APP_DIR"
 chmod 640 "$APP_DIR/.env"
+git config --global --get-all safe.directory 2>/dev/null | grep -qx "$APP_DIR" \
+  || git config --global --add safe.directory "$APP_DIR"
 
 install -m 644 "$APP_DIR/deploy/simust.service" /etc/systemd/system/simust.service
 if [ ! -f /etc/systemd/system/caddy.service ] && [ ! -f /lib/systemd/system/caddy.service ]; then
