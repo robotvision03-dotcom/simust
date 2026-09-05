@@ -104,6 +104,19 @@ def save_users(users):
             logging.getLogger(__name__).warning("Could not sync accounts to host: %s", exc)
 
 
+def ensure_player_workspace(player_id: str) -> str:
+    """Create the player reports folder plus an empty index.json."""
+    player_id = (player_id or "").strip()
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+    if player_id:
+        os.makedirs(player_dir, exist_ok=True)
+        index_file = os.path.join(player_dir, "index.json")
+        if not os.path.exists(index_file):
+            with open(index_file, "w", encoding="utf-8") as f:
+                json.dump([], f)
+    return player_dir
+
+
 ADMIN_NOTIFY_EMAIL = os.environ.get("ADMIN_NOTIFY_EMAIL", "robotvision03@gmail.com")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[0-9][0-9\s\-()]{5,20}$")
@@ -2914,7 +2927,7 @@ async def get_players(request: Request):
 
     # 1. Load from users.json (role = "player")
     for username, user_data in users.items():
-        if user_data.get("role") == "player":
+        if str(user_data.get("role") or "player").strip().lower() == "player":
             player_id = username
             # Ensure progress exists
             if "progress" not in user_data:
@@ -3018,6 +3031,55 @@ async def get_players(request: Request):
         if can_access_player(viewer, player.get("id"), player):
             visible.append(player)
     return {"players": visible}
+
+
+@app.post("/lab-upsert-player")
+async def lab_upsert_player(req: Request):
+    """Lab operator: create a player in users.json so search and tests use the SIMUST ID."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "This action is only available on the training machine.")
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    player_id = (data.get("player_id") or data.get("username") or "").strip()
+    name = (data.get("name") or "").strip()
+    surname = (data.get("surname") or "").strip()
+    if not player_id or not simust_push.PLAYER_ID_RE.match(player_id):
+        raise HTTPException(400, "SIMUST ID must be letters, numbers, dot, underscore or dash")
+    if not name or not surname:
+        raise HTTPException(400, "Name and surname are required")
+    users = load_users()
+    existing = users.get(player_id) or {}
+    existing.update({
+        "name": name,
+        "surname": surname,
+        "club": (data.get("club") or existing.get("club") or "").strip(),
+        "age": (data.get("age") or existing.get("age") or "").strip(),
+        "role": "player",
+    })
+    existing.setdefault("password", "")
+    existing.setdefault("progress", {
+        "current_level": "L00-Foundation",
+        "unlocked_levels": ["L00-Foundation"],
+        "completed_levels": [],
+        "challenge_results": {},
+    })
+    users[player_id] = existing
+    save_users(users)
+    ensure_player_workspace(player_id)
+    return {
+        "status": "success",
+        "player": {
+            "id": player_id,
+            "playerId": player_id,
+            "name": name,
+            "surname": surname,
+            "club": existing.get("club", ""),
+            "age": existing.get("age", ""),
+            "progress": existing.get("progress"),
+        },
+    }
 
 @app.post("/internal/ingest-player-data")
 async def ingest_player_data(request: Request):
@@ -3353,6 +3415,7 @@ async def register(req: Request):
         "progress": progress
     }
     save_users(users)
+    ensure_player_workspace(username)
 
     email_payload = {
         "username": username,

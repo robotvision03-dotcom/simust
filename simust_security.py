@@ -53,6 +53,7 @@ LAB_ONLY_PREFIXES = (
     "/sync-live-to-host",
     "/sync-accounts-to-host",
     "/sync-reports-to-host",
+    "/lab-upsert-player",
     "/unlock-level",
     "/lock-level",
     "/stitch",

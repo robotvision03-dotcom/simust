@@ -1682,11 +1682,12 @@
                 return axios.get("/get-players").then(function(res) {
                     if (res.data && res.data.players) {
                         var backendPlayers = res.data.players.map(function(p) {
+                            var sid = p.playerId || p.id;
                             return {
-                                id: p.id || p.playerId,
-                                name: p.name || '',
+                                id: sid,
+                                name: p.name || sid || '',
                                 surname: p.surname || '',
-                                playerId: p.playerId || p.id,
+                                playerId: sid,
                                 club: p.club || '',
                                 birthday: p.birthday || '',
                                 age: p.age || '',
@@ -1708,8 +1709,9 @@
                         backendPlayers.forEach(function(p) { existingIds[p.id] = true; });
                         var merged = backendPlayers.slice();
                         localPlayers.forEach(function(lp) {
-                            if (!existingIds[lp.id]) {
-                                merged.push(lp);
+                            var lid = lp.playerId || lp.id;
+                            if (!existingIds[lid] && !existingIds[lp.id]) {
+                                merged.push(Object.assign({}, lp, { id: lid, playerId: lid }));
                             }
                         });
                         setPlayers(merged);
@@ -1723,8 +1725,9 @@
                                 if (player) updateProgressForPlayer(player);
                             }
                         }
-                        return;
+                        return merged;
                     }
+                    return [];
                 }).catch(function(e) {
                     console.warn("Could not fetch players from server, using localStorage fallback.", e);
                     // Fallback
@@ -1755,8 +1758,10 @@
                                 var p2 = updated.find(function(p) { return p.id === selectedPlayerId; });
                                 if (p2) updateProgressForPlayer(p2);
                             }
+                            return updated;
                         }
                     } catch (e2) { console.error(e2); }
+                    return [];
                 });
             };
 
@@ -1787,18 +1792,26 @@
                 setSelectedSubdirectory("");
             };
 
+            var playerMatchesQuery = function(p, lower) {
+                var blob = [
+                    p.id, p.playerId, p.name, p.surname,
+                    (p.name || '') + ' ' + (p.surname || ''),
+                    p.club, p.team
+                ].join(' ').toLowerCase();
+                return blob.indexOf(lower) !== -1;
+            };
+
             var performSearch = function(query) {
                 setSearchQuery(query);
                 if (!query.trim()) { setFilteredPlayers([]);
                     setShowSearchResults(false); return; }
                 var lower = query.toLowerCase().trim();
-                var filtered = players.filter(function(p) {
-                    return p.playerId.toLowerCase().indexOf(lower) !== -1 ||
-                        (p.name + ' ' + p.surname).toLowerCase().indexOf(lower) !== -1;
-                });
+                loadPlayers().then(function(list) {
+                var source = (list && list.length) ? list : players;
+                var filtered = source.filter(function(p) { return playerMatchesQuery(p, lower); });
                 setFilteredPlayers(filtered);
                 setShowSearchResults(true);
-                var exact = players.find(function(p) { return p.playerId.toLowerCase() === lower; });
+                var exact = source.find(function(p) { return String(p.playerId || '').toLowerCase() === lower || String(p.id || '').toLowerCase() === lower; });
                 if (exact) {
                     if (selectedPlayerId === exact.id) {
                         clearResultsDisplay();
@@ -1810,6 +1823,7 @@
                     loadPlayerSessionsFromBackend(exact.id);
                     showToast("Selected: " + exact.name + ' ' + exact.surname, 'success');
                 }
+                });
             };
 
             var selectPlayerFromSearch = function(player) {
@@ -1847,37 +1861,41 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                if (players.find(function(p) { return p.playerId === newPlayer.playerId; })) {
-                    setError("SIMUST ID " + newPlayer.playerId + " already exists");
+                var simustId = newPlayer.playerId.trim();
+                if (players.find(function(p) { return p.playerId === simustId || p.id === simustId; })) {
+                    setError("SIMUST ID " + simustId + " already exists");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                var player = {
-                    id: Date.now().toString(),
+                axios.post("/lab-upsert-player", {
+                    player_id: simustId,
                     name: newPlayer.name.trim(),
                     surname: newPlayer.surname.trim(),
-                    playerId: newPlayer.playerId.trim(),
                     club: (newPlayer.club || '').trim(),
-                    birthday: newPlayer.birthday || '',
-                    age: newPlayer.age || '',
-                    image: newPlayer.image || null,
-                    simustScore: 0,
-                    avgAe: 0,
-                    avgAcc: 0,
-                    sessions: [],
-                    progress: { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"],
-                        completed_levels: [] },
-                    createdAt: new Date().toISOString()
-                };
-                savePlayers(players.concat([player]));
-                setSelectedPlayerId(player.id);
-                setSearchQuery(player.playerId);
-                updateProgressForPlayer(player);
-                setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
-                setShowAddPlayer(false);
-                setError("");
-                loadPlayerSessionsFromBackend(player.id);
-                showToast("Player " + player.name + ' ' + player.surname + " created", 'success');
+                    age: newPlayer.age || ''
+                }).then(function(res) {
+                    var player = (res.data && res.data.player) ? res.data.player : {
+                        id: simustId,
+                        playerId: simustId,
+                        name: newPlayer.name.trim(),
+                        surname: newPlayer.surname.trim()
+                    };
+                    player.sessions = [];
+                    player.progress = player.progress || { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"], completed_levels: [] };
+                    savePlayers(players.concat([player]));
+                    setSelectedPlayerId(player.id);
+                    setSearchQuery(player.playerId);
+                    updateProgressForPlayer(player);
+                    setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
+                    setShowAddPlayer(false);
+                    setError("");
+                    loadPlayers();
+                    loadPlayerSessionsFromBackend(player.id);
+                    showToast("Player " + player.name + ' ' + player.surname + " created", 'success');
+                }).catch(function(e) {
+                    setError((e.response && e.response.data && e.response.data.detail) || "Could not save player");
+                    setTimeout(function() { setError(""); }, 4000);
+                });
             };
 
             var getSelectedPlayer = function() {

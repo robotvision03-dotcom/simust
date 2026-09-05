@@ -389,7 +389,12 @@ def pull_and_merge_accounts(load_users_fn, save_users_fn, reports_dir: str = "")
         if reports_dir:
             for username in added:
                 try:
-                    os.makedirs(os.path.join(reports_dir, username), exist_ok=True)
+                    folder = os.path.join(reports_dir, username)
+                    os.makedirs(folder, exist_ok=True)
+                    index_path = os.path.join(folder, "index.json")
+                    if not os.path.isfile(index_path):
+                        with open(index_path, "w", encoding="utf-8") as f:
+                            json.dump([], f)
                 except OSError:
                     pass
         logger.info("Imported %s My SIMUST account(s) into the lab: %s", len(added), ", ".join(added))
