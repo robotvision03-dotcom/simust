@@ -750,7 +750,10 @@
 
             var handleSubmit = function(e) {
                 e.preventDefault();
-                onLogin(username, password);
+                var form = e.target || {};
+                var typedUser = (form.username && form.username.value) || username;
+                var typedPass = (form.password && form.password.value) || password;
+                onLogin(typedUser, typedPass);
             };
 
             return React.createElement('div', { className: "login-overlay" },
@@ -774,6 +777,11 @@
                         React.createElement('form', { onSubmit: handleSubmit },
                             React.createElement('input', {
                                 type: "text",
+                                name: "username",
+                                autoComplete: "username",
+                                autoCapitalize: "none",
+                                autoCorrect: "off",
+                                spellCheck: "false",
                                 className: "login-input",
                                 placeholder: t("username"),
                                 value: username,
@@ -783,6 +791,8 @@
                             }),
                             React.createElement('input', {
                                 type: "password",
+                                name: "password",
+                                autoComplete: "current-password",
                                 className: "login-input",
                                 placeholder: t("password"),
                                 value: password,
@@ -1769,13 +1779,22 @@
                         } catch (e) {}
                     }
                     finishLocalLogin(data.username || uname, nextRole);
-                }).catch(function() {
+                }).catch(function(err) {
                     if (!window.SIMUST_PUBLIC && uname === 'simust26' && pwd === 'sina26') {
                         finishLocalLogin(uname, 'user');
                         return;
                     }
                     if (!window.SIMUST_PUBLIC && uname === 'admin' && pwd === 'sina27') {
                         finishLocalLogin(uname, 'admin');
+                        return;
+                    }
+                    var status = err && err.response && err.response.status;
+                    if (status === 429) {
+                        setLoginError('Too many sign-in attempts. Wait a few minutes.');
+                        return;
+                    }
+                    if (!err || !err.response) {
+                        setLoginError('Cannot reach SIMUST. Check Wi‑Fi or SIM data.');
                         return;
                     }
                     setLoginError(t('invalidLogin'));

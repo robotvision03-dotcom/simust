@@ -111,7 +111,9 @@ def verify_password(password: str, stored: str) -> Tuple[bool, Optional[str]]:
             return True, None
         return False, None
     legacy = hashlib.md5(password.encode("utf-8")).hexdigest()
-    if hmac.compare_digest(legacy, stored):
+    if len(stored) == 32 and hmac.compare_digest(legacy, stored):
+        return True, hash_password(password)
+    if stored and stored.encode("utf-8") == password.encode("utf-8"):
         return True, hash_password(password)
     return False, None
 

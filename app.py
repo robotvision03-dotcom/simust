@@ -105,6 +105,48 @@ def save_users(users):
             logging.getLogger(__name__).warning("Could not sync accounts to host: %s", exc)
 
 
+def find_username(users: dict, username: str) -> Optional[str]:
+    username = (username or "").strip()
+    if not username:
+        return None
+    if username in users:
+        return username
+    lowered = username.lower()
+    for key in users:
+        if str(key).lower() == lowered:
+            return key
+    return None
+
+
+def ensure_admin_account() -> None:
+    """Create admin on first boot when SIMUST_ADMIN_PASSWORD is set. Never overwrites."""
+    password = os.environ.get("SIMUST_ADMIN_PASSWORD", "").strip()
+    if not password:
+        return
+    users = load_users()
+    if find_username(users, "admin"):
+        return
+    users["admin"] = {
+        "name": "SIMUST",
+        "surname": "Admin",
+        "role": "admin",
+        "club": "",
+        "team": "",
+        "age": "",
+        "gender": "",
+        "email": ADMIN_NOTIFY_EMAIL,
+        "password": hash_password(password),
+        "progress": {
+            "current_level": "L00-Foundation",
+            "unlocked_levels": ["L00-Foundation"],
+            "completed_levels": [],
+            "challenge_results": {},
+        },
+    }
+    save_users(users)
+    logging.getLogger(__name__).info("Created missing admin sign-in on this host")
+
+
 def ensure_player_workspace(player_id: str) -> str:
     """Create the player reports folder plus an empty index.json."""
     player_id = (player_id or "").strip()
@@ -885,6 +927,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Player reports directory: {PLAYER_REPORTS_DIR}")
     if not os.environ.get("SIMUST_SESSION_SECRET"):
         logger.warning("SIMUST_SESSION_SECRET is not set; login sessions reset when the app restarts")
+    try:
+        ensure_admin_account()
+    except Exception as exc:
+        logger.warning("Could not ensure admin account: %s", exc)
     if simust_push.push_configured():
         logger.info("Lab→host JSON push is enabled")
         try:
@@ -3665,15 +3711,19 @@ async def login(req: Request):
 
     check_auth_rate(req)
     username = data.get("username", "").strip()
-    password = data.get("password", "").strip()
+    password = data.get("password", "")
+    if isinstance(password, str):
+        password = password.strip()
 
     if not username or not password:
         raise HTTPException(400, "Missing credentials")
 
     users = load_users()
-    if username not in users:
+    matched = find_username(users, username)
+    if not matched:
         raise HTTPException(401, "Invalid credentials")
 
+    username = matched
     user = users[username]
     ok, upgraded = verify_password(password, user.get("password", ""))
     if not ok:
