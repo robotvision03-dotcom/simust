@@ -189,11 +189,26 @@
         }
         @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
         @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
-        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; }
+        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; overflow-x: hidden; }
         html.simust-android .simust-card { min-height: 100dvh; border-radius: 0; max-width: none; }
-        html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn { min-height: 48px; padding: 12px 20px; }
-        html.simust-android .tab-button { min-height: 44px; }
-        html.simust-android .search-input, html.simust-android .login-input { min-height: 46px; font-size: 16px; }
+        html.simust-android .simust-body { min-height: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+        html.simust-android .simust-header { padding: 12px 16px; gap: 10px; }
+        html.simust-android .simust-tabs { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+        html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn, html.simust-android .btn-logout, html.simust-android .btn-results, html.simust-android .btn-danger { min-height: 48px; padding: 12px 20px; font-size: 16px; }
+        html.simust-android .btn-realtime { min-height: 56px; min-width: min(100%, 280px); font-size: 17px; }
+        html.simust-android .tab-button { min-height: 48px; padding: 12px 18px; font-size: 14px; }
+        html.simust-android .search-input, html.simust-android .login-input, html.simust-android .modal-box .form-group input { min-height: 48px; font-size: 16px; }
+        html.simust-android .player-card { min-height: 56px; padding: 14px 16px; }
+        html.simust-android .toggle-switch { width: 64px; height: 32px; }
+        html.simust-android .slider::before { height: 26px; width: 26px; }
+        html.simust-android input:checked + .slider::before { transform: translateX(32px); }
+        html.simust-android .lab-link-banner { font-size: 13px; padding: 10px 16px; }
+        html.simust-android .table-wrap { -webkit-overflow-scrolling: touch; }
+        html.simust-android .toast { inset-inline-end: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
+        @media (orientation: landscape) {
+            html.simust-android .simust-body { padding: 12px 16px; }
+            html.simust-android .btn-realtime { min-width: 240px; }
+        }
         .lab-link-banner { width: 100%; padding: 8px 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-align: center; }
         .lab-link-banner.online { background: rgba(46,204,113,0.16); color: #2ecc71; }
         .lab-link-banner.offline { background: rgba(231,76,60,0.16); color: #e74c3c; }

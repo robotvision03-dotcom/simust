@@ -2,6 +2,7 @@ package com.simust.playsmart
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
@@ -30,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var errorPanel: LinearLayout
     private lateinit var progressBar: ProgressBar
     private var lastUrl: String = ""
+    private var lastTextZoom: Int = 0
     private val statusHandler = Handler(Looper.getMainLooper())
     private val statusTick = object : Runnable {
         override fun run() {
@@ -42,7 +44,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        applyDisplayPrefs()
 
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -63,6 +65,7 @@ class MainActivity : AppCompatActivity() {
         settings.databaseEnabled = true
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
+        settings.setSupportZoom(true)
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -70,7 +73,9 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowContentAccess = true
         settings.allowFileAccess = false
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.0"
+        settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.2"
+        applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -91,8 +96,13 @@ class MainActivity : AppCompatActivity() {
                 if (request?.isForMainFrame == true) {
                     progressBar.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
+                    val extra = if (NetworkStatus.isOnline(this@MainActivity)) {
+                        Prefs.getLaunchUrl(this@MainActivity)
+                    } else {
+                        getString(R.string.load_error_offline)
+                    }
                     findViewById<TextView>(R.id.errorText).text =
-                        getString(R.string.load_error) + "\n" + Prefs.getLaunchUrl(this@MainActivity)
+                        getString(R.string.load_error) + "\n" + extra
                 }
             }
 
@@ -127,6 +137,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         webView.onResume()
+        applyDisplayPrefs()
+        applyTextZoom()
         val url = Prefs.getLaunchUrl(this)
         if (url != lastUrl) {
             loadGui()
@@ -182,6 +194,26 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
+    private fun applyDisplayPrefs() {
+        if (Prefs.getKeepScreenOn(this)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        requestedOrientation = when (Prefs.getOrientation(this)) {
+            Prefs.ORIENTATION_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            Prefs.ORIENTATION_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        }
+    }
+
+    private fun applyTextZoom() {
+        if (!::webView.isInitialized) return
+        val zoom = Prefs.getTextZoom(this)
+        webView.settings.textZoom = zoom
+        lastTextZoom = zoom
+    }
+
     private fun titleForMode() {
         supportActionBar?.title = when (Prefs.getMode(this)) {
             Prefs.MODE_PLAYER -> getString(R.string.title_player)
@@ -198,6 +230,11 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_lab_lan) }
             return
         }
+        if (!NetworkStatus.isOnline(this)) {
+            runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_no_network) }
+            return
+        }
+        val transport = NetworkStatus.transportLabel(this)
         Thread {
             try {
                 val url = java.net.URL(Prefs.getPublicHost(this) + "/app-config")
@@ -209,11 +246,14 @@ class MainActivity : AppCompatActivity() {
                 val online = text.contains("\"lab_online\": true") || text.contains("\"lab_online\":true")
                 runOnUiThread {
                     supportActionBar?.subtitle = getString(
-                        if (online) R.string.subtitle_lab_online else R.string.subtitle_lab_offline,
+                        if (online) R.string.subtitle_lab_online_net else R.string.subtitle_lab_offline_net,
+                        transport,
                     )
                 }
             } catch (_: Exception) {
-                runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_lab_offline) }
+                runOnUiThread {
+                    supportActionBar?.subtitle = getString(R.string.subtitle_host_unreachable, transport)
+                }
             }
         }.start()
     }
@@ -223,6 +263,7 @@ class MainActivity : AppCompatActivity() {
         val url = Prefs.getLaunchUrl(this)
         lastUrl = url
         titleForMode()
+        applyTextZoom()
         invalidateOptionsMenu()
         webView.loadUrl(url)
     }
