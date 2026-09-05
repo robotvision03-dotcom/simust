@@ -1436,8 +1436,7 @@ async def get_levels():
         logger.error(f"Failed to get levels: {e}")
         raise HTTPException(500, f"Failed to get levels: {str(e)}")
         
-@app.get("/playback-status")
-async def get_playback_status():
+def playback_status_snapshot() -> dict:
     if realtime_aborted and _realtime_session_active:
         return {"state": "aborted", "message": "Operator stopped. Session discarded.", "paused": False}
     status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
@@ -1454,6 +1453,11 @@ async def get_playback_status():
         status["state"] = "paused"
         status["message"] = status.get("message") or "Paused — press Play to continue"
     return status
+
+
+@app.get("/playback-status")
+async def get_playback_status():
+    return playback_status_snapshot()
 
 # ============================================================
 # REALTIME PLAYBACK ENDPOINTS (with unlock check)
@@ -1549,7 +1553,7 @@ async def start_realtime_playback(req: Request):
             try:
                 if realtime_camera_process.poll() is None:
                     realtime_camera_process.terminate()
-                    time.sleep(1)
+                    await asyncio.sleep(1)
                     if realtime_camera_process.poll() is None:
                         realtime_camera_process.kill()
             except Exception as e:
@@ -1580,7 +1584,7 @@ async def start_realtime_playback(req: Request):
                     shell=False
                 )
             logger.info("Realtime camera/QR detection started.")
-            time.sleep(3)
+            await asyncio.sleep(3)
 
         # Launch smart player
         smart_script = os.path.join(script_dir, "smart_simust_player.py")
@@ -1664,11 +1668,6 @@ async def stop_realtime(req: Request):
                 os.remove(speed_file)
         except Exception:
             pass
-        if abort:
-            try:
-                _publish_lab_status()
-            except Exception:
-                pass
         return {
             "status": "success",
             "aborted": abort,
@@ -1828,8 +1827,7 @@ async def set_simulation(req: Request):
 # RESULTS ENDPOINTS
 # ============================================================
 
-@app.get("/results")
-async def get_results():
+def results_snapshot() -> dict:
     global current_results_dir
     realtime_folder = get_newest_realtime_session_folder()
     if realtime_folder:
@@ -1859,6 +1857,11 @@ async def get_results():
             logger.error(f"Fallback detection failed: {e}")
     return {"results": [], "directory": None, "message": "No recording directory found"}
 
+
+@app.get("/results")
+async def get_results():
+    return results_snapshot()
+
 @app.post("/video-results")
 async def video_results(req: Request):
     global current_results_dir
@@ -1878,8 +1881,7 @@ async def video_results(req: Request):
         logger.error(f"/video-results failed: {e}")
         raise HTTPException(500, f"Failed to load video results: {str(e)}")
 
-@app.get("/realtime-results")
-async def get_realtime_results():
+def realtime_results_snapshot() -> dict:
     if realtime_aborted:
         return {"status": "aborted", "message": "Test was stopped", "report": None, "directory": None}
     try:
@@ -1971,6 +1973,11 @@ async def get_realtime_results():
     except Exception as e:
         logger.error(f"Failed to get realtime results: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/realtime-results")
+async def get_realtime_results():
+    return realtime_results_snapshot()
 
 @app.post("/save-results-to-json")
 async def save_results_to_json(req: Request):
@@ -3829,25 +3836,28 @@ def _lab_local_url(path: str) -> str:
 
 def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -> Any:
     body = json.dumps(payload or {}).encode("utf-8") if method != "GET" else None
+    timeout = 40 if path.lstrip("/").startswith("start-realtime") else 15
     req = urllib.request.Request(
         _lab_local_url(path),
         data=body,
         method=method,
         headers={"Content-Type": "application/json"} if body is not None else {},
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8")
     return json.loads(raw) if raw else {}
 
 
 def _publish_lab_status() -> None:
+    # Read local state in-process. Never HTTP back into this same uvicorn worker;
+    # that deadlocks the event loop (Remote operator command failed: timed out).
     status = {"lab_online": True}
     try:
-        status["playback-status"] = _lab_local_request("GET", "/playback-status")
+        status["playback-status"] = playback_status_snapshot()
     except Exception:
         status["playback-status"] = {"state": "unknown"}
     try:
-        live = _lab_local_request("GET", "/realtime-results")
+        live = realtime_results_snapshot()
         if isinstance(live, dict):
             live = dict(live)
             live.pop("directory", None)
@@ -3855,7 +3865,11 @@ def _publish_lab_status() -> None:
     except Exception:
         status["realtime-results"] = {"status": "waiting"}
     try:
-        status["results"] = _lab_local_request("GET", "/results")
+        results = results_snapshot()
+        if isinstance(results, dict):
+            results = dict(results)
+            results.pop("directory", None)
+        status["results"] = results
     except Exception:
         status["results"] = {}
     simust_push.push_lab_status(status)

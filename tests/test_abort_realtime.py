@@ -75,6 +75,20 @@ class AbortFlagTests(unittest.TestCase):
         self.assertIsNone(data.get("report"))
 
 
+class PublishStatusTests(unittest.TestCase):
+    def test_publish_lab_status_is_in_process(self):
+        pushed = []
+        prev = simust_app.simust_push.push_lab_status
+        simust_app.simust_push.push_lab_status = pushed.append
+        try:
+            simust_app._publish_lab_status()
+        finally:
+            simust_app.simust_push.push_lab_status = prev
+        self.assertEqual(len(pushed), 1)
+        self.assertTrue(pushed[0].get("lab_online"))
+        self.assertIn("playback-status", pushed[0])
+
+
 class StaleRemoteStopTests(unittest.TestCase):
     def setUp(self):
         self.prev_abort = simust_app.realtime_aborted
