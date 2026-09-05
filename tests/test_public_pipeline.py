@@ -63,6 +63,7 @@ class FoundationProgressTests(unittest.TestCase):
         self.assertNotIn("L01-Entry", progress["unlocked_levels"])
         self.assertFalse(progress["challenge_results"]["L00-Foundation"]["passed"])
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["subdirectory"], "SF-30N")
+        self.assertEqual(progress["challenge_results"]["L00-Foundation"]["aac"], 80.0)
 
     def test_sf180n_unlocks_entry(self):
         users = self._player()
