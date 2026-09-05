@@ -1,0 +1,36 @@
+SEND THIS TO THE SIMUST.COM WEBSITE AGENT
+========================================
+
+Live My SIMUST is NOT on simust.com. That site cannot run Python.
+The real portal is already running on a Hetzner VPS.
+
+Do this on https://simust.com only:
+
+1. Every "My SIMUST" button, menu link, and the route
+   https://simust.com/my-simust
+   https://simust.com/my-simust/login
+   must send the visitor to the live portal.
+
+   Use this URL (after DNS is updated):
+   https://my.simust.com/login
+
+   Until my.simust.com points at the VPS, use this working URL:
+   http://157.180.47.98/login
+
+2. Preferred implementation: HTTP 302/308 redirect.
+   Do not keep the demo "Preview player dashboard" page
+   at /my-simust/login. That page is a prototype and has no live login.
+
+3. Do not upload app.py, my_simust.html, or users.json to simust.com.
+   Do not try to run FastAPI on Cloudflare / ChatGPT Site.
+
+4. Do not change lab training software (index.html).
+
+DNS (owner of simust.com must do this, if not already done):
+   A record   my.simust.com   ->   157.180.47.98
+
+After that, this path must work:
+   https://simust.com/my-simust/login  -->  https://my.simust.com/login
+   and the Sign in page from the Hetzner host must open.
+
+Reply with the exact files you changed and the final href.
