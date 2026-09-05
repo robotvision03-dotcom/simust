@@ -75,11 +75,17 @@ if (-not (Test-Path $localProps)) {
 Write-Host "SDK : $sdk"
 Write-Host "Java: $($env:JAVA_HOME)"
 Write-Host "adb : $adb"
+if ($env:JAVA_HOME) {
+    & "$env:JAVA_HOME\bin\java.exe" -version
+}
 Write-Host ""
+Write-Host "Stopping old Gradle daemons (Java 25 needs Gradle 9)..."
+& "$Root\gradlew.bat" --stop | Out-Null
 Write-Host "Building debug APK..."
 & "$Root\gradlew.bat" assembleDebug
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Gradle build failed. Open $Root in Android Studio and use Build > Build APK(s)."
+    Write-Host "Gradle build failed. Keep this PC online so Gradle 9 can download."
+    Write-Host "If Studio asks for SDK Platform 35 or Build-Tools 36, accept it, then Build > Build APK(s)."
     exit $LASTEXITCODE
 }
 

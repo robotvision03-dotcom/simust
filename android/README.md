@@ -14,6 +14,8 @@ Tablet and phone console that uses the same operator UI as `index.html`. Works o
 
 The APK path `app\build\outputs\apk\debug\app-debug.apk` is created only after a successful Gradle build. `adb` working does not mean the APK exists.
 
+If Gradle says only `What went wrong: 25.0.2`, that is Android Studio’s Java 25. Pull this branch again — the project now uses Gradle 9.3.1, which can run on that JDK. The first build downloads a new Gradle zip (keep the PC online).
+
 ### 1. Switch to the Android branch (repo root, not `android\`)
 
 ```powershell

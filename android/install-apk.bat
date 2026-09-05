@@ -21,12 +21,20 @@ if not exist "local.properties" (
 
 echo SDK : %ANDROID_HOME%
 echo Java: %JAVA_HOME%
+if defined JAVA_HOME "%JAVA_HOME%\bin\java.exe" -version
 echo.
+
+echo Stopping old Gradle daemons (Java 25 needs Gradle 9)...
+call "%~dp0gradlew.bat" --stop >nul 2>&1
 
 echo Building debug APK...
 call "%~dp0gradlew.bat" assembleDebug
 if errorlevel 1 (
-  echo Gradle build failed. In Android Studio: File ^> Open this folder, then Build ^> Build APK^(s^).
+  echo.
+  echo Gradle build failed.
+  echo First-time builds download Gradle 9 and the Android plugin; keep this PC online.
+  echo If Android Studio asks to install SDK Platform 35 or Build-Tools 36, accept it.
+  echo Then: File ^> Open this folder, wait for sync, Build ^> Build APK^(s^).
   exit /b 1
 )
 
