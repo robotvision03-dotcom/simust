@@ -3,12 +3,12 @@
 #
 # From a fresh server (you are already root), paste:
 #   apt-get update && apt-get install -y curl
-#   curl -fsSL https://raw.githubusercontent.com/robotvision03-dotcom/simust/cursor/hetzner-public-host-c690/deploy/hetzner-setup.sh -o hetzner-setup.sh
+#   curl -fsSL https://raw.githubusercontent.com/robotvision03-dotcom/simust/cursor/arena-simulation/deploy/hetzner-setup.sh -o hetzner-setup.sh
 #   bash hetzner-setup.sh
 set -euo pipefail
 
 REPO_URL="${SIMUST_REPO_URL:-https://github.com/robotvision03-dotcom/simust.git}"
-REPO_BRANCH="${SIMUST_REPO_BRANCH:-cursor/hetzner-public-host-c690}"
+REPO_BRANCH="${SIMUST_REPO_BRANCH:-cursor/arena-simulation}"
 APP_DIR=/opt/simust
 DOMAIN="${SIMUST_DOMAIN:-my.simust.com}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
