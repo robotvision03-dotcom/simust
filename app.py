@@ -12,7 +12,7 @@ import subprocess
 import multiprocessing
 import urllib.parse
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import uvicorn
 import asyncio
@@ -49,6 +49,7 @@ from simust_security import (
     verify_password,
 )
 import simust_push
+import simust_remote
 
 if PUBLIC_MODE:
     cv2 = None
@@ -912,6 +913,7 @@ async def lifespan(app: FastAPI):
                             logger.warning("Account pull loop: %s", pull_exc)
 
                 threading.Thread(target=_pull_loop, daemon=True, name="simust-pull-users").start()
+                threading.Thread(target=_remote_operator_loop, daemon=True, name="simust-remote-ops").start()
             except Exception as exc:
                 logger.warning("Could not sync accounts/reports on startup: %s", exc)
     yield
@@ -933,6 +935,39 @@ async def root():
     if PUBLIC_MODE:
         return _my_simust_page()
     return FileResponse("index.html")
+
+
+@app.get("/operator", response_class=FileResponse)
+@app.get("/index.html", response_class=FileResponse)
+async def operator_console():
+    """Same operator GUI as the lab index.html, for tablets and the public Android app."""
+    return FileResponse("index.html")
+
+
+@app.get("/app-config")
+async def app_config():
+    levels = []
+    for level_id in ALL_LEVELS:
+        main = get_main_level(level_id)
+        display = PROGRESSION.get(main, {}).get("display", level_id)
+        if level_id != "L00-Foundation":
+            parts = level_id.split("/")
+            if len(parts) >= 3:
+                display += f" {parts[1]} {parts[2]}"
+        levels.append({
+            "id": level_id,
+            "display": display,
+            "exists": True,
+            "video_count": 0,
+            "level_num": ALL_LEVELS.index(level_id) + 1,
+        })
+    return {
+        "public_mode": PUBLIC_MODE,
+        "operator_path": "/operator",
+        "player_path": "/login",
+        "foundation_subdirs": ["SF-30N", "SF-60N", "SF-110N", "SF-180N"],
+        "levels": levels,
+    }
 
 @app.get("/cameras")
 async def get_cameras():
@@ -3115,6 +3150,9 @@ async def ingest_player_data(request: Request):
         raise HTTPException(400, "Invalid JSON")
 
     kind = (data.get("kind") or "session").strip()
+    if kind == "lab_status":
+        simust_remote.set_status(data.get("status") or {})
+        return {"status": "success"}
     users = load_users()
 
     def _merge_account(username: str, account: dict) -> None:
@@ -3272,6 +3310,116 @@ async def export_accounts(request: Request):
             except HTTPException:
                 continue
     return {"status": "success", "accounts": accounts, "reservations": reservations}
+
+
+def _require_operator(request: Request):
+    users = load_users()
+    viewer = current_user(request, users, required=True)
+    role = str(viewer.get("role") or "").strip().lower()
+    if role not in RESERVATION_STAFF_ROLES:
+        raise HTTPException(403, "Operator access requires a coach, manager, or admin account")
+    return viewer
+
+
+@app.post("/remote/command")
+async def remote_command(request: Request):
+    """Tablet / public operator: queue a lab action. The training PC pulls and runs it."""
+    if not PUBLIC_MODE:
+        raise HTTPException(404, "Use the lab APIs on the training machine")
+    viewer = _require_operator(request)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    action = (data.get("action") or data.get("path") or "").strip().lstrip("/")
+    try:
+        item = simust_remote.enqueue(action, data.get("payload") or {}, viewer.get("username") or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"status": "queued", "id": item["id"], "action": item["action"]}
+
+
+@app.get("/remote/status")
+async def remote_status(request: Request):
+    if not PUBLIC_MODE:
+        raise HTTPException(404, "Use the lab APIs on the training machine")
+    _require_operator(request)
+    return simust_remote.get_status()
+
+
+@app.get("/internal/export-remote-commands")
+async def export_remote_commands(request: Request):
+    body = await request.body()
+    try:
+        simust_push.verify_ingest_headers(
+            request.headers.get("x-simust-push-key", ""),
+            request.headers.get("x-simust-ts", ""),
+            request.headers.get("x-simust-sign", ""),
+            body,
+        )
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc))
+    commands = simust_remote.take_pending()
+    return {"status": "success", "commands": commands}
+
+
+def _lab_local_url(path: str) -> str:
+    port = int(os.environ.get("SIMUST_PORT", "8000"))
+    return f"http://127.0.0.1:{port}/{path.lstrip('/')}"
+
+
+def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -> Any:
+    body = json.dumps(payload or {}).encode("utf-8") if method != "GET" else None
+    req = urllib.request.Request(
+        _lab_local_url(path),
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json"} if body is not None else {},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode("utf-8")
+    return json.loads(raw) if raw else {}
+
+
+def _publish_lab_status() -> None:
+    status = {"lab_online": True}
+    try:
+        status["playback-status"] = _lab_local_request("GET", "/playback-status")
+    except Exception:
+        status["playback-status"] = {"state": "unknown"}
+    try:
+        status["realtime-results"] = _lab_local_request("GET", "/realtime-results")
+    except Exception:
+        status["realtime-results"] = {"status": "waiting"}
+    try:
+        status["results"] = _lab_local_request("GET", "/results")
+    except Exception:
+        status["results"] = {}
+    simust_push.push_lab_status(status)
+
+
+def _run_queued_operator_command(command: dict) -> None:
+    action = (command.get("action") or "").strip().lstrip("/")
+    payload = command.get("payload") or {}
+    if action not in simust_remote.ALLOWED_ACTIONS:
+        logger.warning("Skip unknown remote operator action %s", action)
+        return
+    _lab_local_request("POST", f"/{action}", payload)
+    logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
+
+
+def _remote_operator_loop() -> None:
+    while True:
+        time.sleep(2)
+        try:
+            for command in simust_push.pull_remote_commands():
+                try:
+                    _run_queued_operator_command(command)
+                except Exception as exc:
+                    logger.warning("Remote operator command failed: %s", exc)
+            _publish_lab_status()
+        except Exception as exc:
+            logger.warning("Remote operator loop: %s", exc)
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):

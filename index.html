@@ -189,6 +189,11 @@
         }
         @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
         @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
+        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; }
+        html.simust-android .simust-card { min-height: 100dvh; border-radius: 0; max-width: none; }
+        html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn { min-height: 48px; padding: 12px 20px; }
+        html.simust-android .tab-button { min-height: 44px; }
+        html.simust-android .search-input, html.simust-android .login-input { min-height: 46px; font-size: 16px; }
 
         .num-ltr,
         .metric-ring .value,
@@ -273,6 +278,88 @@
     <script>
         // Replace all optional chaining (?.) with safe checks to avoid syntax errors
         const { useState, useEffect, useRef } = React;
+
+        window.SIMUST_PUBLIC = false;
+        window.SIMUST_TOKEN = '';
+        window.SIMUST_APP_CONFIG = { levels: [] };
+        (function bootOperatorBridge() {
+            try {
+                var params = new URLSearchParams(location.search || '');
+                if (params.get('app') === 'android' || /SIMUSTAndroid/i.test(navigator.userAgent || '')) {
+                    document.documentElement.classList.add('simust-android');
+                    if (document.body) document.body.classList.add('simust-android');
+                }
+            } catch (e) {}
+            try {
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', '/app-config', false);
+                xhr.send(null);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    window.SIMUST_APP_CONFIG = JSON.parse(xhr.responseText) || {};
+                    window.SIMUST_PUBLIC = !!window.SIMUST_APP_CONFIG.public_mode;
+                }
+            } catch (e) {}
+            try {
+                var stored = localStorage.getItem('simust-operator-token') || '';
+                if (stored) {
+                    window.SIMUST_TOKEN = stored;
+                    axios.defaults.headers.common.Authorization = 'Bearer ' + stored;
+                }
+            } catch (e) {}
+            var labPost = {
+                'start-realtime-playback': true,
+                'stop-realtime': true,
+                'set-simulation': true,
+                'set-visualization': true,
+                'lab-upsert-player': true,
+                'unlock-level': true,
+                'lock-level': true,
+                'save-session-to-player': true,
+                'sync-live-to-host': true
+            };
+            var labGet = {
+                'playback-status': true,
+                'realtime-results': true,
+                'results': true,
+                'get-levels': true
+            };
+            axios.interceptors.request.use(function(config) {
+                if (window.SIMUST_TOKEN) {
+                    config.headers = config.headers || {};
+                    config.headers.Authorization = 'Bearer ' + window.SIMUST_TOKEN;
+                }
+                if (!window.SIMUST_PUBLIC) return config;
+                var name = String(config.url || '').split('?')[0].replace(/^\//, '');
+                if (name === 'get-levels') {
+                    config.adapter = function() {
+                        return Promise.resolve({
+                            data: { levels: window.SIMUST_APP_CONFIG.levels || [] },
+                            status: 200,
+                            statusText: 'OK',
+                            headers: {},
+                            config: config
+                        });
+                    };
+                    return config;
+                }
+                var method = String(config.method || 'get').toLowerCase();
+                if (method === 'post' && labPost[name]) {
+                    config.url = '/remote/command';
+                    config.data = { action: name, payload: config.data || {} };
+                } else if (method === 'get' && labGet[name]) {
+                    config.url = '/remote/status';
+                    config._simustStatusKey = name;
+                }
+                return config;
+            });
+            axios.interceptors.response.use(function(res) {
+                var key = res.config && res.config._simustStatusKey;
+                if (key && res.data && res.data[key] !== undefined) {
+                    res.data = res.data[key];
+                }
+                return res;
+            });
+        })();
 
         // Helper functions (unchanged)
         const parseScreens = function(screens) {
@@ -1482,13 +1569,17 @@
         // =====================================================================
         function App() {
             // ----- AUTH -----
-            var authState = useState(false);
+            var savedOperator = null;
+            try { savedOperator = JSON.parse(localStorage.getItem('simust-operator-user') || 'null'); } catch (e) { savedOperator = null; }
+            var startLoggedIn = !!(window.SIMUST_PUBLIC && window.SIMUST_TOKEN && savedOperator &&
+                ['coach', 'manager', 'admin'].indexOf(String(savedOperator.role || '').toLowerCase()) !== -1);
+            var authState = useState(startLoggedIn);
             var loggedIn = authState[0];
             var setLoggedIn = authState[1];
-            var userState = useState('');
+            var userState = useState(startLoggedIn ? (savedOperator.username || '') : '');
             var username = userState[0];
             var setUsername = userState[1];
-            var roleState = useState('user');
+            var roleState = useState(startLoggedIn ? (savedOperator.role || 'user') : 'user');
             var role = roleState[0];
             var setRole = roleState[1];
             var loginErrorState = useState('');
@@ -1634,25 +1725,49 @@
             };
 
             // ----- LOGIN -----
+            var finishLocalLogin = function(uname, nextRole) {
+                setLoggedIn(true);
+                setUsername(uname);
+                setRole(nextRole);
+                setLoginError('');
+            };
             var handleLogin = function(uname, pwd) {
-                if (uname === 'simust26' && pwd === 'sina26') {
-                    setLoggedIn(true);
-                    setUsername(uname);
-                    setRole('user');
-                    setLoginError('');
-                    return;
-                } else if (uname === 'admin' && pwd === 'sina27') {
-                    setLoggedIn(true);
-                    setUsername(uname);
-                    setRole('admin');
-                    setLoginError('');
-                    return;
-                } else {
+                axios.post('/login', { username: uname, password: pwd }).then(function(res) {
+                    var data = res.data || {};
+                    var nextRole = String(data.role || 'player').toLowerCase();
+                    if (window.SIMUST_PUBLIC && ['coach', 'manager', 'admin'].indexOf(nextRole) === -1) {
+                        setLoginError('This console is for coach, manager, or admin. Players use My SIMUST.');
+                        return;
+                    }
+                    if (data.token) {
+                        window.SIMUST_TOKEN = data.token;
+                        axios.defaults.headers.common.Authorization = 'Bearer ' + data.token;
+                        try {
+                            localStorage.setItem('simust-operator-token', data.token);
+                            localStorage.setItem('simust-operator-user', JSON.stringify(data));
+                        } catch (e) {}
+                    }
+                    finishLocalLogin(data.username || uname, nextRole);
+                }).catch(function() {
+                    if (!window.SIMUST_PUBLIC && uname === 'simust26' && pwd === 'sina26') {
+                        finishLocalLogin(uname, 'user');
+                        return;
+                    }
+                    if (!window.SIMUST_PUBLIC && uname === 'admin' && pwd === 'sina27') {
+                        finishLocalLogin(uname, 'admin');
+                        return;
+                    }
                     setLoginError(t('invalidLogin'));
-                }
+                });
             };
 
             var handleLogout = function() {
+                window.SIMUST_TOKEN = '';
+                try {
+                    delete axios.defaults.headers.common.Authorization;
+                    localStorage.removeItem('simust-operator-token');
+                    localStorage.removeItem('simust-operator-user');
+                } catch (e) {}
                 setLoggedIn(false);
                 setUsername('');
                 setRole('user');

@@ -16,6 +16,17 @@ Realtime Play running (~5s)       live_{player} session snapshot
 Realtime ends / save session      final session JSON + progress
 lab calendar book / cancel        reservations.json
 lab register / profile / unlock   updated account
+every ~2 seconds                  pull tablet /operator commands
+                                  push playback + live results
+
+
+Android / tablet
+----------------
+Install the SIMUST APK. Default mode is Public operator:
+http://157.180.47.98/operator  (same index.html console)
+
+Sign in as coach / manager / admin. Realtime Play is queued on the
+VPS and run by the lab PC. Player mode opens /login.
 
 
 PULL  (lab <-- VPS)   GET /internal/export-accounts

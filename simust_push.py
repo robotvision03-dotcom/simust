@@ -305,6 +305,14 @@ def export_accounts_url() -> str:
     return PUSH_URL.rsplit("/", 1)[0] + "/export-accounts"
 
 
+def export_remote_commands_url() -> str:
+    if not PUSH_URL:
+        return ""
+    if PUSH_URL.rstrip("/").endswith("/internal/ingest-player-data"):
+        return PUSH_URL.replace("/internal/ingest-player-data", "/internal/export-remote-commands")
+    return PUSH_URL.rsplit("/", 1)[0] + "/export-remote-commands"
+
+
 def pull_remote_accounts() -> Dict[str, Any]:
     """Lab PC: download accounts registered on My SIMUST."""
     url = export_accounts_url()
@@ -509,3 +517,33 @@ def push_live_session(player_id: str, session_report: Dict[str, Any], user: Opti
         "file": f"{session['id']}.json",
     }
     push_session(player_id, live, user, index_entry)
+
+
+def pull_remote_commands() -> list:
+    url = export_remote_commands_url()
+    if not url or not PUSH_KEY:
+        return []
+    ts = str(int(time.time()))
+    body = b""
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "X-SIMUST-PUSH-KEY": PUSH_KEY,
+            "X-SIMUST-TS": ts,
+            "X-SIMUST-SIGN": _sign(body, ts),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    commands = data.get("commands") if isinstance(data, dict) else None
+    return commands if isinstance(commands, list) else []
+
+
+def push_lab_status(status: Dict[str, Any]) -> None:
+    if not push_configured():
+        return
+    try:
+        _post({"kind": "lab_status", "status": status or {}})
+    except Exception as exc:
+        logger.warning("Lab status push failed: %s", exc)

@@ -183,6 +183,8 @@ def can_access_player(viewer: Optional[Dict[str, Any]], player_id: str, player_m
         return bool(viewer.get("team")) and meta.get("team") == viewer.get("team")
     if role == "manager":
         return bool(viewer.get("club")) and meta.get("club") == viewer.get("club")
+    if role == "admin":
+        return True
     return False
 
 

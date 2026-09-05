@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -41,6 +42,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.retryButton).setOnClickListener { loadGui() }
         findViewById<Button>(R.id.openSettingsButton).setOnClickListener { openSettings() }
 
+        val cookies = CookieManager.getInstance()
+        cookies.setAcceptCookie(true)
+        cookies.setAcceptThirdPartyCookies(webView, true)
+
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
@@ -54,6 +59,7 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowContentAccess = true
         settings.allowFileAccess = false
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.0"
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -63,6 +69,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.visibility = View.GONE
+                CookieManager.getInstance().flush()
             }
 
             override fun onReceivedError(
@@ -74,7 +81,7 @@ class MainActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
                     findViewById<TextView>(R.id.errorText).text =
-                        getString(R.string.load_error) + "\n" + Prefs.getServerUrl(this@MainActivity)
+                        getString(R.string.load_error) + "\n" + Prefs.getLaunchUrl(this@MainActivity)
                 }
             }
 
@@ -108,10 +115,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         webView.onResume()
-        val url = Prefs.getServerUrl(this)
+        val url = Prefs.getLaunchUrl(this)
         if (url != lastUrl) {
             loadGui()
         }
+        titleForMode()
     }
 
     override fun onPause() {
@@ -124,9 +132,26 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        val mode = Prefs.getMode(this)
+        menu.findItem(R.id.action_operator)?.isChecked = mode == Prefs.MODE_OPERATOR
+        menu.findItem(R.id.action_player)?.isChecked = mode == Prefs.MODE_PLAYER
+        return super.onPrepareOptionsMenu(menu)
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_reload -> {
+                loadGui()
+                true
+            }
+            R.id.action_operator -> {
+                Prefs.setMode(this, Prefs.MODE_OPERATOR)
+                loadGui()
+                true
+            }
+            R.id.action_player -> {
+                Prefs.setMode(this, Prefs.MODE_PLAYER)
                 loadGui()
                 true
             }
@@ -142,10 +167,20 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
+    private fun titleForMode() {
+        supportActionBar?.title = when (Prefs.getMode(this)) {
+            Prefs.MODE_PLAYER -> getString(R.string.title_player)
+            Prefs.MODE_LAB -> getString(R.string.title_lab)
+            else -> getString(R.string.title_operator)
+        }
+    }
+
     private fun loadGui() {
         errorPanel.visibility = View.GONE
-        val url = Prefs.getServerUrl(this)
+        val url = Prefs.getLaunchUrl(this)
         lastUrl = url
+        titleForMode()
+        invalidateOptionsMenu()
         webView.loadUrl(url)
     }
 }

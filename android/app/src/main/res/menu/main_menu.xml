@@ -2,9 +2,19 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/action_operator"
+        android:checkable="true"
+        android:title="@string/open_operator"
+        app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_player"
+        android:checkable="true"
+        android:title="@string/open_player"
+        app:showAsAction="ifRoom" />
+    <item
         android:id="@+id/action_reload"
         android:title="@string/reload"
-        app:showAsAction="ifRoom" />
+        app:showAsAction="never" />
     <item
         android:id="@+id/action_settings"
         android:title="@string/settings"

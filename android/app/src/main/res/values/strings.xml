@@ -1,12 +1,23 @@
 <resources>
-    <string name="app_name">SIMUST Analyzer</string>
-    <string name="settings_title">Server</string>
-    <string name="server_url_hint">http://192.168.1.10:8000</string>
-    <string name="server_url_label">SIMUST server URL</string>
-    <string name="save">Save and open GUI</string>
+    <string name="app_name">SIMUST</string>
+    <string name="title_operator">SIMUST Operator</string>
+    <string name="title_player">My SIMUST</string>
+    <string name="title_lab">SIMUST Lab</string>
+    <string name="settings_title">Connection</string>
+    <string name="mode_label">What this tablet controls</string>
+    <string name="mode_operator">Public operator — same controls as index.html</string>
+    <string name="mode_player">Public player — My SIMUST login</string>
+    <string name="mode_lab">Lab PC on this Wi‑Fi</string>
+    <string name="public_host_label">Public SIMUST host</string>
+    <string name="public_host_hint">http://157.180.47.98</string>
+    <string name="lab_host_label">Lab PC address</string>
+    <string name="lab_host_hint">http://192.168.1.10:8000</string>
+    <string name="save">Save and open</string>
     <string name="reload">Reload</string>
-    <string name="settings">Server settings</string>
-    <string name="help_text">Run app.py on the PC (listens on port 8000). Phone and PC must be on the same Wi‑Fi. Use the PC LAN IP, for example http://192.168.1.10:8000. Android emulator: http://10.0.2.2:8000</string>
-    <string name="load_error">Could not load the SIMUST GUI. Check the server URL and that app.py is running.</string>
+    <string name="settings">Connection</string>
+    <string name="open_operator">Operator</string>
+    <string name="open_player">Player</string>
+    <string name="help_text">Operator mode uses the same index.html console as the training PC. Sign in with a coach, manager, or admin account. Realtime Play is sent to the Netherlands lab through the public host. Player mode opens My SIMUST. Lab mode talks to app.py on the same Wi‑Fi.</string>
+    <string name="load_error">Could not load the SIMUST console. Check the connection settings and that the public host or lab app.py is running.</string>
     <string name="retry">Retry</string>
 </resources>
