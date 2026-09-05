@@ -269,6 +269,8 @@ def _public_reservation(item: dict) -> dict:
     }
     if item.get("payment_status"):
         public["payment_status"] = item.get("payment_status")
+    if item.get("source"):
+        public["source"] = item.get("source")
     return public
 
 
@@ -485,6 +487,72 @@ def get_level_thresholds(level_id: str) -> Tuple[float, float]:
     if config:
         return config["threshold_acc"], config["threshold_ae"]
     return 0, 0
+
+
+def apply_session_progress(users: dict, player_id: str, level_played: str, subdirectory: str, statistics: dict) -> bool:
+    """Update unlocks from a finished session. Returns True if users should be saved."""
+    if not player_id or player_id not in users:
+        return False
+    if level_played not in ALL_LEVELS:
+        return False
+    correct = statistics.get("correct", 0) or 0
+    late = statistics.get("late", 0) or 0
+    total = correct + late + (statistics.get("wrong", 0) or 0) + (statistics.get("miss", 0) or 0)
+    aac = (correct + late) / total * 100 if total > 0 else 0.0
+    ae = float(statistics.get("avg_ae", 0.0) or 0.0)
+    progress = users[player_id].setdefault("progress", {
+        "current_level": "L00-Foundation",
+        "unlocked_levels": ["L00-Foundation"],
+        "completed_levels": [],
+        "challenge_results": {},
+    })
+    unlocked_levels = progress.setdefault("unlocked_levels", ["L00-Foundation"])
+    completed_levels = progress.setdefault("completed_levels", [])
+    challenge_results = progress.setdefault("challenge_results", {})
+    if level_played not in unlocked_levels or level_played in completed_levels:
+        return False
+    th_acc, th_ae = get_level_thresholds(level_played)
+    passed = False
+    if level_played == "L00-Foundation":
+        if subdirectory == "SF-180N":
+            passed = aac >= th_acc and ae >= th_ae
+    else:
+        passed = aac >= th_acc and ae >= th_ae
+    result = {
+        "aac": round(aac, 1),
+        "ae": round(ae, 1),
+        "passed": passed,
+        "subdirectory": subdirectory or "",
+    }
+    if passed:
+        completed_levels.append(level_played)
+        challenge_results[level_played] = result
+        next_level = get_next_level(level_played)
+        if next_level and next_level not in unlocked_levels:
+            unlocked_levels.append(next_level)
+            progress["current_level"] = next_level
+        progress["completed_levels"] = completed_levels
+        progress["unlocked_levels"] = unlocked_levels
+        progress["challenge_results"] = challenge_results
+        users[player_id]["progress"] = progress
+        return True
+    challenge_results[level_played] = result
+    progress["challenge_results"] = challenge_results
+    users[player_id]["progress"] = progress
+    return True
+
+
+def drop_live_snapshot(player_id: str, index: list) -> list:
+    """Remove the in-progress live_{player} file so a finished test is the latest result."""
+    live_id = f"live_{player_id}"
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+    live_path = os.path.join(player_dir, f"{live_id}.json")
+    if os.path.isfile(live_path):
+        try:
+            os.remove(live_path)
+        except OSError:
+            pass
+    return [row for row in (index or []) if row.get("session_id") != live_id]
 
 # Force TCP for RTSP (more reliable than UDP)
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
@@ -829,13 +897,17 @@ async def lifespan(app: FastAPI):
                 users = load_users()
                 simust_push.push_accounts_async(users)
                 simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
-                simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+                simust_push.pull_and_merge_accounts(
+                    load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
+                )
 
                 def _pull_loop():
                     while True:
                         time.sleep(15)
                         try:
-                            simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+                            simust_push.pull_and_merge_accounts(
+                                load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
+                            )
                         except Exception as pull_exc:
                             logger.warning("Account pull loop: %s", pull_exc)
 
@@ -1247,6 +1319,7 @@ async def sync_live_to_host(req: Request):
             "timestamp": datetime.now().isoformat(),
             "level": data.get("level") or "live",
             "subdirectory": data.get("subdirectory") or "",
+            "simulation": bool(data.get("simulation") or data.get("simulation_enabled")),
             "live": True,
         },
         "statistics": stats,
@@ -2462,15 +2535,16 @@ async def save_session_to_player(req: Request):
                 "image": image
             },
             "session": {
-                "id": session_id,
-                "timestamp": datetime.now().isoformat(),
-                "level": level_played,
-                "subdirectory": subdirectory,
-                "total_duration_minutes": session_data.get("total_duration_minutes", 0),
-                "video_count": session_data.get("video_count", 0),
-                "directory": directory,
-                "original_report_path": session_data.get("report_path", "")
-            },
+            "id": session_id,
+            "timestamp": datetime.now().isoformat(),
+            "level": level_played,
+            "subdirectory": subdirectory,
+            "simulation": bool(session_data.get("simulation") or session_data.get("simulation_enabled")),
+            "total_duration_minutes": session_data.get("total_duration_minutes", 0),
+            "video_count": session_data.get("video_count", 0),
+            "directory": directory,
+            "original_report_path": session_data.get("report_path", "")
+        },
             "statistics": statistics,
             "goals_by_screen": session_data.get("goals_by_screen", {}),
             "actions": actions,
@@ -2513,77 +2587,16 @@ async def save_session_to_player(req: Request):
         except Exception as push_exc:
             logger.warning("Host push could not start: %s", push_exc)
 
-        # ============================================================
-        # PROGRESSION EVALUATION (UPDATED for Foundation subdirectory)
-        # ============================================================
-        # Compute AAC and AE from the session data
-        correct = statistics.get("correct", 0)
-        late = statistics.get("late", 0)
-        total = correct + late + statistics.get("wrong", 0) + statistics.get("miss", 0)
-        aac = (correct + late) / total * 100 if total > 0 else 0.0
-        ae = statistics.get("avg_ae", 0.0)
-
-        if level_played in ALL_LEVELS:
-            if player_id in users:
-                progress = users[player_id].get("progress", {})
-                unlocked_levels = progress.get("unlocked_levels", [])
-                completed_levels = progress.get("completed_levels", [])
-                challenge_results = progress.get("challenge_results", {})
-
-                # Check if this level is unlocked and not yet completed
-                if level_played in unlocked_levels and level_played not in completed_levels:
-                    main = get_main_level(level_played)
-                    th_acc, th_ae = get_level_thresholds(level_played)
-
-                    # ----- SPECIAL HANDLING FOR FOUNDATION -----
-                    passed = False
-                    if level_played == "L00-Foundation":
-                        # Only unlock if subdirectory is exactly "SF-180N" AND thresholds are met
-                        if subdirectory == "SF-180N":
-                            if aac >= th_acc and ae >= th_ae:
-                                passed = True
-                                logger.info(f"Foundation SF-180N passed: AAC={aac:.1f}%, AE={ae:.1f}%")
-                            else:
-                                logger.info(f"Foundation SF-180N failed: AAC={aac:.1f}%, AE={ae:.1f}% (need ≥{th_acc}% ACC and ≥{th_ae}% AE)")
-                        else:
-                            logger.info(f"Foundation subdirectory '{subdirectory}' does not unlock Entry.")
-                    else:
-                        # Normal progression for other levels
-                        passed = (aac >= th_acc and ae >= th_ae)
-
-                    if passed:
-                        completed_levels.append(level_played)
-                        challenge_results[level_played] = {"aac": aac, "ae": ae, "passed": True}
-
-                        # Find the next level to unlock
-                        next_level = get_next_level(level_played)
-                        if next_level and next_level not in unlocked_levels:
-                            unlocked_levels.append(next_level)
-                            progress["current_level"] = next_level
-                            logger.info(f"Unlocked next level for {player_id}: {next_level}")
-                        else:
-                            logger.info(f"Next level {next_level} already unlocked or none.")
-
-                        # Update progress
-                        progress["completed_levels"] = completed_levels
-                        progress["unlocked_levels"] = unlocked_levels
-                        progress["challenge_results"] = challenge_results
-                        users[player_id]["progress"] = progress
-                        save_users(users)
-                        logger.info(f"Progress updated for {player_id}: completed {level_played}")
-                    else:
-                        # Not passed, store the result but don't unlock
-                        challenge_results[level_played] = {"aac": aac, "ae": ae, "passed": False}
-                        progress["challenge_results"] = challenge_results
-                        users[player_id]["progress"] = progress
-                        save_users(users)
-                        logger.info(f"Player {player_id} did not pass {level_played}: AAC={aac:.1f}, AE={ae:.1f}")
-                else:
-                    logger.info(f"Level {level_played} already completed or not unlocked for {player_id}")
-            else:
-                logger.warning(f"Player {player_id} not found in users, progress not updated")
-        else:
-            logger.warning(f"Level {level_played} is not in the progression system")
+        if apply_session_progress(users, player_id, level_played, subdirectory, statistics):
+            save_users(users)
+            result = (users.get(player_id) or {}).get("progress", {}).get("challenge_results", {}).get(level_played) or {}
+            logger.info(
+                "Progress updated for %s on %s [%s]: %s",
+                player_id,
+                level_played,
+                subdirectory or "-",
+                result,
+            )
 
         return {"status": "success", "session_id": session_id, "file_path": session_file}
     except Exception as e:
@@ -2917,7 +2930,9 @@ async def get_players(request: Request):
     """Return players visible to the caller. Public host: own record only for players."""
     if not PUBLIC_MODE:
         try:
-            simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+            simust_push.pull_and_merge_accounts(
+                load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
+            )
         except Exception as exc:
             logger.warning("Could not pull My SIMUST registrations: %s", exc)
     users = load_users()
@@ -3135,10 +3150,27 @@ async def ingest_player_data(request: Request):
         logger.info("Ingested %s lab accounts", imported)
         return {"status": "success", "accounts": imported}
 
+    if kind == "reservations":
+        remote_res = data.get("reservations") or []
+        added = 0
+        with RESERVATION_LOCK:
+            local = load_reservations()
+            added = simust_push.merge_remote_reservations(
+                local,
+                remote_res,
+                prune_source="lab",
+                deleted_ids=data.get("deleted_ids") or [],
+            )
+            save_reservations(local)
+        logger.info("Ingested reservation sync from lab (added %s)", added)
+        return {"status": "success", "added": added}
+
     def _store_session(player_id: str, session_report: dict, index_entry: dict) -> Optional[str]:
         session_report = simust_push.sanitize_session(session_report or {})
         has_actions = bool(session_report.get("actions") or session_report.get("statistics"))
-        session_id = (session_report.get("session") or {}).get("id")
+        session_meta = session_report.get("session") or {}
+        session_id = session_meta.get("id")
+        live = bool(session_meta.get("live") or str(session_id or "").startswith("live_"))
         if not session_id and not has_actions:
             return None
         session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3156,17 +3188,32 @@ async def ingest_player_data(request: Request):
                 except Exception:
                     index = []
         index = [row for row in index if row.get("session_id") != session_id]
+        if not live:
+            index = drop_live_snapshot(player_id, index)
         if not index_entry:
             index_entry = {
                 "session_id": session_id,
-                "timestamp": (session_report.get("session") or {}).get("timestamp", ""),
-                "level": (session_report.get("session") or {}).get("level", ""),
+                "timestamp": session_meta.get("timestamp", ""),
+                "level": session_meta.get("level", ""),
+                "subdirectory": session_meta.get("subdirectory", ""),
             }
         index_entry["file"] = f"{session_id}.json"
+        if live:
+            index_entry["live"] = True
+        if session_meta.get("subdirectory"):
+            index_entry["subdirectory"] = session_meta.get("subdirectory")
         index.append(index_entry)
         index.sort(key=lambda row: row.get("timestamp", ""), reverse=True)
         with open(index_file, "w", encoding="utf-8") as f:
             json.dump(index, f, indent=2, ensure_ascii=False)
+        if not live:
+            apply_session_progress(
+                users,
+                player_id,
+                session_meta.get("level") or "",
+                session_meta.get("subdirectory") or "",
+                session_report.get("statistics") or {},
+            )
         return session_id
 
     if kind == "reports":
@@ -3217,7 +3264,14 @@ async def export_accounts(request: Request):
     for username, user in users.items():
         if simust_push.PLAYER_ID_RE.match(username or ""):
             accounts[username] = simust_push.public_account_payload(username, user or {})
-    return {"status": "success", "accounts": accounts}
+    reservations = []
+    with RESERVATION_LOCK:
+        for item in load_reservations():
+            try:
+                reservations.append(_public_reservation(item))
+            except HTTPException:
+                continue
+    return {"status": "success", "accounts": accounts, "reservations": reservations}
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
@@ -3594,6 +3648,11 @@ async def create_reservation(req: Request):
     duration = _validate_reservation_window(start, end)
 
     users = load_users()
+    if PUBLIC_MODE:
+        viewer = current_user(req, users, required=True)
+        staff = str(viewer.get("role") or "").strip().lower() in RESERVATION_STAFF_ROLES
+        if viewer["username"] != username and not staff:
+            raise HTTPException(403, "You can only reserve a slot for your own account")
     user = users.get(username)
     if not user:
         raise HTTPException(404, "Player not found")
@@ -3619,6 +3678,7 @@ async def create_reservation(req: Request):
             "end": end.isoformat(timespec="seconds"),
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "payment_status": payment_status,
+            "source": "public" if PUBLIC_MODE else "lab",
         }
         bookings.append(created)
         save_reservations(bookings)
@@ -3635,11 +3695,17 @@ async def create_reservation(req: Request):
     ).start()
     public = _public_reservation(created)
     public["duration_minutes"] = duration
+    if not PUBLIC_MODE:
+        try:
+            simust_push.push_reservations_async(load_reservations())
+        except Exception:
+            logger.exception("Could not push reservations to host")
     return public
 
 
 @app.delete("/reservations/{id}")
 async def delete_reservation(id: str, request: Request):
+    users = load_users()
     username = request.query_params.get("username", "").strip()
     try:
         body = await request.json()
@@ -3647,14 +3713,17 @@ async def delete_reservation(id: str, request: Request):
             username = username or (body.get("username") or body.get("player_id") or "").strip()
     except Exception:
         pass
-    if not username:
-        raise HTTPException(400, "username is required")
-
-    users = load_users()
-    actor = users.get(username)
-    if not actor:
-        raise HTTPException(404, "User not found")
-    staff = str(actor.get("role", "")).strip().lower() in RESERVATION_STAFF_ROLES
+    if PUBLIC_MODE:
+        viewer = current_user(request, users, required=True)
+        username = viewer["username"]
+        staff = str(viewer.get("role") or "").strip().lower() in RESERVATION_STAFF_ROLES
+    else:
+        if not username:
+            raise HTTPException(400, "username is required")
+        actor = users.get(username)
+        if not actor:
+            raise HTTPException(404, "User not found")
+        staff = str(actor.get("role", "")).strip().lower() in RESERVATION_STAFF_ROLES
 
     with RESERVATION_LOCK:
         bookings = load_reservations()
@@ -3672,6 +3741,11 @@ async def delete_reservation(id: str, request: Request):
             raise HTTPException(403, "You can only cancel your own reservation")
         save_reservations(remaining)
 
+    if not PUBLIC_MODE:
+        try:
+            simust_push.push_reservations_async(remaining, deleted_ids=[id])
+        except Exception:
+            logger.exception("Could not push reservation cancel to host")
     return {"status": "success", "id": id}
 
 

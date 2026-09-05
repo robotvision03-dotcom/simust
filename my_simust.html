@@ -5261,6 +5261,48 @@
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
+            function isLiveSession(session) {
+                var meta = (session && session.session) || {};
+                return !!(meta.live || String(meta.id || '').indexOf('live_') === 0);
+            }
+
+            function splitLiveSessions(sessions) {
+                var live = [];
+                var completed = [];
+                (sessions || []).forEach(function(s) {
+                    if (isLiveSession(s)) live.push(s);
+                    else completed.push(s);
+                });
+                return { live: live, completed: completed };
+            }
+
+            function sessionLevelLabel(session) {
+                var meta = (session && session.session) || {};
+                var level = String(meta.level || '');
+                var sub = String(meta.subdirectory || '');
+                var name = level;
+                if (level.indexOf('Foundation') !== -1 || level === 'L00-Foundation') name = 'Foundation';
+                else if (level.indexOf('L01-Entry') === 0) name = 'Entry';
+                else if (level.indexOf('L02-Activated') === 0) name = 'Activated';
+                else if (level.indexOf('L03-HighPerformance') === 0) name = 'High Performance';
+                else if (level.indexOf('L04-Elite') === 0) name = 'Elite';
+                else if (level.indexOf('L05-WorldClass') === 0) name = 'World Class';
+                if (sub) name += ' · ' + sub;
+                if (meta.simulation) name += ' · Simulator';
+                return name;
+            }
+
+            function progressLevelLabel(progress) {
+                var raw = (progress && progress.current_level) || 'L00-Foundation';
+                if (raw.indexOf('L00-Foundation') === 0) return 'Foundation';
+                if (raw.indexOf('L01-Entry') === 0) return 'Entry';
+                if (raw.indexOf('L02-Activated') === 0) return 'Activated';
+                if (raw.indexOf('L03-HighPerformance') === 0) return 'High Performance';
+                if (raw.indexOf('L04-Elite') === 0) return 'Elite';
+                if (raw.indexOf('L05-WorldClass') === 0) return 'World-Class';
+                return raw;
+            }
+
             // ----- Helper: compute session metrics (unchanged) -----
             function computeSessionMetrics(session) {
                 var stats = session.statistics || {};
@@ -5269,7 +5311,7 @@
                 var late = stats.late || 0;
                 var wrong = stats.wrong || 0;
                 var miss = stats.miss || 0;
-                var total = actions.length || 0;
+                var total = correct + late + wrong + miss || actions.length || 0;
                 var avgFinishingTime = stats.avg_finishing_time || 0;
                 var totalDistance = stats.total_distance || 0;
                 var avgAe = stats.avg_ae || 0;
@@ -5345,9 +5387,17 @@
                 playerNameDisplay.textContent = fullName;
                 document.getElementById('player-greeting').innerHTML =
                     'Good Day<br><em id="player-name-display">' + fullName + '</em>';
+                var split = splitLiveSessions(sessions);
+                var liveSession = split.live.sort(function(a, b) {
+                    var da = new Date(a.session && a.session.timestamp || a.timestamp || 0);
+                    var db = new Date(b.session && b.session.timestamp || b.timestamp || 0);
+                    return db - da;
+                })[0] || null;
+                sessions = split.completed;
                 playerSummaryText.textContent = sessions.length > 0 ?
                     'You have completed ' + sessions.length + ' sessions. Your development is tracked against your own baseline.' :
-                    'No sessions recorded yet. Start training to see your progress.';
+                    (liveSession ? 'A live test is in progress. Results will lock in when the session is saved.' :
+                    'No sessions recorded yet. Start training to see your progress.');
 
                 var latestSession = null;
                 var previousSession = null;
@@ -5381,11 +5431,22 @@
                     sessionsData = [];
                     trendPage = 0;
                 }
-                latestSessionDate.textContent = sessions.length > 0 ? 'Session on ' + latestDate : 'No sessions yet';
-                latestSessionSub.textContent = sessions.length > 1 ?
+                if (liveSession) {
+                    previousSession = latestSession;
+                    previousDate = latestDate;
+                    latestSession = liveSession;
+                    var ld = new Date(liveSession.session && liveSession.session.timestamp || liveSession.timestamp);
+                    latestDate = isNaN(ld.getTime()) ? 'Live' : ld.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+                }
+                latestSessionDate.textContent = liveSession
+                    ? ('Live now · ' + sessionLevelLabel(liveSession))
+                    : (sessions.length > 0 ? ('Session on ' + latestDate + ' · ' + sessionLevelLabel(latestSession)) : 'No sessions yet');
+                latestSessionSub.textContent = liveSession
+                    ? 'Updating from the training machine. Finished results replace this when the test is saved.'
+                    : (sessions.length > 1 ?
                     'Comparing with previous session (' + previousDate + ')' :
                     sessions.length === 1 ? 'Only one session available – no trend arrow shown.' :
-                    'Start training to see improvement.';
+                    'Start training to see improvement.');
 
                 function getArrow(current, previous, higherIsBetter) {
                     if (previous === undefined || previous === null || current === undefined || current === null)
@@ -5870,7 +5931,7 @@
                     registerError.textContent = t('invalidPhone');
                     return;
                 }
-                if (password.length < 4) {
+                if (password.length < 8) {
                     registerError.textContent = t('passwordMin');
                     return;
                 }
@@ -6067,7 +6128,7 @@
                         var resp = await fetch(API_BASE + '/get-player-reports/' + p.id, { headers: apiHeaders() });
                         if (resp.ok) {
                             var data = await resp.json();
-                            sessions = data.sessions || [];
+                            sessions = (data.sessions || []).filter(function(s) { return !isLiveSession(s); });
                             totalSess += sessions.length;
 
                             sessions.sort(function(a, b) {
@@ -6079,11 +6140,7 @@
                             if (sessions.length > 0) {
                                 var latest = sessions[0];
                                 latestAe = latest.statistics && latest.statistics.avg_ae || 0;
-                                if (latestAe >= 80) level = 'World-Class';
-                                else if (latestAe >= 65) level = 'Elite';
-                                else if (latestAe >= 50) level = 'High Performance';
-                                else if (latestAe >= 35) level = 'Activated';
-                                else level = 'Entry';
+                                level = progressLevelLabel(p.progress);
 
                                 var avgPrev = null;
                                 if (sessions.length >= 2) {
@@ -6113,16 +6170,16 @@
                                 else priority = 'Low';
                                 if (trend.includes('Declining') && latestAe < 60) priority = 'High';
                             } else {
-                                level = 'Entry';
+                                level = progressLevelLabel(p.progress);
                                 priority = 'New';
                                 trend = '—';
                             }
                         } else {
-                            level = 'Entry';
+                            level = progressLevelLabel(p.progress);
                             priority = 'New';
                         }
                     } catch (e) {
-                        level = 'Entry';
+                        level = progressLevelLabel(p.progress);
                         priority = 'New';
                     }
 

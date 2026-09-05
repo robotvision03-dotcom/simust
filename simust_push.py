@@ -327,6 +327,51 @@ def pull_remote_accounts() -> Dict[str, Any]:
     return accounts if isinstance(accounts, dict) else {}
 
 
+def pull_remote_state() -> Dict[str, Any]:
+    url = export_accounts_url()
+    if not url or not PUSH_KEY:
+        return {}
+    ts = str(int(time.time()))
+    body = b""
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "X-SIMUST-PUSH-KEY": PUSH_KEY,
+            "X-SIMUST-TS": ts,
+            "X-SIMUST-SIGN": _sign(body, ts),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def merge_remote_reservations(local: list, remote: list, prune_source: str = "", deleted_ids=None) -> int:
+    """Union reservations by id. Optionally drop cancelled ids or stale rows from one source."""
+    if local is None:
+        local = []
+    deleted = {item for item in (deleted_ids or []) if item}
+    if deleted:
+        kept = [item for item in local if item.get("id") not in deleted]
+        local[:] = kept
+    if prune_source:
+        remote_ids = {item.get("id") for item in (remote or []) if item.get("id")}
+        local[:] = [
+            item for item in local
+            if (item.get("source") or "") != prune_source or item.get("id") in remote_ids
+        ]
+    by_id = {item.get("id"): item for item in local if item.get("id")}
+    added = 0
+    for item in remote or []:
+        rid = (item or {}).get("id")
+        if not rid or rid in deleted or rid in by_id:
+            continue
+        local.append(item)
+        added += 1
+    return added
+
+
 def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list:
     """Add VPS-only users to the lab list. Does not overwrite existing lab passwords."""
     added = []
@@ -366,7 +411,13 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
     return added
 
 
-def pull_and_merge_accounts(load_users_fn, save_users_fn, reports_dir: str = "") -> list:
+def pull_and_merge_accounts(
+    load_users_fn,
+    save_users_fn,
+    reports_dir: str = "",
+    load_reservations_fn=None,
+    save_reservations_fn=None,
+) -> list:
     global _users_pull_at
     now = time.time()
     with _users_pull_lock:
@@ -376,29 +427,58 @@ def pull_and_merge_accounts(load_users_fn, save_users_fn, reports_dir: str = "")
     if not push_configured():
         return []
     try:
-        remote = pull_remote_accounts()
+        remote = pull_remote_state()
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, OSError, json.JSONDecodeError) as exc:
         logger.warning("Could not pull My SIMUST accounts: %s", exc)
         return []
-    if not remote:
-        return []
-    local = load_users_fn()
-    added = merge_remote_accounts(local, remote)
-    if added:
-        save_users_fn(local)
-        if reports_dir:
-            for username in added:
-                try:
-                    folder = os.path.join(reports_dir, username)
-                    os.makedirs(folder, exist_ok=True)
-                    index_path = os.path.join(folder, "index.json")
-                    if not os.path.isfile(index_path):
-                        with open(index_path, "w", encoding="utf-8") as f:
-                            json.dump([], f)
-                except OSError:
-                    pass
-        logger.info("Imported %s My SIMUST account(s) into the lab: %s", len(added), ", ".join(added))
+    remote_accounts = remote.get("accounts") if isinstance(remote.get("accounts"), dict) else {}
+    added = []
+    if remote_accounts:
+        local = load_users_fn()
+        added = merge_remote_accounts(local, remote_accounts)
+        if added:
+            save_users_fn(local)
+            if reports_dir:
+                for username in added:
+                    try:
+                        folder = os.path.join(reports_dir, username)
+                        os.makedirs(folder, exist_ok=True)
+                        index_path = os.path.join(folder, "index.json")
+                        if not os.path.isfile(index_path):
+                            with open(index_path, "w", encoding="utf-8") as f:
+                                json.dump([], f)
+                    except OSError:
+                        pass
+            logger.info("Imported %s My SIMUST account(s) into the lab: %s", len(added), ", ".join(added))
+    if load_reservations_fn and save_reservations_fn:
+        remote_res = remote.get("reservations")
+        if isinstance(remote_res, list) and remote_res:
+            local_res = load_reservations_fn() or []
+            added_res = merge_remote_reservations(local_res, remote_res, prune_source="public")
+            save_reservations_fn(local_res)
+            if added_res:
+                logger.info("Imported %s reservation(s) from My SIMUST", added_res)
     return added
+
+
+def push_reservations(items: list, deleted_ids=None) -> None:
+    if not push_configured():
+        return
+    payload = {"kind": "reservations", "reservations": items or [], "deleted_ids": list(deleted_ids or [])}
+    try:
+        _post(payload)
+    except Exception as exc:
+        logger.warning("Reservation push failed: %s", exc)
+        enqueue(payload)
+
+
+def push_reservations_async(items: list, deleted_ids=None) -> None:
+    threading.Thread(
+        target=push_reservations,
+        args=(items, deleted_ids),
+        daemon=True,
+        name="simust-push-res",
+    ).start()
 
 
 def push_reports_async(reports_dir: str, users: Optional[Dict[str, Any]] = None) -> None:

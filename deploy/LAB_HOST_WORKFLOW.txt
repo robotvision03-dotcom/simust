@@ -14,13 +14,14 @@ app.py starts                     all accounts (hashed passwords)
                                   all simust_reports/*.json
 Realtime Play running (~5s)       live_{player} session snapshot
 Realtime ends / save session      final session JSON + progress
+lab calendar book / cancel        reservations.json
 lab register / profile / unlock   updated account
 
 
 PULL  (lab <-- VPS)   GET /internal/export-accounts
 ------------------------------------------------------
 When                              What
-app.py starts                     new My SIMUST registrations
+app.py starts                     new My SIMUST registrations + calendar bookings
 every ~15 seconds                 same
 index.html search /get-players    same
 

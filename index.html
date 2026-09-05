@@ -2366,7 +2366,8 @@
                     }),
                     total_actions: reportData.total_actions || 0,
                     avg_finishing_time: (reportData.statistics && reportData.statistics
-                        .avg_finishing_time) || 0
+                        .avg_finishing_time) || 0,
+                    simulation: !!simulationEnabledRef.current
                 };
 
                 return saveSessionToPlayerFolder(
@@ -2450,7 +2451,8 @@
                             axios.post("/sync-live-to-host", {
                                 player_id: player.id,
                                 level: selectedLevel,
-                                subdirectory: selectedSubdirectory || ""
+                                subdirectory: selectedSubdirectory || "",
+                                simulation: !!simulationEnabledRef.current
                             }).catch(function() {});
                         }
                     }, 800);
