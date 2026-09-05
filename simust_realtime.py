@@ -74,8 +74,11 @@ STITCHED_HEIGHT = 1080
 HALF_WIDTH = STITCHED_WIDTH // 2
 
 VIZ_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
+SIM_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
+SIM_FRAME_WIDTH = 1280
+SIM_FRAME_HEIGHT = 360
 
 # ============================================================================
 # POLYGON ROI – DEFINE YOUR 17 POINTS HERE (stitched frame coordinates)
@@ -260,40 +263,42 @@ class OneEuroFilter:
 # ============================================================================
 
 class DetectionTracker:
-    def __init__(self):
-        # Existing detection engine
-        if not torch.cuda.is_available():
-            print("ERROR: CUDA not available. .engine files require GPU.")
-            sys.exit(1)
-        if not os.path.exists(DETECTION_ENGINE_PATH):
-            print(f"ERROR: {DETECTION_ENGINE_PATH} not found.")
-            sys.exit(1)
-        try:
-            self.detection_model = YOLO(DETECTION_ENGINE_PATH)
-            print(f"Detection model loaded: {DETECTION_ENGINE_PATH}")
-        except Exception as e:
-            print(f"Failed to load detection engine: {e}")
-            sys.exit(1)
-
+    def __init__(self, require_models=True):
+        self.detection_model = None
+        self.pose_detector = PoseDetector("")
         self.detection_conf = DETECTION_CONF
         self.max_players = MAX_PLAYERS
         self.half_width = HALF_WIDTH
-
-        # Pose detector
-        self.pose_detector = PoseDetector(POSE_ENGINE_PATH)
-
-        # 1‑Euro filters for hip point
         self.filter_x = OneEuroFilter(min_cutoff=1.0, beta=0.5)
         self.filter_y = OneEuroFilter(min_cutoff=1.0, beta=0.5)
-
         self.total_balls_detected = 0
         self.total_players_detected = 0
         self.frame_process_count = 0
         self.last_fps_time = time.time()
         self.current_fps = 0
-
-        # Polygon for player ROI
         self.polygon = POLYGON_POINTS
+
+        cuda_ok = torch.cuda.is_available()
+        engine_ok = os.path.exists(DETECTION_ENGINE_PATH)
+        if not cuda_ok or not engine_ok:
+            msg = "CUDA not available." if not cuda_ok else f"{DETECTION_ENGINE_PATH} not found."
+            if require_models:
+                print(f"ERROR: {msg} .engine files require GPU.")
+                sys.exit(1)
+            print(f"Arena simulation: skipping detection models ({msg})")
+            self.pose_detector = PoseDetector("")
+            return
+        try:
+            self.detection_model = YOLO(DETECTION_ENGINE_PATH)
+            print(f"Detection model loaded: {DETECTION_ENGINE_PATH}")
+        except Exception as e:
+            print(f"Failed to load detection engine: {e}")
+            if require_models:
+                sys.exit(1)
+            print("Arena simulation: continuing without detection model.")
+            return
+        if os.path.exists(POSE_ENGINE_PATH):
+            self.pose_detector = PoseDetector(POSE_ENGINE_PATH)
 
     def detect_objects(self, frame):
         """Fast detection - balls on both halves, players on left half only, filtered by polygon."""
@@ -1298,15 +1303,475 @@ def ensure_directory(path):
         os.makedirs(path)
     return path
 
-def read_visualization_setting():
+def _read_flag_file(path):
+    """Return True/False from a flag file, or None if missing/partial."""
     try:
-        if os.path.exists(VIZ_FILE):
-            with open(VIZ_FILE, 'r') as f:
-                content = f.read().strip().lower()
-                return content == 'true' or content == '1' or content == 'yes'
-    except:
-        pass
-    return False
+        if not os.path.exists(path):
+            return False
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read().strip().lower()
+        if not content:
+            return None
+        if content in ('true', '1', 'yes', 'on'):
+            return True
+        if content in ('false', '0', 'no', 'off'):
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def read_visualization_setting():
+    return _read_flag_file(VIZ_FILE)
+
+
+def read_simulation_setting():
+    return _read_flag_file(SIM_FILE)
+
+
+class ArenaSimulator:
+    """Synthetic ball + player for empty-arena testing of the realtime pipeline.
+
+    PASS finishing (matches analyze_action_with_context):
+      Correct — closest approach to a listed screen <= FINISH_DIST (100px)
+                AND the ball then stays/returns within threshold*3.4 (check_ball_return).
+      Miss    — closest approach <= 100px, but no stay/return after that closest frame.
+                Near-miss: it was a finish attempt, not a goal.
+      Late    — during the QR the ball stays > 100px from every listed screen;
+                after the QR it reaches a listed screen.
+      Wrong   — never within 100px during the QR, and no late finish afterwards.
+    """
+
+    PLAYER_HOME = (280.0, 268.0)
+    BALL_HOME = (302.0, 282.0)
+    PASS_CYCLE = ("correct", "miss", "late", "wrong")
+    OTHER_CYCLE = ("correct", "late", "wrong")
+
+    def __init__(self):
+        self.action = None
+        self.screens = []
+        self.start_ts = 0.0
+        self.active = False
+        self.late_phase = False
+        self.late_start_ts = 0.0
+        self.intended = "correct"
+        self.outcome_index = 0
+        self.target_xy = self.BALL_HOME
+        self.miss_xy = self.BALL_HOME
+        self.late_hold_xy = self.BALL_HOME
+        self.late_start_xy = self.BALL_HOME
+        self.late_from_xy = self.BALL_HOME
+        self.late_finish_xy = self.BALL_HOME
+        self.late_finish_roll_xy = self.BALL_HOME
+        self.wrong_xy = (420.0, 200.0)
+        self.goal_late_start_xy = self.BALL_HOME
+        self.line_p0 = None
+        self.line_p1 = None
+        self.last_ball = self.BALL_HOME
+        self.last_player = self.PLAYER_HOME
+
+    def start_action(self, action, screens):
+        self.action = (action or "").upper()
+        self.screens = [str(s) for s in (screens or [])]
+        self.start_ts = time.time()
+        self.active = True
+        self.late_phase = False
+        self.target_xy, self.line_p0, self.line_p1 = self._line_target(self.screens)
+        # Stay off the line during the QR. GOAL needs a valid projection (0..1)
+        # so late search can run; PASS/TARGET/PRESS stay on the home side so the
+        # path never enters FINISH_DIST.
+        if self.action == "GOAL":
+            self.miss_xy = self._perp_from_mid(78)
+            self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=True)
+            self.goal_late_start_xy = self.late_start_xy
+            self.wrong_xy = self._offset_from_line(240)
+        else:
+            self.miss_xy = self._offset_from_line(78)
+            self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=False)
+            self.goal_late_start_xy = self.late_start_xy
+            self.wrong_xy = self._far_from_all_screens(240, min_from_home=50)
+        self.late_finish_xy = self._closest_screen_mid(self.late_hold_xy)
+        self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
+        self.intended = self._next_outcome(self.action)
+        print(
+            f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
+            f"target={self.target_xy} late_hold={self.late_hold_xy} wrong={self.wrong_xy}"
+        )
+
+    def end_action(self):
+        self.active = False
+        if self.intended == "late":
+            self.late_phase = True
+            self.late_start_ts = time.time()
+            self.late_from_xy = self.last_ball
+        else:
+            self.late_phase = False
+            self.action = None
+
+    def _next_outcome(self, action):
+        cycle = self.PASS_CYCLE if action == "PASS" else self.OTHER_CYCLE
+        result = cycle[self.outcome_index % len(cycle)]
+        self.outcome_index += 1
+        return result
+
+    def _line_target(self, screens):
+        for screen in screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            p0, p1 = line["p0"], line["p1"]
+            mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+            return mid, p0, p1
+        return (640.0, 280.0), (600.0, 280.0), (680.0, 280.0)
+
+    def _min_dist_to_screens(self, pt):
+        best = float("inf")
+        for screen in self.screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            if d < best:
+                best = d
+        return best
+
+    def _point_line_dist(self, pt):
+        if not self.line_p0 or not self.line_p1:
+            return float("inf")
+        return get_effective_distance(pt, self.line_p0, self.line_p1)[0]
+
+    def _far_from_all_screens(self, min_clearance, min_from_home=50.0):
+        """In-frame point at least min_clearance from every listed screen, and not on home."""
+        hx, hy = self.BALL_HOME
+        saved = (self.line_p0, self.line_p1, self.target_xy)
+        samples = [(220.0, 200.0), (400.0, 140.0), (180.0, 310.0), (450.0, 250.0),
+                   (350.0, 180.0), (250.0, 120.0), (500.0, 300.0), (320.0, 220.0)]
+        for screen in self.screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            self.line_p0, self.line_p1 = line["p0"], line["p1"]
+            p0, p1 = line["p0"], line["p1"]
+            self.target_xy = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+            samples.append(self._offset_from_line(min_clearance))
+            samples.append(self._offset_from_line(min_clearance + 70))
+        self.line_p0, self.line_p1, self.target_xy = saved
+        best = None
+        best_score = -1.0
+        for raw in samples:
+            pt = self._clip(raw[0], raw[1])
+            d_screens = self._min_dist_to_screens(pt)
+            d_home = math.hypot(pt[0] - hx, pt[1] - hy)
+            if d_screens >= min_clearance and d_home >= min_from_home:
+                return pt
+            score = d_screens + 0.15 * d_home
+            if score > best_score:
+                best_score = score
+                best = pt
+        return best if best is not None else self.BALL_HOME
+
+    def _closest_screen_mid(self, pt):
+        """Midpoint of the listed screen nearest this point (short late finish)."""
+        best_mid = self.target_xy
+        best_d = float("inf")
+        for screen in self.screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            if d < best_d:
+                best_d = d
+                p0, p1 = line["p0"], line["p1"]
+                best_mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        return best_mid
+
+    def _along_line_from(self, pt, span):
+        p0, p1 = self.line_p0, self.line_p1
+        nearest = None
+        nearest_d = float("inf")
+        for screen in self.screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            if d < nearest_d:
+                nearest_d = d
+                nearest = line
+        if nearest:
+            p0, p1 = nearest["p0"], nearest["p1"]
+        if not p0 or not p1:
+            return self._clip(pt[0] + span, pt[1])
+        tx, ty = p1[0] - p0[0], p1[1] - p0[1]
+        nlen = math.hypot(tx, ty) or 1.0
+        return self._clip(pt[0] + (tx / nlen) * span, pt[1] + (ty / nlen) * span)
+
+    def _late_hold_near_home(self, clearance, goal=False):
+        """Closest practical point to home that stays outside FINISH_DIST of every listed screen."""
+        if goal:
+            return self._perp_from_mid(clearance)
+        hx, hy = self.BALL_HOME
+        home = (hx, hy)
+        if self._min_dist_to_screens(home) >= clearance:
+            return home
+        nearest = None
+        nearest_d = float("inf")
+        for screen in self.screens:
+            line = GOAL_LINES.get(str(screen))
+            if not line:
+                continue
+            d, _ = get_effective_distance(home, line["p0"], line["p1"])
+            if d < nearest_d:
+                nearest_d = d
+                nearest = line
+        if not nearest:
+            return home
+        saved = (self.line_p0, self.line_p1, self.target_xy)
+        self.line_p0, self.line_p1 = nearest["p0"], nearest["p1"]
+        p0, p1 = nearest["p0"], nearest["p1"]
+        self.target_xy = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        chosen = home
+        for dist in range(int(clearance), 280, 6):
+            pt = self._offset_from_line(float(dist))
+            if self._min_dist_to_screens(pt) >= clearance:
+                chosen = pt
+                break
+            chosen = pt
+        self.line_p0, self.line_p1, self.target_xy = saved
+        return chosen
+
+    def _late_local_pair(self, clearance, span, goal=False):
+        """Two nearby safe points: one short control step, then freeze (no pitch-wide run)."""
+        a = self._late_hold_near_home(clearance, goal=goal)
+        ax, ay = a
+        dirs = []
+        if self.line_p0 and self.line_p1:
+            tx = self.line_p1[0] - self.line_p0[0]
+            ty = self.line_p1[1] - self.line_p0[1]
+            nlen = math.hypot(tx, ty) or 1.0
+            dirs.append((tx / nlen, ty / nlen))
+            dirs.append((-tx / nlen, -ty / nlen))
+        dirs.extend([(1.0, 0.0), (0.0, 1.0), (-0.8, 0.6), (0.6, -0.8), (-1.0, 0.0), (0.0, -1.0)])
+        min_ok = 108.0
+        for ux, uy in dirs:
+            b = self._clip(ax + ux * span, ay + uy * span)
+            if math.hypot(b[0] - ax, b[1] - ay) < 36:
+                continue
+            if self._min_dist_to_screens(a) >= min_ok and self._min_dist_to_screens(b) >= min_ok:
+                if goal:
+                    _d0, t0 = get_effective_distance(a, self.line_p0, self.line_p1)
+                    _d1, t1 = get_effective_distance(b, self.line_p0, self.line_p1)
+                    if not (0.0 <= t0 <= 1.0 and 0.0 <= t1 <= 1.0):
+                        continue
+                return a, b
+        b = self._clip(ax + span, ay)
+        return a, b
+
+    def _offset_from_line(self, dist):
+        """Point on the home side of the goal line, still in-frame, ~dist px away."""
+        if not self.line_p0 or not self.line_p1:
+            return self._lerp(self.target_xy, self.BALL_HOME, 0.45)
+        x0, y0 = self.line_p0
+        x1, y1 = self.line_p1
+        hx, hy = self.BALL_HOME
+        _d, proj_t, _, _ = compute_projection((hx, hy), self.line_p0, self.line_p1)
+        t_seg = max(0.0, min(1.0, proj_t))
+        cx = x0 + t_seg * (x1 - x0)
+        cy = y0 + t_seg * (y1 - y0)
+        vx, vy = hx - cx, hy - cy
+        nlen = math.hypot(vx, vy)
+        if nlen < 1e-3:
+            vx, vy = -(y1 - y0), (x1 - x0)
+            nlen = math.hypot(vx, vy) or 1.0
+        vx, vy = vx / nlen, vy / nlen
+        min_ok = dist * 0.85
+        candidates = []
+        for scale in (dist, dist + 40, dist + 80, dist + 120):
+            candidates.append((cx + vx * scale, cy + vy * scale))
+        candidates.extend([self.BALL_HOME, (220.0, 200.0), (400.0, 140.0), (180.0, 310.0)])
+        best = None
+        best_d = -1.0
+        for raw in candidates:
+            clipped = self._clip(raw[0], raw[1])
+            d = self._point_line_dist(clipped)
+            if d >= min_ok:
+                return clipped
+            if d > best_d:
+                best_d = d
+                best = clipped
+        return best if best is not None else self.BALL_HOME
+
+    def _perp_from_mid(self, dist):
+        """Offset from segment midpoint along the perpendicular that stays in-frame.
+
+        Keeps 0<=proj_t<=1 so GOAL late search is allowed.
+        """
+        if not self.line_p0 or not self.line_p1:
+            return self._offset_from_line(dist)
+        x0, y0 = self.line_p0
+        x1, y1 = self.line_p1
+        mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        nx, ny = -(y1 - y0), (x1 - x0)
+        nlen = math.hypot(nx, ny) or 1.0
+        nx, ny = nx / nlen, ny / nlen
+        min_ok = dist * 0.85
+        best = None
+        best_d = -1.0
+        for sign in (1.0, -1.0):
+            for scale in (dist, dist + 40, dist + 80):
+                clipped = self._clip(mx + sign * nx * scale, my + sign * ny * scale)
+                d = self._point_line_dist(clipped)
+                _eff, proj_t = get_effective_distance(clipped, self.line_p0, self.line_p1)
+                if d >= min_ok and 0.0 <= proj_t <= 1.0:
+                    return clipped
+                if d > best_d and 0.0 <= proj_t <= 1.0:
+                    best_d = d
+                    best = clipped
+        return best if best is not None else self._offset_from_line(dist)
+
+    def blank_half(self):
+        frame = np.zeros((SIM_FRAME_HEIGHT, SIM_FRAME_WIDTH // 2, 3), dtype=np.uint8)
+        frame[:] = (28, 72, 32)
+        cv2.rectangle(frame, (8, 8), (SIM_FRAME_WIDTH // 2 - 8, SIM_FRAME_HEIGHT - 8), (40, 110, 50), 1)
+        return frame
+
+    def _lerp(self, a, b, u):
+        u = max(0.0, min(1.0, u))
+        return (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u)
+
+    def _clip(self, x, y):
+        return (
+            max(8.0, min(float(SIM_FRAME_WIDTH - 8), x)),
+            max(8.0, min(float(SIM_FRAME_HEIGHT - 8), y)),
+        )
+
+    def _ball_player_for_outcome(self, t, now):
+        target = self.target_xy
+        is_press = self.action == "PRESS"
+        intended = self.intended
+
+        if self.late_phase:
+            elapsed = now - self.late_start_ts
+            dest = self.late_finish_xy
+            start = self.late_from_xy
+            if elapsed <= 0.40:
+                pos = self._lerp(start, dest, elapsed / 0.40)
+            else:
+                pos = self._lerp(dest, self.late_finish_roll_xy, min(1.0, (elapsed - 0.40) / 0.30))
+            bx, by = pos
+            if is_press:
+                px, py = bx - 16, by - 10
+            else:
+                px, py = self._lerp(self.PLAYER_HOME, dest, 0.10)
+            if elapsed > 2.2:
+                self.late_phase = False
+            return bx, by, px, py
+
+        if not self.active:
+            wobble = math.sin(now * 1.15)
+            px = self.PLAYER_HOME[0] + wobble * 7
+            py = self.PLAYER_HOME[1]
+            bx = self.BALL_HOME[0] + wobble * 5
+            by = self.BALL_HOME[1]
+            return bx, by, px, py
+
+        if intended == "correct":
+            u = min(1.0, t / 0.70)
+            if is_press:
+                px, py = self._lerp(self.PLAYER_HOME, target, u)
+                bx, by = px + 16, py + 10
+            else:
+                if t <= 0.70:
+                    bx, by = self._lerp(self.BALL_HOME, target, t / 0.70)
+                else:
+                    bx, by = self._lerp(target, self.BALL_HOME, min(1.0, (t - 0.70) / 0.65))
+                px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
+            return bx, by, px, py
+
+        if intended == "miss":
+            # Reach ~78px (within PASS FINISH_DIST) then leave immediately so return-check fails.
+            if t <= 0.55:
+                bx, by = self._lerp(self.BALL_HOME, self.miss_xy, t / 0.55)
+            else:
+                bx, by = self.BALL_HOME
+            px, py = self._lerp(self.PLAYER_HOME, target, 0.15)
+            return bx, by, px, py
+
+        if intended == "late":
+            # One short control step (~44px), then freeze. Enough for the static
+            # filter (>33px), without running across the pitch the way a late
+            # player would not.
+            u = min(1.0, t / 0.40)
+            origin = self.late_start_xy
+            hold = self.late_hold_xy
+            if is_press:
+                px, py = self._lerp(origin, hold, u)
+                bx, by = px + 16, py + 10
+            else:
+                bx, by = self._lerp(origin, hold, u)
+                px, py = self._lerp(self.PLAYER_HOME, hold, u * 0.08)
+            return bx, by, px, py
+
+        # wrong: move on the home side only — never cross the goal line
+        u = min(1.0, t / 0.60)
+        if is_press:
+            px, py = self._lerp(self.PLAYER_HOME, self.wrong_xy, u)
+            bx, by = px + 16, py + 10
+        else:
+            bx, by = self._lerp(self.BALL_HOME, self.wrong_xy, u)
+            px, py = self._lerp(self.PLAYER_HOME, self.wrong_xy, u * 0.18)
+        return bx, by, px, py
+
+    def step(self, frame_w, frame_h):
+        sx = frame_w / float(SIM_FRAME_WIDTH)
+        sy = frame_h / float(SIM_FRAME_HEIGHT)
+        now = time.time()
+        t = now - self.start_ts if self.active else (now - self.late_start_ts if self.late_phase else 0.0)
+        bx, by, px, py = self._ball_player_for_outcome(t, now)
+        bx, by = self._clip(bx, by)
+        px, py = self._clip(px, py)
+        self.last_ball = (bx, by)
+        self.last_player = (px, py)
+
+        bx_s = int(bx * sx)
+        by_s = int(by * sy)
+        px_s = int(px * sx)
+        py_s = int(py * sy)
+        bw, bh = max(18, int(36 * sx)), max(50, int(88 * sy))
+        x1 = max(0, px_s - bw // 2)
+        y1 = max(0, py_s - bh)
+        x2 = min(frame_w - 1, px_s + bw // 2)
+        y2 = min(frame_h - 1, py_s + 6)
+        hip = (float(px_s), float(max(0, py_s - int(28 * sy))))
+        balls = [{
+            "center": [bx_s, by_s],
+            "bbox": [bx_s - 8, by_s - 8, bx_s + 8, by_s + 8],
+            "confidence": 1.0,
+            "simulated": True,
+        }]
+        players = [{
+            "center": [px_s, py_s - bh // 3],
+            "bbox": [x1, y1, x2, y2],
+            "confidence": 1.0,
+            "simulated": True,
+        }]
+        return balls, players, hip
+
+    def draw_on_frame(self, frame, balls, players):
+        for player in players:
+            x1, y1, x2, y2 = player["bbox"]
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (40, 180, 80), -1)
+            frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
+            cv2.ellipse(frame, ((x1 + x2) // 2, y1 + 16), (12, 14), 0, 0, 360, (20, 220, 90), -1)
+        for ball in balls:
+            cx, cy = ball["center"]
+            cv2.circle(frame, (cx, cy), 11, (0, 0, 0), -1)
+            cv2.circle(frame, (cx, cy), 9, (255, 255, 255), -1)
+            cv2.circle(frame, (cx, cy), 9, (0, 140, 255), 2)
+        label = f"ARENA SIM  {self.intended.upper()}" if (self.active or self.late_phase) else "ARENA SIMULATION"
+        cv2.putText(frame, label, (12, frame.shape[0] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)
+        return frame
 
 class VideoSaver:
     def __init__(self):
@@ -1453,8 +1918,12 @@ class SimustRealtimeCamera:
         print("REAL-TIME RESULTS ANALYSIS DISPLAYED")
         print("=" * 60)
 
-        self.tracker = DetectionTracker()
-        self.visualization_enabled = read_visualization_setting()
+        sim = read_simulation_setting()
+        self.simulation_enabled = bool(sim)
+        self.simulator = ArenaSimulator()
+        self.tracker = DetectionTracker(require_models=not self.simulation_enabled)
+        viz = read_visualization_setting()
+        self.visualization_enabled = bool(viz)
 
         self.session_lock = threading.Lock()
         self.pending_start = None
@@ -1473,6 +1942,7 @@ class SimustRealtimeCamera:
         self.session_frame_count = 0
         self.session_fps_sum = 0
         self.between_session_start_time = 0
+        self.between_session_start_ts = 0.0
         self.between_session_end_time = ""
 
         self.session_data = []
@@ -1539,6 +2009,7 @@ class SimustRealtimeCamera:
         print(f"Detection Confidence: {DETECTION_CONF}")
         print(f"Recordings: {DEFAULT_RECORDINGS_DIR}")
         print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
+        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'}")
         print("-" * 60)
 
     def signal_handler(self, signum, frame):
@@ -1582,6 +2053,7 @@ class SimustRealtimeCamera:
         self.between_sessions_active = True
         self.between_session_data = []
         self.between_session_start_time = current_time
+        self.between_session_start_ts = time.time()
         self.between_session_end_time = ""
 
     def save_between_sessions_block(self):
@@ -1737,6 +2209,20 @@ class SimustRealtimeCamera:
                 self._execute_start(current_timestamp)
                 self.pending_start = None
 
+    def _blocks_for_late_analysis(self):
+        """Rebuild block list at analysis time so post-QR (late) frames are included."""
+        combined = list(self.qr_blocks)
+        if self.between_session_data:
+            combined.append({
+                "id": "BETWEEN",
+                "action": "BETWEEN_SESSIONS",
+                "screens": [],
+                "start_time": self.between_session_start_time,
+                "end_time": get_current_time_ms(),
+                "data": list(self.between_session_data),
+            })
+        return combined
+
     def _perform_late_analysis(self):
         """Delayed analysis: computes result and sends to backend, but does NOT append the block (it's already in qr_blocks)."""
         with self.session_lock:
@@ -1744,21 +2230,24 @@ class SimustRealtimeCamera:
                 return
 
             action_data = self.pending_analysis['action_data']
-            combined_blocks = self.pending_analysis['combined_blocks']
             action_type = self.pending_analysis['action_type']
             video_index = self.pending_analysis['video_index']
             block_id = self.pending_analysis['block_id']
             screens = self.pending_analysis['screens']
 
-            # The block is already in qr_blocks, we do NOT append it again.
+            combined_blocks = self._blocks_for_late_analysis()
+            action_index = 0
+            for i, block in enumerate(combined_blocks):
+                if block.get("id") == block_id:
+                    action_index = i
+                    break
 
-            # Perform analysis
             analysis_result = analyze_action_with_context(
                 action_data,
                 GOAL_LINES,
                 action_type,
                 combined_blocks,
-                len(self.qr_blocks) - 1   # index of the block in qr_blocks (it's the last one)
+                action_index
             )
 
             # Build result entry
@@ -1802,6 +2291,8 @@ class SimustRealtimeCamera:
         action_key = self.current_action
         self.stats["action_counts"][action_key] = self.stats["action_counts"].get(action_key, 0) + 1
         self.session_active = False
+        if self.simulation_enabled:
+            self.simulator.end_action()
 
         if self.current_qr_block:
             if self.session_data:
@@ -1884,6 +2375,7 @@ class SimustRealtimeCamera:
         self.between_sessions_active = True
         self.between_session_data = []
         self.between_session_start_time = offset_end_time_str
+        self.between_session_start_ts = current_timestamp
         self.between_session_end_time = ""
 
     def _execute_end(self, current_time_str, current_timestamp):
@@ -1919,6 +2411,9 @@ class SimustRealtimeCamera:
             "end_time": "",
             "data": []
         }
+
+        if self.simulation_enabled:
+            self.simulator.start_action(self.current_action, self.current_screens)
 
         print(f"\n{'='*50}")
         print(f"SESSION {self.current_block_id} - {self.current_action}")
@@ -2033,15 +2528,22 @@ class SimustRealtimeCamera:
         return frame
 
     # ---- Frame processing (with hip-point tracking) ----
-    def process_frame_for_session(self, frame, current_timestamp):
-        self.tracker.increment_frame_count()
-
+    def _detections_for_frame(self, frame, current_timestamp):
+        if self.simulation_enabled:
+            h, w = frame.shape[:2]
+            balls, players, hip = self.simulator.step(w, h)
+            frame = self.simulator.draw_on_frame(frame, balls, players)
+            return frame, balls, players, hip[0], hip[1]
         balls, players = self.tracker.detect_objects(frame)
-
-        # Get hip point (no fallback – may be None)
         sx, sy = self.tracker.get_player_tracking_point(
             frame, players, current_timestamp, self.session_start_timestamp
         )
+        return frame, balls, players, sx, sy
+
+    def process_frame_for_session(self, frame, current_timestamp):
+        self.tracker.increment_frame_count()
+
+        frame, balls, players, sx, sy = self._detections_for_frame(frame, current_timestamp)
 
         # Store in all_player_positions ONLY if hip is valid (used for EOP)
         if sx is not None and sy is not None:
@@ -2091,13 +2593,7 @@ class SimustRealtimeCamera:
     def process_frame_between_sessions(self, frame, current_timestamp):
         self.tracker.increment_frame_count()
 
-        balls, players = self.tracker.detect_objects(frame)
-
-        # Get hip point (no fallback – may be None)
-        sx, sy = self.tracker.get_player_tracking_point(
-            frame, players, current_timestamp,
-            self.session_start_timestamp if self.session_active else 0.0
-        )
+        frame, balls, players, sx, sy = self._detections_for_frame(frame, current_timestamp)
 
         # Store in all_player_positions ONLY if hip is valid (used for EOP)
         if sx is not None and sy is not None:
@@ -2106,10 +2602,12 @@ class SimustRealtimeCamera:
             self.all_player_positions.append((rel_time, sx, sy))
 
         # ===== FIX: assign a real time offset for between‑session frames =====
-        # Use the session start timestamp as reference; if no session, use 0.
-        rel_time = current_timestamp - self.session_start_timestamp if self.session_start_timestamp != 0 else 0.0
+        # Time is relative to the between-session block start so late search
+        # (LATE_SEARCH_DURATION) can still accept finishes after the QR ends.
+        between_origin = getattr(self, "between_session_start_ts", 0.0) or 0.0
+        rel_time = current_timestamp - between_origin if between_origin else 0.0
         frame_data = {
-            't': round(rel_time, 3),  # now correct relative time
+            't': round(rel_time, 3),
             'b': [[c[0], c[1]] for c in [ball['center'] for ball in balls]],
             'p': [[c[0], c[1]] for c in [player['center'] for player in players]],
             'hp': [sx, sy] if (sx is not None and sy is not None) else None
@@ -2261,9 +2759,6 @@ class SimustRealtimeCamera:
 
     def show_frame(self, frame):
         if not self.visualization_enabled:
-            if self.window_created:
-                cv2.destroyWindow(self.window_name)
-                self.window_created = False
             return
 
         if not self.window_created:
@@ -2285,10 +2780,38 @@ class SimustRealtimeCamera:
         cv2.imshow(self.window_name, canvas)
         cv2.waitKey(1)
 
-    def destroy_window(self):
-        if self.window_created:
+    def _close_viz_window(self):
+        if not self.window_created:
+            return
+        try:
             cv2.destroyWindow(self.window_name)
-            self.window_created = False
+            cv2.waitKey(1)
+        except Exception:
+            pass
+        self.window_created = False
+
+    def destroy_window(self):
+        self._close_viz_window()
+
+    def _apply_visualization_setting(self):
+        new_viz = read_visualization_setting()
+        if new_viz is None or new_viz == self.visualization_enabled:
+            return
+        self.visualization_enabled = new_viz
+        print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
+        if not self.visualization_enabled:
+            self._close_viz_window()
+
+    def _apply_simulation_setting(self):
+        new_sim = read_simulation_setting()
+        if new_sim is None or new_sim == self.simulation_enabled:
+            return
+        self.simulation_enabled = new_sim
+        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'}")
+        if self.simulation_enabled and self.session_active:
+            self.simulator.start_action(self.current_action, self.current_screens)
+        if not self.simulation_enabled:
+            self.simulator.end_action()
 
     # ---- Main loop ----
     def run(self):
@@ -2302,15 +2825,17 @@ class SimustRealtimeCamera:
         time.sleep(3)
 
         self.start_new_recording()
-        self.visualization_enabled = read_visualization_setting()
+        viz = read_visualization_setting()
+        self.visualization_enabled = bool(viz)
 
-        last_viz_check = time.time()
+        last_viz_check = 0
         recording_started_for_video = False
 
         print("\n" + "=" * 60)
         print("READY - Press Ctrl+C to stop")
         print("=" * 60)
         print("Detection ALWAYS active (Balls on both cameras, Players on Camera 1)")
+        print("Arena simulation: artificial ball/player injected when enabled")
         print("Player tracking: Pose-based hip point (cm-accurate) – NO fallback")
         print("Video ALWAYS recording at 25 FPS")
         print("Real-time results displayed on screen and saved to file")
@@ -2326,19 +2851,19 @@ class SimustRealtimeCamera:
                 self.check_pending(current_timestamp, current_time_str)
 
                 if current_timestamp - last_viz_check >= 0.5:
-                    new_viz = read_visualization_setting()
-                    if new_viz != self.visualization_enabled:
-                        self.visualization_enabled = new_viz
-                        if not self.visualization_enabled and self.window_created:
-                            cv2.destroyWindow(self.window_name)
-                            self.window_created = False
+                    self._apply_visualization_setting()
+                    self._apply_simulation_setting()
                     last_viz_check = current_timestamp
 
                 left, right = self.get_frames()
 
                 if left is None or right is None:
-                    time.sleep(0.01)
-                    continue
+                    if self.simulation_enabled:
+                        left = self.simulator.blank_half()
+                        right = self.simulator.blank_half()
+                    else:
+                        time.sleep(0.01)
+                        continue
 
                 stitched = self.stitch_frames(left, right)
                 if stitched is None:
@@ -2374,9 +2899,6 @@ class SimustRealtimeCamera:
 
                 if self.visualization_enabled:
                     self.show_frame(stitched)
-                elif self.window_created:
-                    cv2.destroyWindow(self.window_name)
-                    self.window_created = False
 
                 time.sleep(0.005)
 

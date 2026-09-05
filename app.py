@@ -1,4 +1,4 @@
-﻿"""
+"""
 SIMUST PLAY IT SMART - Main Application (REALTIME ONLY)
 Soccer Action Analysis System with Player Tracking
 """
@@ -458,6 +458,29 @@ os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
 os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
 os.makedirs(REALTIME_RECORDINGS_DIR, exist_ok=True)
 os.makedirs(ANIMATIONS_DIR, exist_ok=True)
+
+def write_visualization_setting(enabled):
+    """Atomically write visualization on/off so the realtime process can pick it up."""
+    viz_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    tmp_file = viz_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        f.write("true" if enabled else "false")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, viz_file)
+
+
+def write_simulation_setting(enabled):
+    """Atomically write arena simulation on/off so the realtime process can pick it up."""
+    sim_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    tmp_file = sim_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        f.write("true" if enabled else "false")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, sim_file)
 
 # ============================================================
 # Calibration
@@ -949,6 +972,9 @@ async def start_realtime_playback(req: Request):
         if not os.path.isdir(level_path):
             raise HTTPException(400, f"Level directory not found: {level_path}")
 
+        write_visualization_setting(bool(data.get("visualization_enabled", False)))
+        write_simulation_setting(bool(data.get("simulation_enabled", False)))
+
         force_kill_smart_player()
         try:
             status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
@@ -1104,16 +1130,25 @@ async def stop_realtime_camera():
 async def set_visualization(req: Request):
     try:
         data = await req.json()
-        enabled = data.get("enabled", False)
-        viz_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
-        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
-        with open(viz_file, 'w') as f:
-            f.write(str(enabled).lower())
+        enabled = bool(data.get("enabled", False))
+        write_visualization_setting(enabled)
         logger.info(f"Visualization set to: {enabled}")
         return {"status": "success", "visualization_enabled": enabled}
     except Exception as e:
         logger.error(f"Failed to set visualization: {e}")
         raise HTTPException(500, f"Failed to set visualization: {str(e)}")
+
+@app.post("/set-simulation")
+async def set_simulation(req: Request):
+    try:
+        data = await req.json()
+        enabled = bool(data.get("enabled", False))
+        write_simulation_setting(enabled)
+        logger.info(f"Arena simulation set to: {enabled}")
+        return {"status": "success", "simulation_enabled": enabled}
+    except Exception as e:
+        logger.error(f"Failed to set simulation: {e}")
+        raise HTTPException(500, f"Failed to set simulation: {str(e)}")
 
 # ============================================================
 # RESULTS ENDPOINTS
@@ -1732,10 +1767,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         num_tiles = len(slice_numbers)
         tile_width = width // num_tiles
 
-        CHART_CENTER_Y = 160
-        RING_RADIUS = 60
+        CHART_CENTER_Y = 140
+        RING_RADIUS = 90
         RING_THICKNESS = 22
-        LABEL_VERTICAL_GAP = 45
+        LABEL_VERTICAL_GAP = 20
         RING_TEXT_Y_OFFSET = -10
         LABEL_TEXT_Y_OFFSET = -10
 
@@ -1766,7 +1801,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         def draw_text_inside_ring_on_pil(draw, center_x, center_y, lines, color=(255,255,255)):
             if not lines:
                 return
-            font_size = 24 if len(lines) > 1 else 28
+            font_size = 36 if len(lines) > 1 else 42
             font = get_segoe_font(font_size, bold=True)
             total_h = 0
             for line in lines:
@@ -1790,8 +1825,8 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 lines = [words[0], " ".join(words[1:])]
             else:
                 lines = [text]
-            font_size = 15 if max(len(line) for line in lines) > 6 else 22
-            line_gap = 4
+            font_size = 22 if max(len(line) for line in lines) > 6 else 33
+            line_gap = 6
             font = get_segoe_font(font_size, True)
             heights = []
             widths = []
@@ -1800,7 +1835,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 widths.append(bbox[2] - bbox[0])
                 heights.append(bbox[3] - bbox[1])
             total_h = sum(heights) + line_gap * (len(lines) - 1)
-            y = rect_y + 35 + LABEL_TEXT_Y_OFFSET - total_h // 2
+            y = rect_y + 65 + LABEL_TEXT_Y_OFFSET - total_h // 2
             for i, line in enumerate(lines):
                 x = center_x - widths[i] // 2
                 draw.text((x, y), line, font=font, fill=(255, 255, 255))
@@ -1808,7 +1843,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         def draw_label_rectangle(img, center_x, tile_width, rect_y, text,
                                  color=(255,255,255), bg=(0,165,255)):
-            rect_h = 70
+            rect_h = 130
             rect_x1 = center_x - tile_width // 2
             rect_y1 = rect_y
             rect_x2 = rect_x1 + tile_width
@@ -1924,10 +1959,13 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
                 # Footer
                 footer = "SIMUST RESULTS – Analysis Complete"
-                (fw, fh), _ = cv2.getTextSize(footer, cv2.FONT_HERSHEY_DUPLEX, 0.9, 3)
+                footer_font_size = 36
+                footer_font = get_segoe_font(footer_font_size, False)
+                footer_bbox = draw.textbbox((0, 0), footer, font=footer_font)
+                fw, fh = footer_bbox[2] - footer_bbox[0], footer_bbox[3] - footer_bbox[1]
                 draw_text_on_pil(draw, footer,
                                 (width - fw)//2, height - 10 - fh,
-                                font_size=24, color=(150,150,150), bold=False, anchor='lt')
+                                font_size=footer_font_size, color=(150,150,150), bold=False, anchor='lt')
 
                 img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
                 out.write(img)
