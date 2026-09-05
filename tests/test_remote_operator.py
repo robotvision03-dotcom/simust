@@ -56,6 +56,23 @@ class RemoteQueueTests(unittest.TestCase):
         self.assertTrue(status.get("lab_online"))
         self.assertEqual(status["playback-status"]["state"], "playing")
 
+    def test_stale_commands_are_dropped(self):
+        prev_ttl = simust_remote.REMOTE_COMMAND_TTL_SEC
+        simust_remote.REMOTE_COMMAND_TTL_SEC = 1
+        try:
+            item = simust_remote.enqueue("stop-realtime", {"abort": True}, "admin")
+            item["created_at"] = "2020-01-01T00:00:00"
+            simust_remote.enqueue("start-realtime-playback", {"player_id": "james"}, "admin")
+            # Rewrite the first command to an expired timestamp.
+            state = simust_remote._load()
+            state["pending"][0]["created_at"] = "2020-01-01T00:00:00"
+            simust_remote._save(state)
+            pending = simust_remote.peek_pending()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["action"], "start-realtime-playback")
+        finally:
+            simust_remote.REMOTE_COMMAND_TTL_SEC = prev_ttl
+
 
 if __name__ == "__main__":
     unittest.main()

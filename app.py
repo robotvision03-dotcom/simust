@@ -817,6 +817,8 @@ realtime_camera_process = None
 realtime_aborted = False
 realtime_active_player_id = ""
 _realtime_dirs_at_start: set = set()
+_realtime_session_active = False
+_realtime_session_started_at = 0.0
 
 # ============================================================
 # Helper Functions
@@ -961,10 +963,55 @@ def clear_live_snapshot(player_id: str) -> None:
         logger.warning("Could not discard live snapshot on host: %s", exc)
 
 
+def _realtime_is_running() -> bool:
+    if _realtime_session_active:
+        return True
+    try:
+        if smart_player_process is not None and smart_player_process.poll() is None:
+            return True
+    except Exception:
+        pass
+    try:
+        if realtime_camera_process is not None and realtime_camera_process.poll() is None:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _parse_queued_at(value) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return time.mktime(time.strptime(str(value).strip()[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None
+
+
+def should_ignore_remote_stop(data: Optional[dict]) -> bool:
+    """Leftover tablet Stop commands must not abort the next test."""
+    payload = data or {}
+    if not payload.get("_remote"):
+        return False
+    abort = bool(payload.get("abort") or payload.get("discard") or payload.get("operator_stop"))
+    if not abort:
+        return False
+    if not _realtime_is_running():
+        return True
+    queued_at = _parse_queued_at(payload.get("_queued_at"))
+    if queued_at and _realtime_session_started_at and queued_at < (_realtime_session_started_at - 5):
+        return True
+    return False
+
+
 def discard_aborted_realtime_folders() -> list:
     """Delete session folders created after the current Realtime Play started."""
     global current_results_dir
     current_results_dir = None
+    if not _realtime_session_active:
+        return []
     removed = []
     extra = _realtime_dir_names() - set(_realtime_dirs_at_start or ())
     for name in extra:
@@ -1391,7 +1438,7 @@ async def get_levels():
         
 @app.get("/playback-status")
 async def get_playback_status():
-    if realtime_aborted:
+    if realtime_aborted and _realtime_session_active:
         return {"state": "aborted", "message": "Operator stopped. Session discarded.", "paused": False}
     status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
     status = {"state": "idle", "message": "No active playback"}
@@ -1416,7 +1463,10 @@ async def get_playback_status():
 async def start_realtime_playback(req: Request):
     global smart_player_process, realtime_camera_process, current_results_dir
     global realtime_aborted, realtime_active_player_id, _realtime_dirs_at_start
+    global _realtime_session_active, _realtime_session_started_at
     realtime_aborted = False
+    _realtime_session_active = True
+    _realtime_session_started_at = time.time()
     try:
         data = await req.json()
         level_id = data.get("level")  # e.g., "L00-Foundation" or "L01-Entry/A-T1/A.T1.C1"
@@ -1572,20 +1622,28 @@ async def start_realtime_playback(req: Request):
             "message": "Realtime started."
         }
     except HTTPException:
+        _realtime_session_active = False
         raise
     except Exception as e:
+        _realtime_session_active = False
         logger.error(f"Failed to start realtime: {e}")
         raise HTTPException(500, f"Failed to start: {str(e)}")
 
 @app.post("/stop-realtime")
 async def stop_realtime(req: Request):
     global smart_player_process, realtime_camera_process, realtime_aborted, realtime_active_player_id
+    global _realtime_session_active
     try:
         try:
             data = await req.json()
         except Exception:
             data = {}
-        abort = bool((data or {}).get("abort") or (data or {}).get("discard") or (data or {}).get("operator_stop"))
+        data = data or {}
+        if should_ignore_remote_stop(data):
+            logger.info("Ignoring remote stop-realtime; no current test to abort")
+            write_pause_setting(False)
+            return {"status": "ignored", "aborted": False, "discarded": [], "message": "No active test"}
+        abort = bool(data.get("abort") or data.get("discard") or data.get("operator_stop"))
         logger.info("Stopping realtime playback (abort=%s)...", abort)
         write_pause_setting(False)
         if abort:
@@ -1599,6 +1657,7 @@ async def stop_realtime(req: Request):
             discarded = discard_aborted_realtime_folders()
             clear_live_snapshot(realtime_active_player_id)
             write_playback_status("idle", "Ready for the next test")
+        _realtime_session_active = False
         try:
             speed_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "simust_speed.txt")
             if os.path.exists(speed_file):
@@ -1630,7 +1689,11 @@ async def pause_realtime(req: Request):
         data = await req.json()
     except Exception:
         data = {}
-    paused = bool((data or {}).get("paused"))
+    data = data or {}
+    if data.get("_remote") and not _realtime_is_running():
+        logger.info("Ignoring remote pause-realtime; no active test")
+        return {"status": "ignored", "paused": False, "message": "No active test"}
+    paused = bool(data.get("paused"))
     write_pause_setting(paused)
     write_playback_status(
         "paused" if paused else "playing",
@@ -3755,7 +3818,7 @@ async def export_remote_commands(request: Request):
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
-    commands = simust_remote.peek_pending()
+    commands = simust_remote.take_pending()
     return {"status": "success", "commands": commands}
 
 
@@ -3800,10 +3863,12 @@ def _publish_lab_status() -> None:
 
 def _run_queued_operator_command(command: dict) -> None:
     action = (command.get("action") or "").strip().lstrip("/")
-    payload = command.get("payload") or {}
+    payload = dict(command.get("payload") or {})
     if action not in simust_remote.ALLOWED_ACTIONS:
         logger.warning("Skip unknown remote operator action %s", action)
         return
+    payload["_remote"] = True
+    payload["_queued_at"] = command.get("created_at")
     _lab_local_request("POST", f"/{action}", payload)
     logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
 

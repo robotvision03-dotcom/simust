@@ -22,12 +22,15 @@ class PauseSettingTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="simust-pause-")
         self.prev_dir = simust_app.SIMUST_PLAYER_DIRECTORY
         self.prev_abort = simust_app.realtime_aborted
+        self.prev_active = simust_app._realtime_session_active
         simust_app.SIMUST_PLAYER_DIRECTORY = self.tmp
         simust_app.realtime_aborted = False
+        simust_app._realtime_session_active = False
 
     def tearDown(self):
         simust_app.SIMUST_PLAYER_DIRECTORY = self.prev_dir
         simust_app.realtime_aborted = self.prev_abort
+        simust_app._realtime_session_active = self.prev_active
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -59,6 +62,7 @@ class PauseSettingTests(unittest.TestCase):
 
     def test_aborted_status_wins_over_pause(self):
         simust_app.realtime_aborted = True
+        simust_app._realtime_session_active = True
         simust_app.write_pause_setting(True)
         data = asyncio.run(simust_app.get_playback_status())
         self.assertEqual(data["state"], "aborted")

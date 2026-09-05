@@ -27,11 +27,14 @@ class DiscardAbortedFoldersTests(unittest.TestCase):
         with open(os.path.join(self.tmp, "new_session", "results.json"), "w", encoding="utf-8") as f:
             f.write("[]")
         simust_app.current_results_dir = os.path.join(self.tmp, "new_session")
+        self.prev_active = simust_app._realtime_session_active
+        simust_app._realtime_session_active = True
 
     def tearDown(self):
         simust_app.REALTIME_RECORDINGS_DIR = self.prev_dir
         simust_app._realtime_dirs_at_start = self.prev_start
         simust_app.current_results_dir = self.prev_results
+        simust_app._realtime_session_active = self.prev_active
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -42,14 +45,23 @@ class DiscardAbortedFoldersTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "new_session")))
         self.assertIsNone(simust_app.current_results_dir)
 
+    def test_idle_discard_does_not_delete_folders(self):
+        simust_app._realtime_session_active = False
+        removed = simust_app.discard_aborted_realtime_folders()
+        self.assertEqual(removed, [])
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "new_session")))
+
 
 class AbortFlagTests(unittest.TestCase):
     def setUp(self):
         self.prev = simust_app.realtime_aborted
+        self.prev_active = simust_app._realtime_session_active
         simust_app.realtime_aborted = True
+        simust_app._realtime_session_active = True
 
     def tearDown(self):
         simust_app.realtime_aborted = self.prev
+        simust_app._realtime_session_active = self.prev_active
 
     def test_playback_status_aborted(self):
         import asyncio
@@ -61,6 +73,41 @@ class AbortFlagTests(unittest.TestCase):
         data = asyncio.run(simust_app.get_realtime_results())
         self.assertEqual(data["status"], "aborted")
         self.assertIsNone(data.get("report"))
+
+
+class StaleRemoteStopTests(unittest.TestCase):
+    def setUp(self):
+        self.prev_abort = simust_app.realtime_aborted
+        self.prev_active = simust_app._realtime_session_active
+        self.prev_started = simust_app._realtime_session_started_at
+        simust_app.realtime_aborted = False
+        simust_app._realtime_session_active = False
+        simust_app._realtime_session_started_at = 0.0
+
+    def tearDown(self):
+        simust_app.realtime_aborted = self.prev_abort
+        simust_app._realtime_session_active = self.prev_active
+        simust_app._realtime_session_started_at = self.prev_started
+
+    def test_idle_remote_abort_is_ignored(self):
+        self.assertTrue(simust_app.should_ignore_remote_stop({
+            "_remote": True,
+            "abort": True,
+            "_queued_at": "2020-01-01T00:00:00",
+        }))
+
+    def test_local_operator_stop_is_not_ignored(self):
+        simust_app._realtime_session_active = True
+        self.assertFalse(simust_app.should_ignore_remote_stop({"abort": True}))
+
+    def test_stale_remote_stop_before_session_is_ignored(self):
+        simust_app._realtime_session_active = True
+        simust_app._realtime_session_started_at = 2_000_000_000
+        self.assertTrue(simust_app.should_ignore_remote_stop({
+            "_remote": True,
+            "abort": True,
+            "_queued_at": "2020-01-01T00:00:00",
+        }))
 
 
 if __name__ == "__main__":

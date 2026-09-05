@@ -8,7 +8,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ GET_STATUS_KEYS = {
 }
 
 COMMANDS_FILE = os.environ.get("SIMUST_REMOTE_FILE", "remote_commands.json")
+REMOTE_COMMAND_TTL_SEC = int(os.environ.get("SIMUST_REMOTE_COMMAND_TTL", "90"))
 _LOCK = threading.Lock()
 
 
@@ -60,6 +61,27 @@ def _save(state: Dict[str, Any]) -> None:
     os.replace(tmp, COMMANDS_FILE)
 
 
+def _created_ts(item: Dict[str, Any]) -> Optional[float]:
+    created = (item or {}).get("created_at") or ""
+    try:
+        return time.mktime(time.strptime(str(created)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None
+
+
+def _fresh_pending(pending: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    now = time.time()
+    fresh = []
+    for row in pending:
+        if not isinstance(row, dict):
+            continue
+        created = _created_ts(row)
+        if created is not None and (now - created) > REMOTE_COMMAND_TTL_SEC:
+            continue
+        fresh.append(row)
+    return fresh
+
+
 def enqueue(action: str, payload: Dict[str, Any], actor: str) -> Dict[str, Any]:
     action = (action or "").strip().lstrip("/")
     if action not in ALLOWED_ACTIONS:
@@ -73,7 +95,7 @@ def enqueue(action: str, payload: Dict[str, Any], actor: str) -> Dict[str, Any]:
     }
     with _LOCK:
         state = _load()
-        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+        pending = _fresh_pending([row for row in state.get("pending") or [] if isinstance(row, dict)])
         pending.append(item)
         state["pending"] = pending[-50:]
         _save(state)
@@ -83,7 +105,7 @@ def enqueue(action: str, payload: Dict[str, Any], actor: str) -> Dict[str, Any]:
 def take_pending(limit: int = 20) -> List[Dict[str, Any]]:
     with _LOCK:
         state = _load()
-        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+        pending = _fresh_pending([row for row in state.get("pending") or [] if isinstance(row, dict)])
         taken = pending[: max(1, int(limit))] if pending else []
         state["pending"] = pending[len(taken) :]
         _save(state)
@@ -93,7 +115,10 @@ def take_pending(limit: int = 20) -> List[Dict[str, Any]]:
 def peek_pending(limit: int = 20) -> List[Dict[str, Any]]:
     with _LOCK:
         state = _load()
-        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+        pending = _fresh_pending([row for row in state.get("pending") or [] if isinstance(row, dict)])
+        if pending != (state.get("pending") or []):
+            state["pending"] = pending
+            _save(state)
     return pending[: max(1, int(limit))] if pending else []
 
 
@@ -103,7 +128,7 @@ def ack_ids(ids) -> int:
         return 0
     with _LOCK:
         state = _load()
-        pending = [row for row in state.get("pending") or [] if isinstance(row, dict)]
+        pending = _fresh_pending([row for row in state.get("pending") or [] if isinstance(row, dict)])
         kept = [row for row in pending if row.get("id") not in drop]
         state["pending"] = kept
         _save(state)
