@@ -1,8 +1,9 @@
 """
-smart_simust_player.py - Plays videos sequentially, generates a results video after each video,
-displays it for 15 seconds (or 0.5s for the last video), then continues. After the last video,
-displays a final summary video. Writes current video index to file for simust_realtime.py.
-Auto‑stops only the camera process when final summary is displayed; the player itself closes
+smart_simust_player.py - Owns Screen 2 for the whole test sequence, with no overlapping windows:
+  action set → 5s waiting overlay → 20s per-video results → next action set (if any)
+  → same 5s waiting overlay → final results video.
+Writes current video index to file for simust_realtime.py.
+Auto-stops only the camera process when the final summary is displayed; the player itself closes
 after the summary video finishes, updating the status file so the frontend disables the Stop button.
 """
 
@@ -41,6 +42,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
+
+WAIT_ANIMATION_MS = 5000
+PER_VIDEO_RESULTS_MS = 20000
 
 try:
     import requests
@@ -311,8 +315,9 @@ class WaitingOverlay(QtWidgets.QWidget):
 # SMART PLAYER MAIN WINDOW
 # ============================================================
 class SmartPlayerWindow(QtWidgets.QMainWindow):
-    # Signal now emits the video path (or empty string on failure)
+    # Signals emit the video path (or empty string on failure)
     final_summary_done = pyqtSignal(str)
+    per_video_results_ready = pyqtSignal(str)
 
     def __init__(self, video_directory, player_speed=1.0, screen_index=1, status_file=None):
         super().__init__()
@@ -345,12 +350,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._pending_start_after_pause = False
         self._force_close_timer = None
         self._frozen_qt_timers = []
+        self.display_phase = "action"
+        self._wait_started = 0.0
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
 
-        # Connect signal for final summary completion
         self.final_summary_done.connect(self._on_final_summary_done)
+        self.per_video_results_ready.connect(self._on_per_video_results_ready)
 
         # Get video files
         self.video_files = self._get_video_files(video_directory)
@@ -623,6 +630,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.completion_label.hide()
         self.playlist_finished = False
         self.waiting_for_results = False
+        self.display_phase = "action"
         self.check_timer.start()
 
     def _update_progress_display(self):
@@ -647,11 +655,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._update_status_file("playing", 0, total, f"Playlist loaded: {total} videos")
         logger.info(f"Playlist loaded: {total} videos")
 
-    def _show_waiting_overlay(self, status_text="Processing Results..."):
+    def _show_waiting_overlay(self, status_text=""):
         if self.waiting_overlay is None:
             self.waiting_overlay = WaitingOverlay(self.videoframe)
             self.videoframe.installEventFilter(self)
-        self.waiting_overlay.set_status_text(status_text)
+        # Empty status keeps the same "Processing" / "Results" rings as per-video wait.
+        self.waiting_overlay.set_status_text(status_text or "")
         self.waiting_overlay.setGeometry(0, 0, self.videoframe.width(), self.videoframe.height())
         self.waiting_overlay.show()
         self.waiting_overlay.raise_()
@@ -682,51 +691,115 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         return path
         return None
 
-    def _trigger_results_for_video(self, report_path, video_num, start_time, end_time, is_last_video=False):
-        logger.info(f"Triggering results for video {video_num} (start={start_time}, end={end_time})")
+    def _arm_timer(self, ms, callback):
+        if self.results_timer:
+            self.results_timer.stop()
+        self.results_timer = QtCore.QTimer(singleShot=True)
+        self.results_timer.timeout.connect(callback)
+        self.results_timer.start(max(0, int(ms)))
+
+    def _remaining_wait_ms(self):
+        elapsed_ms = int((time.time() - getattr(self, "_wait_started", time.time())) * 1000)
+        return max(0, WAIT_ANIMATION_MS - elapsed_ms)
+
+    def _play_local_clip(self, video_path, rate=1.0):
+        self.player.stop()
+        self.media = self.instance.media_new(os.path.abspath(video_path))
+        self.player.set_media(self.media)
+        self.player.video_set_aspect_ratio("3712:512")
+        self.player.video_set_scale(1.0)
+        self.player.video_set_crop_geometry("0:0:3712:512")
+        try:
+            self.player.set_rate(rate)
+        except Exception:
+            pass
+        self.player.play()
+        self.check_timer.start()
+
+    def _do_per_video_request(self, video_num, start_time, end_time):
+        report_path = self._find_latest_report()
+        video_path = ""
+        if not report_path:
+            logger.warning("No report found – skipping per-video results.")
+            self.per_video_results_ready.emit("")
+            return
         backend_url = "http://127.0.0.1:8000/create-video-results"
         payload = {
             "report_path": report_path,
             "start_time": start_time,
             "end_time": end_time,
             "video_index": video_num,
-            "total_videos": self.total_videos
+            "total_videos": self.total_videos,
+            "display": False,
         }
-        success = False
-        if HAS_REQUESTS:
-            try:
+        try:
+            if HAS_REQUESTS:
                 response = requests.post(backend_url, json=payload, timeout=30)
                 if response.status_code == 200:
-                    success = True
-                    logger.info(f"Results video for video {video_num} generated.")
+                    data = response.json()
+                    candidate = data.get("video_path") or ""
+                    if candidate and os.path.exists(candidate):
+                        video_path = candidate
+                        logger.info("Results video for video %s generated.", video_num)
+                    else:
+                        logger.error("Per-video results missing file: %s", data)
                 else:
-                    logger.error(f"Backend error: {response.text}")
-            except Exception as e:
-                logger.error(f"Request failed: {e}")
-        else:
-            try:
+                    logger.error("Backend error: %s", response.text)
+            else:
                 import urllib.request
-                req = urllib.request.Request(backend_url, data=json.dumps(payload).encode('utf-8'),
-                                             headers={'Content-Type': 'application/json'})
+                req = urllib.request.Request(
+                    backend_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    if resp.getcode() == 200:
-                        success = True
-            except Exception as e:
-                logger.error(f"urllib failed: {e}")
+                    data = json.loads(resp.read().decode("utf-8") or "{}")
+                    candidate = data.get("video_path") or ""
+                    if candidate and os.path.exists(candidate):
+                        video_path = candidate
+        except Exception as e:
+            logger.error("Per-video results request failed: %s", e)
+        self.per_video_results_ready.emit(video_path)
 
-        if success:
-            self._hide_waiting_overlay()
-            self.waiting_for_results = True
-            self.show_status(f"Video {video_num} results on Screen 2", 1000)
-            if self.results_timer:
-                self.results_timer.stop()
-            self.results_timer = QtCore.QTimer(singleShot=True)
-            delay_ms = 500 if is_last_video else 15000
-            self.results_timer.timeout.connect(self._continue_to_next_video)
-            self.results_timer.start(delay_ms)
-        else:
-            self._hide_waiting_overlay()
-            self._continue_to_next_video()
+    def _on_per_video_results_ready(self, video_path):
+        if self.operator_paused:
+            QTimer.singleShot(200, lambda: self._on_per_video_results_ready(video_path))
+            return
+        self._arm_timer(self._remaining_wait_ms(), lambda: self._play_per_video_results(video_path))
+
+    def _play_per_video_results(self, video_path):
+        if self.operator_paused:
+            QTimer.singleShot(200, lambda: self._play_per_video_results(video_path))
+            return
+        self._hide_waiting_overlay()
+        if not video_path or not os.path.exists(video_path):
+            logger.warning("Per-video results missing; continuing sequence")
+            self._finish_per_video_results()
+            return
+        self.display_phase = "per_video_results"
+        self.waiting_for_results = True
+        self.completion_label.hide()
+        self._update_status_file(
+            "playing_results",
+            self.current_video_index + 1,
+            self.total_videos,
+            "Playing per-video results...",
+        )
+        logger.info("Playing per-video results for 20s: %s", video_path)
+        self._play_local_clip(video_path, rate=1.0)
+        self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
+
+    def _finish_per_video_results(self):
+        if self.results_timer:
+            self.results_timer.stop()
+            self.results_timer = None
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        self.waiting_for_results = False
+        self.display_phase = "action"
+        self._do_continue()
 
     def _continue_to_next_video(self):
         self.waiting_for_results = False
@@ -739,15 +812,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _do_continue(self):
         self.current_video_index += 1
         if self.current_video_index < len(self.video_files):
+            self.display_phase = "action"
             self._load_video(self.current_video_index)
         else:
             self._show_final_summary()
 
     def _show_final_summary(self):
-        logger.info("Processing Final Results")
-        self._final_wait_started = time.time()
-        # Same overlay as per-video results (14 spinning rings + Processing / Results).
-        self._show_waiting_overlay("Processing Results...")
+        logger.info("All action sets done; showing the same wait animation then final results")
+        self.display_phase = "wait_final"
+        self.waiting_for_results = True
+        self._wait_started = time.time()
+        self._show_waiting_overlay()
         QTimer.singleShot(100, self._call_final_summary_backend)
 
     def _call_final_summary_backend(self):
@@ -761,7 +836,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         backend_url = "http://127.0.0.1:8000/create-results-video"
         try:
-            response = requests.post(backend_url, json={"report_path": report_path}, timeout=60)
+            response = requests.post(
+                backend_url,
+                json={"report_path": report_path, "display": False},
+                timeout=60,
+            )
             if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
@@ -769,10 +848,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     if video_path and os.path.exists(video_path):
                         self.final_summary_done.emit(video_path)
                         return
-            # If we reach here, something went wrong
             self.final_summary_done.emit("")
         except Exception as e:
-            logger.error(f"Final summary request failed: {e}")
+            logger.error("Final summary request failed: %s", e)
             self.final_summary_done.emit("")
 
     def _force_close_with_completion(self):
@@ -783,23 +861,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.close()
 
     def _on_final_summary_done(self, video_path):
-        elapsed = time.time() - getattr(self, "_final_wait_started", time.time())
-        remain_ms = max(0, int((5.0 - elapsed) * 1000))
-        QtCore.QTimer.singleShot(remain_ms, lambda: self._play_final_after_wait(video_path))
+        if self.operator_paused:
+            QTimer.singleShot(200, lambda: self._on_final_summary_done(video_path))
+            return
+        self._arm_timer(self._remaining_wait_ms(), lambda: self._play_final_after_wait(video_path))
 
     def _play_final_after_wait(self, video_path):
+        if self.operator_paused:
+            QTimer.singleShot(200, lambda: self._play_final_after_wait(video_path))
+            return
         self._hide_waiting_overlay()
         if video_path and os.path.exists(video_path):
+            self.display_phase = "final"
             # Set status to "playing_final" – not "completed" yet
             self._update_status_file("playing_final", self.total_videos, self.total_videos, "Playing final summary...")
             logger.info(f"Playing final summary video: {video_path}")
-            self.player.stop()
-            self.media = self.instance.media_new(os.path.abspath(video_path))
-            self.player.set_media(self.media)
-            self.player.video_set_aspect_ratio("3712:512")
-            self.player.video_set_scale(1.0)
-            self.player.video_set_crop_geometry("0:0:3712:512")
-            self.player.play()
+            self._play_local_clip(video_path, rate=1.0)
 
             self.completion_label.setText("Final summary playing...")
             self.completion_label.adjustSize()
@@ -873,30 +950,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.error(f"Error stopping realtime: {e}")
 
     def _on_video_ended(self):
+        if self.display_phase != "action":
+            return
         if self.operator_paused or self.video_end_called or self.waiting_for_results:
             return
         self.video_end_called = True
+        self.waiting_for_results = True
+        self.display_phase = "wait_per_video"
         self.check_timer.stop()
-        self._show_waiting_overlay("Processing Results...")
+        self._wait_started = time.time()
+        self._show_waiting_overlay()
         video_num = self.current_video_index + 1
-        is_last_video = (video_num == self.total_videos)
-        logger.info(f"Video {video_num} ended. is_last_video={is_last_video}")
+        logger.info("Action set %s finished; 5s wait then 20s per-video results", video_num)
         self.player.stop()
-        QTimer.singleShot(3000, lambda: self._trigger_results_after_delay(video_num, is_last_video))
-
-    def _trigger_results_after_delay(self, video_num, is_last_video):
-        if self.operator_paused:
-            QTimer.singleShot(200, lambda: self._trigger_results_after_delay(video_num, is_last_video))
-            return
-        report_path = self._find_latest_report()
-        if not report_path:
-            logger.warning("No report found – skipping per‑video results.")
-            self._hide_waiting_overlay()
-            QTimer.singleShot(500, self._continue_to_next_video)
-            return
         start_time = self.video_start_time
         end_time = time.time()
-        self._trigger_results_for_video(report_path, video_num, start_time, end_time, is_last_video)
+        thread = threading.Thread(
+            target=self._do_per_video_request,
+            args=(video_num, start_time, end_time),
+            daemon=True,
+        )
+        thread.start()
 
     def _set_speed_with_retry(self, speed, retry_count=0):
         try:
@@ -912,6 +986,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _check_speed_changes(self):
         try:
+            if getattr(self, "display_phase", "action") != "action":
+                return
             current_time = time.time()
             if current_time - self.last_check_time < 0.1:
                 return
@@ -1052,10 +1128,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
 
         try:
+            if getattr(self, "display_phase", "action") in ("wait_per_video", "wait_final", "per_video_results"):
+                return
             state = self.player.get_state()
 
             # If we're playing the final video (playlist_finished is True)
-            if self.playlist_finished:
+            if self.playlist_finished or getattr(self, "display_phase", "") == "final":
                 if self._final_play_started_at and (time.time() - self._final_play_started_at) < 2.0:
                     return
                 length = 0

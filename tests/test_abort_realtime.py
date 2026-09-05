@@ -127,5 +127,19 @@ class StaleRemoteStopTests(unittest.TestCase):
         }))
 
 
+class Screen2DisplayTests(unittest.TestCase):
+    def test_player_owned_sequence_does_not_spawn_helpers(self):
+        self.assertFalse(simust_app.should_spawn_screen2_display(False))
+        self.assertFalse(simust_app.should_spawn_screen2_display("false"))
+
+    def test_operator_can_display_when_player_is_idle(self):
+        previous = simust_app.smart_player_process
+        simust_app.smart_player_process = None
+        try:
+            self.assertTrue(simust_app.should_spawn_screen2_display(True))
+        finally:
+            simust_app.smart_player_process = previous
+
+
 if __name__ == "__main__":
     unittest.main()

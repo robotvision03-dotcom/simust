@@ -907,6 +907,37 @@ def kill_process_tree(proc) -> None:
         pass
 
 
+def smart_player_is_running() -> bool:
+    return smart_player_process is not None and smart_player_process.poll() is None
+
+
+def kill_screen2_result_helpers() -> None:
+    """Stop leftover Screen 2 helper windows so the player sequence is not covered."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *play_results_video*"],
+            capture_output=True,
+            timeout=8,
+        )
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *waiting.py*"],
+            capture_output=True,
+            timeout=8,
+        )
+    except Exception:
+        pass
+
+
+def should_spawn_screen2_display(display_flag) -> bool:
+    if display_flag is False or str(display_flag).lower() in ("0", "false", "no"):
+        return False
+    if smart_player_is_running():
+        return False
+    return True
+
+
 def force_kill_smart_player():
     global smart_player_process
     kill_process_tree(smart_player_process)
@@ -2386,13 +2417,13 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 logger.info("Using static background for final video (30s, 2 FPS)")
         else:
             output_fps = 2
-            total_frames = 30
-            video_duration = 15.0
+            video_duration = float(duration_seconds) if duration_seconds and duration_seconds > 0 else 20.0
+            total_frames = max(1, int(round(video_duration * output_fps)))
             if slice_video_path and os.path.exists(slice_video_path):
                 use_slice_video = True
-                logger.info("Per-video will sample coach clip via ffmpeg/stream (15s @ 2 FPS)")
+                logger.info("Per-video will sample coach clip via ffmpeg/stream (%.0fs @ 2 FPS)", video_duration)
             else:
-                logger.info("Using static background for per-video")
+                logger.info("Using static background for per-video (%.0fs)", video_duration)
 
         temp_avi = output_path.replace(".mp4", "_temp.avi")
 
@@ -2672,7 +2703,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 cmd = [
                     ffmpeg_exe, "-y",
                     "-loop", "1", "-i", static_png,
-                    "-t", str(video_duration or 15),
+                    "-t", str(video_duration or 20),
                     "-r", str(output_fps or 2),
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
@@ -2813,6 +2844,9 @@ async def create_video_results(req: Request):
         data = await req.json()
         directory = data.get("directory")
         video_index = data.get("video_index", 1)
+        spawn_display = should_spawn_screen2_display(data.get("display", True))
+        if not spawn_display:
+            kill_screen2_result_helpers()
 
         # If directory not provided, fallback to newest realtime folder
         if not directory or not os.path.exists(directory):
@@ -2846,7 +2880,7 @@ async def create_video_results(req: Request):
         success = generate_results_video_from_results(
             video_results,
             video_path,
-            duration_seconds=15,
+            duration_seconds=20,
             is_final=False,
             slice_video_path=None,
             session_folder=directory
@@ -2858,17 +2892,16 @@ async def create_video_results(req: Request):
         if not os.path.exists(video_path):
             return {"status": "error", "message": "Video file not created"}
 
-        # Play the video on Screen 2
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        player_script = os.path.join(script_dir, "play_results_video.py")
-        if not os.path.exists(player_script):
-            player_script = os.path.join(os.getcwd(), "play_results_video.py")
-        if os.path.exists(player_script):
-            subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
-            return {"status": "success", "video_path": video_path}
-        else:
-            logger.error("Player script not found")
-            return {"status": "error", "message": "Player script not found"}
+        if spawn_display:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            player_script = os.path.join(script_dir, "play_results_video.py")
+            if not os.path.exists(player_script):
+                player_script = os.path.join(os.getcwd(), "play_results_video.py")
+            if os.path.exists(player_script):
+                subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
+            else:
+                logger.error("Player script not found")
+        return {"status": "success", "video_path": video_path}
 
     except Exception as e:
         logger.error(f"create-video-results error: {e}", exc_info=True)
@@ -2882,6 +2915,9 @@ async def create_results_video(req: Request):
     try:
         data = await req.json()
         directory = data.get("directory")
+        spawn_display = should_spawn_screen2_display(data.get("display", True))
+        if not spawn_display:
+            kill_screen2_result_helpers()
 
         # If no directory, try to find newest
         if not directory or not os.path.exists(directory):
@@ -2915,7 +2951,7 @@ async def create_results_video(req: Request):
         wait_proc = None
         wait_started = time.time()
         try:
-            if os.path.exists(waiting_script):
+            if spawn_display and os.path.exists(waiting_script):
                 wait_cmd = [sys.executable, waiting_script]
                 if sys.platform == "win32":
                     wait_proc = subprocess.Popen(
@@ -2935,9 +2971,10 @@ async def create_results_video(req: Request):
                 session_folder=directory
             )
 
-            leftover = 5.0 - (time.time() - wait_started)
-            if leftover > 0:
-                await asyncio.sleep(leftover)
+            if spawn_display:
+                leftover = 5.0 - (time.time() - wait_started)
+                if leftover > 0:
+                    await asyncio.sleep(leftover)
         finally:
             if wait_proc:
                 kill_process_tree(wait_proc)
@@ -2948,7 +2985,7 @@ async def create_results_video(req: Request):
         if not os.path.exists(video_path):
             return {"status": "error", "message": "Video file not created"}
 
-        if os.path.exists(player_script):
+        if spawn_display and os.path.exists(player_script):
             play_cmd = [sys.executable, player_script, video_path, "1"]
             if sys.platform == "win32":
                 subprocess.Popen(
@@ -2957,8 +2994,7 @@ async def create_results_video(req: Request):
                 )
             else:
                 subprocess.Popen(play_cmd, shell=False)
-            return {"status": "success", "video_path": video_path}
-        return {"status": "error", "message": "Player script not found"}
+        return {"status": "success", "video_path": video_path}
 
     except Exception as e:
         logger.error(f"create-results-video error: {e}", exc_info=True)
