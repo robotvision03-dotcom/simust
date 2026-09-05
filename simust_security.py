@@ -41,6 +41,7 @@ LAB_ONLY_PREFIXES = (
     "/start-realtime",
     "/stop-realtime",
     "/set-visualization",
+    "/set-simulation",
     "/results",
     "/video-results",
     "/realtime-results",
