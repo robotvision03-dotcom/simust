@@ -16,8 +16,6 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import uvicorn
 import asyncio
-import cv2
-import numpy as np
 import math
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
@@ -29,7 +27,6 @@ import time
 import atexit
 import gc
 import re
-from PIL import Image, ImageDraw, ImageFont
 
 import hashlib
 import json
@@ -38,21 +35,54 @@ import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
-# --- NEW: PDF generation imports ---
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from simust_security import (
+    PUBLIC_MODE,
+    can_access_player,
+    check_auth_rate,
+    cors_origins,
+    current_user,
+    hash_password,
+    is_lab_only_path,
+    issue_token,
+    verify_password,
+)
+import simust_push
+
+if PUBLIC_MODE:
+    cv2 = None
+    np = None
+    Image = ImageDraw = ImageFont = None
+else:
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+
 app = FastAPI()
+_CORS_ORIGINS = cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=_CORS_ORIGINS != ["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-SIMUST-PUSH-KEY", "X-SIMUST-TS", "X-SIMUST-SIGN"],
 )
+
+
+@app.middleware("http")
+async def guard_lab_only_on_public_host(request: Request, call_next):
+    if PUBLIC_MODE and is_lab_only_path(request.url.path):
+        return JSONResponse(
+            {"detail": "This action is only available on the training machine."},
+            status_code=403,
+        )
+    return await call_next(request)
 
 os.makedirs("static", exist_ok=True)   
 
@@ -448,10 +478,25 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 # Directory Configuration
 # ============================================================
-SIMUST_PLAYER_DIRECTORY = "C:/Users/siama/Documents/simust_player"
-PLAYER_REPORTS_DIR = "C:/Users/siama/Documents/simust_reports"
-REALTIME_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
-ANIMATIONS_DIR = "C:/Users/siama/Documents/_Sia/Animations"
+# Training-lab Windows paths stay the default on Windows.
+# On a public Linux host (my.simust.com) use local folders unless env vars are set,
+# so player reports are not expected at C:\Users\siama\...
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if os.name == "nt":
+    _DEFAULT_PLAYER_DIR = "C:/Users/siama/Documents/simust_player"
+    _DEFAULT_REPORTS_DIR = "C:/Users/siama/Documents/simust_reports"
+    _DEFAULT_REALTIME_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
+    _DEFAULT_ANIMATIONS_DIR = "C:/Users/siama/Documents/_Sia/Animations"
+else:
+    _DEFAULT_PLAYER_DIR = os.path.join(_APP_DIR, "simust_player")
+    _DEFAULT_REPORTS_DIR = os.path.join(_APP_DIR, "simust_reports")
+    _DEFAULT_REALTIME_DIR = os.path.join(_APP_DIR, "simust_realtime_recordings")
+    _DEFAULT_ANIMATIONS_DIR = os.path.join(_APP_DIR, "animations")
+
+SIMUST_PLAYER_DIRECTORY = os.environ.get("SIMUST_PLAYER_DIRECTORY", _DEFAULT_PLAYER_DIR)
+PLAYER_REPORTS_DIR = os.environ.get("SIMUST_REPORTS_DIR", _DEFAULT_REPORTS_DIR)
+REALTIME_RECORDINGS_DIR = os.environ.get("SIMUST_REALTIME_DIR", _DEFAULT_REALTIME_DIR)
+ANIMATIONS_DIR = os.environ.get("SIMUST_ANIMATIONS_DIR", _DEFAULT_ANIMATIONS_DIR)
 
 # Ensure directories exist
 os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
@@ -490,8 +535,17 @@ PIXEL_TO_METER_SCALE = 0.0259
 # ============================================================
 # Local imports
 # ============================================================
-from recorder.main import prepare_video_recorders, capture_videos
-from recorder import settings as recorder_settings
+if PUBLIC_MODE:
+    prepare_video_recorders = None
+    capture_videos = None
+
+    class _PublicRecorderSettings:
+        CAMERAS: Dict[str, dict] = {}
+
+    recorder_settings = _PublicRecorderSettings()
+else:
+    from recorder.main import prepare_video_recorders, capture_videos
+    from recorder import settings as recorder_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -730,13 +784,28 @@ async def check_all_cameras_status() -> List[Dict[str, str]]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global current_selections, current_results_dir, output_path
-    logger.info("App start – checking cameras")
-    await check_all_cameras_status()
-    current_selections = {c: False for c in recorder_settings.CAMERAS.keys()}
-    current_results_dir = None
-    logger.info(f"Initialized selections: {list(current_selections.keys())}")
+    if PUBLIC_MODE:
+        current_selections = {}
+        current_results_dir = None
+        logger.info("Public host mode: training-machine APIs are blocked; player data requires sign-in")
+    else:
+        logger.info("App start – checking cameras")
+        await check_all_cameras_status()
+        current_selections = {c: False for c in recorder_settings.CAMERAS.keys()}
+        current_results_dir = None
+        logger.info(f"Initialized selections: {list(current_selections.keys())}")
     logger.info(f"SIMUST_PLAYER directory: {SIMUST_PLAYER_DIRECTORY}")
     logger.info(f"Player reports directory: {PLAYER_REPORTS_DIR}")
+    if not os.environ.get("SIMUST_SESSION_SECRET"):
+        logger.warning("SIMUST_SESSION_SECRET is not set; login sessions reset when the app restarts")
+    if simust_push.push_configured():
+        logger.info("Lab→host JSON push is enabled")
+        try:
+            flushed = simust_push.flush_queue()
+            if flushed:
+                logger.info("Flushed %s queued player JSON payloads to the host", flushed)
+        except Exception as exc:
+            logger.warning("Could not flush push queue: %s", exc)
     yield
     logger.info("App shutdown")
     force_kill_smart_player()
@@ -753,6 +822,8 @@ async def validation_exc(_: Request, exc: ValidationError):
 
 @app.get("/", response_class=FileResponse)
 async def root():
+    if PUBLIC_MODE:
+        return _my_simust_page()
     return FileResponse("index.html")
 
 @app.get("/cameras")
@@ -2325,6 +2396,16 @@ async def save_session_to_player(req: Request):
 
         logger.info(f"Saved session to player folder: {session_file}")
 
+        try:
+            simust_push.push_session_async(
+                player_id,
+                session_report,
+                users.get(player_id),
+                index[-1] if index else None,
+            )
+        except Exception as push_exc:
+            logger.warning("Host push could not start: %s", push_exc)
+
         # ============================================================
         # PROGRESSION EVALUATION (UPDATED for Foundation subdirectory)
         # ============================================================
@@ -2475,8 +2556,19 @@ def compute_player_ae_acc(player_id):
     return round(avg_ae, 1), round(avg_acc, 1)
 
 
+def _public_sessions(raw_sessions):
+    if not PUBLIC_MODE:
+        return raw_sessions
+    return [simust_push.sanitize_session(s) for s in raw_sessions]
+
+
 @app.get("/get-player-reports/{player_id}")
-async def get_player_reports(player_id: str):
+async def get_player_reports(player_id: str, request: Request):
+    users = load_users()
+    viewer = current_user(request, users, required=PUBLIC_MODE)
+    player_meta = users.get(player_id) or {}
+    if not can_access_player(viewer, player_id, player_meta):
+        raise HTTPException(403, "You can only view your own training data")
     try:
         player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
         index_file = os.path.join(player_dir, "index.json")
@@ -2492,7 +2584,9 @@ async def get_player_reports(player_id: str):
                     session_data = json.load(f)
                     sessions.append(session_data)
         sessions.sort(key=lambda x: x.get("session", {}).get("timestamp", ""), reverse=True)
-        return {"sessions": sessions}
+        return {"sessions": _public_sessions(sessions)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get player reports: {e}")
         return {"sessions": [], "error": str(e)}
@@ -2685,14 +2779,37 @@ async def open_directory(req: Request):
 # ============================================================
 # NEW: Create PDF Report Endpoint
 # ============================================================
-@app.get("/my_simust.html", response_class=FileResponse)
-async def my_simust():
+def _my_simust_page():
     return FileResponse("my_simust.html")
 
+@app.get("/my_simust.html", response_class=FileResponse)
+async def my_simust():
+    return _my_simust_page()
+
+@app.get("/my-simust", response_class=FileResponse)
+async def my_simust_root():
+    """Public My SIMUST portal."""
+    return _my_simust_page()
+
+@app.get("/my-simust/{page}", response_class=FileResponse)
+async def my_simust_view(page: str):
+    """Public views: /my-simust/login, /register, /dashboard."""
+    if page not in ("login", "register", "dashboard"):
+        raise HTTPException(404, "Not found")
+    return _my_simust_page()
+
+@app.get("/login", response_class=FileResponse)
+@app.get("/register", response_class=FileResponse)
+@app.get("/dashboard", response_class=FileResponse)
+async def my_simust_host_pages():
+    """Short paths for my.simust.com (GET only; POST /login and POST /register stay the API)."""
+    return _my_simust_page()
+
 @app.get("/get-players")
-async def get_players():
-    """Return a list of all players with their id, name, surname, playerId, club, team, age, image, and progress."""
+async def get_players(request: Request):
+    """Return players visible to the caller. Public host: own record only for players."""
     users = load_users()
+    viewer = current_user(request, users, required=PUBLIC_MODE)
     players = []
     seen = set()
 
@@ -2793,7 +2910,95 @@ async def get_players():
                 "sessions": []
             })
 
-    return {"players": players}
+    visible = []
+    for player in players:
+        image = player.get("image") or ""
+        if PUBLIC_MODE and isinstance(image, str) and image.startswith("data:"):
+            player = dict(player)
+            player["image"] = ""
+        if can_access_player(viewer, player.get("id"), player):
+            visible.append(player)
+    return {"players": visible}
+
+@app.post("/internal/ingest-player-data")
+async def ingest_player_data(request: Request):
+    """Receive sanitized player JSON from the lab PC. Requires SIMUST_PUSH_KEY."""
+    body = await request.body()
+    try:
+        simust_push.verify_ingest_headers(
+            request.headers.get("x-simust-push-key", ""),
+            request.headers.get("x-simust-ts", ""),
+            request.headers.get("x-simust-sign", ""),
+            body,
+        )
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc))
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+
+    player_id = (data.get("player_id") or "").strip()
+    if not simust_push.PLAYER_ID_RE.match(player_id):
+        raise HTTPException(400, "Invalid player_id")
+
+    account = data.get("account") or {}
+    session_report = simust_push.sanitize_session(data.get("session") or {})
+    index_entry = data.get("index_entry") or {}
+
+    users = load_users()
+    existing = users.get(player_id) or {}
+    merged = dict(existing)
+    for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
+        value = account.get(field)
+        if value not in (None, ""):
+            merged[field] = value
+    if account.get("progress"):
+        merged["progress"] = account.get("progress")
+    if not existing and account.get("password_hash"):
+        merged["password"] = account.get("password_hash")
+        merged.setdefault("role", "player")
+    if not merged.get("progress"):
+        merged["progress"] = {
+            "current_level": "L00-Foundation",
+            "unlocked_levels": ["L00-Foundation"],
+            "completed_levels": [],
+            "challenge_results": {},
+        }
+    users[player_id] = merged
+    save_users(users)
+
+    session_id = (session_report.get("session") or {}).get("id") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+    os.makedirs(player_dir, exist_ok=True)
+    session_file = os.path.join(player_dir, f"{session_id}.json")
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(session_report, f, indent=2, ensure_ascii=False)
+
+    index_file = os.path.join(player_dir, "index.json")
+    index = []
+    if os.path.exists(index_file):
+        with open(index_file, "r", encoding="utf-8") as f:
+            try:
+                index = json.load(f)
+            except Exception:
+                index = []
+    index = [row for row in index if row.get("session_id") != session_id]
+    if not index_entry:
+        index_entry = {
+            "session_id": session_id,
+            "timestamp": (session_report.get("session") or {}).get("timestamp", ""),
+            "level": (session_report.get("session") or {}).get("level", ""),
+            "file": f"{session_id}.json",
+        }
+    index_entry["file"] = f"{session_id}.json"
+    index.append(index_entry)
+    index.sort(key=lambda row: row.get("timestamp", ""), reverse=True)
+    with open(index_file, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, ensure_ascii=False)
+
+    logger.info("Ingested pushed session %s for %s", session_id, player_id)
+    return {"status": "success", "player_id": player_id, "session_id": session_id}
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
@@ -2931,6 +3136,7 @@ async def register(req: Request):
     except:
         raise HTTPException(400, "Invalid JSON")
 
+    check_auth_rate(req)
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     name = data.get("name", "").strip()
@@ -2940,6 +3146,8 @@ async def register(req: Request):
     team = data.get("team", "").strip()
     role = data.get("role", "player").strip()
     image = data.get("image", "").strip()
+    if PUBLIC_MODE and image.startswith("data:"):
+        image = ""
     gender = data.get("gender", "").strip()
     email = data.get("email", "").strip().lower()
     country_code = data.get("country_code", "").strip()
@@ -2947,6 +3155,8 @@ async def register(req: Request):
 
     if not username or not password or not name or not surname or not role:
         raise HTTPException(400, "Missing required fields")
+    if PUBLIC_MODE and len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
     if not email or not EMAIL_RE.match(email):
         raise HTTPException(400, "Valid email is required")
     if not country_code.startswith("+"):
@@ -2959,8 +3169,8 @@ async def register(req: Request):
     if username in users:
         raise HTTPException(400, "Username already exists")
 
-    # Simple hash (MD5 – for demo; use bcrypt in production)
-    hashed = hashlib.md5(password.encode()).hexdigest()
+    # pbkdf2 on the public host; legacy MD5 hashes are upgraded on next sign-in
+    hashed = hash_password(password)
 
     # Initialize progress
     progress = {
@@ -3009,6 +3219,7 @@ async def login(req: Request):
     except:
         raise HTTPException(400, "Invalid JSON")
 
+    check_auth_rate(req)
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
 
@@ -3020,9 +3231,16 @@ async def login(req: Request):
         raise HTTPException(401, "Invalid credentials")
 
     user = users[username]
-    hashed = hashlib.md5(password.encode()).hexdigest()
-    if user["password"] != hashed:
+    ok, upgraded = verify_password(password, user.get("password", ""))
+    if not ok:
         raise HTTPException(401, "Invalid credentials")
+    if upgraded:
+        users[username]["password"] = upgraded
+        save_users(users)
+
+    image = user.get("image") or ""
+    if PUBLIC_MODE and isinstance(image, str) and image.startswith("data:"):
+        image = ""
 
     return {
         "username": username,
@@ -3032,8 +3250,10 @@ async def login(req: Request):
         "club": user["club"],
         "team": user["team"],
         "age": user["age"],
-        "image": user["image"],
-        "progress": user.get("progress", {})
+        "gender": user.get("gender", "Male"),
+        "image": image,
+        "progress": user.get("progress", {}),
+        "token": issue_token(username, user.get("role", "player")),
     }
     
 @app.post("/update-profile")
@@ -3055,6 +3275,9 @@ async def update_profile(req: Request):
         raise HTTPException(400, "Username required")
 
     users = load_users()
+    viewer = current_user(req, users, required=PUBLIC_MODE)
+    if viewer and viewer["username"] != username:
+        raise HTTPException(403, "You can only update your own profile")
     if username not in users:
         raise HTTPException(404, "User not found")
 

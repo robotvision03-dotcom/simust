@@ -1,3 +1,4 @@
+.venv/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -5,6 +6,10 @@ __pycache__/
 .env.*
 *.log
 users.json
+simust_reports/
+simust_player/
+simust_realtime_recordings/
+push_queue/
 .vscode/
 .idea/
 android/.gradle/
