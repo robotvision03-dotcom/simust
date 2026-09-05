@@ -745,7 +745,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _show_final_summary(self):
         logger.info("Processing Final Results")
-        self._show_waiting_overlay("Processing Final Results")
+        self._final_wait_started = time.time()
+        # Same overlay as per-video results (14 spinning rings + Processing / Results).
+        self._show_waiting_overlay("Processing Results...")
         QTimer.singleShot(100, self._call_final_summary_backend)
 
     def _call_final_summary_backend(self):
@@ -781,6 +783,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.close()
 
     def _on_final_summary_done(self, video_path):
+        elapsed = time.time() - getattr(self, "_final_wait_started", time.time())
+        remain_ms = max(0, int((5.0 - elapsed) * 1000))
+        QtCore.QTimer.singleShot(remain_ms, lambda: self._play_final_after_wait(video_path))
+
+    def _play_final_after_wait(self, video_path):
         self._hide_waiting_overlay()
         if video_path and os.path.exists(video_path):
             # Set status to "playing_final" – not "completed" yet

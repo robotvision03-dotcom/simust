@@ -2909,33 +2909,38 @@ async def create_results_video(req: Request):
         player_script = os.path.join(script_dir, "play_results_video.py")
         if not os.path.exists(player_script):
             player_script = os.path.join(os.getcwd(), "play_results_video.py")
+        waiting_script = os.path.join(script_dir, "waiting.py")
+        if not os.path.exists(waiting_script):
+            waiting_script = os.path.join(os.getcwd(), "waiting.py")
         wait_proc = None
         wait_started = time.time()
-        if os.path.exists(player_script):
-            wait_cmd = [sys.executable, player_script, "--processing", "1"]
-            if sys.platform == "win32":
-                wait_proc = subprocess.Popen(
-                    wait_cmd, shell=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-            else:
-                wait_proc = subprocess.Popen(wait_cmd, shell=False)
-            logger.info("Showing processing-results animation on Screen 2")
+        try:
+            if os.path.exists(waiting_script):
+                wait_cmd = [sys.executable, waiting_script]
+                if sys.platform == "win32":
+                    wait_proc = subprocess.Popen(
+                        wait_cmd, shell=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                else:
+                    wait_proc = subprocess.Popen(wait_cmd, shell=False)
+                logger.info("Showing the same per-video waiting animation before the final results")
 
-        success = generate_results_video_from_results(
-            all_results,
-            video_path,
-            duration_seconds=0,
-            is_final=True,
-            slice_video_path=None,
-            session_folder=directory
-        )
+            success = generate_results_video_from_results(
+                all_results,
+                video_path,
+                duration_seconds=0,
+                is_final=True,
+                slice_video_path=None,
+                session_folder=directory
+            )
 
-        leftover = 5.0 - (time.time() - wait_started)
-        if leftover > 0:
-            await asyncio.sleep(leftover)
-        if wait_proc:
-            kill_process_tree(wait_proc)
+            leftover = 5.0 - (time.time() - wait_started)
+            if leftover > 0:
+                await asyncio.sleep(leftover)
+        finally:
+            if wait_proc:
+                kill_process_tree(wait_proc)
 
         if not success:
             return {"status": "error", "message": "Video generation failed"}
