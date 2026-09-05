@@ -1,0 +1,40 @@
+SIMUST lab PC  <--------push / pull-------->  Hetzner VPS (My SIMUST)
+index.html + app.py                            http://157.180.47.98/login
+C:\Users\siama\Documents\simust_reports        /opt/simust/simust_reports
+users.json                                     /opt/simust/users.json
+
+Needs lab.env next to app.py (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).
+Raw passwords and videos stay on the lab. Hashes + JSON results are sent.
+
+
+PUSH  (lab --> VPS)   POST /internal/ingest-player-data
+------------------------------------------------------
+When                              What
+app.py starts                     all accounts (hashed passwords)
+                                  all simust_reports/*.json
+Realtime Play running (~5s)       live_{player} session snapshot
+Realtime ends / save session      final session JSON + progress
+lab register / profile / unlock   updated account
+
+
+PULL  (lab <-- VPS)   GET /internal/export-accounts
+------------------------------------------------------
+When                              What
+app.py starts                     new My SIMUST registrations
+every ~15 seconds                 same
+index.html search /get-players    same
+
+New Register on My SIMUST is written into lab users.json
+so index.html can search that name and start a test.
+
+
+NOT sent
+---------
+videos, camera streams, disk paths, raw passwords, profile data-URI photos
+
+
+Public site
+-----------
+simust.com  = marketing only
+My SIMUST button should open https://my.simust.com/login
+(or http://157.180.47.98/login until DNS is updated)
