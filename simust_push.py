@@ -235,6 +235,75 @@ def push_accounts_async(users: Dict[str, Any]) -> None:
     threading.Thread(target=push_accounts, args=(users,), daemon=True, name="simust-push-users").start()
 
 
+def push_reports_dir(reports_dir: str, users: Optional[Dict[str, Any]] = None) -> int:
+    """Push every player JSON under simust_reports (no videos)."""
+    if not push_configured():
+        logger.info("SIMUST_PUSH_URL / SIMUST_PUSH_KEY not set; reports stay on this PC only")
+        return 0
+    if not reports_dir or not os.path.isdir(reports_dir):
+        logger.warning("Reports folder not found: %s", reports_dir)
+        return 0
+    users = users or {}
+    sent = 0
+    players: list = []
+    for player_id in sorted(os.listdir(reports_dir)):
+        if not PLAYER_ID_RE.match(player_id):
+            continue
+        player_dir = os.path.join(reports_dir, player_id)
+        if not os.path.isdir(player_dir):
+            continue
+        index_path = os.path.join(player_dir, "index.json")
+        index = []
+        if os.path.isfile(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    index = json.load(f) or []
+            except Exception:
+                index = []
+        by_file = {row.get("file"): row for row in index if row.get("file")}
+        sessions = []
+        names = [n for n in os.listdir(player_dir) if n.endswith(".json") and n != "index.json"]
+        for name in sorted(names):
+            path = os.path.join(player_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    report = json.load(f)
+            except Exception as exc:
+                logger.warning("Skip report %s: %s", path, exc)
+                continue
+            sessions.append({
+                "session": sanitize_session(report if isinstance(report, dict) else {}),
+                "index_entry": by_file.get(name) or {},
+            })
+        if not sessions:
+            continue
+        players.append({
+            "player_id": player_id,
+            "account": public_account_payload(player_id, users.get(player_id) or {}),
+            "sessions": sessions,
+        })
+        # Send one player per request so a 2 GB host is not overloaded.
+        payload = {"kind": "reports", "players": [players[-1]]}
+        try:
+            flush_queue()
+            _post(payload)
+            sent += len(sessions)
+            logger.info("Pushed %s reports for %s", len(sessions), player_id)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, OSError) as exc:
+            logger.warning("Report push failed for %s (%s); queued", player_id, exc)
+            enqueue(payload)
+    return sent
+
+
+def push_reports_async(reports_dir: str, users: Optional[Dict[str, Any]] = None) -> None:
+    threading.Thread(
+        target=push_reports_dir,
+        args=(reports_dir, users),
+        daemon=True,
+        name="simust-push-reports",
+    ).start()
+
+
 def push_live_session(player_id: str, session_report: Dict[str, Any], user: Optional[Dict[str, Any]]) -> None:
     """Overwrite one live_{player} session on the host while a test is running."""
     live = sanitize_session(session_report)

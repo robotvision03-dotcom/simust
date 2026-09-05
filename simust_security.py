@@ -52,6 +52,7 @@ LAB_ONLY_PREFIXES = (
     "/save-session-to-player",
     "/sync-live-to-host",
     "/sync-accounts-to-host",
+    "/sync-reports-to-host",
     "/unlock-level",
     "/lock-level",
     "/stitch",

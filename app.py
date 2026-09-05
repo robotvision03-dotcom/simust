@@ -813,9 +813,11 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not flush push queue: %s", exc)
         if not PUBLIC_MODE:
             try:
-                simust_push.push_accounts_async(load_users())
+                users = load_users()
+                simust_push.push_accounts_async(users)
+                simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
             except Exception as exc:
-                logger.warning("Could not sync accounts on startup: %s", exc)
+                logger.warning("Could not sync accounts/reports on startup: %s", exc)
     yield
     logger.info("App shutdown")
     force_kill_smart_player()
@@ -1245,6 +1247,16 @@ async def sync_accounts_to_host():
         return {"status": "skipped", "detail": "Set lab.env SIMUST_PUSH_URL and SIMUST_PUSH_KEY"}
     simust_push.push_accounts_async(load_users())
     return {"status": "success"}
+
+
+@app.post("/sync-reports-to-host")
+async def sync_reports_to_host():
+    if PUBLIC_MODE:
+        raise HTTPException(403, "This action is only available on the training machine.")
+    if not simust_push.push_configured():
+        return {"status": "skipped", "detail": "Set lab.env SIMUST_PUSH_URL and SIMUST_PUSH_KEY"}
+    simust_push.push_reports_async(PLAYER_REPORTS_DIR, load_users())
+    return {"status": "success", "reports_dir": PLAYER_REPORTS_DIR}
 
 @app.post("/stop-realtime-camera")
 async def stop_realtime_camera():
@@ -3045,49 +3057,65 @@ async def ingest_player_data(request: Request):
         logger.info("Ingested %s lab accounts", imported)
         return {"status": "success", "accounts": imported}
 
+    def _store_session(player_id: str, session_report: dict, index_entry: dict) -> Optional[str]:
+        session_report = simust_push.sanitize_session(session_report or {})
+        has_actions = bool(session_report.get("actions") or session_report.get("statistics"))
+        session_id = (session_report.get("session") or {}).get("id")
+        if not session_id and not has_actions:
+            return None
+        session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+        player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+        os.makedirs(player_dir, exist_ok=True)
+        session_file = os.path.join(player_dir, f"{session_id}.json")
+        with open(session_file, "w", encoding="utf-8") as f:
+            json.dump(session_report, f, indent=2, ensure_ascii=False)
+        index_file = os.path.join(player_dir, "index.json")
+        index = []
+        if os.path.exists(index_file):
+            with open(index_file, "r", encoding="utf-8") as f:
+                try:
+                    index = json.load(f)
+                except Exception:
+                    index = []
+        index = [row for row in index if row.get("session_id") != session_id]
+        if not index_entry:
+            index_entry = {
+                "session_id": session_id,
+                "timestamp": (session_report.get("session") or {}).get("timestamp", ""),
+                "level": (session_report.get("session") or {}).get("level", ""),
+            }
+        index_entry["file"] = f"{session_id}.json"
+        index.append(index_entry)
+        index.sort(key=lambda row: row.get("timestamp", ""), reverse=True)
+        with open(index_file, "w", encoding="utf-8") as f:
+            json.dump(index, f, indent=2, ensure_ascii=False)
+        return session_id
+
+    if kind == "reports":
+        stored = 0
+        for row in data.get("players") or []:
+            pid = (row.get("player_id") or "").strip()
+            if not simust_push.PLAYER_ID_RE.match(pid):
+                continue
+            _merge_account(pid, row.get("account") or {})
+            for item in row.get("sessions") or []:
+                if _store_session(pid, item.get("session") or {}, item.get("index_entry") or {}):
+                    stored += 1
+        save_users(users)
+        logger.info("Ingested %s lab report sessions", stored)
+        return {"status": "success", "sessions": stored}
+
     player_id = (data.get("player_id") or "").strip()
     if not simust_push.PLAYER_ID_RE.match(player_id):
         raise HTTPException(400, "Invalid player_id")
 
     account = data.get("account") or {}
-    session_report = simust_push.sanitize_session(data.get("session") or {})
-    index_entry = data.get("index_entry") or {}
     _merge_account(player_id, account)
     save_users(users)
-
-    has_actions = bool(session_report.get("actions") or session_report.get("statistics"))
-    session_id = (session_report.get("session") or {}).get("id")
-    if not session_id and not has_actions:
+    session_id = _store_session(player_id, data.get("session") or {}, data.get("index_entry") or {})
+    if not session_id:
         logger.info("Ingested account %s with no session payload", player_id)
         return {"status": "success", "player_id": player_id, "session_id": None}
-    session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-    player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
-    os.makedirs(player_dir, exist_ok=True)
-    session_file = os.path.join(player_dir, f"{session_id}.json")
-    with open(session_file, "w", encoding="utf-8") as f:
-        json.dump(session_report, f, indent=2, ensure_ascii=False)
-
-    index_file = os.path.join(player_dir, "index.json")
-    index = []
-    if os.path.exists(index_file):
-        with open(index_file, "r", encoding="utf-8") as f:
-            try:
-                index = json.load(f)
-            except Exception:
-                index = []
-    index = [row for row in index if row.get("session_id") != session_id]
-    if not index_entry:
-        index_entry = {
-            "session_id": session_id,
-            "timestamp": (session_report.get("session") or {}).get("timestamp", ""),
-            "level": (session_report.get("session") or {}).get("level", ""),
-            "file": f"{session_id}.json",
-        }
-    index_entry["file"] = f"{session_id}.json"
-    index.append(index_entry)
-    index.sort(key=lambda row: row.get("timestamp", ""), reverse=True)
-    with open(index_file, "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2, ensure_ascii=False)
 
     logger.info("Ingested pushed session %s for %s", session_id, player_id)
     return {"status": "success", "player_id": player_id, "session_id": session_id}
