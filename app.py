@@ -3452,6 +3452,8 @@ async def get_players(request: Request):
                 continue
             if folder in seen:
                 continue
+            if "copy" in folder.lower() or not simust_push.PLAYER_ID_RE.match(folder):
+                continue
             # Try to read name, surname, club, team, age from first session file
             index_file = os.path.join(player_dir, "index.json")
             player_name = folder
