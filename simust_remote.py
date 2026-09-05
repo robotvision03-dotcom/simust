@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_ACTIONS = {
     "start-realtime-playback",
     "stop-realtime",
+    "pause-realtime",
     "set-simulation",
     "set-visualization",
     "lab-upsert-player",

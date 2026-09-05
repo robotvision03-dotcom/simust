@@ -339,6 +339,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._realtime_stopped = False
         self._status_completed = False
         self._final_play_started_at = 0
+        self.operator_paused = False
+        self._paused_media_time = None
+        self._pause_started_at = 0
+        self._pending_start_after_pause = False
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -363,6 +367,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # Speed file
         self.speed_file_dir = "C:/Users/siama/Documents/simust_player"
         self.speed_file_path = os.path.join(self.speed_file_dir, "simust_speed.txt")
+        self.pause_file_path = os.path.join(self.speed_file_dir, "pause.txt")
         self.video_index_file = os.path.join(self.speed_file_dir, "current_video_index.txt")
         try:
             os.makedirs(self.speed_file_dir, exist_ok=True)
@@ -420,6 +425,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.speed_monitor_timer = QtCore.QTimer()
         self.speed_monitor_timer.setInterval(300)
         self.speed_monitor_timer.timeout.connect(self._check_speed_changes)
+        self.speed_monitor_timer.timeout.connect(self._check_operator_pause)
         self.last_speed = player_speed
         self.last_check_time = time.time()
 
@@ -598,6 +604,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self._start_playback()
 
     def _start_playback(self):
+        if self.operator_paused:
+            self._pending_start_after_pause = True
+            logger.info("Start delayed until operator resumes.")
+            return
         if self.play_delay_timer:
             self.play_delay_timer.stop()
             self.play_delay_timer = None
@@ -850,7 +860,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.error(f"Error stopping realtime: {e}")
 
     def _on_video_ended(self):
-        if self.video_end_called or self.waiting_for_results:
+        if self.operator_paused or self.video_end_called or self.waiting_for_results:
             return
         self.video_end_called = True
         self.check_timer.stop()
@@ -862,6 +872,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         QTimer.singleShot(3000, lambda: self._trigger_results_after_delay(video_num, is_last_video))
 
     def _trigger_results_after_delay(self, video_num, is_last_video):
+        if self.operator_paused:
+            QTimer.singleShot(200, lambda: self._trigger_results_after_delay(video_num, is_last_video))
+            return
         report_path = self._find_latest_report()
         if not report_path:
             logger.warning("No report found – skipping per‑video results.")
@@ -925,8 +938,70 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.status.show()
         self.status_timer.start(timeout)
 
+    def _read_pause_file(self):
+        try:
+            if not os.path.exists(self.pause_file_path):
+                return False
+            with open(self.pause_file_path, "r", encoding="utf-8") as f:
+                return f.read().strip().lower() in ("1", "true", "yes", "on", "paused")
+        except Exception:
+            return False
+
+    def _set_vlc_paused(self, paused):
+        try:
+            if hasattr(self.player, "set_pause"):
+                self.player.set_pause(1 if paused else 0)
+            elif paused:
+                if self.player.is_playing():
+                    self.player.pause()
+            else:
+                self.player.play()
+        except Exception as exc:
+            logger.warning("VLC pause/resume failed: %s", exc)
+
+    def _apply_operator_pause(self, paused):
+        if paused == self.operator_paused:
+            return
+        self.operator_paused = paused
+        if paused:
+            self._pause_started_at = time.time()
+            try:
+                t = self.player.get_time()
+                self._paused_media_time = t if t is not None and t >= 0 else None
+            except Exception:
+                self._paused_media_time = None
+            self._set_vlc_paused(True)
+            self._update_status_file("paused", self.current_video_index + 1, len(self.video_files), "Paused")
+            logger.info("Operator pause: video and timers frozen at %s ms", self._paused_media_time)
+            return
+        if self._pause_started_at and self.video_start_time:
+            self.video_start_time += time.time() - self._pause_started_at
+        self._pause_started_at = 0
+        self._set_vlc_paused(False)
+        if self._paused_media_time is not None:
+            try:
+                self.player.set_time(self._paused_media_time)
+            except Exception:
+                pass
+        self._paused_media_time = None
+        if self._pending_start_after_pause:
+            self._pending_start_after_pause = False
+            self._start_playback()
+        self._update_status_file("playing", self.current_video_index + 1, len(self.video_files), "Resumed")
+        logger.info("Operator resume: continuing from pause point")
+
+    def _check_operator_pause(self):
+        if self._is_closing or self.playlist_finished:
+            return
+        try:
+            self._apply_operator_pause(self._read_pause_file())
+        except Exception as exc:
+            logger.warning("Pause control check failed: %s", exc)
+
     def _check_video_position(self):
         if self._is_closing:
+            return
+        if self.operator_paused:
             return
         if not self.player:
             return

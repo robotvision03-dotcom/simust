@@ -40,6 +40,7 @@ LAB_ONLY_PREFIXES = (
     "/playback-status",
     "/start-realtime",
     "/stop-realtime",
+    "/pause-realtime",
     "/set-visualization",
     "/set-simulation",
     "/results",

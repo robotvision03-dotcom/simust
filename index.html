@@ -45,11 +45,14 @@
         .btn-realtime { background: linear-gradient(105deg, #2ecc71, #1ea55a); color: #07111f; }
         .btn-realtime:disabled { background: #1a2d4a; color: #8fa0b6; }
         .btn-danger { background: var(--red); color: white; }
+        .btn-pause { background: linear-gradient(105deg, #f59e0b, #d97706); color: #07111f; }
+        .btn-resume { background: linear-gradient(105deg, #276ce5, #1d5bc4); color: white; }
         .btn-results { background: linear-gradient(105deg, var(--blue), #1d5bc4); color: white; }
         .btn-logout { background: transparent; color: #a8c6ff; border: 1px solid var(--line); padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer; transition: 0.2s; }
         .btn-logout:hover { background: #ffffff0a; color: var(--ink); }
         .live-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-inline-end: 8px; animation: pulse 1.5s infinite; }
         .live-dot.active { background: var(--green); }
+        .live-dot.paused { background: #f59e0b; }
         .live-dot.inactive { background: #647185; animation: none; }
         @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
         .tab-button { background: transparent; color: #8190a5; border: none; border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.04em; }
@@ -194,7 +197,7 @@
         html.simust-android .simust-body { min-height: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
         html.simust-android .simust-header { padding: 12px 16px; gap: 10px; }
         html.simust-android .simust-tabs { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
-        html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn, html.simust-android .btn-logout, html.simust-android .btn-results, html.simust-android .btn-danger { min-height: 48px; padding: 12px 20px; font-size: 16px; }
+        html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn, html.simust-android .btn-logout, html.simust-android .btn-results, html.simust-android .btn-danger, html.simust-android .btn-pause, html.simust-android .btn-resume { min-height: 48px; padding: 12px 20px; font-size: 16px; }
         html.simust-android .btn-realtime { min-height: 56px; min-width: min(100%, 280px); font-size: 17px; }
         html.simust-android .tab-button { min-height: 48px; padding: 12px 18px; font-size: 14px; }
         html.simust-android .search-input, html.simust-android .login-input, html.simust-android .modal-box .form-group input { min-height: 48px; font-size: 16px; }
@@ -328,6 +331,7 @@
             var labPost = {
                 'start-realtime-playback': true,
                 'stop-realtime': true,
+                'pause-realtime': true,
                 'set-simulation': true,
                 'set-visualization': true,
                 'lab-upsert-player': true,
@@ -1660,6 +1664,9 @@
             var realtimeRunningState = useState(false);
             var realtimeRunning = realtimeRunningState[0];
             var setRealtimeRunning = realtimeRunningState[1];
+            var realtimePausedState = useState(false);
+            var realtimePaused = realtimePausedState[0];
+            var setRealtimePaused = realtimePausedState[1];
             var activeTabState = useState("main");
             var activeTab = activeTabState[0];
             var setActiveTab = activeTabState[1];
@@ -1743,6 +1750,7 @@
             var sessionAbortedRef = useRef(false);
             var autoStopTimeoutRef = useRef(null);
             var realtimeRunningRef = useRef(false);
+            var realtimePausedRef = useRef(false);
             var activeTabRef = useRef(activeTab);
             var resultsEpochRef = useRef(0);
             var visualizationEnabledRef = useRef(false);
@@ -2246,7 +2254,7 @@
 
             // ----- FETCH RESULTS -----
             var fetchRealtimeResults = function(showLoading, forceApply) {
-                if (sessionAbortedRef.current) {
+                if (sessionAbortedRef.current || realtimePausedRef.current) {
                     return Promise.resolve(false);
                 }
                 if (showLoading === undefined) showLoading = true;
@@ -2586,6 +2594,8 @@
                 setActiveTab("main");
                 sessionSavedRef.current = false;
                 sessionAbortedRef.current = false;
+                realtimePausedRef.current = false;
+                setRealtimePaused(false);
                 clearResultsDisplay();
 
                 var payload = {
@@ -2615,6 +2625,7 @@
                     var hostSyncTick = 0;
                     liveIntervalRef.current = setInterval(function() {
                         if (activeTabRef.current === 'results') return;
+                        if (realtimePausedRef.current) return;
                         fetchRealtimeResults(false);
                         hostSyncTick += 1;
                         if (hostSyncTick % 6 === 0) {
@@ -2636,7 +2647,7 @@
 
                     var sawActivePlayback = false;
                     var finishFromStatus = function() {
-                        if (sessionAbortedRef.current) return;
+                        if (sessionAbortedRef.current || realtimePausedRef.current) return;
                         if (!realtimeRunningRef.current && sessionSavedRef.current) return;
                         realtimeRunningRef.current = false;
                         setRealtimeRunning(false);
@@ -2671,8 +2682,17 @@
                                 sessionSavedRef.current = true;
                                 realtimeRunningRef.current = false;
                                 setRealtimeRunning(false);
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
                                 clearResultsDisplay();
                                 return;
+                            }
+                            if (state === "paused" || statusRes.data.paused) {
+                                realtimePausedRef.current = true;
+                                setRealtimePaused(true);
+                            } else if (realtimePausedRef.current && state !== "paused") {
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
                             }
                             if (state === "playing" || state === "playing_final" || state === "loading") {
                                 sawActivePlayback = true;
@@ -2716,6 +2736,22 @@
                 });
             };
 
+            var togglePausePlayback = function() {
+                if (!realtimeRunningRef.current && !realtimeRunning) return;
+                var next = !realtimePausedRef.current;
+                realtimePausedRef.current = next;
+                setRealtimePaused(next);
+                axios.post("/pause-realtime", { paused: next }).then(function() {
+                    showToast(next
+                        ? "Paused. Detection and saving are frozen."
+                        : "Playing. Continuing from the pause point.", 'info');
+                }).catch(function(e) {
+                    realtimePausedRef.current = !next;
+                    setRealtimePaused(!next);
+                    showToast("Could not pause/resume: " + (e.response ? e.response.data.detail : e.message), 'error');
+                });
+            };
+
             var stopPlayback = function(opts) {
                 opts = opts || {};
                 var abort = opts.abort !== false;
@@ -2736,6 +2772,8 @@
                 }
                 realtimeRunningRef.current = false;
                 setRealtimeRunning(false);
+                realtimePausedRef.current = false;
+                setRealtimePaused(false);
                 if (realtimeMonitorInterval.current) { clearTimeout(realtimeMonitorInterval.current);
                     realtimeMonitorInterval.current = null; }
                 if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current);
@@ -2934,10 +2972,9 @@
                     ),
                     React.createElement('div', { className: "flex items-center gap-4" },
                         React.createElement(LanguageSwitcher, { lang: lang, onLangChange: changeLang, t: t }),
-                        React.createElement('span', { className: "live-dot" + (realtimeRunning ?
-                                ' active' : ' inactive') }),
+                        React.createElement('span', { className: "live-dot" + (realtimePaused ? " paused" : (realtimeRunning ? " active" : " inactive")) }),
                         React.createElement('span', { className: "text-xs text-gray-400" },
-                            realtimeRunning ? t("live") : t("idle")
+                            realtimePaused ? t("paused") : (realtimeRunning ? t("live") : t("idle"))
                         ),
                         React.createElement('button', { onClick: handleLogout, className: "btn-logout" },
                             t("logout"))
@@ -3113,6 +3150,12 @@
                                 !realtimeRunning ? React.createElement('span', { className: "auto-badge" },
                                     "AUTO") : null
                             ),
+                            realtimeRunning ?
+                            React.createElement('button', {
+                                onClick: togglePausePlayback,
+                                className: "btn-primary px-6 py-2 font-bold " + (realtimePaused ? "btn-resume" : "btn-pause")
+                            }, realtimePaused ? t("play") : t("pause")) :
+                            null,
                             realtimeRunning ?
                             React.createElement('button', {
                                 onClick: function() { stopPlayback({ abort: true }); },

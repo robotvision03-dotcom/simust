@@ -75,6 +75,7 @@ HALF_WIDTH = STITCHED_WIDTH // 2
 
 VIZ_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
 SIM_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
+PAUSE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
 SIM_FRAME_WIDTH = 1280
@@ -1312,7 +1313,7 @@ def _read_flag_file(path):
             content = f.read().strip().lower()
         if not content:
             return None
-        if content in ('true', '1', 'yes', 'on'):
+        if content in ('true', '1', 'yes', 'on', 'paused'):
             return True
         if content in ('false', '0', 'no', 'off'):
             return False
@@ -1327,6 +1328,11 @@ def read_visualization_setting():
 
 def read_simulation_setting():
     return _read_flag_file(SIM_FILE)
+
+
+def read_pause_setting():
+    flag = _read_flag_file(PAUSE_FILE)
+    return bool(flag)
 
 
 class ArenaSimulator:
@@ -1997,6 +2003,11 @@ class SimustRealtimeCamera:
         # Delayed analysis support
         self.pending_analysis = None
         self.analysis_timer = None
+        self.analysis_started_at = 0
+        self.operator_paused = False
+        self._pause_lock = threading.Lock()
+        self._pause_started_at = 0
+        self._paused_analysis_remaining = None
 
         ensure_directory(DEFAULT_RECORDINGS_DIR)
 
@@ -2343,6 +2354,7 @@ class SimustRealtimeCamera:
             # Schedule delayed analysis (timer) – this will compute result and send to backend
             if self.analysis_timer:
                 self.analysis_timer.cancel()
+            self.analysis_started_at = time.time()
             self.analysis_timer = threading.Timer(1.5, self._perform_late_analysis)
             self.analysis_timer.daemon = True
             self.analysis_timer.start()
@@ -2692,6 +2704,14 @@ class SimustRealtimeCamera:
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                     current_time_str = get_current_time_ms()
                     current_timestamp = time.time()
+                    paused = read_pause_setting()
+                    if paused:
+                        if not self.operator_paused:
+                            self._freeze_for_pause()
+                        time.sleep(1.0 / 30.0)
+                        continue
+                    if self.operator_paused:
+                        self._unfreeze_after_pause()
                     self.check_pending(current_timestamp, current_time_str)
                     frame = self.process_qr_detection(frame, current_time_str, current_timestamp)
                     time.sleep(1.0 / 30.0)
@@ -2802,6 +2822,48 @@ class SimustRealtimeCamera:
         if not self.visualization_enabled:
             self._close_viz_window()
 
+    def _freeze_for_pause(self):
+        with self._pause_lock:
+            if self.operator_paused:
+                return
+            self.operator_paused = True
+            self._pause_started_at = time.time()
+            if self.analysis_timer:
+                self.analysis_timer.cancel()
+                started = self.analysis_started_at or self._pause_started_at
+                self._paused_analysis_remaining = max(0.05, 1.5 - (self._pause_started_at - started))
+                self.analysis_timer = None
+            print("PAUSED — detection, analysis, and saving frozen")
+
+    def _unfreeze_after_pause(self):
+        with self._pause_lock:
+            if not self.operator_paused:
+                return
+            dt = time.time() - (self._pause_started_at or time.time())
+            if self.pending_start:
+                self.pending_start_time += dt
+            if self.pending_end:
+                self.pending_end_time += dt
+            if self.session_active:
+                self.session_start_timestamp += dt
+            if self.between_sessions_active and self.between_session_start_ts:
+                self.between_session_start_ts += dt
+            simulator = getattr(self, "simulator", None)
+            if simulator is not None:
+                if getattr(simulator, "start_ts", 0):
+                    simulator.start_ts += dt
+                if getattr(simulator, "late_start_ts", 0):
+                    simulator.late_start_ts += dt
+            if self._paused_analysis_remaining is not None:
+                self.analysis_started_at = time.time()
+                self.analysis_timer = threading.Timer(self._paused_analysis_remaining, self._perform_late_analysis)
+                self.analysis_timer.daemon = True
+                self.analysis_timer.start()
+                self._paused_analysis_remaining = None
+            self.operator_paused = False
+            self._pause_started_at = 0
+            print("RESUMED — continuing from the pause point")
+
     def _apply_simulation_setting(self):
         new_sim = read_simulation_setting()
         if new_sim is None or new_sim == self.simulation_enabled:
@@ -2830,6 +2892,7 @@ class SimustRealtimeCamera:
 
         last_viz_check = 0
         recording_started_for_video = False
+        last_stitched = None
 
         print("\n" + "=" * 60)
         print("READY - Press Ctrl+C to stop")
@@ -2848,6 +2911,18 @@ class SimustRealtimeCamera:
             while self.camera_running:
                 current_timestamp = time.time()
                 current_time_str = get_current_time_ms()
+
+                paused = read_pause_setting()
+                if paused:
+                    if not self.operator_paused:
+                        self._freeze_for_pause()
+                    if self.visualization_enabled and last_stitched is not None:
+                        self.show_frame(last_stitched)
+                    time.sleep(0.05)
+                    continue
+                if self.operator_paused:
+                    self._unfreeze_after_pause()
+
                 self.check_pending(current_timestamp, current_time_str)
 
                 if current_timestamp - last_viz_check >= 0.5:
@@ -2896,6 +2971,8 @@ class SimustRealtimeCamera:
 
                 if self.recording_active and self.video_saver.is_recording:
                     self.video_saver.write_frame(stitched)
+
+                last_stitched = stitched
 
                 if self.visualization_enabled:
                     self.show_frame(stitched)

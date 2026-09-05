@@ -656,6 +656,27 @@ def write_simulation_setting(enabled):
         os.fsync(f.fileno())
     os.replace(tmp_file, sim_file)
 
+
+def write_pause_setting(paused: bool) -> None:
+    """Atomically tell the smart player and camera to freeze or continue."""
+    pause_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    tmp_file = pause_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        f.write("true" if paused else "false")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, pause_file)
+
+
+def read_pause_setting() -> bool:
+    pause_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
+    try:
+        with open(pause_file, "r", encoding="utf-8") as f:
+            return f.read().strip().lower() in ("1", "true", "yes", "on", "paused")
+    except OSError:
+        return False
+
 # ============================================================
 # Calibration
 # ============================================================
@@ -743,15 +764,25 @@ def write_playback_status(state: str, message: str) -> None:
     try:
         status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
         os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        current = {}
+        if os.path.exists(status_file):
+            try:
+                with open(status_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    current = loaded
+            except Exception:
+                current = {}
+        current.update({
+            "state": state,
+            "message": message,
+            "timestamp": time.time(),
+        })
+        current.setdefault("current_video", 0)
+        current.setdefault("total_videos", 0)
+        current.setdefault("progress", 0)
         with open(status_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "state": state,
-                "current_video": 0,
-                "total_videos": 0,
-                "progress": 0,
-                "message": message,
-                "timestamp": time.time(),
-            }, f)
+            json.dump(current, f)
     except Exception as exc:
         logger.warning("Could not write playback status: %s", exc)
 
@@ -1265,15 +1296,21 @@ async def get_levels():
 @app.get("/playback-status")
 async def get_playback_status():
     if realtime_aborted:
-        return {"state": "aborted", "message": "Operator stopped. Session discarded."}
+        return {"state": "aborted", "message": "Operator stopped. Session discarded.", "paused": False}
     status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
+    status = {"state": "idle", "message": "No active playback"}
     if os.path.exists(status_file):
         try:
             with open(status_file, 'r') as f:
-                return json.load(f)
-        except:
-            return {"state": "unknown", "message": "Could not read status"}
-    return {"state": "idle", "message": "No active playback"}
+                status = json.load(f)
+        except Exception:
+            status = {"state": "unknown", "message": "Could not read status"}
+    paused = read_pause_setting()
+    status["paused"] = paused
+    if paused and status.get("state") not in ("aborted", "completed", "idle"):
+        status["state"] = "paused"
+        status["message"] = status.get("message") or "Paused — press Play to continue"
+    return status
 
 # ============================================================
 # REALTIME PLAYBACK ENDPOINTS (with unlock check)
@@ -1346,6 +1383,7 @@ async def start_realtime_playback(req: Request):
 
         realtime_active_player_id = (player_id or "").strip()
         _realtime_dirs_at_start = _realtime_dir_names()
+        write_pause_setting(False)
         force_kill_smart_player()
         try:
             status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
@@ -1453,6 +1491,7 @@ async def stop_realtime(req: Request):
             data = {}
         abort = bool((data or {}).get("abort") or (data or {}).get("discard") or (data or {}).get("operator_stop"))
         logger.info("Stopping realtime playback (abort=%s)...", abort)
+        write_pause_setting(False)
         if abort:
             realtime_aborted = True
             write_playback_status("aborted", "Operator stopped. Session discarded.")
@@ -1486,6 +1525,25 @@ async def stop_realtime(req: Request):
         raise HTTPException(500, f"Failed to stop: {str(e)}")
 
 
+@app.post("/pause-realtime")
+async def pause_realtime(req: Request):
+    """Freeze or resume the smart player, camera detection, and result saving."""
+    if realtime_aborted:
+        return {"status": "aborted", "paused": False, "message": "Test was stopped"}
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    paused = bool((data or {}).get("paused"))
+    write_pause_setting(paused)
+    write_playback_status(
+        "paused" if paused else "playing",
+        "Paused — press Play to continue" if paused else "Resumed from pause",
+    )
+    logger.info("Realtime %s by operator", "paused" if paused else "resumed")
+    return {"status": "success", "paused": paused}
+
+
 @app.post("/sync-live-to-host")
 async def sync_live_to_host(req: Request):
     """Lab only: push the current realtime snapshot + player account to My SIMUST."""
@@ -1503,6 +1561,8 @@ async def sync_live_to_host(req: Request):
 
     if realtime_aborted:
         return {"status": "aborted", "message": "Test was stopped"}
+    if read_pause_setting():
+        return {"status": "paused", "message": "Paused"}
     snapshot = await get_realtime_results()
     report = (snapshot or {}).get("report") or {}
     stats = report.get("statistics") or {}
