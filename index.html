@@ -2602,6 +2602,9 @@
             useEffect(function() {
                 fetchLevels();
                 loadPlayers();
+                var hostPlayerRefresh = setInterval(function() {
+                    loadPlayers();
+                }, 15000);
                 var stored = localStorage.getItem('simust_visualization');
                 if (stored !== null) {
                     var val = JSON.parse(stored);
@@ -2627,6 +2630,7 @@
                     axios.post("/set-simulation", { enabled: false }).catch(function() {});
                 }
                 return function() {
+                    clearInterval(hostPlayerRefresh);
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
                     if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);

@@ -59,6 +59,8 @@ PUSH_URL = os.environ.get("SIMUST_PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("SIMUST_PUSH_KEY", "").strip()
 _users_push_lock = threading.Lock()
 _users_push_at = 0.0
+_users_pull_lock = threading.Lock()
+_users_pull_at = 0.0
 PLAYER_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 QUEUE_DIR = os.environ.get("SIMUST_PUSH_QUEUE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_queue"))
 
@@ -293,6 +295,105 @@ def push_reports_dir(reports_dir: str, users: Optional[Dict[str, Any]] = None) -
             logger.warning("Report push failed for %s (%s); queued", player_id, exc)
             enqueue(payload)
     return sent
+
+
+def export_accounts_url() -> str:
+    if not PUSH_URL:
+        return ""
+    if PUSH_URL.rstrip("/").endswith("/internal/ingest-player-data"):
+        return PUSH_URL.replace("/internal/ingest-player-data", "/internal/export-accounts")
+    return PUSH_URL.rsplit("/", 1)[0] + "/export-accounts"
+
+
+def pull_remote_accounts() -> Dict[str, Any]:
+    """Lab PC: download accounts registered on My SIMUST."""
+    url = export_accounts_url()
+    if not url or not PUSH_KEY:
+        return {}
+    ts = str(int(time.time()))
+    body = b""
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "X-SIMUST-PUSH-KEY": PUSH_KEY,
+            "X-SIMUST-TS": ts,
+            "X-SIMUST-SIGN": _sign(body, ts),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    accounts = data.get("accounts") if isinstance(data, dict) else None
+    return accounts if isinstance(accounts, dict) else {}
+
+
+def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list:
+    """Add VPS-only users to the lab list. Does not overwrite existing lab passwords."""
+    added = []
+    for username, account in (remote or {}).items():
+        username = (username or "").strip()
+        if not PLAYER_ID_RE.match(username):
+            continue
+        account = account or {}
+        if username not in local:
+            local[username] = {
+                "password": account.get("password_hash") or "",
+                "name": account.get("name", ""),
+                "surname": account.get("surname", ""),
+                "role": account.get("role") or "player",
+                "club": account.get("club", ""),
+                "team": account.get("team", ""),
+                "age": account.get("age", ""),
+                "gender": account.get("gender", ""),
+                "email": account.get("email", ""),
+                "progress": account.get("progress") or {
+                    "current_level": "L00-Foundation",
+                    "unlocked_levels": ["L00-Foundation"],
+                    "completed_levels": [],
+                    "challenge_results": {},
+                },
+            }
+            added.append(username)
+            continue
+        existing = local[username]
+        for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
+            if not existing.get(field) and account.get(field):
+                existing[field] = account[field]
+        if account.get("progress") and not existing.get("progress"):
+            existing["progress"] = account["progress"]
+        if account.get("password_hash") and not existing.get("password"):
+            existing["password"] = account["password_hash"]
+    return added
+
+
+def pull_and_merge_accounts(load_users_fn, save_users_fn, reports_dir: str = "") -> list:
+    global _users_pull_at
+    now = time.time()
+    with _users_pull_lock:
+        if now - _users_pull_at < 8:
+            return []
+        _users_pull_at = now
+    if not push_configured():
+        return []
+    try:
+        remote = pull_remote_accounts()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not pull My SIMUST accounts: %s", exc)
+        return []
+    if not remote:
+        return []
+    local = load_users_fn()
+    added = merge_remote_accounts(local, remote)
+    if added:
+        save_users_fn(local)
+        if reports_dir:
+            for username in added:
+                try:
+                    os.makedirs(os.path.join(reports_dir, username), exist_ok=True)
+                except OSError:
+                    pass
+        logger.info("Imported %s My SIMUST account(s) into the lab: %s", len(added), ", ".join(added))
+    return added
 
 
 def push_reports_async(reports_dir: str, users: Optional[Dict[str, Any]] = None) -> None:

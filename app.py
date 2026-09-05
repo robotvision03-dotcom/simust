@@ -816,6 +816,17 @@ async def lifespan(app: FastAPI):
                 users = load_users()
                 simust_push.push_accounts_async(users)
                 simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
+                simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+
+                def _pull_loop():
+                    while True:
+                        time.sleep(15)
+                        try:
+                            simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+                        except Exception as pull_exc:
+                            logger.warning("Account pull loop: %s", pull_exc)
+
+                threading.Thread(target=_pull_loop, daemon=True, name="simust-pull-users").start()
             except Exception as exc:
                 logger.warning("Could not sync accounts/reports on startup: %s", exc)
     yield
@@ -2891,6 +2902,11 @@ async def my_simust_host_pages():
 @app.get("/get-players")
 async def get_players(request: Request):
     """Return players visible to the caller. Public host: own record only for players."""
+    if not PUBLIC_MODE:
+        try:
+            simust_push.pull_and_merge_accounts(load_users, save_users, PLAYER_REPORTS_DIR)
+        except Exception as exc:
+            logger.warning("Could not pull My SIMUST registrations: %s", exc)
     users = load_users()
     viewer = current_user(request, users, required=PUBLIC_MODE)
     players = []
@@ -3119,6 +3135,27 @@ async def ingest_player_data(request: Request):
 
     logger.info("Ingested pushed session %s for %s", session_id, player_id)
     return {"status": "success", "player_id": player_id, "session_id": session_id}
+
+
+@app.get("/internal/export-accounts")
+async def export_accounts(request: Request):
+    """Lab PC downloads My SIMUST registrations. Requires SIMUST_PUSH_KEY."""
+    body = await request.body()
+    try:
+        simust_push.verify_ingest_headers(
+            request.headers.get("x-simust-push-key", ""),
+            request.headers.get("x-simust-ts", ""),
+            request.headers.get("x-simust-sign", ""),
+            body,
+        )
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc))
+    users = load_users()
+    accounts = {}
+    for username, user in users.items():
+        if simust_push.PLAYER_ID_RE.match(username or ""):
+            accounts[username] = simust_push.public_account_payload(username, user or {})
+    return {"status": "success", "accounts": accounts}
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
