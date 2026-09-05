@@ -2215,121 +2215,99 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             aet_percent = 0
             aet_display = "-"
 
-        # ---- Slice video handling (UPDATED: use ffprobe for true FPS) ----
+        # ---- Probe coach/slice clip (metadata only; never decode every frame into RAM) ----
         width, height = 3712, 512
         use_slice_video = False
-        slice_frames = []
+        has_slice_audio = False
         output_fps = 2
         total_frames = 30
         video_duration = 0.0
 
-        # Helper to get stream info via ffprobe
-        def get_stream_info(filepath):
+        def find_av_tool(name):
+            candidates = [
+                rf"C:\Program Files\ffmpeg\bin\{name}.exe",
+                rf"C:\ffmpeg\bin\{name}.exe",
+                name,
+            ]
+            for path in candidates:
+                try:
+                    subprocess.run([path, "-version"], capture_output=True, timeout=5)
+                    return path
+                except Exception:
+                    continue
+            return None
+
+        ffmpeg_exe = find_av_tool("ffmpeg") or "ffmpeg"
+        ffprobe_exe = find_av_tool("ffprobe")
+
+        def probe_media(filepath):
             vid_info = {}
-            aud_info = {}
+            has_audio = False
+            if not ffprobe_exe:
+                return vid_info, has_audio
             try:
-                # Video
                 cmd = [
-                    'ffprobe', '-v', 'error',
-                    '-select_streams', 'v:0',
-                    '-show_entries', 'stream=codec_type,width,height,r_frame_rate,duration,time_base,nb_frames',
-                    '-of', 'json', filepath
+                    ffprobe_exe, "-v", "error",
+                    "-show_entries", "stream=codec_type,width,height,r_frame_rate,duration,nb_frames",
+                    "-of", "json", filepath,
                 ]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    if data.get('streams'):
-                        s = data['streams'][0]
-                        vid_info = {
-                            'codec_type': s.get('codec_type'),
-                            'width': s.get('width'),
-                            'height': s.get('height'),
-                            'r_frame_rate': s.get('r_frame_rate'),
-                            'duration': s.get('duration'),
-                            'time_base': s.get('time_base'),
-                            'nb_frames': s.get('nb_frames')
-                        }
-                # Audio
-                cmd_audio = [
-                    'ffprobe', '-v', 'error',
-                    '-select_streams', 'a:0',
-                    '-show_entries', 'stream=codec_type,duration,sample_rate,time_base,nb_frames',
-                    '-of', 'json', filepath
-                ]
-                result_audio = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=10)
-                if result_audio.returncode == 0:
-                    data = json.loads(result_audio.stdout)
-                    if data.get('streams'):
-                        s = data['streams'][0]
-                        aud_info = {
-                            'codec_type': s.get('codec_type'),
-                            'duration': s.get('duration'),
-                            'sample_rate': s.get('sample_rate'),
-                            'time_base': s.get('time_base'),
-                            'nb_frames': s.get('nb_frames')
-                        }
+                    data = json.loads(result.stdout or "{}")
+                    for s in data.get("streams") or []:
+                        if s.get("codec_type") == "audio":
+                            has_audio = True
+                        elif s.get("codec_type") == "video" and not vid_info:
+                            vid_info = s
             except Exception as e:
                 logger.warning(f"ffprobe failed: {e}")
-            return vid_info, aud_info
+            return vid_info, has_audio
 
         if is_final:
             if slice_video_path and os.path.exists(slice_video_path):
-                # Try ffprobe first
-                vid_info, aud_info = get_stream_info(slice_video_path)
-                if vid_info and vid_info.get('r_frame_rate'):
-                    fps_str = vid_info['r_frame_rate']
-                    if '/' in fps_str:
-                        num, den = map(int, fps_str.split('/'))
+                vid_info, has_slice_audio = probe_media(slice_video_path)
+                if vid_info and vid_info.get("r_frame_rate"):
+                    fps_str = vid_info["r_frame_rate"]
+                    if "/" in str(fps_str):
+                        num, den = map(int, str(fps_str).split("/"))
                         true_fps = num / den if den > 0 else 25.0
                     else:
                         true_fps = float(fps_str)
                     output_fps = true_fps
-                    logger.info(f"Using true FPS from ffprobe: {output_fps:.2f}")
-                    # Get frame count
-                    if vid_info.get('nb_frames'):
-                        total_frames = int(vid_info['nb_frames'])
+                    if vid_info.get("nb_frames"):
+                        total_frames = int(vid_info["nb_frames"])
+                    elif vid_info.get("duration"):
+                        total_frames = int(round(float(vid_info["duration"]) * output_fps))
                     else:
-                        # fallback
                         cap = cv2.VideoCapture(slice_video_path)
-                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                         cap.release()
-                    video_duration = total_frames / output_fps
-                    logger.info(f"Frame count: {total_frames}, duration: {video_duration:.3f}s")
+                    if vid_info.get("duration"):
+                        video_duration = float(vid_info["duration"])
+                    elif output_fps > 0 and total_frames > 0:
+                        video_duration = total_frames / output_fps
+                    use_slice_video = True
+                    logger.info(
+                        "Final video will stream %s at %.2f FPS (%s frames, %.3fs); audio=%s",
+                        os.path.basename(slice_video_path), output_fps, total_frames,
+                        video_duration, has_slice_audio,
+                    )
                 else:
-                    # fallback to OpenCV
                     cap = cv2.VideoCapture(slice_video_path)
                     if cap.isOpened():
-                        output_fps = cap.get(cv2.CAP_PROP_FPS)
-                        if output_fps <= 0:
+                        output_fps = cap.get(cv2.CAP_PROP_FPS) or 25
+                        if output_fps <= 1:
                             output_fps = 25
-                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                        video_duration = total_frames / output_fps
+                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                        video_duration = total_frames / output_fps if output_fps else 0
                         cap.release()
-                        logger.info(f"Using OpenCV FPS: {output_fps:.2f}, frames: {total_frames}, duration: {video_duration:.3f}s")
-
-                # Load frames
-                cap = cv2.VideoCapture(slice_video_path)
-                if cap.isOpened():
-                    all_frames = []
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                        all_frames.append(frame)
-                    cap.release()
-                    if all_frames:
-                        slice_frames = all_frames
-                        # Use loaded frame count if different from ffprobe
-                        if len(slice_frames) != total_frames:
-                            logger.warning(f"Loaded {len(slice_frames)} frames, but expected {total_frames}. Using loaded count.")
-                            total_frames = len(slice_frames)
-                            video_duration = total_frames / output_fps
                         use_slice_video = True
-                        logger.info(f"Final video using {total_frames} frames at {output_fps:.2f} FPS (duration {video_duration:.3f}s) from slice video")
+                        logger.info(
+                            "Using OpenCV FPS: %.2f, frames: %s, duration: %.3fs",
+                            output_fps, total_frames, video_duration,
+                        )
                     else:
-                        logger.warning("Slice video had no frames, falling back to static background.")
-                else:
-                    logger.warning("Could not open slice video, falling back to static background.")
+                        logger.warning("Could not open slice video, falling back to static background.")
 
             if not use_slice_video:
                 output_fps = 2
@@ -2337,46 +2315,16 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 video_duration = 30.0
                 logger.info("Using static background for final video (30s, 2 FPS)")
         else:
-            # Per‑video: always 2 FPS, 30 frames (15s)
             output_fps = 2
             total_frames = 30
             video_duration = 15.0
             if slice_video_path and os.path.exists(slice_video_path):
-                cap = cv2.VideoCapture(slice_video_path)
-                if cap.isOpened():
-                    all_frames = []
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                        all_frames.append(frame)
-                    cap.release()
-                    if all_frames:
-                        if len(all_frames) >= total_frames:
-                            indices = np.linspace(0, len(all_frames)-1, total_frames, dtype=int)
-                            slice_frames = [all_frames[i] for i in indices]
-                        else:
-                            slice_frames = []
-                            while len(slice_frames) < total_frames:
-                                for f in all_frames:
-                                    slice_frames.append(f)
-                                    if len(slice_frames) >= total_frames:
-                                        break
-                        use_slice_video = True
-                        logger.info(f"Per‑video using {len(slice_frames)} sampled frames from slice video")
-                else:
-                    cap = None
+                use_slice_video = True
+                logger.info("Per-video will sample coach clip via ffmpeg/stream (15s @ 2 FPS)")
+            else:
+                logger.info("Using static background for per-video")
 
-            if not use_slice_video:
-                logger.info("Using static background for per‑video")
-
-        # ---- Create temporary AVI (MJPEG) ----
         temp_avi = output_path.replace(".mp4", "_temp.avi")
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter(temp_avi, fourcc, output_fps, (width, height))
-        if not out.isOpened():
-            logger.error(f"Could not open temporary video writer for {temp_avi}")
-            return False
 
         slice_numbers = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         num_tiles = len(slice_numbers)
@@ -2387,20 +2335,32 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         RING_THICKNESS = 22
         LABEL_VERTICAL_GAP = 20
         RING_TEXT_Y_OFFSET = -10
-        LABEL_TEXT_Y_OFFSET = -10
+        LABEL_RECT_H = 65
+        _font_cache = {}
 
-        # ----- PIL helpers (unchanged) -----
         def get_segoe_font(size, bold=True):
-            try:
-                if bold:
-                    font_path = "C:/Windows/Fonts/segoeuib.ttf"
-                else:
-                    font_path = "C:/Windows/Fonts/segoeui.ttf"
+            key = (int(size), bool(bold))
+            cached = _font_cache.get(key)
+            if cached is not None:
+                return cached
+            font = None
+            candidates = [
+                "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+                "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
+            for font_path in candidates:
                 if not os.path.exists(font_path):
-                    font_path = "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf"
-                return ImageFont.truetype(font_path, size)
-            except:
-                return ImageFont.load_default()
+                    continue
+                try:
+                    font = ImageFont.truetype(font_path, size)
+                    break
+                except Exception:
+                    font = None
+            if font is None:
+                font = ImageFont.load_default()
+            _font_cache[key] = font
+            return font
 
         def draw_text_on_pil(draw, text, x, y, font_size, color=(255,255,255), bold=True, anchor='lt'):
             font = get_segoe_font(font_size, bold)
@@ -2450,7 +2410,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 widths.append(bbox[2] - bbox[0])
                 heights.append(bbox[3] - bbox[1])
             total_h = sum(heights) + line_gap * (len(lines) - 1)
-            y = rect_y + 65 + LABEL_TEXT_Y_OFFSET - total_h // 2
+            y = rect_y + (LABEL_RECT_H - total_h) // 2
             for i, line in enumerate(lines):
                 x = center_x - widths[i] // 2
                 draw.text((x, y), line, font=font, fill=(255, 255, 255))
@@ -2458,7 +2418,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         def draw_label_rectangle(img, center_x, tile_width, rect_y, text,
                                  color=(255,255,255), bg=(0,165,255)):
-            rect_h = 130
+            rect_h = LABEL_RECT_H
             rect_x1 = center_x - tile_width // 2
             rect_y1 = rect_y
             rect_x2 = rect_x1 + tile_width
@@ -2514,179 +2474,257 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             6: 6     # tile 6 (slice 4)  – shift right 6px
         }
 
-        # ---- Main drawing loop ----
-        for frame_idx in range(total_frames):
-            try:
-                if use_slice_video and slice_frames:
-                    img = slice_frames[frame_idx % len(slice_frames)].copy()
-                else:
-                    img = np.zeros((height, width, 3), dtype=np.uint8)
-                    img[:] = (10, 12, 18)
+        def render_overlay_once(base_bgr):
+            img = base_bgr
+            for i, num in enumerate(slice_numbers):
+                x_offset = i * tile_width
+                offset_x = content_offset.get(i, 0)
+                center_x = x_offset + tile_width // 2 + offset_x
+                rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+                if num == 12:
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aet_percent, 100)
+                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Reaction Time")
+                elif num == 3:
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, avg_ae, 100)
+                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
+                elif num == 13:
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aac, 100)
+                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Accuracy")
+                elif num == 4:
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, economy_percent, 100)
+                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Displacement")
 
-                # Draw OpenCV shapes
-                for i, num in enumerate(slice_numbers):
-                    x_offset = i * tile_width
-                    offset_x = content_offset.get(i, 0)
-                    center_x = x_offset + tile_width // 2 + offset_x
-                    rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img)
+            for i, num in enumerate(slice_numbers):
+                x_offset = i * tile_width
+                offset_x = content_offset.get(i, 0)
+                center_x = x_offset + tile_width // 2 + offset_x
+                rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+                if num == 12:
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aet_display if aet_display != "-" else "-"])
+                    draw_metric_label(draw, "Reaction Time", center_x, rect_y)
+                elif num == 3:
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ae_display if ae_display != "-" else "-"])
+                    draw_metric_label(draw, "Efficiency", center_x, rect_y)
+                elif num == 13:
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac:.0f}%" if aac > 0 else "-"])
+                    draw_metric_label(draw, "Accuracy", center_x, rect_y)
+                elif num == 4:
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{total_distance:.1f} m" if total_distance > 0 else "-"])
+                    draw_metric_label(draw, "Displacement", center_x, rect_y)
 
-                    if num == 12:
-                        draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aet_percent, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Reaction Time")
-                    elif num == 3:
-                        draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, avg_ae, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
-                    elif num == 13:
-                        draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aac, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Accuracy")
-                    elif num == 4:
-                        draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, economy_percent, 100)
-                        draw_label_rectangle(img, center_x, tile_width, rect_y, "Displacement")
+            footer = "SIMUST RESULTS – Analysis Complete"
+            footer_font_size = 36
+            footer_font = get_segoe_font(footer_font_size, False)
+            footer_bbox = draw.textbbox((0, 0), footer, font=footer_font)
+            fw, fh = footer_bbox[2] - footer_bbox[0], footer_bbox[3] - footer_bbox[1]
+            draw_text_on_pil(draw, footer, (width - fw)//2, height - 10 - fh,
+                             font_size=footer_font_size, color=(150,150,150), bold=False, anchor='lt')
+            return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-                # Convert to PIL and draw text
-                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                draw = ImageDraw.Draw(pil_img)
+        static_bg = np.zeros((height, width, 3), dtype=np.uint8)
+        static_bg[:] = (10, 12, 18)
+        overlay = render_overlay_once(np.zeros((height, width, 3), dtype=np.uint8))
+        overlay_mask = np.any(overlay > 2, axis=2)
+        static_frame = static_bg.copy()
+        static_frame[overlay_mask] = overlay[overlay_mask]
 
-                for i, num in enumerate(slice_numbers):
-                    x_offset = i * tile_width
-                    offset_x = content_offset.get(i, 0)
-                    center_x = x_offset + tile_width // 2 + offset_x
-                    rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+        def composite_frame(base):
+            if base is None or base.size == 0:
+                return static_frame
+            if base.shape[1] != width or base.shape[0] != height:
+                base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
+            out_img = base
+            out_img[overlay_mask] = overlay[overlay_mask]
+            return out_img
 
-                    if num == 12:
-                        aet_text = aet_display if aet_display != "-" else "-"
-                        draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aet_text])
-                        draw_metric_label(draw, "Reaction Time", center_x, rect_y)
-                    elif num == 3:
-                        ae_text = ae_display if ae_display != "-" else "-"
-                        draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ae_text])
-                        draw_metric_label(draw, "Efficiency", center_x, rect_y)
-                    elif num == 13:
-                        aac_text = f"{aac:.0f}%" if aac > 0 else "-"
-                        draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aac_text])
-                        draw_metric_label(draw, "Accuracy", center_x, rect_y)
-                    elif num == 4:
-                        bdp_text = f"{total_distance:.1f} m" if total_distance > 0 else "-"
-                        draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [bdp_text])
-                        draw_metric_label(draw, "Displacement", center_x, rect_y)
-                    elif num == 14 and is_final:
-                        pass
+        def run_ffmpeg(cmd, timeout=180):
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode != 0:
+                err = (result.stderr or "")[-2000:]
+                logger.error("ffmpeg failed (code %s): %s", result.returncode, err)
+                return False
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
-                # Footer
-                footer = "SIMUST RESULTS – Analysis Complete"
-                footer_font_size = 36
-                footer_font = get_segoe_font(footer_font_size, False)
-                footer_bbox = draw.textbbox((0, 0), footer, font=footer_font)
-                fw, fh = footer_bbox[2] - footer_bbox[0], footer_bbox[3] - footer_bbox[1]
-                draw_text_on_pil(draw, footer,
-                                (width - fw)//2, height - 10 - fh,
-                                font_size=footer_font_size, color=(150,150,150), bold=False, anchor='lt')
-
-                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-                out.write(img)
-
-            except Exception as e:
-                logger.error(f"Error writing frame {frame_idx}: {e}")
-                continue
-
-        out.release()
-
-        # ---- Re-encode with ffmpeg (force constant FPS) ----
-        if os.path.exists(temp_avi) and os.path.getsize(temp_avi) > 0:
-            logger.info(f"Temporary AVI created: {temp_avi} ({os.path.getsize(temp_avi)} bytes)")
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", temp_avi,
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "28",
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                "-r", str(output_fps),
-                "-vsync", "1",
-                "-fflags", "+genpts",
-                output_path
-            ]
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                    logger.info(f"Successfully re-encoded to H.264: {output_path}")
-                    if os.path.exists(temp_avi):
-                        os.remove(temp_avi)
-                else:
-                    logger.error(f"ffmpeg re-encode failed: {result.stderr}")
-                    if os.path.exists(temp_avi) and not os.path.exists(output_path):
-                        os.rename(temp_avi, output_path)
-                        logger.warning(f"Fell back to AVI file (renamed to .mp4): {output_path}")
+        # Fast path: one ffmpeg pass composites the static HUD onto the coach clip
+        # and encodes H.264 (plus audio) without an MJPEG temp file or a second mux.
+        overlay_png = output_path.replace(".mp4", "_overlay.png")
+        static_png = output_path.replace(".mp4", "_static.png")
+        encoded = False
+        try:
+            overlay_bgra = cv2.cvtColor(overlay, cv2.COLOR_BGR2BGRA)
+            overlay_bgra[:, :, 3] = np.where(overlay_mask, 255, 0).astype(np.uint8)
+            if not cv2.imwrite(overlay_png, overlay_bgra):
+                raise RuntimeError("Could not write overlay PNG")
+            vf = (
+                f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
+                f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+            )
+            if use_slice_video and is_final and slice_video_path and os.path.exists(slice_video_path):
+                cmd = [
+                    ffmpeg_exe, "-y",
+                    "-i", slice_video_path,
+                    "-i", overlay_png,
+                    "-filter_complex", vf,
+                    "-map", "[v]",
+                ]
+                if has_slice_audio:
+                    cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"]
+                    if video_duration and video_duration > 0:
+                        cmd += ["-af", "apad", "-t", str(video_duration)]
                     else:
-                        return False
-            except Exception as e:
-                logger.error(f"ffmpeg error: {e}")
-                if os.path.exists(temp_avi) and not os.path.exists(output_path):
-                    os.rename(temp_avi, output_path)
-                    logger.warning(f"Fell back to AVI file (renamed to .mp4): {output_path}")
+                        cmd += ["-shortest"]
                 else:
-                    return False
-        else:
-            logger.error("Temporary AVI file is missing or empty.")
-            return False
-
-        # ---- Add audio from slice video (with padding) ----
-        if is_final and slice_video_path and os.path.exists(slice_video_path) and os.path.exists(output_path):
-            try:
-                # Check if slice video has audio
-                probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'default=noprint_wrappers=1:nokey=1', slice_video_path]
-                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
-                if 'audio' not in probe_result.stdout:
-                    logger.info("Slice video has no audio track.")
-                    return True
-
-                # Get generated video duration (ensure it matches)
-                duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', output_path]
-                duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, timeout=10)
-                video_duration = float(duration_result.stdout.strip()) if duration_result.stdout else None
-                if video_duration is None or video_duration <= 0:
-                    video_duration = total_frames / output_fps
-                logger.info(f"Generated video duration for audio padding: {video_duration:.3f}s")
-
-                temp_with_audio = output_path.replace('.mp4', '_with_audio.mp4')
-
-                # Get audio sample rate from slice (to avoid resampling drift)
-                slice_sample_rate = "44100"  # default
+                    cmd += ["-an"]
+                cmd += [
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-movflags", "+faststart", output_path,
+                ]
+                encoded = run_ffmpeg(cmd, timeout=180)
+            elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+                cmd = [
+                    ffmpeg_exe, "-y",
+                    "-i", slice_video_path,
+                    "-i", overlay_png,
+                    "-filter_complex",
+                    f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear[bg];"
+                    f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]",
+                    "-map", "[v]", "-an",
+                    "-t", str(video_duration),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-movflags", "+faststart", output_path,
+                ]
+                encoded = run_ffmpeg(cmd, timeout=120)
+            else:
+                if not cv2.imwrite(static_png, static_frame):
+                    raise RuntimeError("Could not write static PNG")
+                cmd = [
+                    ffmpeg_exe, "-y",
+                    "-loop", "1", "-i", static_png,
+                    "-t", str(video_duration or 15),
+                    "-r", str(output_fps or 2),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    output_path,
+                ]
+                encoded = run_ffmpeg(cmd, timeout=60)
+        except Exception as e:
+            logger.warning("ffmpeg overlay encode failed, using OpenCV fallback: %s", e)
+            encoded = False
+        finally:
+            for tmp in (overlay_png, static_png):
                 try:
-                    cmd_sr = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate', '-of', 'default=noprint_wrappers=1:nokey=1', slice_video_path]
-                    sr_result = subprocess.run(cmd_sr, capture_output=True, text=True, timeout=10)
-                    if sr_result.returncode == 0 and sr_result.stdout.strip():
-                        slice_sample_rate = sr_result.stdout.strip()
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
                 except Exception:
                     pass
 
-                # Pad audio to video duration
-                cmd_audio = [
-                    'ffmpeg', '-y',
-                    '-i', output_path,
-                    '-i', slice_video_path,
-                    '-map', '0:v:0',
-                    '-map', '1:a:0',
-                    '-c:v', 'copy',
-                    '-c:a', 'aac',
-                    '-b:a', '192k',
-                    '-ar', slice_sample_rate,
-                    '-t', str(video_duration),
-                    '-af', 'apad',
-                    '-fflags', '+genpts',
-                    temp_with_audio
-                ]
+        if encoded:
+            logger.info("Video generation completed (ffmpeg overlay): %s", output_path)
+            return True
 
-                subprocess.run(cmd_audio, capture_output=True, timeout=120)
-                if os.path.exists(temp_with_audio) and os.path.getsize(temp_with_audio) > 0:
-                    os.remove(output_path)
-                    os.rename(temp_with_audio, output_path)
-                    logger.info("Audio merged successfully with padding and sample rate sync.")
+        # Fallback: stream frames (no full-clip RAM load), then one ultrafast x264 encode.
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        out = cv2.VideoWriter(temp_avi, fourcc, output_fps, (width, height))
+        if not out.isOpened():
+            logger.error(f"Could not open temporary video writer for {temp_avi}")
+            return False
+
+        written = 0
+        if use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+            cap = cv2.VideoCapture(slice_video_path)
+            if not cap.isOpened():
+                logger.warning("Could not reopen slice video for streaming; using static overlay")
+                for _ in range(max(total_frames, 1)):
+                    out.write(static_frame)
+                    written += 1
+            elif is_final:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    out.write(composite_frame(frame))
+                    written += 1
+                cap.release()
+            else:
+                source_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                if source_count <= 0:
+                    source_count = total_frames
+                indices = np.linspace(0, max(0, source_count - 1), total_frames, dtype=int)
+                last = None
+                src_i = 0
+                want = 0
+                while written < total_frames:
+                    if want < len(indices) and src_i > indices[want]:
+                        out.write(composite_frame(last if last is not None else static_frame))
+                        written += 1
+                        want += 1
+                        continue
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    last = frame
+                    if src_i == indices[min(want, len(indices) - 1)]:
+                        out.write(composite_frame(frame))
+                        written += 1
+                        want += 1
+                    src_i += 1
+                while written < total_frames:
+                    out.write(composite_frame(last if last is not None else static_frame))
+                    written += 1
+                cap.release()
+        else:
+            for _ in range(max(total_frames, 1)):
+                out.write(static_frame)
+                written += 1
+
+        out.release()
+        if written > 0:
+            total_frames = written
+            video_duration = total_frames / output_fps if output_fps else video_duration
+        logger.info("Wrote %s overlay frames at %.2f FPS (%.2fs) [fallback]", written, output_fps, video_duration)
+
+        if not (os.path.exists(temp_avi) and os.path.getsize(temp_avi) > 0):
+            logger.error("Temporary AVI file is missing or empty.")
+            return False
+
+        encode_cmd = [
+            ffmpeg_exe, "-y",
+            "-i", temp_avi,
+        ]
+        if is_final and use_slice_video and has_slice_audio and slice_video_path and os.path.exists(slice_video_path):
+            encode_cmd += [
+                "-i", slice_video_path,
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:a", "aac", "-b:a", "192k", "-shortest",
+            ]
+        else:
+            encode_cmd += ["-an"]
+        encode_cmd += [
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "-r", str(output_fps),
+            output_path,
+        ]
+        try:
+            if run_ffmpeg(encode_cmd, timeout=180):
+                logger.info("Successfully re-encoded to H.264: %s", output_path)
+                if os.path.exists(temp_avi):
+                    os.remove(temp_avi)
+            else:
+                if os.path.exists(temp_avi) and not os.path.exists(output_path):
+                    os.rename(temp_avi, output_path)
+                    logger.warning("Fell back to AVI file (renamed to .mp4): %s", output_path)
                 else:
-                    logger.warning("Audio merge failed, keeping video without audio.")
-            except Exception as e:
-                logger.warning(f"Could not add audio: {e}")
+                    return False
+        except Exception as e:
+            logger.error("ffmpeg error: %s", e)
+            if os.path.exists(temp_avi) and not os.path.exists(output_path):
+                os.rename(temp_avi, output_path)
+                logger.warning("Fell back to AVI file (renamed to .mp4): %s", output_path)
+            else:
+                return False
 
         logger.info(f"Video generation completed: {output_path}")
         return True
