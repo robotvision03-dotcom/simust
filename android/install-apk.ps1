@@ -66,6 +66,11 @@ if ($javaHome) {
 $env:ANDROID_HOME = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
 $adb = Join-Path $sdk "platform-tools\adb.exe"
+$localProps = Join-Path $Root "local.properties"
+if (-not (Test-Path $localProps)) {
+    $sdkDir = $sdk -replace "\\", "/"
+    Set-Content -Path $localProps -Value "sdk.dir=$sdkDir"
+}
 
 Write-Host "SDK : $sdk"
 Write-Host "Java: $($env:JAVA_HOME)"
