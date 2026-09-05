@@ -18,9 +18,15 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, Request
 
 PUBLIC_MODE = os.environ.get("SIMUST_PUBLIC_MODE", "").strip().lower() in ("1", "true", "yes")
-SESSION_SECRET = os.environ.get("SIMUST_SESSION_SECRET", "").strip() or secrets.token_hex(32)
+_SESSION_SECRET_RAW = os.environ.get("SIMUST_SESSION_SECRET", "").strip()
+if PUBLIC_MODE and (not _SESSION_SECRET_RAW or _SESSION_SECRET_RAW == "change-me"):
+    raise RuntimeError("SIMUST_SESSION_SECRET must be set to a strong value on the public host")
+SESSION_SECRET = _SESSION_SECRET_RAW or secrets.token_hex(32)
 SESSION_HOURS = int(os.environ.get("SIMUST_SESSION_HOURS", "12"))
 PBKDF2_ROUNDS = 260000
+PLAYER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9._-]{1,64}$")
+PUBLIC_REGISTER_ROLES = {"player", "coach", "manager"}
+TRUSTED_PROXY_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # Login / register: 8 tries per IP per 10 minutes
 _AUTH_WINDOW_S = 600
@@ -61,6 +67,7 @@ LAB_ONLY_PREFIXES = (
     "/open-directory",
     "/create-pdf-report",
     "/delete-player-report",
+    "/stop-realtime-camera",
 )
 
 
@@ -74,10 +81,60 @@ def cors_origins() -> list:
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if peer in TRUSTED_PROXY_HOSTS:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip() or peer
+    return peer
+
+
+def require_player_id(player_id: str) -> str:
+    value = (player_id or "").strip()
+    if not PLAYER_ID_RE.match(value):
+        raise HTTPException(400, "Invalid player id")
+    return value
+
+
+def contained_player_dir(reports_root: str, player_id: str) -> str:
+    safe_id = require_player_id(player_id)
+    root = os.path.realpath(reports_root)
+    player_dir = os.path.realpath(os.path.join(root, safe_id))
+    if player_dir != root and not player_dir.startswith(root + os.sep):
+        raise HTTPException(400, "Invalid player id")
+    return player_dir
+
+
+def sanitize_profile_image(image: str) -> str:
+    value = (image or "").strip()
+    if not value:
+        return ""
+    if PUBLIC_MODE:
+        if value.startswith("data:"):
+            return ""
+        if not (value.startswith("https://") and " " not in value and '"' not in value):
+            return ""
+        return value[:400]
+    return value[:400]
+
+
+def public_security_headers() -> Dict[str, str]:
+    return {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Content-Security-Policy": (
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+            "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "connect-src 'self' https://api.stripe.com; "
+            "frame-src https://js.stripe.com https://hooks.stripe.com; "
+            "base-uri 'self'; form-action 'self' https://checkout.stripe.com"
+        ),
+    }
 
 
 def check_auth_rate(request: Request) -> None:

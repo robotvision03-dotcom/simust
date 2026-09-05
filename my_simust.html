@@ -3527,11 +3527,20 @@
                                     <select id="res-duration"></select>
                                 </div>
                                 <div class="res-end-preview" id="res-end-preview"></div>
+                                <div class="res-end-preview" id="res-fee-preview"></div>
                                 <button type="button" class="res-submit" id="res-submit" data-i18n="reservationConfirm">Confirm reservation</button>
                             </div>
                             <div class="res-pay-step" id="res-pay-step">
                                 <h4 data-i18n="payOnline">Online payment</h4>
-                                <p class="res-book-sub" data-i18n="paymentSub">Complete online payment to confirm this reservation. This step is a simulation.</p>
+                                <p class="res-book-sub" data-i18n="paymentSub">Pay 20 EUR for each 30 minutes. The reservation is registered only after payment.</p>
+                                <p class="res-end-preview" id="res-pay-amount"></p>
+                                <div class="res-field">
+                                    <label for="res-pay-method" data-i18n="paymentMethod">Payment method</label>
+                                    <select id="res-pay-method">
+                                        <option value="card" data-i18n="paymentCard">Card (Stripe)</option>
+                                        <option value="" data-i18n="paymentEmpty">Empty — admin waiver</option>
+                                    </select>
+                                </div>
                                 <button type="button" class="res-submit" id="res-pay-btn" data-i18n="payNow">Pay</button>
                                 <button type="button" class="res-pay-back" id="res-pay-cancel" data-i18n="reservationCancel">Cancel</button>
                             </div>
@@ -5103,16 +5112,26 @@
                 }
             }
 
-            function setProfileAvatar(user) {
-                var imgSrc = user.image || '';
-                if (imgSrc) {
-                    profileAvatar.innerHTML = '<img src="' + imgSrc + '" style="width:100%;height:100%;object-fit:cover;">';
+            function setSafeAvatar(el, imageUrl, displayName) {
+                if (!el) return;
+                el.textContent = '';
+                var src = String(imageUrl || '').trim();
+                var safe = /^https:\/\//i.test(src) && src.indexOf('"') === -1 && src.indexOf(' ') === -1;
+                if (safe) {
+                    var img = document.createElement('img');
+                    img.src = src;
+                    img.alt = '';
+                    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+                    el.appendChild(img);
                     return;
                 }
-                var initial = (user.name || 'P').charAt(0).toUpperCase();
-                profileAvatar.textContent = initial;
-                profileAvatar.style.background = '#1a2d4a';
-                profileAvatar.style.color = '#a8c6ff';
+                el.textContent = String(displayName || 'P').charAt(0).toUpperCase();
+                el.style.background = '#1a2d4a';
+                el.style.color = '#a8c6ff';
+            }
+
+            function setProfileAvatar(user) {
+                setSafeAvatar(profileAvatar, user && user.image, (user && user.name) || 'P');
             }
 
             // ----- set coach avatar based on age and gender -----
@@ -5196,9 +5215,9 @@
                 }
                 var html = '';
                 filtered.forEach(function(p) {
-                    html += '<button data-player-id="' + p.id + '" class="player-select-btn">' +
-                        '<strong>' + p.name + ' ' + p.surname + '</strong>' +
-                        '<span class="player-id num-ltr">' + p.playerId + '</span>' +
+                    html += '<button data-player-id="' + escapeHtml(p.id) + '" class="player-select-btn">' +
+                        '<strong>' + escapeHtml(p.name) + ' ' + escapeHtml(p.surname) + '</strong>' +
+                        '<span class="player-id num-ltr">' + escapeHtml(p.playerId) + '</span>' +
                         '</button>';
                 });
                 playerListContainer.innerHTML = html;
@@ -5241,14 +5260,7 @@
                 }
                 var displayName = player.name || 'Player';
                 profileLabel.textContent = 'PLAYER ' + player.playerId;
-                if (player.image) {
-                    profileAvatar.innerHTML = '<img src="' + player.image +
-                        '" style="width:100%;height:100%;object-fit:cover;">';
-                } else {
-                    profileAvatar.textContent = displayName.charAt(0).toUpperCase();
-                    profileAvatar.style.background = '#1a2d4a';
-                    profileAvatar.style.color = '#a8c6ff';
-                }
+                setSafeAvatar(profileAvatar, player.image, displayName);
                 if (player.age) {
                     setCoachAvatar(player.age, player.gender);
                 } else {
@@ -5257,7 +5269,7 @@
                 setSiaAvatar();
                 sidebarRoleName.textContent = displayName + ' ' + (player.surname || '');
                 document.getElementById('player-greeting').innerHTML =
-                    'Good Day<br><em id="player-name-display">' + displayName + ' ' + (player.surname || '') + '</em>';
+                    'Good Day<br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (player.surname || '')) + '</em>';
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
@@ -5386,7 +5398,7 @@
                 var fullName = (firstName + ' ' + (player.surname || '')).trim();
                 playerNameDisplay.textContent = fullName;
                 document.getElementById('player-greeting').innerHTML =
-                    'Good Day<br><em id="player-name-display">' + fullName + '</em>';
+                    'Good Day<br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
                 var split = splitLiveSessions(sessions);
                 var liveSession = split.live.sort(function(a, b) {
                     var da = new Date(a.session && a.session.timestamp || a.timestamp || 0);
@@ -6658,8 +6670,7 @@
                         if (currentView === 'player') {
                             var displayName = currentUser.name || 'Player';
                             document.getElementById('player-greeting').innerHTML =
-                                'Good Day<br><em id="player-name-display">' + displayName + ' ' + (currentUser
-                                    .surname || '') + '</em>';
+                                'Good Day<br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (currentUser.surname || '')) + '</em>';
                             if (age) {
                                 setCoachAvatar(age, gender);
                             }
@@ -6839,6 +6850,7 @@
                     preview.classList.toggle('unavailable', !!invalid);
                 }
                 if (submit) submit.disabled = !!invalid || !currentUser;
+                updateFeePreview();
             }
 
             function renderReservationCalendar() {
@@ -7007,11 +7019,54 @@
                 if (pay) pay.classList.toggle('show', !!on);
             }
 
+            function bookingFeeEur(mins) {
+                return Math.max(1, Math.floor(Number(mins) / 30)) * 20;
+            }
+
+            function updateFeePreview() {
+                var durSel = document.getElementById('res-duration');
+                var preview = document.getElementById('res-fee-preview');
+                var payAmount = document.getElementById('res-pay-amount');
+                var mins = durSel ? Number(durSel.value) : 30;
+                var text = bookingFeeEur(mins) + ' EUR / ' + mins + ' min';
+                if (preview) preview.textContent = text;
+                if (payAmount) payAmount.textContent = text;
+            }
+
+            async function confirmPaidReservation(sessionId) {
+                var resp = await fetch(API_BASE + '/reservations/confirm-payment', {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+                var data = await resp.json().catch(function() { return {}; });
+                if (!resp.ok) {
+                    throw new Error(data.detail || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
+                }
+                showResMessage(resT('paymentApproved', 'Payment approved.') + ' ' + resT('reservationSuccess', 'Reservation confirmed.'), '');
+                showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
+                setPaymentStep(false);
+                await loadReservationsAndRender();
+            }
+
+            async function maybeFinishStripeReturn() {
+                try {
+                    var params = new URLSearchParams(location.search || '');
+                    var sessionId = params.get('session_id') || '';
+                    if (params.get('paid') !== '1' || !sessionId || !currentUser) return;
+                    await confirmPaidReservation(sessionId);
+                    history.replaceState({}, '', location.pathname);
+                } catch (e) {
+                    showResMessage('', e.message || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
+                }
+            }
+
             async function submitReservation() {
                 var dateEl = document.getElementById('res-date');
                 var startSel = document.getElementById('res-start');
                 var durSel = document.getElementById('res-duration');
                 var payBtn = document.getElementById('res-pay-btn');
+                var methodEl = document.getElementById('res-pay-method');
                 if (!currentUser) {
                     showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
                     setPaymentStep(false);
@@ -7021,6 +7076,7 @@
                 var startHm = startSel.value;
                 var mins = Number(durSel.value);
                 var endHm = addMinutesHm(startHm, mins);
+                var method = methodEl ? String(methodEl.value || '') : 'card';
                 if (overlapExists(dateStr, startHm, mins)) {
                     showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation.'));
                     setPaymentStep(false);
@@ -7028,35 +7084,58 @@
                 }
                 if (payBtn) payBtn.disabled = true;
                 try {
-                    var resp = await fetch(API_BASE + '/reservations', {
+                    var payload = {
+                        player_id: currentUser.username,
+                        start: localIso(dateStr, startHm),
+                        end: localIso(dateStr, endHm)
+                    };
+                    if (!method) {
+                        var adminPass = window.prompt(resT('adminPasswordPrompt', 'Admin password is required to register this booking without payment.'));
+                        if (!adminPass) {
+                            showResMessage('', resT('paymentRequired', 'Payment is required unless an administrator waives the fee.'));
+                            return;
+                        }
+                        payload.admin_password = adminPass;
+                        var waive = await fetch(API_BASE + '/reservations', {
+                            method: 'POST',
+                            headers: apiHeaders(),
+                            body: JSON.stringify(payload)
+                        });
+                        var waiveData = await waive.json().catch(function() { return {}; });
+                        if (!waive.ok) {
+                            var detail = waiveData.detail || resT('reservationFailed', 'Reservation failed.');
+                            showResMessage('', detail);
+                            return;
+                        }
+                        showResMessage(resT('adminWaiverOk', 'Administrator confirmed the booking without payment.') + ' ' + dateStr + '  ' + startHm + '–' + endHm, '');
+                        showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
+                        setPaymentStep(false);
+                        await loadReservationsAndRender();
+                        return;
+                    }
+                    var resp = await fetch(API_BASE + '/reservations/checkout', {
                         method: 'POST',
                         headers: apiHeaders(),
-                        body: JSON.stringify({
-                            player_id: currentUser.username,
-                            start: localIso(dateStr, startHm),
-                            end: localIso(dateStr, endHm),
-                            payment_status: 'simulated'
-                        })
+                        body: JSON.stringify(payload)
                     });
                     var data = await resp.json().catch(function() { return {}; });
                     if (!resp.ok) {
-                        var detail = data.detail || resT('reservationFailed', 'Reservation failed.');
-                        if (Array.isArray(detail)) detail = detail.map(function(d) { return d.msg || d; }).join(' ');
-                        showResMessage('', detail);
-                        setPaymentStep(false);
+                        var err = data.detail || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.');
+                        if (Array.isArray(err)) err = err.map(function(d) { return d.msg || d; }).join(' ');
+                        showResMessage('', err);
                         return;
                     }
-                    var when = dateStr + '  ' + startHm + '–' + endHm;
-                    showResMessage(resT('paymentApproved', 'Payment approved (simulation).') + ' ' + resT('reservationSuccess', 'Reservation confirmed.') + ' ' + when, '');
-                    showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
-                    setPaymentStep(false);
-                    await loadReservationsAndRender();
+                    if (data.checkout_url) {
+                        window.location.href = data.checkout_url;
+                        return;
+                    }
+                    showResMessage('', resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
                 } catch (e) {
                     showResMessage('', resT('networkError', 'Network error. Is the backend running?'));
-                    setPaymentStep(false);
                 } finally {
                     if (payBtn) payBtn.disabled = false;
                     updateDurationAvailability();
+                    updateFeePreview();
                 }
             }
 
@@ -7208,6 +7287,7 @@
                 startAutoRefresh();
                 bindReservationUi();
                 loadReservationsAndRender();
+                maybeFinishStripeReturn();
             };
 
             var originalShowLogin = showLogin;

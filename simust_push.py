@@ -62,6 +62,8 @@ _users_push_at = 0.0
 _users_pull_lock = threading.Lock()
 _users_pull_at = 0.0
 PLAYER_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_seen_ingest: Dict[str, float] = {}
+_seen_ingest_lock = threading.Lock()
 QUEUE_DIR = os.environ.get("SIMUST_PUSH_QUEUE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_queue"))
 
 os.makedirs(QUEUE_DIR, exist_ok=True)
@@ -121,6 +123,16 @@ def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, bod
     expect = _sign(body, str(ts))
     if not sign_header or not hmac.compare_digest(sign_header, expect):
         raise PermissionError("Invalid push signature")
+    digest = hashlib.sha256(body).hexdigest()
+    stamp = f"{ts}:{digest}"
+    now = time.time()
+    with _seen_ingest_lock:
+        stale = [key for key, seen_at in _seen_ingest.items() if now - seen_at > 300]
+        for key in stale:
+            _seen_ingest.pop(key, None)
+        if stamp in _seen_ingest:
+            raise PermissionError("Replay rejected")
+        _seen_ingest[stamp] = now
 
 
 def _post(payload: Dict[str, Any]) -> None:

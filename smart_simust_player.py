@@ -343,6 +343,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._paused_media_time = None
         self._pause_started_at = 0
         self._pending_start_after_pause = False
+        self._force_close_timer = None
+        self._frozen_qt_timers = []
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -804,7 +806,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.check_timer.start()
 
             # Fallback: close after 60 seconds (in case the video never ends)
-            QTimer.singleShot(60000, self._force_close_with_completion)
+            if self._force_close_timer:
+                self._force_close_timer.stop()
+            self._force_close_timer = QtCore.QTimer(singleShot=True)
+            self._force_close_timer.timeout.connect(self._force_close_with_completion)
+            self._force_close_timer.start(60000)
         else:
             self._update_status_file("error", self.total_videos, self.total_videos, "Final summary failed to generate")
             self.completion_label.setText("Final summary failed to generate.")
@@ -970,13 +976,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self._paused_media_time = t if t is not None and t >= 0 else None
             except Exception:
                 self._paused_media_time = None
+            self._freeze_qt_timers()
             self._set_vlc_paused(True)
             self._update_status_file("paused", self.current_video_index + 1, len(self.video_files), "Paused")
             logger.info("Operator pause: video and timers frozen at %s ms", self._paused_media_time)
             return
+        dt = time.time() - self._pause_started_at if self._pause_started_at else 0
         if self._pause_started_at and self.video_start_time:
-            self.video_start_time += time.time() - self._pause_started_at
+            self.video_start_time += dt
+        if self._final_play_started_at:
+            self._final_play_started_at += dt
         self._pause_started_at = 0
+        self._thaw_qt_timers()
         self._set_vlc_paused(False)
         if self._paused_media_time is not None:
             try:
@@ -989,6 +1000,33 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._start_playback()
         self._update_status_file("playing", self.current_video_index + 1, len(self.video_files), "Resumed")
         logger.info("Operator resume: continuing from pause point")
+
+    def _freeze_qt_timers(self):
+        frozen = []
+        for name in ("results_timer", "close_timer", "play_delay_timer", "_force_close_timer"):
+            timer = getattr(self, name, None)
+            if timer is None:
+                continue
+            try:
+                if not timer.isActive():
+                    continue
+                remaining = timer.remainingTime()
+                timer.stop()
+                frozen.append((name, max(50, remaining if remaining >= 0 else 0)))
+            except Exception:
+                continue
+        self._frozen_qt_timers = frozen
+
+    def _thaw_qt_timers(self):
+        for name, remaining in self._frozen_qt_timers:
+            timer = getattr(self, name, None)
+            if timer is None:
+                continue
+            try:
+                timer.start(remaining)
+            except Exception:
+                continue
+        self._frozen_qt_timers = []
 
     def _check_operator_pause(self):
         if self._is_closing or self.playlist_finished:

@@ -1749,6 +1749,8 @@
             var sessionSavedRef = useRef(false);
             var sessionAbortedRef = useRef(false);
             var autoStopTimeoutRef = useRef(null);
+            var autoStopRemainingRef = useRef(45 * 60 * 1000);
+            var autoStopDeadlineRef = useRef(0);
             var realtimeRunningRef = useRef(false);
             var realtimePausedRef = useRef(false);
             var activeTabRef = useRef(activeTab);
@@ -1759,6 +1761,37 @@
             var simRequestSeqRef = useRef(0);
 
             var REPORTS_BASE = "C:/Users/siama/Documents/simust_reports";
+
+            var clearAutoStopTimeout = function() {
+                if (autoStopTimeoutRef.current) {
+                    clearTimeout(autoStopTimeoutRef.current);
+                    autoStopTimeoutRef.current = null;
+                }
+            };
+            var armAutoStopTimeout = function(remainingMs) {
+                clearAutoStopTimeout();
+                var ms = Math.max(1000, remainingMs || (45 * 60 * 1000));
+                autoStopRemainingRef.current = ms;
+                autoStopDeadlineRef.current = Date.now() + ms;
+                autoStopTimeoutRef.current = setTimeout(function() {
+                    autoStopTimeoutRef.current = null;
+                    if (realtimePausedRef.current) return;
+                    if (realtimeRunningRef.current && !sessionSavedRef.current) {
+                        showToast("Auto‑stopping after safety timeout", 'info');
+                        stopPlayback();
+                    }
+                }, ms);
+            };
+            var freezeAutoStopTimeout = function() {
+                if (!autoStopDeadlineRef.current) return;
+                autoStopRemainingRef.current = Math.max(1000, autoStopDeadlineRef.current - Date.now());
+                clearAutoStopTimeout();
+            };
+            var resumeAutoStopTimeout = function() {
+                if (autoStopRemainingRef.current) {
+                    armAutoStopTimeout(autoStopRemainingRef.current);
+                }
+            };
 
             var clearResultsDisplay = function() {
                 resultsEpochRef.current += 1;
@@ -2638,12 +2671,8 @@
                         }
                     }, 800);
 
-                    autoStopTimeoutRef.current = setTimeout(function() {
-                        if (realtimeRunningRef.current && !sessionSavedRef.current) {
-                            showToast("Auto‑stopping after safety timeout", 'info');
-                            stopPlayback();
-                        }
-                    }, 45 * 60 * 1000);
+                    autoStopRemainingRef.current = 45 * 60 * 1000;
+                    armAutoStopTimeout(autoStopRemainingRef.current);
 
                     var sawActivePlayback = false;
                     var finishFromStatus = function() {
@@ -2688,11 +2717,13 @@
                                 return;
                             }
                             if (state === "paused" || statusRes.data.paused) {
+                                if (!realtimePausedRef.current) freezeAutoStopTimeout();
                                 realtimePausedRef.current = true;
                                 setRealtimePaused(true);
                             } else if (realtimePausedRef.current && state !== "paused") {
                                 realtimePausedRef.current = false;
                                 setRealtimePaused(false);
+                                resumeAutoStopTimeout();
                             }
                             if (state === "playing" || state === "playing_final" || state === "loading") {
                                 sawActivePlayback = true;
@@ -2741,6 +2772,8 @@
                 var next = !realtimePausedRef.current;
                 realtimePausedRef.current = next;
                 setRealtimePaused(next);
+                if (next) freezeAutoStopTimeout();
+                else resumeAutoStopTimeout();
                 axios.post("/pause-realtime", { paused: next }).then(function() {
                     showToast(next
                         ? "Paused. Detection and saving are frozen."
@@ -2748,6 +2781,8 @@
                 }).catch(function(e) {
                     realtimePausedRef.current = !next;
                     setRealtimePaused(!next);
+                    if (next) resumeAutoStopTimeout();
+                    else freezeAutoStopTimeout();
                     showToast("Could not pause/resume: " + (e.response ? e.response.data.detail : e.message), 'error');
                 });
             };
@@ -2778,8 +2813,8 @@
                     realtimeMonitorInterval.current = null; }
                 if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current);
                     liveIntervalRef.current = null; }
-                if (autoStopTimeoutRef.current) { clearTimeout(autoStopTimeoutRef.current);
-                    autoStopTimeoutRef.current = null; }
+                clearAutoStopTimeout();
+                autoStopDeadlineRef.current = 0;
                 showToast(abort
                     ? "Test stopped. Nothing was saved. Ready for the next test."
                     : "Realtime stopped", 'info');

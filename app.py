@@ -39,15 +39,21 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from simust_security import (
     PUBLIC_MODE,
+    PUBLIC_REGISTER_ROLES,
     can_access_player,
     check_auth_rate,
+    contained_player_dir,
     cors_origins,
     current_user,
     hash_password,
     is_lab_only_path,
     issue_token,
+    public_security_headers,
+    require_player_id,
+    sanitize_profile_image,
     verify_password,
 )
+import simust_billing
 import simust_push
 import simust_remote
 
@@ -83,7 +89,11 @@ async def guard_lab_only_on_public_host(request: Request, call_next):
             {"detail": "This action is only available on the training machine."},
             status_code=403,
         )
-    return await call_next(request)
+    response = await call_next(request)
+    if PUBLIC_MODE:
+        for key, value in public_security_headers().items():
+            response.headers.setdefault(key, value)
+    return response
 
 os.makedirs("static", exist_ok=True)   
 
@@ -312,9 +322,95 @@ def _public_reservation(item: dict) -> dict:
     }
     if item.get("payment_status"):
         public["payment_status"] = item.get("payment_status")
+    if item.get("amount_eur") is not None:
+        public["amount_eur"] = item.get("amount_eur")
     if item.get("source"):
         public["source"] = item.get("source")
     return public
+
+
+def _reservation_for_viewer(item: dict, viewer: Optional[dict]) -> dict:
+    public = _public_reservation(item)
+    role = str((viewer or {}).get("role") or "").strip().lower()
+    username = str((viewer or {}).get("username") or "")
+    if PUBLIC_MODE and role not in RESERVATION_STAFF_ROLES and public.get("player_id") != username:
+        public["player_id"] = ""
+        public["player_name"] = "Booked"
+    return public
+
+
+def _assert_slot_free(bookings: list, start: datetime, end: datetime) -> None:
+    for item in bookings:
+        try:
+            existing_start = _parse_iso_dt(item.get("start", ""), "start")
+            existing_end = _parse_iso_dt(item.get("end", ""), "end")
+        except HTTPException:
+            continue
+        if _intervals_overlap(start, end, existing_start, existing_end):
+            raise HTTPException(409, "That time overlaps an existing reservation")
+
+
+def _insert_reservation(
+    *,
+    username: str,
+    display_name: str,
+    start: datetime,
+    end: datetime,
+    duration: int,
+    payment_status: str,
+    amount_eur: int,
+    source: str,
+    payment_ref: str = "",
+) -> dict:
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+        _assert_slot_free(bookings, start, end)
+        created = {
+            "id": str(uuid.uuid4()),
+            "player_id": username,
+            "player_name": display_name,
+            "start": start.isoformat(timespec="seconds"),
+            "end": end.isoformat(timespec="seconds"),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "payment_status": payment_status,
+            "amount_eur": amount_eur,
+            "source": source,
+        }
+        if payment_ref:
+            created["payment_ref"] = payment_ref
+        bookings.append(created)
+        save_reservations(bookings)
+    return created
+
+
+def _verify_admin_password(users: dict, password: str) -> bool:
+    if not password:
+        return False
+    for uname, record in (users or {}).items():
+        if str((record or {}).get("role") or "").strip().lower() != "admin":
+            continue
+        ok, _upgraded = verify_password(password, (record or {}).get("password", ""))
+        if ok:
+            return True
+    return False
+
+
+def _notify_reservation(created: dict, user: dict) -> None:
+    email_user = {
+        "email": (user or {}).get("email", ""),
+        "name": (user or {}).get("name", ""),
+        "surname": (user or {}).get("surname", ""),
+    }
+    threading.Thread(
+        target=send_reservation_email,
+        args=(created, email_user),
+        daemon=True,
+    ).start()
+    if not PUBLIC_MODE:
+        try:
+            simust_push.push_reservations_async(load_reservations())
+        except Exception:
+            logger.exception("Could not push reservations to host")
 
 
 def _format_duration_label(minutes: int) -> str:
@@ -2956,13 +3052,14 @@ def _public_sessions(raw_sessions):
 
 @app.get("/get-player-reports/{player_id}")
 async def get_player_reports(player_id: str, request: Request):
+    player_id = require_player_id(player_id)
     users = load_users()
     viewer = current_user(request, users, required=PUBLIC_MODE)
     player_meta = users.get(player_id) or {}
     if not can_access_player(viewer, player_id, player_meta):
         raise HTTPException(403, "You can only view your own training data")
     try:
-        player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+        player_dir = contained_player_dir(PLAYER_REPORTS_DIR, player_id)
         index_file = os.path.join(player_dir, "index.json")
         if not os.path.exists(index_file):
             return {"sessions": []}
@@ -3557,7 +3654,15 @@ async def export_accounts(request: Request):
     return {"status": "success", "accounts": accounts, "reservations": reservations}
 
 
-REMOTE_STAFF_ONLY_ACTIONS = {"lab-upsert-player", "unlock-level", "lock-level"}
+REMOTE_STAFF_ONLY_ACTIONS = {
+    "lab-upsert-player",
+    "unlock-level",
+    "lock-level",
+    "stop-realtime",
+    "pause-realtime",
+    "set-simulation",
+    "set-visualization",
+}
 
 
 def _require_remote_user(request: Request):
@@ -3579,7 +3684,7 @@ async def remote_command(request: Request):
     action = (data.get("action") or data.get("path") or "").strip().lstrip("/")
     payload = dict(data.get("payload") or {})
     if action in REMOTE_STAFF_ONLY_ACTIONS and role not in RESERVATION_STAFF_ROLES:
-        raise HTTPException(403, "Only coach, manager, or admin can change unlocks")
+        raise HTTPException(403, "Only coach, manager, or admin can run lab operator commands")
     if role == "player" and action == "start-realtime-playback":
         payload["player_id"] = viewer["username"]
         payload["player_player_id"] = viewer["username"]
@@ -3827,10 +3932,8 @@ async def register(req: Request):
     age = data.get("age", "").strip()
     club = data.get("club", "").strip()
     team = data.get("team", "").strip()
-    role = data.get("role", "player").strip()
-    image = data.get("image", "").strip()
-    if PUBLIC_MODE and image.startswith("data:"):
-        image = ""
+    role = data.get("role", "player").strip().lower()
+    image = sanitize_profile_image(data.get("image", "").strip())
     gender = data.get("gender", "").strip()
     email = data.get("email", "").strip().lower()
     country_code = data.get("country_code", "").strip()
@@ -3838,6 +3941,12 @@ async def register(req: Request):
 
     if not username or not password or not name or not surname or not role:
         raise HTTPException(400, "Missing required fields")
+    try:
+        username = require_player_id(username)
+    except HTTPException:
+        raise HTTPException(400, "Username may only contain letters, numbers, dot, underscore, or hyphen")
+    if PUBLIC_MODE and role not in PUBLIC_REGISTER_ROLES:
+        raise HTTPException(400, "Choose player, coach, or manager")
     if PUBLIC_MODE and len(password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     if not email or not EMAIL_RE.match(email):
@@ -3849,8 +3958,8 @@ async def register(req: Request):
     phone = f"{country_code} {phone_number}"
 
     users = load_users()
-    if username in users:
-        raise HTTPException(400, "Username already exists")
+    if username in users or find_username(users, username):
+        raise HTTPException(400, "Unable to create this account")
 
     # pbkdf2 on the public host; legacy MD5 hashes are upgraded on next sign-in
     hashed = hash_password(password)
@@ -3976,7 +4085,7 @@ async def update_profile(req: Request):
     users[username]["club"] = club
     users[username]["team"] = team
     if image:
-        users[username]["image"] = image
+        users[username]["image"] = sanitize_profile_image(image)
 
     save_users(users)
     return {"status": "success", "message": "Profile updated"}
@@ -4005,7 +4114,7 @@ async def reservations_today():
             continue
         items.append({
             "id": item.get("id"),
-            "player_name": item.get("player_name") or "Booked",
+            "player_name": "Booked" if PUBLIC_MODE else (item.get("player_name") or "Booked"),
             "start": start.strftime("%H:%M"),
             "end": end.strftime("%H:%M"),
             "start_iso": start.isoformat(timespec="seconds"),
@@ -4022,7 +4131,9 @@ async def reservations_today():
 
 @app.get("/reservations")
 async def list_reservations(request: Request):
-    """List bookings in a date range. No emails or passwords."""
+    """List bookings in a date range. Public host requires sign-in and hides other names."""
+    users = load_users()
+    viewer = current_user(request, users, required=PUBLIC_MODE)
     range_from = _parse_range_bound(request.query_params.get("from", ""), end_of_day=False)
     range_to = _parse_range_bound(request.query_params.get("to", ""), end_of_day=True)
     if range_from is None:
@@ -4041,9 +4152,165 @@ async def list_reservations(request: Request):
         except HTTPException:
             continue
         if _intervals_overlap(start, end, range_from, range_to):
-            results.append(_public_reservation(item))
+            results.append(_reservation_for_viewer(item, viewer))
     results.sort(key=lambda row: row.get("start", ""))
-    return {"reservations": results}
+    return {
+        "reservations": results,
+        "fee_eur_per_slot": simust_billing.EUR_PER_SLOT,
+        "slot_minutes": simust_billing.SLOT_MINUTES,
+        "stripe_enabled": simust_billing.stripe_configured(),
+    }
+
+
+@app.get("/billing/config")
+async def billing_config():
+    return {
+        "currency": "EUR",
+        "fee_eur_per_slot": simust_billing.EUR_PER_SLOT,
+        "slot_minutes": simust_billing.SLOT_MINUTES,
+        "stripe_enabled": simust_billing.stripe_configured(),
+        "publishable_key": simust_billing.STRIPE_PUBLISHABLE_KEY if simust_billing.stripe_configured() else "",
+    }
+
+
+@app.post("/reservations/checkout")
+async def create_reservation_checkout(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    users = load_users()
+    viewer = current_user(req, users, required=True)
+    username = (data.get("player_id") or data.get("username") or viewer["username"]).strip()
+    username = require_player_id(username)
+    staff = str(viewer.get("role") or "").strip().lower() in RESERVATION_STAFF_ROLES
+    if viewer["username"] != username and not staff:
+        raise HTTPException(403, "You can only reserve a slot for your own account")
+    start = _parse_iso_dt(data.get("start", ""), "start")
+    end = _parse_iso_dt(data.get("end", ""), "end")
+    duration = _validate_reservation_window(start, end)
+    user = users.get(username)
+    if not user:
+        raise HTTPException(404, "Player not found")
+    with RESERVATION_LOCK:
+        _assert_slot_free(load_reservations(), start, end)
+    if not simust_billing.stripe_configured():
+        raise HTTPException(503, "Card payment is not configured. An administrator can confirm the booking without payment.")
+    origin = str(req.headers.get("origin") or simust_billing.public_base_url()).rstrip("/")
+    success = origin + "/dashboard?paid=1&session_id={CHECKOUT_SESSION_ID}"
+    cancel = origin + "/dashboard?paid=0"
+    try:
+        session_id, url, amount = simust_billing.create_checkout_session(
+            player_id=username,
+            player_email=str(user.get("email") or ""),
+            start_iso=start.isoformat(timespec="seconds"),
+            end_iso=end.isoformat(timespec="seconds"),
+            duration_minutes=duration,
+            success_url=success,
+            cancel_url=cancel,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {
+        "status": "checkout",
+        "checkout_url": url,
+        "session_id": session_id,
+        "amount_eur": amount,
+        "duration_minutes": duration,
+    }
+
+
+@app.post("/reservations/confirm-payment")
+async def confirm_reservation_payment(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    session_id = str(data.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(400, "session_id is required")
+    users = load_users()
+    viewer = current_user(req, users, required=True)
+    try:
+        paid = simust_billing.retrieve_paid_session(session_id)
+    except PermissionError as exc:
+        raise HTTPException(402, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    username = require_player_id(paid.get("player_id") or viewer["username"])
+    if viewer["username"] != username and str(viewer.get("role") or "").lower() not in RESERVATION_STAFF_ROLES:
+        raise HTTPException(403, "This payment belongs to another account")
+    start = _parse_iso_dt(paid.get("start", ""), "start")
+    end = _parse_iso_dt(paid.get("end", ""), "end")
+    duration = _validate_reservation_window(start, end)
+    user = users.get(username)
+    if not user:
+        raise HTTPException(404, "Player not found")
+    with RESERVATION_LOCK:
+        for item in load_reservations():
+            if item.get("payment_ref") == session_id:
+                public = _public_reservation(item)
+                public["duration_minutes"] = duration
+                return public
+    created = _insert_reservation(
+        username=username,
+        display_name=_player_display_name(user, username),
+        start=start,
+        end=end,
+        duration=duration,
+        payment_status="paid",
+        amount_eur=paid.get("amount_eur") or simust_billing.booking_fee_eur(duration),
+        source="public" if PUBLIC_MODE else "lab",
+        payment_ref=session_id,
+    )
+    simust_billing.pop_pending(session_id)
+    _notify_reservation(created, user)
+    public = _public_reservation(created)
+    public["duration_minutes"] = duration
+    return public
+
+
+@app.post("/internal/stripe-webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    try:
+        event = simust_billing.verify_webhook(payload, request.headers.get("stripe-signature") or "")
+    except Exception:
+        raise HTTPException(400, "Invalid Stripe signature")
+    if event.get("type") != "checkout.session.completed":
+        return {"status": "ignored"}
+    session = (event.get("data") or {}).get("object") or {}
+    session_id = session.get("id") or ""
+    if str(session.get("payment_status") or "") != "paid" or not session_id:
+        return {"status": "ignored"}
+    try:
+        paid = simust_billing.retrieve_paid_session(session_id)
+        username = require_player_id(paid["player_id"])
+        start = _parse_iso_dt(paid["start"], "start")
+        end = _parse_iso_dt(paid["end"], "end")
+        duration = int(paid.get("duration_minutes") or _validate_reservation_window(start, end))
+    except Exception:
+        return {"status": "ignored"}
+    users = load_users()
+    user = users.get(username) or {}
+    with RESERVATION_LOCK:
+        for item in load_reservations():
+            if item.get("payment_ref") == session_id:
+                return {"status": "exists"}
+    created = _insert_reservation(
+        username=username,
+        display_name=_player_display_name(user, username),
+        start=start,
+        end=end,
+        duration=duration,
+        payment_status="paid",
+        amount_eur=paid.get("amount_eur") or simust_billing.booking_fee_eur(duration),
+        source="public",
+        payment_ref=session_id,
+    )
+    simust_billing.pop_pending(session_id)
+    _notify_reservation(created, user)
+    return {"status": "success", "id": created["id"]}
 
 
 @app.post("/reservations")
@@ -4056,12 +4323,15 @@ async def create_reservation(req: Request):
     username = (data.get("player_id") or data.get("username") or "").strip()
     if not username:
         raise HTTPException(400, "player_id or username is required")
+    username = require_player_id(username)
 
     start = _parse_iso_dt(data.get("start", ""), "start")
     end = _parse_iso_dt(data.get("end", ""), "end")
     duration = _validate_reservation_window(start, end)
+    amount_eur = simust_billing.booking_fee_eur(duration)
 
     users = load_users()
+    viewer = None
     if PUBLIC_MODE:
         viewer = current_user(req, users, required=True)
         staff = str(viewer.get("role") or "").strip().lower() in RESERVATION_STAFF_ROLES
@@ -4072,48 +4342,48 @@ async def create_reservation(req: Request):
         raise HTTPException(404, "Player not found")
 
     display_name = _player_display_name(user, username)
-    created = None
-    with RESERVATION_LOCK:
-        bookings = load_reservations()
-        for item in bookings:
-            try:
-                existing_start = _parse_iso_dt(item.get("start", ""), "start")
-                existing_end = _parse_iso_dt(item.get("end", ""), "end")
-            except HTTPException:
-                continue
-            if _intervals_overlap(start, end, existing_start, existing_end):
-                raise HTTPException(409, "That time overlaps an existing reservation")
-        payment_status = str(data.get("payment_status") or "").strip() or "simulated"
-        created = {
-            "id": str(uuid.uuid4()),
-            "player_id": username,
-            "player_name": display_name,
-            "start": start.isoformat(timespec="seconds"),
-            "end": end.isoformat(timespec="seconds"),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "payment_status": payment_status,
-            "source": "public" if PUBLIC_MODE else "lab",
-        }
-        bookings.append(created)
-        save_reservations(bookings)
+    admin_password = str(data.get("admin_password") or data.get("adminPassword") or "")
+    stripe_session = str(data.get("stripe_session_id") or data.get("session_id") or "").strip()
+    payment_status = "lab"
+    payment_ref = ""
 
-    email_user = {
-        "email": user.get("email", ""),
-        "name": user.get("name", ""),
-        "surname": user.get("surname", ""),
-    }
-    threading.Thread(
-        target=send_reservation_email,
-        args=(created, email_user),
-        daemon=True,
-    ).start()
+    if PUBLIC_MODE:
+        if admin_password:
+            if not _verify_admin_password(users, admin_password):
+                raise HTTPException(401, "Admin password is not correct")
+            payment_status = "admin_waived"
+            payment_ref = "admin-waiver"
+        elif stripe_session:
+            try:
+                paid = simust_billing.retrieve_paid_session(stripe_session)
+            except PermissionError as exc:
+                raise HTTPException(402, str(exc))
+            if paid.get("player_id") and paid["player_id"] != username:
+                raise HTTPException(403, "This payment belongs to another account")
+            payment_status = "paid"
+            payment_ref = stripe_session
+            amount_eur = paid.get("amount_eur") or amount_eur
+        else:
+            raise HTTPException(402, "Payment is required before this reservation is registered")
+    else:
+        payment_status = str(data.get("payment_status") or "").strip() or "lab"
+
+    created = _insert_reservation(
+        username=username,
+        display_name=display_name,
+        start=start,
+        end=end,
+        duration=duration,
+        payment_status=payment_status,
+        amount_eur=amount_eur,
+        source="public" if PUBLIC_MODE else "lab",
+        payment_ref=payment_ref,
+    )
+    if stripe_session:
+        simust_billing.pop_pending(stripe_session)
+    _notify_reservation(created, user)
     public = _public_reservation(created)
     public["duration_minutes"] = duration
-    if not PUBLIC_MODE:
-        try:
-            simust_push.push_reservations_async(load_reservations())
-        except Exception:
-            logger.exception("Could not push reservations to host")
     return public
 
 

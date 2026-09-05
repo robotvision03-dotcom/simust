@@ -2842,12 +2842,27 @@ class SimustRealtimeCamera:
             dt = time.time() - (self._pause_started_at or time.time())
             if self.pending_start:
                 self.pending_start_time += dt
+                offset = self.pending_start.get("offset_start_time_str")
+                if offset:
+                    self.pending_start["offset_start_time_str"] = add_offset_to_time(offset, dt)
             if self.pending_end:
                 self.pending_end_time += dt
+                end_str = getattr(self, "pending_end_time_str", "")
+                if end_str:
+                    self.pending_end_time_str = add_offset_to_time(end_str, dt)
             if self.session_active:
                 self.session_start_timestamp += dt
+            if self.current_qr_block and self.current_qr_block.get("start_time"):
+                self.current_qr_block["start_time"] = add_offset_to_time(
+                    self.current_qr_block["start_time"], dt
+                )
             if self.between_sessions_active and self.between_session_start_ts:
                 self.between_session_start_ts += dt
+            if self.between_session_start_time:
+                self.between_session_start_time = add_offset_to_time(self.between_session_start_time, dt)
+            last_det = (self.qr_state or {}).get("last_detection_time")
+            if last_det:
+                self.qr_state["last_detection_time"] = last_det + dt
             simulator = getattr(self, "simulator", None)
             if simulator is not None:
                 if getattr(simulator, "start_ts", 0):

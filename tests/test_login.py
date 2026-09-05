@@ -9,6 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 os.environ.setdefault("SIMUST_PUBLIC_MODE", "1")
+os.environ.setdefault("SIMUST_SESSION_SECRET", "test-session-secret-not-for-production")
 
 from simust_security import hash_password, verify_password  # noqa: E402
 import app as simust_app  # noqa: E402

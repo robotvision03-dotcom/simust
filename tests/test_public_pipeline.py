@@ -8,6 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 os.environ.setdefault("SIMUST_PUBLIC_MODE", "1")
+os.environ.setdefault("SIMUST_SESSION_SECRET", "test-session-secret-not-for-production")
 
 import simust_push  # noqa: E402
 from app import apply_session_progress  # noqa: E402
