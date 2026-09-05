@@ -23,7 +23,13 @@ Default public host: `http://157.180.47.98`. Leave `app.py` running on the lab P
 
 ## Install on a real tablet
 
-Copy `app-debug.apk` onto the tablet (USB, Drive, or email) and open it. Allow install from that source if Android asks.
+Gradle always writes:
+
+`android\app\build\outputs\apk\debug\app-debug.apk`
+
+That **is** SIMUST 2.2. After `.\install-apk.bat` or `assembleDebug`, a copy is also saved as `android\SIMUST-2.2-debug.apk`.
+
+Copy either file onto the tablet (USB, Drive, or email) and open it. Allow install from that source if Android asks.
 
 Or with a USB cable and the SDK:
 

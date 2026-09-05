@@ -43,6 +43,13 @@ if not exist "app\build\outputs\apk\debug\app-debug.apk" (
   exit /b 1
 )
 
+copy /Y "app\build\outputs\apk\debug\app-debug.apk" "SIMUST-2.2-debug.apk" >nul
+copy /Y "app\build\outputs\apk\debug\app-debug.apk" "app\build\outputs\apk\debug\SIMUST-2.2-debug.apk" >nul
+echo APK ready:
+echo   %cd%\SIMUST-2.2-debug.apk
+echo   %cd%\app\build\outputs\apk\debug\app-debug.apk
+echo   (same file; Gradle always names the build app-debug.apk)
+
 echo.
 echo Devices:
 "%ANDROID_HOME%\platform-tools\adb.exe" start-server

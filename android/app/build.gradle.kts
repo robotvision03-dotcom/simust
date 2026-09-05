@@ -36,3 +36,13 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
 }
+
+tasks.named("assembleDebug").configure {
+    doLast {
+        val src = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
+        if (!src.exists()) return@doLast
+        val named = "SIMUST-${android.defaultConfig.versionName}-debug.apk"
+        src.copyTo(src.resolveSibling(named), overwrite = true)
+        src.copyTo(rootProject.projectDir.resolve(named), overwrite = true)
+    }
+}

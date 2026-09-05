@@ -94,6 +94,13 @@ if (-not (Test-Path $apk)) {
     Write-Host "APK was not created at $apk"
     exit 1
 }
+$named = Join-Path $Root "SIMUST-2.2-debug.apk"
+Copy-Item $apk $named -Force
+Copy-Item $apk (Join-Path (Split-Path $apk) "SIMUST-2.2-debug.apk") -Force
+Write-Host "APK ready:"
+Write-Host "  $named"
+Write-Host "  $apk"
+Write-Host "  (same file; Gradle always names the build app-debug.apk)"
 
 Write-Host ""
 Write-Host "Looking for a USB device..."
