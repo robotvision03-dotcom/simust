@@ -26,14 +26,15 @@ class GoalProbeCatalogTests(unittest.TestCase):
         self.assertTrue({"line_center", "post_a", "post_b", "upper_corner_a", "upper_corner_b"} <= names)
         self.assertTrue({"outside_20", "outside_73", "outside_140", "wide_a", "wide_b"} <= names)
 
-    def test_suggested_rect_contains_upper_not_far_outside(self):
+    def test_line_band_contains_center_not_upper_or_far(self):
         p0, p1 = rt.GOAL_LINES["8"]["p0"], rt.GOAL_LINES["8"]["p1"]
+        depth = rt.arrival_depth_for("8", "GOAL")
         mid = rt.goal_probe_xy(p0, p1, "line_center")
         upper = rt.goal_probe_xy(p0, p1, "upper_center_90")
         far = rt.goal_probe_xy(p0, p1, "outside_140")
-        self.assertTrue(rt.point_in_suggested_goal(mid, p0, p1))
-        self.assertTrue(rt.point_in_suggested_goal(upper, p0, p1))
-        self.assertFalse(rt.point_in_suggested_goal(far, p0, p1))
+        self.assertTrue(rt.in_goal_area(mid, p0, p1, depth))
+        self.assertFalse(rt.in_goal_area(upper, p0, p1, depth))
+        self.assertFalse(rt.in_goal_area(far, p0, p1, depth))
 
     def test_probe_cycles_named_zones_and_does_not_change_scoring_api(self):
         prev = rt.ArenaSimulator.GOAL_PROBE

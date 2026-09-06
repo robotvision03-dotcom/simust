@@ -29,9 +29,14 @@ def fmt_dt(dt: datetime) -> str:
     return dt.strftime("%H:%M:%S.%f")
 
 
-def sample_xy(sim: rt.ArenaSimulator) -> Tuple[List[int], List[int]]:
+def sample_xy(sim: rt.ArenaSimulator):
     balls, players, _hip = sim.step(rt.SIM_FRAME_WIDTH, rt.SIM_FRAME_HEIGHT)
-    return balls[0]["center"], players[0]["center"]
+    b = balls[0]["center"] if balls else None
+    if players:
+        p = players[0]["center"]
+    else:
+        p = [int(sim.last_player[0]), int(sim.last_player[1])]
+    return b, p
 
 
 def build_frames(sim: rt.ArenaSimulator, clock: FakeClock, duration: float, fps: float = 25.0):
@@ -41,7 +46,7 @@ def build_frames(sim: rt.ArenaSimulator, clock: FakeClock, duration: float, fps:
     t0 = clock.now
     for i in range(n):
         b, p = sample_xy(sim)
-        data.append({"t": round(clock.now - t0, 3), "b": [b], "p": [p], "hp": p})
+        data.append({"t": round(clock.now - t0, 3), "b": [b] if b is not None else [], "p": [p], "hp": p})
         clock.advance(dt)
     return data
 

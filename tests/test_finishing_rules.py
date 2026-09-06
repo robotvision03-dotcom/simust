@@ -173,16 +173,20 @@ class FinishingRuleTests(unittest.TestCase):
                 session = _travel(start, xy, arrive_s=0.70, hold_s=2.4)
                 result = _analyze("GOAL", [screen], session)
                 self.assertEqual(result.get("Result"), "Correct", msg=(screen, label, xy, result))
-                self.assertTrue(rt.point_in_goal_mouth(xy, line["p0"], line["p1"]))
+                depth = rt.arrival_depth_for(screen, "GOAL")
+                self.assertTrue(rt.in_goal_area(xy, line["p0"], line["p1"], depth), msg=(screen, label, xy))
 
-    def test_goal_upper_mouth_is_correct(self):
+    def test_goal_upper_net_outside_band_is_wrong(self):
+        """Points far above the line fail dist + proj_t. No rectangle scoring."""
         for screen in ("8", "1"):
             start = _outside_start(screen)
             p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+            depth = rt.arrival_depth_for(screen, "GOAL")
             for name in ("upper_center_90", "upper_corner_a", "upper_corner_b"):
                 dest = rt.goal_probe_xy(p0, p1, name)
+                self.assertFalse(rt.in_goal_area(dest, p0, p1, depth), msg=(screen, name, dest))
                 result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
-                self.assertEqual(result.get("Result"), "Correct", msg=(screen, name, result))
+                self.assertEqual(result.get("Result"), "Wrong", msg=(screen, name, result))
 
     def test_goal_pass_through_line_toward_camera_is_correct(self):
         """From the real origin, a shot that crosses the line and stops past it is a goal."""
@@ -190,6 +194,15 @@ class FinishingRuleTests(unittest.TestCase):
         start = _outside_start(screen)
         p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
         dest = rt.goal_probe_xy(p0, p1, "outside_40")
+        result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_goal_pass_through_past_band_toward_camera_is_correct(self):
+        """Leaving the 73px band on the camera side is still a finish, not a come-back."""
+        screen = "8"
+        start = _outside_start(screen)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_probe_xy(p0, p1, "outside_100")
         result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
         self.assertEqual(result.get("Result"), "Correct", msg=result)
 
@@ -208,14 +221,47 @@ class FinishingRuleTests(unittest.TestCase):
         self.assertEqual(sim.start_xy, (961.0, 82.0))
 
     def test_goal_approach_dropout_is_correct(self):
-        """Ball still heading through the mouth when detections stop."""
+        """Sparse detections that still enter the line + proj_t band stay Correct."""
         screen = "8"
         start = _outside_start(screen)
         p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
         dest = rt.goal_probe_xy(p0, p1, "outside_40")
         session = _travel(start, dest, arrive_s=0.50, hold_s=0.0)
+        # Keep every 3rd frame so the track looks like YOLO dropouts.
+        session = [row if i % 3 == 0 else {**row, "b": []} for i, row in enumerate(session)]
         result = _analyze("GOAL", [screen], session)
         self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_goal_physical_ball_grows_blurs_and_drops_frames(self):
+        clock = audit.FakeClock(4000.0)
+        prev_time = rt.time.time
+        rt.time.time = clock.time
+        try:
+            sim = rt.ArenaSimulator()
+            sim.start_action("GOAL", ["8"])
+            sim.intended = "correct"
+            radii = []
+            misses = 0
+            detected = 0
+            max_blur = 0.0
+            for _ in range(50):
+                balls, _, _ = sim.step(rt.SIM_FRAME_WIDTH, rt.SIM_FRAME_HEIGHT)
+                radii.append(sim.last_ball_radius)
+                max_blur = max(max_blur, sim.last_blur)
+                if balls:
+                    detected += 1
+                else:
+                    misses += 1
+                clock.advance(1.0 / 25.0)
+            self.assertGreater(radii[-1], radii[0] + 3.0)
+            self.assertGreater(detected, 10)
+            self.assertGreaterEqual(misses, 1)
+            self.assertGreater(max_blur, 2.0)
+            self.assertTrue(sim.last_detected)
+            depth = rt.arrival_depth_for("8", "GOAL")
+            self.assertTrue(rt.in_goal_area(sim.last_ball, sim.line_p0, sim.line_p1, depth))
+        finally:
+            rt.time.time = prev_time
 
 
 if __name__ == "__main__":

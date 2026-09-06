@@ -38,6 +38,7 @@ import warnings
 import signal
 import atexit
 import gc
+import random
 import requests
 
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -68,7 +69,6 @@ COLOR_LATE = (0, 255, 255)
 COLOR_WRONG = (0, 0, 255)
 COLOR_HIP = (0, 255, 255)  # cyan for hip point
 COLOR_POLYGON = (0, 255, 0)  # green for polygon outline
-COLOR_GOAL_RECT = (0, 200, 255)  # suggested GOAL rectangle (visual only)
 
 STITCHED_WIDTH = 3840
 STITCHED_HEIGHT = 1080
@@ -164,16 +164,10 @@ GOAL_LINES = {
     "6L": {"p0": (1262, 181), "p1": (1273, 222)},
 }
 
-# GOAL mouth: software GOAL_LINES is the BOTTOM. Posts go image-up; height is
-# one quarter of the bottom-line length. Used only for GOAL scoring.
-GOAL_RECT_HEIGHT_RATIO = 0.25
-GOAL_LINE_SLACK_PX = 12
-GOAL_SIDE_SLACK_PX = 12
-GOAL_CROSS_SPEED_PX_S = 18.0
-GOAL_CROSS_HORIZON_S = 1.4
-SUGGESTED_GOAL_HEIGHT_PX = 90  # probe marker only
-SUGGESTED_GOAL_LINE_SLACK_PX = 12
+# Probe markers only. Scoring uses GOAL_LINES + proj_t + GOAL_SCREEN_THRESHOLDS.
+SUGGESTED_GOAL_HEIGHT_PX = 90
 GOAL_PROBE_TRAVEL_S = 1.9
+GOAL_SHOT_TRAVEL_S = 0.85
 # Real send origin (far pitch, top of the camera). Screen 8 is the live pack.
 GOAL_SEND_ORIGIN = {
     "8": (961.0, 82.0),
@@ -222,46 +216,6 @@ def goal_along_axis(p0, p1):
     return (tx / nlen, ty / nlen), nlen
 
 
-def goal_mouth_height(p0, p1):
-    _along, width = goal_along_axis(p0, p1)
-    return max(40.0, width * GOAL_RECT_HEIGHT_RATIO)
-
-
-def goal_line_coords(point, p0, p1):
-    along, width = goal_along_axis(p0, p1)
-    up = goal_up_axis(p0, p1)
-    vx = float(point[0]) - float(p0[0])
-    vy = float(point[1]) - float(p0[1])
-    t = vx * along[0] + vy * along[1]
-    h = vx * up[0] + vy * up[1]
-    return t, h, width, along, up
-
-
-def suggested_goal_corners(p0, p1, height=None):
-    if height is None:
-        height = goal_mouth_height(p0, p1)
-    up = goal_up_axis(p0, p1)
-    a = (float(p0[0]), float(p0[1]))
-    b = (float(p1[0]), float(p1[1]))
-    c = (b[0] + up[0] * height, b[1] + up[1] * height)
-    d = (a[0] + up[0] * height, a[1] + up[1] * height)
-    return a, b, c, d
-
-
-def point_in_goal_mouth(point, p0, p1, height=None,
-                        line_slack=GOAL_LINE_SLACK_PX, side_slack=GOAL_SIDE_SLACK_PX):
-    """True if the point is in the GOAL rectangle (bottom = software line)."""
-    if height is None:
-        height = goal_mouth_height(p0, p1)
-    t, h, width, _along, _up = goal_line_coords(point, p0, p1)
-    return (-side_slack) <= t <= (width + side_slack) and (-line_slack) <= h <= (height + 8.0)
-
-
-def point_in_suggested_goal(point, p0, p1, height=None,
-                            line_slack=SUGGESTED_GOAL_LINE_SLACK_PX, side_slack=8.0):
-    return point_in_goal_mouth(point, p0, p1, height=height, line_slack=line_slack, side_slack=side_slack)
-
-
 def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
     along, width = goal_along_axis(p0, p1)
     up = goal_up_axis(p0, p1)
@@ -290,136 +244,20 @@ def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
     return table.get(name, mid)
 
 
-def recent_ball_velocity(positions, window_s=0.35):
-    """px/s from the last moving window. A held ball returns ~zero."""
-    if not positions or len(positions) < 2:
-        return (0.0, 0.0)
-    t1, x1, y1 = positions[-1]
-    chosen = None
-    for row in reversed(positions[:-1]):
-        if t1 - row[0] >= window_s:
-            chosen = row
-            break
-    if chosen is None:
-        chosen = positions[0]
-    dt = t1 - chosen[0]
-    if dt < 0.08:
-        return (0.0, 0.0)
-    return ((x1 - chosen[1]) / dt, (y1 - chosen[2]) / dt)
-
-
-def predict_goal_crossing(positions, p0, p1, horizon=GOAL_CROSS_HORIZON_S):
-    """If recent velocity aims through the mouth, return (t_cross, proj_t, dist)."""
-    if not positions or len(positions) < 2:
-        return None
-    vx, vy = recent_ball_velocity(positions)
-    up = goal_up_axis(p0, p1)
-    vh = vx * up[0] + vy * up[1]
-    if vh < GOAL_CROSS_SPEED_PX_S:
-        return None
-    t_last, x, y = positions[-1]
-    along_t, h, width, along, _up = goal_line_coords((x, y), p0, p1)
-    if h > goal_mouth_height(p0, p1) + 8.0:
-        return None
-    if h >= -GOAL_LINE_SLACK_PX:
-        if (-GOAL_SIDE_SLACK_PX) <= along_t <= (width + GOAL_SIDE_SLACK_PX):
-            proj = 0.0 if width <= 1e-6 else max(0.0, min(1.0, along_t / width))
-            return (t_last, proj, max(0.0, -h))
-        return None
-    t_cross = -h / vh
-    if t_cross < 0.0 or t_cross > horizon:
-        return None
-    cx = x + vx * t_cross
-    cy = y + vy * t_cross
-    along_c, _hc, width_c, _a, _u = goal_line_coords((cx, cy), p0, p1)
-    if (-GOAL_SIDE_SLACK_PX) <= along_c <= (width_c + GOAL_SIDE_SLACK_PX):
-        proj = 0.0 if width_c <= 1e-6 else max(0.0, min(1.0, along_c / width_c))
-        return (t_last + t_cross, proj, 0.0)
-    return None
-
-
-def first_goal_mouth_hit(positions, p0, p1):
-    height = goal_mouth_height(p0, p1)
-    best = None
-    first_t = None
-    for t, x, y in positions:
-        if not point_in_goal_mouth((x, y), p0, p1, height):
-            continue
-        if first_t is None:
-            first_t = t
-        eff, proj = get_effective_distance((x, y), p0, p1)
-        if best is None or eff < best[0]:
-            best = (eff, t, proj)
-    return first_t, best
-
-
-def left_goal_mouth(positions, p0, p1, after_t):
-    """True if the ball enters the mouth then goes back out the far/top side.
-
-    Passing the bottom line toward the camera is a finish, not a come-back.
-    """
-    if after_t is None or not positions:
-        return False
-    height = goal_mouth_height(p0, p1)
-    seen = False
-    away = 0
-    for t, x, y in positions:
-        if t + 1e-6 < after_t:
-            continue
-        if point_in_goal_mouth((x, y), p0, p1, height):
-            seen = True
-            away = 0
-            continue
-        _along_t, h, _w, _a, _u = goal_line_coords((x, y), p0, p1)
-        if seen and h > height + 16.0:
-            away += 1
-            if away >= 2:
-                return True
-    return False
-
-
-def goal_finish_evidence(positions, screens, goal_lines):
-    """Best in-mouth or predicted-crossing evidence on this track."""
-    best = None
-    for screen in screens:
-        p0, p1 = get_screen_info(screen, goal_lines)
-        if p0 is None:
-            continue
-        first_t, hit = first_goal_mouth_hit(positions, p0, p1)
-        if hit is not None:
-            eff, t_hit, proj = hit
-            cand = {
-                "screen": screen,
-                "t": first_t if first_t is not None else t_hit,
-                "dist": eff,
-                "proj": proj,
-                "kind": "mouth",
-            }
-            if best is None or cand["dist"] < best["dist"]:
-                best = cand
-            continue
-        cross = predict_goal_crossing(positions, p0, p1)
-        if cross is None:
-            continue
-        t_cross, proj, dist = cross
-        cand = {
-            "screen": screen,
-            "t": t_cross,
-            "dist": dist,
-            "proj": proj,
-            "kind": "predict",
-        }
-        if best is None or cand["dist"] < best["dist"]:
-            best = cand
-    return best
-
-
 def analyze_goal_with_context(action_id, screens, track, full_track, session_duration,
                               movement, direction, goal_lines):
-    """GOAL only: rectangle mouth + heading through dropouts. No Miss."""
-    session_ev = goal_finish_evidence(track, screens, goal_lines)
+    """GOAL only: software goal line + proj_t (posts included). No Miss.
+
+    Arrival is in_goal_area: perpendicular distance <= screen threshold and a
+    valid projection (proj_t in [-slack, 1+slack], posts count). Come-back is
+    only a return toward the far-pitch send origin. Passing the line toward
+    the camera is a finish, not a return.
+    """
+    arrival, depth = best_arrival_in_positions(track, screens, goal_lines, "GOAL")
     extra = [p for p in (full_track or []) if p[0] > session_duration + 1e-6]
-    late_ev = goal_finish_evidence(extra, screens, goal_lines) if extra else None
+    late_arrival, late_depth = (
+        best_arrival_in_positions(extra, screens, goal_lines, "GOAL") if extra else (None, None)
+    )
 
     result = "Wrong"
     winning_screen = "N/A"
@@ -429,23 +267,21 @@ def analyze_goal_with_context(action_id, screens, track, full_track, session_dur
     best_proj_t = None
     evidence = None
 
-    if session_ev is not None:
-        p0, p1 = get_screen_info(session_ev["screen"], goal_lines)
-        if not left_goal_mouth(full_track, p0, p1, session_ev["t"]):
+    if arrival is not None:
+        eff, t_hit, screen, proj = arrival
+        if not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
             result = "Correct"
-            evidence = session_ev
-    elif late_ev is not None:
-        p0, p1 = get_screen_info(late_ev["screen"], goal_lines)
-        if not left_goal_mouth(full_track, p0, p1, late_ev["t"]):
+            evidence = (eff, t_hit, screen, proj)
+    elif late_arrival is not None:
+        eff, t_hit, screen, proj = late_arrival
+        if not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, late_depth):
             result = "Late"
-            evidence = late_ev
+            evidence = (eff, t_hit, screen, proj)
 
     if evidence is not None:
-        winning_screen = evidence["screen"]
-        display_time = f"{evidence['t']:.3f}"
+        min_dist_display, t_hit, winning_screen, best_proj_t = evidence
+        display_time = f"{t_hit:.3f}"
         display_duration = f"{session_duration:.3f}"
-        min_dist_display = evidence["dist"]
-        best_proj_t = evidence["proj"]
 
     aep = get_aep_orientation(screens, winning_screen)
     finishing_time_val = float(display_time) if display_time != "-" else 0.0
@@ -1178,6 +1014,51 @@ def departed_goal_area(positions, screen, goal_lines, arrive_time, depth):
     return False
 
 
+def line_side_sign(point, p0, p1):
+    """Signed cross product: which side of directed line p0→p1 the point is on."""
+    return (float(p1[0]) - float(p0[0])) * (float(point[1]) - float(p0[1])) - (
+        (float(p1[1]) - float(p0[1])) * (float(point[0]) - float(p0[0]))
+    )
+
+
+def on_origin_side(point, p0, p1, origin):
+    """True when point is on the same side of the goal line as the send origin."""
+    return line_side_sign(point, p0, p1) * line_side_sign(origin, p0, p1) > 1e-6
+
+
+def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, depth):
+    """GOAL come-back: leave the line band back toward the far-pitch origin.
+
+    Continuing past the line toward the camera is a finish, not a return.
+    """
+    p0, p1 = get_screen_info(screen, goal_lines)
+    if p0 is None or arrive_time is None:
+        return False
+    origin = goal_send_origin(screens)
+    leave_depth = float(depth) * 1.15
+    seen_in = False
+    away = 0
+    for t, x, y in positions:
+        if t + 1e-6 < arrive_time:
+            continue
+        pt = (x, y)
+        if in_goal_area(pt, p0, p1, depth):
+            seen_in = True
+            away = 0
+            continue
+        if not seen_in or t <= arrive_time + 0.08:
+            continue
+        if in_goal_area(pt, p0, p1, leave_depth):
+            continue
+        if on_origin_side(pt, p0, p1, origin):
+            away += 1
+            if away >= 2:
+                return True
+        else:
+            away = 0
+    return False
+
+
 def extended_track(positions, action_index, all_data, key, action_end_time, session_start_time, window=2.5):
     extra = []
     if action_end_time is not None and session_start_time is not None:
@@ -1488,11 +1369,14 @@ class ArenaSimulator:
       Late    — first arrival is after the session.
       Wrong   — never arrive.
     GOAL (cameras face screens 1 and 8; posts count):
-      Correct — arrive in the goal area during the session and do not come back.
-      Late    — arrive after the session and do not come back.
-      Wrong   — any other case.
-    When GOAL_PROBE is True the ball walks slowly through named zones so the
-    mouth can be judged by eye. Scoring is unchanged.
+      Correct — reach the goal line / proj_t band during the session and do not
+                come back toward the send origin.
+      Late    — first reach the line after the session and do not come back.
+      Wrong   — any other case (including a return toward the origin).
+    GOAL shots start at the real send origin and include physical camera facts:
+    the ball grows as it nears the camera, smears along its velocity, and YOLO
+    drops some fast/blurred frames. Passing the line toward the camera is a
+    finish. When GOAL_PROBE is True the ball walks slowly through named zones.
     """
 
     PLAYER_HOME = (280.0, 268.0)
@@ -1500,7 +1384,7 @@ class ArenaSimulator:
     PASS_CYCLE = ("correct", "miss", "late", "wrong")
     OTHER_CYCLE = ("correct", "miss", "late", "wrong")
     GOAL_CYCLE = ("correct", "late", "wrong")
-    GOAL_PROBE = True
+    GOAL_PROBE = False
 
     def __init__(self):
         self.action = None
@@ -1530,6 +1414,15 @@ class ArenaSimulator:
         self.hold_player = self.PLAYER_HOME
         self.probe_name = ""
         self.travel_s = 0.70
+        self.last_ball_vel = (0.0, 0.0)
+        self.last_ball_radius = 6.0
+        self.last_blur = 0.0
+        self.last_detected = True
+        self.last_step_ts = 0.0
+        self._prev_ball = None
+        self._miss_streak = 0
+        self._goal_rng = random.Random(1808)
+        self.goal_closeness = 0.0
 
     def start_action(self, action, screens):
         self.action = (action or "").upper()
@@ -1560,27 +1453,34 @@ class ArenaSimulator:
         self.start_xy = self.BALL_HOME
         self.probe_name = ""
         self.travel_s = 0.70
+        self.last_step_ts = 0.0
+        self._prev_ball = None
+        self._miss_streak = 0
+        self.last_ball_vel = (0.0, 0.0)
+        self.last_blur = 0.0
+        self.last_detected = True
+        seed = 1800 + (80 if "8" in self.screens else 10) + int(self.outcome_index)
+        self._goal_rng = random.Random(seed)
         # Screen 1's mouth covers the left-camera baseline; home sits inside it.
         # Start from the pitch side so in-session "late" / "wrong" are not already arrivals.
         if self.action == "GOAL" and self.line_p0 and self.line_p1:
             goal_screen = self.screens[0] if self.screens else "8"
             depth = arrival_depth_for(goal_screen, "GOAL")
             self.start_xy = goal_send_origin(self.screens)
-            self.travel_s = GOAL_PROBE_TRAVEL_S
+            self.travel_s = GOAL_SHOT_TRAVEL_S
             if self.GOAL_PROBE:
                 name = GOAL_PROBE_ZONES[self.outcome_index % len(GOAL_PROBE_ZONES)]
                 self.outcome_index += 1
                 self.probe_name = name
                 self.target_xy = goal_probe_xy(self.line_p0, self.line_p1, name)
                 self.start_xy = goal_send_origin(self.screens)
+                self.travel_s = GOAL_PROBE_TRAVEL_S
                 self.intended = "correct"
                 dist, proj_t, _, _ = compute_projection(self.target_xy, self.line_p0, self.line_p1)
                 now_in = in_goal_area(self.target_xy, self.line_p0, self.line_p1, depth)
-                rect_in = point_in_suggested_goal(self.target_xy, self.line_p0, self.line_p1)
                 print(
                     f"  [SIM] GOAL probe={name} screen={self.screens} target={self.target_xy} "
-                    f"dist={dist:.1f} proj_t={proj_t:.3f} current_band={now_in} "
-                    f"suggested_rect={rect_in}"
+                    f"dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
                 )
                 return
         self.intended = self._next_outcome(self.action)
@@ -1889,7 +1789,10 @@ class ArenaSimulator:
         if intended == "correct":
             if self.action == "GOAL":
                 u = min(1.0, t / max(0.20, self.travel_s))
-                bx, by = self._lerp(self.start_xy, target, u)
+                # Constant world speed looks faster in pixels as the ball nears
+                # the camera (bottom of the image). Ease-in matches that.
+                u_pix = u ** 1.35
+                bx, by = self._lerp(self.start_xy, target, u_pix)
                 px, py = self._lerp(self.PLAYER_HOME, target, u * 0.22)
                 return bx, by, px, py
             if is_press:
@@ -1943,6 +1846,34 @@ class ArenaSimulator:
             px, py = self._lerp(self.PLAYER_HOME, self.wrong_xy, u * 0.18)
         return bx, by, px, py
 
+    def _goal_closeness(self, x, y):
+        """0 at the send origin, 1 at the goal line, >1 past the line toward the camera."""
+        origin = self.start_xy or goal_send_origin(self.screens)
+        if self.line_p0 and self.line_p1:
+            mx = (self.line_p0[0] + self.line_p1[0]) / 2.0
+            my = (self.line_p0[1] + self.line_p1[1]) / 2.0
+        else:
+            mx, my = self.target_xy
+        ox, oy = origin
+        span = math.hypot(mx - ox, my - oy) or 1.0
+        along = ((x - ox) * (mx - ox) + (y - oy) * (my - oy)) / (span * span)
+        return max(0.0, min(1.45, along))
+
+    def _goal_should_detect(self, closeness, speed, blur, x, y):
+        """YOLO-style dropouts: fast + close + smeared balls are often missed."""
+        if closeness < 0.14 or speed < 48.0:
+            return True
+        if x < 18 or y < 18 or x > SIM_FRAME_WIDTH - 18 or y > SIM_FRAME_HEIGHT - 18:
+            return self._goal_rng.random() > 0.55
+        p_miss = (
+            0.08
+            + 0.50 * min(1.0, blur / 22.0)
+            + 0.22 * min(1.0, closeness) * min(1.0, speed / 380.0)
+        )
+        if self._miss_streak:
+            p_miss = min(0.82, p_miss + 0.22)
+        return self._goal_rng.random() > p_miss
+
     def step(self, frame_w, frame_h):
         sx = frame_w / float(SIM_FRAME_WIDTH)
         sy = frame_h / float(SIM_FRAME_HEIGHT)
@@ -1951,8 +1882,38 @@ class ArenaSimulator:
         bx, by, px, py = self._ball_player_for_outcome(t, now)
         bx, by = self._clip(bx, by)
         px, py = self._clip(px, py)
+        if self.last_step_ts <= 0:
+            dt = 1.0 / TARGET_FPS
+        else:
+            dt = max(1e-3, min(0.20, now - self.last_step_ts))
+        self.last_step_ts = now
+        if self._prev_ball is not None:
+            vx = (bx - self._prev_ball[0]) / dt
+            vy = (by - self._prev_ball[1]) / dt
+        else:
+            vx, vy = 0.0, 0.0
+        self._prev_ball = (bx, by)
         self.last_ball = (bx, by)
         self.last_player = (px, py)
+        self.last_ball_vel = (vx, vy)
+
+        closeness = 0.0
+        radius = 9.0
+        blur = 0.0
+        detected = True
+        if self.action == "GOAL":
+            closeness = self._goal_closeness(bx, by)
+            # Far pitch is a few pixels; near the camera the ball is a bit bigger.
+            radius = 5.0 + 11.0 * min(1.0, closeness) + 3.0 * max(0.0, closeness - 1.0)
+            speed = math.hypot(vx, vy)
+            # Indoor exposure ~1/80s. Apparent smear grows with closeness.
+            blur = min(42.0, speed * (1.0 / 80.0) * (0.75 + 1.55 * closeness) + radius * 0.35 * min(1.0, speed / 220.0))
+            detected = self._goal_should_detect(closeness, speed, blur, bx, by)
+            self._miss_streak = 0 if detected else (self._miss_streak + 1)
+        self.last_ball_radius = radius
+        self.last_blur = blur
+        self.last_detected = detected
+        self.goal_closeness = closeness
 
         bx_s = int(bx * sx)
         by_s = int(by * sy)
@@ -1964,12 +1925,17 @@ class ArenaSimulator:
         x2 = min(frame_w - 1, px_s + bw // 2)
         y2 = min(frame_h - 1, py_s + 6)
         hip = (float(px_s), float(max(0, py_s - int(28 * sy))))
-        balls = [{
-            "center": [bx_s, by_s],
-            "bbox": [bx_s - 8, by_s - 8, bx_s + 8, by_s + 8],
-            "confidence": 1.0,
-            "simulated": True,
-        }]
+        r_box = max(6, int(radius * min(sx, sy)))
+        stretch = max(0, int(blur * 0.45 * min(sx, sy)))
+        balls = []
+        if detected:
+            conf = 0.96 if self.action != "GOAL" else max(0.28, 0.94 - 0.035 * blur)
+            balls.append({
+                "center": [bx_s, by_s],
+                "bbox": [bx_s - r_box - stretch, by_s - r_box, bx_s + r_box + stretch, by_s + r_box],
+                "confidence": conf,
+                "simulated": True,
+            })
         players = [{
             "center": [px_s, py_s - bh // 3],
             "bbox": [x1, y1, x2, y2],
@@ -1985,22 +1951,28 @@ class ArenaSimulator:
             cv2.rectangle(overlay, (x1, y1), (x2, y2), (40, 180, 80), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
             cv2.ellipse(frame, ((x1 + x2) // 2, y1 + 16), (12, 14), 0, 0, 360, (20, 220, 90), -1)
-        for ball in balls:
-            cx, cy = ball["center"]
-            cv2.circle(frame, (cx, cy), 11, (0, 0, 0), -1)
-            cv2.circle(frame, (cx, cy), 9, (255, 255, 255), -1)
-            cv2.circle(frame, (cx, cy), 9, (0, 140, 255), 2)
-        if self.action == "GOAL" and self.line_p0 and self.line_p1:
-            self._draw_suggested_goal(frame)
-        if self.probe_name and (self.active or self.hold_finish):
+        if self.action == "GOAL":
+            frame = self._draw_goal_physical_ball(frame)
+        else:
+            for ball in balls:
+                cx, cy = ball["center"]
+                cv2.circle(frame, (cx, cy), 11, (0, 0, 0), -1)
+                cv2.circle(frame, (cx, cy), 9, (255, 255, 255), -1)
+                cv2.circle(frame, (cx, cy), 9, (0, 140, 255), 2)
+        if self.probe_name and (self.active or self.hold_finish) and self.line_p0 and self.line_p1:
             dist, proj_t, _, _ = compute_projection(self.last_ball, self.line_p0, self.line_p1)
             screen = self.screens[0] if self.screens else "8"
             depth = arrival_depth_for(screen, "GOAL")
             now_in = in_goal_area(self.last_ball, self.line_p0, self.line_p1, depth)
-            rect_in = point_in_suggested_goal(self.last_ball, self.line_p0, self.line_p1)
             label = (
-                f"GOAL PROBE {self.probe_name}  dist={dist:.1f} proj={proj_t:.2f} "
-                f"band={'IN' if now_in else 'OUT'} rect={'IN' if rect_in else 'OUT'}"
+                f"GOAL PROBE {self.probe_name}  dist={dist:.1f} proj_t={proj_t:.2f} "
+                f"band={'IN' if now_in else 'OUT'}"
+            )
+        elif self.action == "GOAL" and (self.active or self.late_phase or self.hold_finish):
+            det = "DET" if self.last_detected else "MISS"
+            label = (
+                f"ARENA SIM  {self.intended.upper()}  r={self.last_ball_radius:.0f} "
+                f"blur={self.last_blur:.0f} {det}"
             )
         elif self.active or self.late_phase:
             label = f"ARENA SIM  {self.intended.upper()}"
@@ -2010,16 +1982,43 @@ class ArenaSimulator:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 220, 255), 2)
         return frame
 
-    def _draw_suggested_goal(self, frame):
+    def _draw_goal_physical_ball(self, frame):
+        """True ball with perspective size and a velocity smear, even on miss frames."""
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
-        corners = suggested_goal_corners(self.line_p0, self.line_p1)
-        pts = [(int(x * sx), int(y * sy)) for x, y in corners]
-        for i in range(4):
-            cv2.line(frame, pts[i], pts[(i + 1) % 4], COLOR_GOAL_RECT, 2)
-        tx, ty = self.target_xy
-        cv2.drawMarker(frame, (int(tx * sx), int(ty * sy)), (0, 140, 255), cv2.MARKER_CROSS, 18, 2)
+        cx = int(self.last_ball[0] * sx)
+        cy = int(self.last_ball[1] * sy)
+        r = max(3, int(round(self.last_ball_radius * min(sx, sy))))
+        vx, vy = self.last_ball_vel
+        speed = math.hypot(vx, vy)
+        blur = self.last_blur * min(sx, sy)
+        overlay = frame.copy()
+        if blur > 2.5 and speed > 8.0:
+            ux, uy = vx / speed, vy / speed
+            n = max(4, min(12, int(blur / 2.5)))
+            for i in range(n, 0, -1):
+                k = i / float(n)
+                px = int(cx - ux * blur * k)
+                py = int(cy - uy * blur * k)
+                rr = max(2, int(r * (0.55 + 0.45 * (1.0 - k))))
+                shade = int(40 + 90 * (1.0 - k))
+                cv2.circle(overlay, (px, py), rr + 1, (0, 0, 0), -1)
+                cv2.circle(overlay, (px, py), rr, (shade, shade, 255), -1)
+            frame = cv2.addWeighted(overlay, 0.55, frame, 0.45, 0)
+        alpha = 0.38 if not self.last_detected else 0.85
+        core = frame.copy()
+        cv2.circle(core, (cx, cy), r + 1, (0, 0, 0), -1)
+        cv2.circle(core, (cx, cy), r, (255, 255, 255), -1)
+        cv2.circle(core, (cx, cy), max(2, r - 2), (0, 140, 255), 2)
+        frame = cv2.addWeighted(core, alpha, frame, 1.0 - alpha, 0)
+        if not self.last_detected:
+            cv2.putText(frame, "MISS", (cx + r + 6, cy - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 180, 255), 1)
+        if self.line_p0 and self.line_p1:
+            tx, ty = self.target_xy
+            cv2.drawMarker(frame, (int(tx * sx), int(ty * sy)), (0, 140, 255), cv2.MARKER_CROSS, 16, 2)
+        return frame
 
 class VideoSaver:
     def __init__(self):
@@ -2695,11 +2694,6 @@ class SimustRealtimeCamera:
             cv2.circle(frame, p1, 5, (0, 0, 255), -1)
             cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-            if str(screen_name) in ("1", "8"):
-                corners = suggested_goal_corners(line_data["p0"], line_data["p1"])
-                pts = [(int(x * sx), int(y * sy)) for x, y in corners]
-                for i in range(4):
-                    cv2.line(frame, pts[i], pts[(i + 1) % 4], COLOR_GOAL_RECT, 2)
         return frame
 
     def draw_results_overlay(self, frame):
