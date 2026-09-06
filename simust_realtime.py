@@ -1213,6 +1213,7 @@ class ArenaSimulator:
     BALL_HOME = (302.0, 282.0)
     PASS_CYCLE = ("correct", "miss", "late", "wrong")
     OTHER_CYCLE = ("correct", "miss", "late", "wrong")
+    GOAL_CYCLE = ("correct", "late", "wrong")
 
     def __init__(self):
         self.action = None
@@ -1297,7 +1298,12 @@ class ArenaSimulator:
             self.action = None
 
     def _next_outcome(self, action):
-        cycle = self.PASS_CYCLE if action == "PASS" else self.OTHER_CYCLE
+        if action == "GOAL":
+            cycle = self.GOAL_CYCLE
+        elif action == "PASS":
+            cycle = self.PASS_CYCLE
+        else:
+            cycle = self.OTHER_CYCLE
         result = cycle[self.outcome_index % len(cycle)]
         self.outcome_index += 1
         return result
