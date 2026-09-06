@@ -44,7 +44,7 @@ def build_frames(sim: rt.ArenaSimulator, clock: FakeClock, duration: float, fps:
     return data
 
 
-def run_case(action: str, screens: List[str], intended: str, session_s: float = 3.2, late_s: float = 1.2):
+def run_case(action: str, screens: List[str], intended: str, session_s: float = 3.2, late_s: float = 1.2, after_s: float = 0.0):
     clock = FakeClock(2000.0)
     rt.time.time = clock.time
     sim = rt.ArenaSimulator()
@@ -56,7 +56,12 @@ def run_case(action: str, screens: List[str], intended: str, session_s: float = 
     session_end = session_start + timedelta(seconds=session_s)
 
     sim.end_action()
-    between_data = build_frames(sim, clock, late_s) if intended == "late" else []
+    if intended == "late":
+        between_data = build_frames(sim, clock, late_s) if late_s else []
+    elif after_s > 0:
+        between_data = build_frames(sim, clock, after_s)
+    else:
+        between_data = []
 
     action_data = {
         "id": f"{action}-{intended}",
@@ -194,8 +199,16 @@ def main():
     for action in ["GOAL", "TARGET", "PRESS"]:
         screen = "8" if action == "GOAL" else "2"
         cases.append((action, [screen], "correct"))
+        if action != "GOAL":
+            cases.append((action, [screen], "miss"))
         cases.append((action, [screen], "late"))
         cases.append((action, [screen], "wrong"))
+    cases.append(("GOAL", ["1"], "correct"))
+    cases.append(("GOAL", ["1"], "late"))
+    cases.append(("GOAL", ["1"], "wrong"))
+    cases.append(("GOAL", ["8"], "correct"))
+    cases.append(("GOAL", ["8"], "late"))
+    cases.append(("GOAL", ["8"], "wrong"))
 
     print("=" * 88)
     print("SIMUST finishing audit: intended simulator outcome vs analyze_action_with_context")

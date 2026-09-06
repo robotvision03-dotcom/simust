@@ -120,6 +120,7 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
+GOAL_POST_SLACK = 0.10  # posts of screens 1 and 8 count as the goal mouth
 
 PIXEL_TO_METER_SCALE = 0.0259
 
@@ -667,9 +668,9 @@ def search_goal_late(current_index: int, all_data: List[dict],
                 if p0 is None:
                     continue
                 eff_dist, proj_t = get_effective_distance((x, y), p0, p1)
-                if not (0 <= proj_t <= 1):
-                    continue
                 threshold = get_goal_threshold(screen)
+                if not in_goal_area((x, y), p0, p1, threshold):
+                    continue
                 if eff_dist <= threshold:
                     pos_abs_time = block_start + timedelta(seconds=t)
                     offset = (pos_abs_time - action_end_time).total_seconds()
@@ -807,26 +808,84 @@ def get_positions_from_blocks_after(current_index, all_data, key, action_end_tim
 # ================================================================
 def check_ball_return(positions, screen, goal_lines, min_time, threshold, session_duration,
                       search_frames=SEARCH_FRAMES, entry_threshold=None):
-    """
-    Returns True if the ball ever comes within 2*threshold of the goal line
-    after the minimum distance time (min_time).
-    """
+    """True if the tracked point leaves the goal area after arriving (come-back)."""
+    depth = entry_threshold if entry_threshold is not None else threshold
+    return departed_goal_area(positions, screen, goal_lines, min_time, depth)
+
+
+def arrival_depth_for(screen, action_type):
+    threshold = get_threshold_for_screen(screen, action_type)
+    if action_type == "GOAL":
+        return float(threshold)
+    return float(max(FINISH_DIST, threshold))
+
+
+def in_goal_area(point, p0, p1, depth):
+    """Goal mouth including posts. Cameras face screens 1 and 8."""
+    dist, proj_t, d_left, d_right = compute_projection(point, p0, p1)
+    if dist <= depth and (-GOAL_POST_SLACK) <= proj_t <= (1.0 + GOAL_POST_SLACK):
+        return True
+    post_r = min(float(depth), 30.0)
+    return d_left <= post_r or d_right <= post_r
+
+
+def first_arrival_time(positions, screen, goal_lines, depth):
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None:
-        return True
-
-    check_dist = entry_threshold if entry_threshold is not None else threshold * 2
-
-    count = 0
+        return None
     for t, x, y in positions:
-        if t > min_time and t <= session_duration:
-            d, _, _, _ = compute_projection((x, y), p0, p1)
-            if d <= check_dist:
-                return True
-            count += 1
-            if count >= search_frames:
-                break
+        if in_goal_area((x, y), p0, p1, depth):
+            return t
+    return None
+
+
+def best_arrival_in_positions(positions, screens, goal_lines, action_type):
+    best = None
+    depth_used = None
+    for screen in screens:
+        p0, p1 = get_screen_info(screen, goal_lines)
+        if p0 is None:
+            continue
+        depth = arrival_depth_for(screen, action_type)
+        for t, x, y in positions:
+            if not in_goal_area((x, y), p0, p1, depth):
+                continue
+            eff, proj = get_effective_distance((x, y), p0, p1)
+            if best is None or eff < best[0]:
+                best = (eff, t, screen, proj)
+                depth_used = depth
+    return best, depth_used
+
+
+def departed_goal_area(positions, screen, goal_lines, arrive_time, depth):
+    """True if the object leaves the goal area after the arrival time."""
+    p0, p1 = get_screen_info(screen, goal_lines)
+    if p0 is None or arrive_time is None:
+        return False
+    leave_depth = float(depth) * 1.15
+    seen_in = False
+    for t, x, y in positions:
+        if t + 1e-6 < arrive_time:
+            continue
+        if in_goal_area((x, y), p0, p1, depth):
+            seen_in = True
+            continue
+        if seen_in and t > arrive_time + 0.08 and not in_goal_area((x, y), p0, p1, leave_depth):
+            return True
     return False
+
+
+def extended_track(positions, action_index, all_data, key, action_end_time, session_start_time, window=2.5):
+    extra = []
+    if action_end_time is not None and session_start_time is not None:
+        extra = get_positions_from_blocks_after(
+            action_index, all_data, key, action_end_time, session_start_time, time_window=window
+        )
+    if not extra:
+        return list(positions or [])
+    merged = list(positions or []) + list(extra)
+    merged.sort(key=lambda p: p[0])
+    return merged
 
 # ================================================================
 # Helper to compute AEP orientation for a single action (from code A)
@@ -971,274 +1030,77 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             'AE': 0.0
         }
 
-    # ---- GOAL actions ----
+    # GOAL uses raw points so nearby screens 1/8 (cameras in front) are not dropped
+    # as "static". PASS/TARGET still drop static noise; PRESS uses the player track.
     if action_type == 'GOAL':
-        # Use filtered positions to remove static noise, but don't require movement
-        filtered_positions = filter_static_ball_positions(positions)
-        if not filtered_positions:
-            filtered_positions = positions
+        track = positions
+    elif action_type == 'PRESS':
+        track = positions
+    else:
+        track = filter_static_ball_positions(positions) or positions
 
-        # Compute best distance and projection from this action's data
-        best_screen, best_eff_dist, best_min_time, best_proj_t = find_min_distance_to_screens(
-            filtered_positions, screens, goal_lines, require_movement=False
-        )
+    session_duration = track[-1][0] if track else 0
+    movement, direction = analyze_movement(track)
+    full_track = extended_track(
+        track, action_index, all_data, key, action_end_time, session_start_time
+    )
 
-        result = 'Wrong'
-        winning_screen = 'N/A'
-        display_time = '-'
-        display_duration = '-'
-        min_dist_display = best_eff_dist if best_eff_dist != float('inf') else None
+    result = 'Wrong'
+    winning_screen = 'N/A'
+    display_time = '-'
+    display_duration = '-'
+    min_dist_display = None
+    best_proj_t = None
 
-        valid_projection = False
-        if best_proj_t is not None and 0 <= best_proj_t <= 1:
-            valid_projection = True
-
-        if best_screen is not None and valid_projection:
-            threshold = get_threshold_for_screen(best_screen, 'GOAL')
-            if best_eff_dist <= threshold:
-                result = 'Correct'
-                winning_screen = best_screen
-                display_time = f"{best_min_time:.3f}"
-                display_duration = f"{filtered_positions[-1][0]:.3f}"
-            else:
-                if action_end_time is not None:
-                    found_late, late_screen, late_time, late_dist, late_proj = search_goal_late(
-                        action_index, all_data, screens, goal_lines, key, action_end_time
-                    )
-                    if found_late:
-                        result = 'Late'
-                        winning_screen = late_screen
-                        display_time = f"{late_time:.3f}"
-                        display_duration = f"{filtered_positions[-1][0]:.3f}"
-                        min_dist_display = late_dist
-        else:
-            # Projection invalid -> Wrong, no late search
-            result = 'Wrong'
-            winning_screen = 'N/A'
-            display_time = '-'
-            display_duration = '-'
-            min_dist_display = None
-
-        if result == 'Wrong':
-            display_time = '-'
-            display_duration = '-'
-            winning_screen = 'N/A'
-
-        movement, direction = analyze_movement(filtered_positions)
-        aep = get_aep_orientation(screens, winning_screen)
-
-        # --- Compute AE ---
-        finishing_time_val = float(display_time) if display_time != '-' else 0.0
-        ae = compute_action_efficiency('GOAL', result, finishing_time_val, movement)
-
-        return {
-            'Action ID': action_id,
-            'Action': action_type,
-            'Screens': ', '.join(screens),
-            'Result': result,
-            'Winning Screen': winning_screen,
-            'Min Distance (px)': round(min_dist_display, 1) if min_dist_display is not None and min_dist_display != float('inf') else None,
-            'Time of Min (s)': display_time,
-            'Session Duration (s)': display_duration,
-            'Movement (px)': movement,
-            'Direction': direction,
-            'AEP': aep,
-            'proj_t': round(best_proj_t, 3) if best_proj_t is not None else None,
-            'AE': ae
-        }
-
-    # ---- PRESS and TARGET actions ----
-    if action_type in ['PRESS', 'TARGET']:
-        filtered_positions = positions if action_type == 'PRESS' else filter_static_ball_positions(positions)
-        if not filtered_positions:
-            return {
-                'Action ID': action_id,
-                'Action': action_type,
-                'Screens': ', '.join(screens),
-                'Result': 'Wrong',
-                'Winning Screen': 'N/A',
-                'Min Distance (px)': None,
-                'Time of Min (s)': '-',
-                'Session Duration (s)': '-',
-                'Movement (px)': 0,
-                'Direction': 'NONE',
-                'AEP': 'N/A',
-                'proj_t': None,
-                'AE': 0.0
-            }
-        if not is_ball_moving(filtered_positions):
-            return {
-                'Action ID': action_id,
-                'Action': action_type,
-                'Screens': ', '.join(screens),
-                'Result': 'Wrong',
-                'Winning Screen': 'N/A',
-                'Min Distance (px)': None,
-                'Time of Min (s)': '-',
-                'Session Duration (s)': '-',
-                'Movement (px)': 0,
-                'Direction': 'NONE',
-                'AEP': 'N/A',
-                'proj_t': None,
-                'AE': 0.0
-            }
-        unique_positions = get_unique_trajectory(filtered_positions)
-        session_duration = unique_positions[-1][0] if unique_positions else 0
-        movement, direction = analyze_movement(filtered_positions)
-
-        best_screen, best_eff_dist, best_min_time, best_proj_t = find_min_distance_to_screens(
-            filtered_positions, screens, goal_lines, require_movement=False
-        )
-
-        if best_screen is not None:
-            action_threshold = get_threshold_for_screen(best_screen, action_type)
-        else:
-            action_threshold = 50 if action_type == 'PRESS' else CORRECT_THRESHOLD
-
-        result = 'Wrong'
-        winning_screen = 'N/A'
-        display_time = '-'
-        display_duration = '-'
-        min_dist_display = best_eff_dist if best_eff_dist != float('inf') else None
-
-        if best_screen is not None:
-            if best_eff_dist <= action_threshold:
-                result = 'Correct'
-                winning_screen = best_screen
-                display_time = f"{best_min_time:.3f}"
-                display_duration = f"{session_duration:.3f}"
-            else:
-                # --- Use fallback action_end_time if needed ---
-                if action_end_time is not None:
-                    found_late, late_screen, late_time, late_dist, _ = search_late_across_blocks(
-                        action_index, all_data, screens, goal_lines, key, action_end_time, action_type
-                    )
-                    if found_late:
-                        result = 'Late'
-                        winning_screen = late_screen
-                        display_time = f"{late_time:.3f}"
-                        display_duration = f"{session_duration:.3f}"
-                        min_dist_display = late_dist
-
-        if result == 'Wrong':
-            display_time = '-'
-            display_duration = '-'
-            winning_screen = 'N/A'
-
-        aep = get_aep_orientation(screens, winning_screen)
-
-        # --- Compute AE ---
-        finishing_time_val = float(display_time) if display_time != '-' else 0.0
-        ae = compute_action_efficiency(action_type, result, finishing_time_val, movement)
-
-        return {
-            'Action ID': action_id,
-            'Action': action_type,
-            'Screens': ', '.join(screens),
-            'Result': result,
-            'Winning Screen': winning_screen,
-            'Min Distance (px)': round(min_dist_display, 1) if min_dist_display is not None and min_dist_display != float('inf') else None,
-            'Time of Min (s)': display_time,
-            'Session Duration (s)': display_duration,
-            'Movement (px)': movement,
-            'Direction': direction,
-            'AEP': aep,
-            'proj_t': round(best_proj_t, 3) if best_proj_t is not None else None,
-            'AE': ae
-        }
-
-    # ---- PASS actions (UPDATED: uses FINISH_DIST and simplified check_ball_return) ----
-    if action_type == 'PASS':
-        filtered_positions = filter_static_ball_positions(positions)
-        if not filtered_positions:
-            return {
-                'Action ID': action_id,
-                'Action': action_type,
-                'Screens': ', '.join(screens),
-                'Result': 'Wrong',
-                'Winning Screen': 'N/A',
-                'Min Distance (px)': None,
-                'Time of Min (s)': '-',
-                'Session Duration (s)': '-',
-                'Movement (px)': 0,
-                'Direction': 'NONE',
-                'AEP': 'N/A',
-                'proj_t': None,
-                'AE': 0.0
-            }
-
-        session_duration = filtered_positions[-1][0] if filtered_positions else 0
-
-        best_screen, best_eff_dist, best_min_time, best_proj_t = find_min_distance_to_screens(
-            filtered_positions, screens, goal_lines, require_movement=False
-        )
-
-        result = 'Wrong'
-        winning_screen = 'N/A'
-        display_time = '-'
-        display_duration = '-'
-        min_dist_display = best_eff_dist if best_eff_dist != float('inf') else None
-
-        def get_threshold(screen: str) -> float:
-            return get_threshold_for_screen(screen, 'PASS')
-
-        if best_screen is not None:
-            threshold = get_threshold(best_screen)
-            # Use FINISH_DIST as the outer acceptance radius
-            if best_eff_dist <= FINISH_DIST:
-                # Check if the ball ever gets within threshold*2 after min_time
-                is_returned = check_ball_return(
-                    positions, best_screen, goal_lines,
-                    best_min_time, threshold, session_duration,
-                    entry_threshold=threshold * 3.4  # use 2x threshold for presence
-                )
-                if not is_returned and action_end_time is not None and session_start_time is not None:
-                    extra_positions = get_positions_from_blocks_after(
-                        action_index, all_data, key, action_end_time, session_start_time, time_window=1.0
-                    )
-                    if extra_positions:
-                        all_positions = positions + extra_positions
-                        all_positions.sort(key=lambda p: p[0])
-                        extended_duration = all_positions[-1][0] if all_positions else session_duration
-                        is_returned = check_ball_return(
-                            all_positions, best_screen, goal_lines,
-                            best_min_time, threshold, extended_duration,
-                            entry_threshold=threshold * 2
-                        )
-                if is_returned:
+    if action_type in ('PASS', 'TARGET', 'PRESS', 'GOAL'):
+        arrival, depth = best_arrival_in_positions(track, screens, goal_lines, action_type)
+        if arrival is not None:
+            best_eff_dist, best_min_time, best_screen, best_proj_t = arrival
+            arrive_t = first_arrival_time(track, best_screen, goal_lines, depth)
+            if arrive_t is None:
+                arrive_t = best_min_time
+            came_back = departed_goal_area(
+                full_track, best_screen, goal_lines, arrive_t, depth
+            )
+            if action_type == 'GOAL':
+                # Arrive in session and stay in the goal = Correct. Coming back = Wrong.
+                if not came_back:
                     result = 'Correct'
                     winning_screen = best_screen
                     display_time = f"{best_min_time:.3f}"
                     display_duration = f"{session_duration:.3f}"
-                else:
-                    # Within FINISH_DIST but not within threshold*2 → Miss (almost)
-                    result = 'Miss'
-                    winning_screen = best_screen  # Keep screen for AEP
-                    display_time = '-'
-                    display_duration = '-'
-                    min_dist_display = None
+                    min_dist_display = best_eff_dist
             else:
-                # Too far → Wrong (or try late)
-                result = 'Wrong'
-                winning_screen = 'N/A'
-                display_time = '-'
-                display_duration = '-'
-                min_dist_display = None
-                # --- Use fallback action_end_time if needed ---
-                if action_end_time is not None:
-                    found_late, late_screen, late_time, late_dist, _ = search_late_across_blocks(
-                        action_index, all_data, screens, goal_lines, key, action_end_time, action_type
+                # Arrive and come back = Correct. Arrive and stay = Miss.
+                if came_back:
+                    result = 'Correct'
+                    winning_screen = best_screen
+                    display_time = f"{best_min_time:.3f}"
+                    display_duration = f"{session_duration:.3f}"
+                    min_dist_display = best_eff_dist
+                else:
+                    result = 'Miss'
+                    winning_screen = best_screen
+                    min_dist_display = best_eff_dist
+        else:
+            if action_type == 'GOAL' and action_end_time is not None:
+                found_late, late_screen, late_time, late_dist, late_proj = search_goal_late(
+                    action_index, all_data, screens, goal_lines, key, action_end_time
+                )
+                if found_late:
+                    late_depth = arrival_depth_for(late_screen, 'GOAL')
+                    came_back = departed_goal_area(
+                        full_track, late_screen, goal_lines, session_duration, late_depth
                     )
-                    if found_late:
+                    if not came_back:
                         result = 'Late'
                         winning_screen = late_screen
                         display_time = f"{late_time:.3f}"
                         display_duration = f"{session_duration:.3f}"
                         min_dist_display = late_dist
-        else:
-            # No best screen – try late
-            if action_end_time is not None:
-                found_late, late_screen, late_time, late_dist, _ = search_late_across_blocks(
+                        best_proj_t = late_proj
+            elif action_end_time is not None:
+                found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
                     action_index, all_data, screens, goal_lines, key, action_end_time, action_type
                 )
                 if found_late:
@@ -1247,19 +1109,17 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                     display_time = f"{late_time:.3f}"
                     display_duration = f"{session_duration:.3f}"
                     min_dist_display = late_dist
+                    best_proj_t = late_proj
 
         if result == 'Wrong':
             display_time = '-'
             display_duration = '-'
             winning_screen = 'N/A'
+            min_dist_display = None
 
-        movement, direction = analyze_movement(filtered_positions)
         aep = get_aep_orientation(screens, winning_screen)
-
-        # --- Compute AE ---
         finishing_time_val = float(display_time) if display_time != '-' else 0.0
         ae = compute_action_efficiency(action_type, result, finishing_time_val, movement)
-
         return {
             'Action ID': action_id,
             'Action': action_type,
@@ -1338,20 +1198,21 @@ def read_pause_setting():
 class ArenaSimulator:
     """Synthetic ball + player for empty-arena testing of the realtime pipeline.
 
-    PASS finishing (matches analyze_action_with_context):
-      Correct — closest approach to a listed screen <= FINISH_DIST (100px)
-                AND the ball then stays/returns within threshold*3.4 (check_ball_return).
-      Miss    — closest approach <= 100px, but no stay/return after that closest frame.
-                Near-miss: it was a finish attempt, not a goal.
-      Late    — during the QR the ball stays > 100px from every listed screen;
-                after the QR it reaches a listed screen.
-      Wrong   — never within 100px during the QR, and no late finish afterwards.
+    PASS / TARGET / PRESS:
+      Correct — arrive in the goal area during the session and come back.
+      Miss    — arrive in the goal area and do not come back, even after the session.
+      Late    — first arrival is after the session.
+      Wrong   — never arrive.
+    GOAL (cameras face screens 1 and 8; posts count):
+      Correct — arrive in the goal area during the session and do not come back.
+      Late    — arrive after the session and do not come back.
+      Wrong   — any other case.
     """
 
     PLAYER_HOME = (280.0, 268.0)
     BALL_HOME = (302.0, 282.0)
     PASS_CYCLE = ("correct", "miss", "late", "wrong")
-    OTHER_CYCLE = ("correct", "late", "wrong")
+    OTHER_CYCLE = ("correct", "miss", "late", "wrong")
 
     def __init__(self):
         self.action = None
@@ -1375,6 +1236,10 @@ class ArenaSimulator:
         self.line_p1 = None
         self.last_ball = self.BALL_HOME
         self.last_player = self.PLAYER_HOME
+        self.start_xy = self.BALL_HOME
+        self.hold_finish = False
+        self.hold_xy = self.BALL_HOME
+        self.hold_player = self.PLAYER_HOME
 
     def start_action(self, action, screens):
         self.action = (action or "").upper()
@@ -1382,6 +1247,7 @@ class ArenaSimulator:
         self.start_ts = time.time()
         self.active = True
         self.late_phase = False
+        self.hold_finish = False
         self.target_xy, self.line_p0, self.line_p1 = self._line_target(self.screens)
         # Stay off the line during the QR. GOAL needs a valid projection (0..1)
         # so late search can run; PASS/TARGET/PRESS stay on the home side so the
@@ -1398,6 +1264,14 @@ class ArenaSimulator:
             self.wrong_xy = self._far_from_all_screens(240, min_from_home=50)
         self.late_finish_xy = self._closest_screen_mid(self.late_hold_xy)
         self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
+        self.start_xy = self.BALL_HOME
+        # Screen 1's mouth covers the left-camera baseline; home sits inside it.
+        # Start from the pitch side so in-session "late" / "wrong" are not already arrivals.
+        if self.action == "GOAL" and self.line_p0 and self.line_p1:
+            goal_screen = self.screens[0] if self.screens else "8"
+            depth = arrival_depth_for(goal_screen, "GOAL")
+            if in_goal_area(self.BALL_HOME, self.line_p0, self.line_p1, depth):
+                self.start_xy = self._perp_from_mid(max(depth + 40.0, 110.0))
         self.intended = self._next_outcome(self.action)
         print(
             f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
@@ -1408,10 +1282,18 @@ class ArenaSimulator:
         self.active = False
         if self.intended == "late":
             self.late_phase = True
+            self.hold_finish = False
             self.late_start_ts = time.time()
             self.late_from_xy = self.last_ball
+        elif self.intended == "miss" or (self.intended == "correct" and self.action == "GOAL"):
+            # Stay in the goal after the QR so after-session frames do not look like a return.
+            self.late_phase = False
+            self.hold_finish = True
+            self.hold_xy = self.last_ball
+            self.hold_player = self.last_player
         else:
             self.late_phase = False
+            self.hold_finish = False
             self.action = None
 
     def _next_outcome(self, action):
@@ -1655,12 +1537,19 @@ class ArenaSimulator:
         is_press = self.action == "PRESS"
         intended = self.intended
 
+        if self.hold_finish:
+            bx, by = self.hold_xy
+            px, py = self.hold_player
+            return bx, by, px, py
+
         if self.late_phase:
             elapsed = now - self.late_start_ts
             dest = self.late_finish_xy
             start = self.late_from_xy
             if elapsed <= 0.40:
                 pos = self._lerp(start, dest, elapsed / 0.40)
+            elif self.action == "GOAL":
+                pos = dest
             else:
                 pos = self._lerp(dest, self.late_finish_roll_xy, min(1.0, (elapsed - 0.40) / 0.30))
             bx, by = pos
@@ -1668,38 +1557,48 @@ class ArenaSimulator:
                 px, py = bx - 16, by - 10
             else:
                 px, py = self._lerp(self.PLAYER_HOME, dest, 0.10)
-            if elapsed > 2.2:
+            if elapsed > 2.2 and self.action != "GOAL":
                 self.late_phase = False
             return bx, by, px, py
 
         if not self.active:
             wobble = math.sin(now * 1.15)
+            rest = self.start_xy or self.BALL_HOME
             px = self.PLAYER_HOME[0] + wobble * 7
             py = self.PLAYER_HOME[1]
-            bx = self.BALL_HOME[0] + wobble * 5
-            by = self.BALL_HOME[1]
+            bx = rest[0] + wobble * 5
+            by = rest[1]
             return bx, by, px, py
 
         if intended == "correct":
+            if self.action == "GOAL":
+                u = min(1.0, t / 0.70)
+                bx, by = self._lerp(self.start_xy, target, u)
+                px, py = self._lerp(self.PLAYER_HOME, target, u * 0.22)
+                return bx, by, px, py
+            if is_press:
+                if t <= 0.70:
+                    px, py = self._lerp(self.PLAYER_HOME, target, t / 0.70)
+                else:
+                    px, py = self._lerp(target, self.PLAYER_HOME, min(1.0, (t - 0.70) / 0.65))
+                bx, by = px + 16, py + 10
+                return bx, by, px, py
+            if t <= 0.70:
+                bx, by = self._lerp(self.BALL_HOME, target, t / 0.70)
+            else:
+                bx, by = self._lerp(target, self.BALL_HOME, min(1.0, (t - 0.70) / 0.65))
+            px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
+            return bx, by, px, py
+
+        if intended == "miss":
+            # Arrive in the goal area and stay — no come-back.
             u = min(1.0, t / 0.70)
             if is_press:
                 px, py = self._lerp(self.PLAYER_HOME, target, u)
                 bx, by = px + 16, py + 10
             else:
-                if t <= 0.70:
-                    bx, by = self._lerp(self.BALL_HOME, target, t / 0.70)
-                else:
-                    bx, by = self._lerp(target, self.BALL_HOME, min(1.0, (t - 0.70) / 0.65))
-                px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
-            return bx, by, px, py
-
-        if intended == "miss":
-            # Reach ~78px (within PASS FINISH_DIST) then leave immediately so return-check fails.
-            if t <= 0.55:
-                bx, by = self._lerp(self.BALL_HOME, self.miss_xy, t / 0.55)
-            else:
-                bx, by = self.BALL_HOME
-            px, py = self._lerp(self.PLAYER_HOME, target, 0.15)
+                bx, by = self._lerp(self.start_xy, target, u)
+                px, py = self._lerp(self.PLAYER_HOME, target, u * 0.22)
             return bx, by, px, py
 
         if intended == "late":
@@ -1719,11 +1618,12 @@ class ArenaSimulator:
 
         # wrong: move on the home side only — never cross the goal line
         u = min(1.0, t / 0.60)
+        origin = self.start_xy
         if is_press:
             px, py = self._lerp(self.PLAYER_HOME, self.wrong_xy, u)
             bx, by = px + 16, py + 10
         else:
-            bx, by = self._lerp(self.BALL_HOME, self.wrong_xy, u)
+            bx, by = self._lerp(origin, self.wrong_xy, u)
             px, py = self._lerp(self.PLAYER_HOME, self.wrong_xy, u * 0.18)
         return bx, by, px, py
 
@@ -2852,15 +2752,15 @@ class SimustRealtimeCamera:
                     self.pending_end_time_str = add_offset_to_time(end_str, dt)
             if self.session_active:
                 self.session_start_timestamp += dt
-            if self.current_qr_block and self.current_qr_block.get("start_time"):
-                self.current_qr_block["start_time"] = add_offset_to_time(
-                    self.current_qr_block["start_time"], dt
-                )
+            current_block = getattr(self, "current_qr_block", None)
+            if current_block and current_block.get("start_time"):
+                current_block["start_time"] = add_offset_to_time(current_block["start_time"], dt)
             if self.between_sessions_active and self.between_session_start_ts:
                 self.between_session_start_ts += dt
-            if self.between_session_start_time:
-                self.between_session_start_time = add_offset_to_time(self.between_session_start_time, dt)
-            last_det = (self.qr_state or {}).get("last_detection_time")
+            between_start = getattr(self, "between_session_start_time", None)
+            if between_start:
+                self.between_session_start_time = add_offset_to_time(between_start, dt)
+            last_det = (getattr(self, "qr_state", None) or {}).get("last_detection_time")
             if last_det:
                 self.qr_state["last_detection_time"] = last_det + dt
             simulator = getattr(self, "simulator", None)
