@@ -77,12 +77,12 @@ def _travel(start, dest, arrive_s, hold_s, back=None, back_s=0.65, fps=25.0):
 
 
 def _outside_start(screen):
+    """Pitch-side start, in front of the goal (toward the camera)."""
     line = rt.GOAL_LINES[screen]
     p0, p1 = line["p0"], line["p1"]
+    up = rt.goal_up_axis(p0, p1)
     mx, my = (p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0
-    nx, ny = -(p1[1] - p0[1]), (p1[0] - p0[0])
-    nlen = math.hypot(nx, ny) or 1.0
-    return (mx + (nx / nlen) * 140.0, my + (ny / nlen) * 140.0)
+    return (mx - up[0] * 150.0, my - up[1] * 150.0)
 
 
 def _beyond_post(p_end, p_other, extra=10.0):
@@ -177,7 +177,43 @@ class FinishingRuleTests(unittest.TestCase):
                 session = _travel(start, xy, arrive_s=0.70, hold_s=2.4)
                 result = _analyze("GOAL", [screen], session)
                 self.assertEqual(result.get("Result"), "Correct", msg=(screen, label, xy, result))
-                self.assertTrue(rt.in_goal_area(xy, line["p0"], line["p1"], rt.arrival_depth_for(screen, "GOAL")))
+                self.assertTrue(rt.point_in_goal_mouth(xy, line["p0"], line["p1"]))
+
+    def test_goal_upper_mouth_is_correct(self):
+        for screen in ("8", "1"):
+            start = _outside_start(screen)
+            p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+            for name in ("upper_center_90", "upper_corner_a", "upper_corner_b"):
+                dest = rt.goal_probe_xy(p0, p1, name)
+                result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
+                self.assertEqual(result.get("Result"), "Correct", msg=(screen, name, result))
+
+    def test_goal_pitch_stay_is_wrong(self):
+        screen = "8"
+        start = _outside_start(screen)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_probe_xy(p0, p1, "outside_40")
+        result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
+        self.assertEqual(result.get("Result"), "Wrong", msg=result)
+
+    def test_goal_wide_of_post_is_wrong(self):
+        screen = "8"
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_probe_xy(p0, p1, "wide_a")
+        up = rt.goal_up_axis(p0, p1)
+        start = (dest[0] - up[0] * 150.0, dest[1] - up[1] * 150.0)
+        result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
+        self.assertEqual(result.get("Result"), "Wrong", msg=result)
+
+    def test_goal_approach_dropout_is_correct(self):
+        """Ball still heading through the mouth when detections stop."""
+        screen = "8"
+        start = _outside_start(screen)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_probe_xy(p0, p1, "outside_40")
+        session = _travel(start, dest, arrive_s=0.50, hold_s=0.0)
+        result = _analyze("GOAL", [screen], session)
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
 
 
 if __name__ == "__main__":

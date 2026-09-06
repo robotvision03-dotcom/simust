@@ -164,10 +164,14 @@ GOAL_LINES = {
     "6L": {"p0": (1262, 181), "p1": (1273, 222)},
 }
 
-# Proposed GOAL mouth (visual / probe only — not used for scoring yet).
-# The software GOAL_LINES entry is the BOTTOM of a rectangle. The two posts
-# go "up" the image (smaller y) from the posts; the crossbar is the top.
-SUGGESTED_GOAL_HEIGHT_PX = 90
+# GOAL mouth: software GOAL_LINES is the BOTTOM. Posts go image-up; height is
+# one quarter of the bottom-line length. Used only for GOAL scoring.
+GOAL_RECT_HEIGHT_RATIO = 0.25
+GOAL_LINE_SLACK_PX = 12
+GOAL_SIDE_SLACK_PX = 12
+GOAL_CROSS_SPEED_PX_S = 18.0
+GOAL_CROSS_HORIZON_S = 1.4
+SUGGESTED_GOAL_HEIGHT_PX = 90  # probe marker only
 SUGGESTED_GOAL_LINE_SLACK_PX = 12
 GOAL_PROBE_TRAVEL_S = 1.9
 GOAL_PROBE_ZONES = (
@@ -203,7 +207,24 @@ def goal_along_axis(p0, p1):
     return (tx / nlen, ty / nlen), nlen
 
 
-def suggested_goal_corners(p0, p1, height=SUGGESTED_GOAL_HEIGHT_PX):
+def goal_mouth_height(p0, p1):
+    _along, width = goal_along_axis(p0, p1)
+    return max(40.0, width * GOAL_RECT_HEIGHT_RATIO)
+
+
+def goal_line_coords(point, p0, p1):
+    along, width = goal_along_axis(p0, p1)
+    up = goal_up_axis(p0, p1)
+    vx = float(point[0]) - float(p0[0])
+    vy = float(point[1]) - float(p0[1])
+    t = vx * along[0] + vy * along[1]
+    h = vx * up[0] + vy * up[1]
+    return t, h, width, along, up
+
+
+def suggested_goal_corners(p0, p1, height=None):
+    if height is None:
+        height = goal_mouth_height(p0, p1)
     up = goal_up_axis(p0, p1)
     a = (float(p0[0]), float(p0[1]))
     b = (float(p1[0]), float(p1[1]))
@@ -212,15 +233,18 @@ def suggested_goal_corners(p0, p1, height=SUGGESTED_GOAL_HEIGHT_PX):
     return a, b, c, d
 
 
-def point_in_suggested_goal(point, p0, p1, height=SUGGESTED_GOAL_HEIGHT_PX,
-                            line_slack=SUGGESTED_GOAL_LINE_SLACK_PX, side_slack=8.0):
-    """True if point is in the proposed rectangle (bottom = software GOAL line)."""
-    along, width = goal_along_axis(p0, p1)
-    up = goal_up_axis(p0, p1)
-    vx, vy = float(point[0]) - float(p0[0]), float(point[1]) - float(p0[1])
-    t = vx * along[0] + vy * along[1]
-    h = vx * up[0] + vy * up[1]
+def point_in_goal_mouth(point, p0, p1, height=None,
+                        line_slack=GOAL_LINE_SLACK_PX, side_slack=GOAL_SIDE_SLACK_PX):
+    """True if the point is in the GOAL rectangle (bottom = software line)."""
+    if height is None:
+        height = goal_mouth_height(p0, p1)
+    t, h, width, _along, _up = goal_line_coords(point, p0, p1)
     return (-side_slack) <= t <= (width + side_slack) and (-line_slack) <= h <= (height + 8.0)
+
+
+def point_in_suggested_goal(point, p0, p1, height=None,
+                            line_slack=SUGGESTED_GOAL_LINE_SLACK_PX, side_slack=8.0):
+    return point_in_goal_mouth(point, p0, p1, height=height, line_slack=line_slack, side_slack=side_slack)
 
 
 def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
@@ -249,6 +273,180 @@ def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
         "wide_b": add(p1, along[0], along[1], 28.0),
     }
     return table.get(name, mid)
+
+
+def recent_ball_velocity(positions, window_s=0.35):
+    """px/s from the last moving window. A held ball returns ~zero."""
+    if not positions or len(positions) < 2:
+        return (0.0, 0.0)
+    t1, x1, y1 = positions[-1]
+    chosen = None
+    for row in reversed(positions[:-1]):
+        if t1 - row[0] >= window_s:
+            chosen = row
+            break
+    if chosen is None:
+        chosen = positions[0]
+    dt = t1 - chosen[0]
+    if dt < 0.08:
+        return (0.0, 0.0)
+    return ((x1 - chosen[1]) / dt, (y1 - chosen[2]) / dt)
+
+
+def predict_goal_crossing(positions, p0, p1, horizon=GOAL_CROSS_HORIZON_S):
+    """If recent velocity aims through the mouth, return (t_cross, proj_t, dist)."""
+    if not positions or len(positions) < 2:
+        return None
+    vx, vy = recent_ball_velocity(positions)
+    up = goal_up_axis(p0, p1)
+    vh = vx * up[0] + vy * up[1]
+    if vh < GOAL_CROSS_SPEED_PX_S:
+        return None
+    t_last, x, y = positions[-1]
+    along_t, h, width, along, _up = goal_line_coords((x, y), p0, p1)
+    if h > goal_mouth_height(p0, p1) + 8.0:
+        return None
+    if h >= -GOAL_LINE_SLACK_PX:
+        if (-GOAL_SIDE_SLACK_PX) <= along_t <= (width + GOAL_SIDE_SLACK_PX):
+            proj = 0.0 if width <= 1e-6 else max(0.0, min(1.0, along_t / width))
+            return (t_last, proj, max(0.0, -h))
+        return None
+    t_cross = -h / vh
+    if t_cross < 0.0 or t_cross > horizon:
+        return None
+    cx = x + vx * t_cross
+    cy = y + vy * t_cross
+    along_c, _hc, width_c, _a, _u = goal_line_coords((cx, cy), p0, p1)
+    if (-GOAL_SIDE_SLACK_PX) <= along_c <= (width_c + GOAL_SIDE_SLACK_PX):
+        proj = 0.0 if width_c <= 1e-6 else max(0.0, min(1.0, along_c / width_c))
+        return (t_last + t_cross, proj, 0.0)
+    return None
+
+
+def first_goal_mouth_hit(positions, p0, p1):
+    height = goal_mouth_height(p0, p1)
+    best = None
+    first_t = None
+    for t, x, y in positions:
+        if not point_in_goal_mouth((x, y), p0, p1, height):
+            continue
+        if first_t is None:
+            first_t = t
+        eff, proj = get_effective_distance((x, y), p0, p1)
+        if best is None or eff < best[0]:
+            best = (eff, t, proj)
+    return first_t, best
+
+
+def left_goal_mouth(positions, p0, p1, after_t):
+    """True if the ball enters the mouth then goes back onto the pitch."""
+    if after_t is None or not positions:
+        return False
+    height = goal_mouth_height(p0, p1)
+    seen = False
+    away = 0
+    for t, x, y in positions:
+        if t + 1e-6 < after_t:
+            continue
+        if point_in_goal_mouth((x, y), p0, p1, height):
+            seen = True
+            away = 0
+            continue
+        _along_t, h, _w, _a, _u = goal_line_coords((x, y), p0, p1)
+        if seen and h < -20.0:
+            away += 1
+            if away >= 3:
+                return True
+    return False
+
+
+def goal_finish_evidence(positions, screens, goal_lines):
+    """Best in-mouth or predicted-crossing evidence on this track."""
+    best = None
+    for screen in screens:
+        p0, p1 = get_screen_info(screen, goal_lines)
+        if p0 is None:
+            continue
+        first_t, hit = first_goal_mouth_hit(positions, p0, p1)
+        if hit is not None:
+            eff, t_hit, proj = hit
+            cand = {
+                "screen": screen,
+                "t": first_t if first_t is not None else t_hit,
+                "dist": eff,
+                "proj": proj,
+                "kind": "mouth",
+            }
+            if best is None or cand["dist"] < best["dist"]:
+                best = cand
+            continue
+        cross = predict_goal_crossing(positions, p0, p1)
+        if cross is None:
+            continue
+        t_cross, proj, dist = cross
+        cand = {
+            "screen": screen,
+            "t": t_cross,
+            "dist": dist,
+            "proj": proj,
+            "kind": "predict",
+        }
+        if best is None or cand["dist"] < best["dist"]:
+            best = cand
+    return best
+
+
+def analyze_goal_with_context(action_id, screens, track, full_track, session_duration,
+                              movement, direction, goal_lines):
+    """GOAL only: rectangle mouth + heading through dropouts. No Miss."""
+    session_ev = goal_finish_evidence(track, screens, goal_lines)
+    extra = [p for p in (full_track or []) if p[0] > session_duration + 1e-6]
+    late_ev = goal_finish_evidence(extra, screens, goal_lines) if extra else None
+
+    result = "Wrong"
+    winning_screen = "N/A"
+    display_time = "-"
+    display_duration = "-"
+    min_dist_display = None
+    best_proj_t = None
+    evidence = None
+
+    if session_ev is not None:
+        p0, p1 = get_screen_info(session_ev["screen"], goal_lines)
+        if not left_goal_mouth(full_track, p0, p1, session_ev["t"]):
+            result = "Correct"
+            evidence = session_ev
+    elif late_ev is not None:
+        p0, p1 = get_screen_info(late_ev["screen"], goal_lines)
+        if not left_goal_mouth(full_track, p0, p1, late_ev["t"]):
+            result = "Late"
+            evidence = late_ev
+
+    if evidence is not None:
+        winning_screen = evidence["screen"]
+        display_time = f"{evidence['t']:.3f}"
+        display_duration = f"{session_duration:.3f}"
+        min_dist_display = evidence["dist"]
+        best_proj_t = evidence["proj"]
+
+    aep = get_aep_orientation(screens, winning_screen)
+    finishing_time_val = float(display_time) if display_time != "-" else 0.0
+    ae = compute_action_efficiency("GOAL", result, finishing_time_val, movement)
+    return {
+        "Action ID": action_id,
+        "Action": "GOAL",
+        "Screens": ", ".join(screens),
+        "Result": result,
+        "Winning Screen": winning_screen,
+        "Min Distance (px)": round(min_dist_display, 1) if min_dist_display is not None and min_dist_display != float("inf") else None,
+        "Time of Min (s)": display_time,
+        "Session Duration (s)": display_duration,
+        "Movement (px)": movement,
+        "Direction": direction,
+        "AEP": aep,
+        "proj_t": round(best_proj_t, 3) if best_proj_t is not None else None,
+        "AE": ae,
+    }
 
 CAPTURE_TRIGGER_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "capture_trigger.txt")
 CAPTURE_OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1139,7 +1337,13 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
     min_dist_display = None
     best_proj_t = None
 
-    if action_type in ('PASS', 'TARGET', 'PRESS', 'GOAL'):
+    if action_type == 'GOAL':
+        return analyze_goal_with_context(
+            action_id, screens, track, full_track, session_duration,
+            movement, direction, goal_lines
+        )
+
+    if action_type in ('PASS', 'TARGET', 'PRESS'):
         arrival, depth = best_arrival_in_positions(track, screens, goal_lines, action_type)
         if arrival is not None:
             best_eff_dist, best_min_time, best_screen, best_proj_t = arrival
@@ -1149,44 +1353,19 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             came_back = departed_goal_area(
                 full_track, best_screen, goal_lines, arrive_t, depth
             )
-            if action_type == 'GOAL':
-                # Arrive in session and stay in the goal = Correct. Coming back = Wrong.
-                if not came_back:
-                    result = 'Correct'
-                    winning_screen = best_screen
-                    display_time = f"{best_min_time:.3f}"
-                    display_duration = f"{session_duration:.3f}"
-                    min_dist_display = best_eff_dist
+            # Arrive and come back = Correct. Arrive and stay = Miss.
+            if came_back:
+                result = 'Correct'
+                winning_screen = best_screen
+                display_time = f"{best_min_time:.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
             else:
-                # Arrive and come back = Correct. Arrive and stay = Miss.
-                if came_back:
-                    result = 'Correct'
-                    winning_screen = best_screen
-                    display_time = f"{best_min_time:.3f}"
-                    display_duration = f"{session_duration:.3f}"
-                    min_dist_display = best_eff_dist
-                else:
-                    result = 'Miss'
-                    winning_screen = best_screen
-                    min_dist_display = best_eff_dist
+                result = 'Miss'
+                winning_screen = best_screen
+                min_dist_display = best_eff_dist
         else:
-            if action_type == 'GOAL' and action_end_time is not None:
-                found_late, late_screen, late_time, late_dist, late_proj = search_goal_late(
-                    action_index, all_data, screens, goal_lines, key, action_end_time
-                )
-                if found_late:
-                    late_depth = arrival_depth_for(late_screen, 'GOAL')
-                    came_back = departed_goal_area(
-                        full_track, late_screen, goal_lines, session_duration, late_depth
-                    )
-                    if not came_back:
-                        result = 'Late'
-                        winning_screen = late_screen
-                        display_time = f"{late_time:.3f}"
-                        display_duration = f"{session_duration:.3f}"
-                        min_dist_display = late_dist
-                        best_proj_t = late_proj
-            elif action_end_time is not None:
+            if action_end_time is not None:
                 found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
                     action_index, all_data, screens, goal_lines, key, action_end_time, action_type
                 )
@@ -1347,7 +1526,19 @@ class ArenaSimulator:
         # path never enters FINISH_DIST.
         if self.action == "GOAL":
             self.miss_xy = self._perp_from_mid(78)
-            self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=True)
+            # Hold on the pitch, outside the mouth, so a late shot is not already in.
+            if self.line_p0 and self.line_p1:
+                up = goal_up_axis(self.line_p0, self.line_p1)
+                along, _w = goal_along_axis(self.line_p0, self.line_p1)
+                mid = self.target_xy
+                pitch = 160.0
+                self.late_hold_xy = self._clip(mid[0] - up[0] * pitch, mid[1] - up[1] * pitch)
+                self.late_start_xy = self._clip(
+                    self.late_hold_xy[0] + along[0] * 36.0,
+                    self.late_hold_xy[1] + along[1] * 36.0,
+                )
+            else:
+                self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=True)
             self.goal_late_start_xy = self.late_start_xy
             self.wrong_xy = self._offset_from_line(240)
         else:
@@ -1376,6 +1567,11 @@ class ArenaSimulator:
                 self.outcome_index += 1
                 self.probe_name = name
                 self.target_xy = goal_probe_xy(self.line_p0, self.line_p1, name)
+                along_t, _h, _w, along, up = goal_line_coords(self.target_xy, self.line_p0, self.line_p1)
+                self.start_xy = (
+                    self.line_p0[0] + along[0] * along_t - up[0] * 150.0,
+                    self.line_p0[1] + along[1] * along_t - up[1] * 150.0,
+                )
                 self.intended = "correct"
                 dist, proj_t, _, _ = compute_projection(self.target_xy, self.line_p0, self.line_p1)
                 now_in = in_goal_area(self.target_xy, self.line_p0, self.line_p1, depth)
