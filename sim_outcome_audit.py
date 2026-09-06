@@ -11,6 +11,8 @@ from typing import List, Tuple
 
 import simust_realtime as rt
 
+rt.ArenaSimulator.GOAL_PROBE = False
+
 
 class FakeClock:
     def __init__(self, start: float = 1000.0):

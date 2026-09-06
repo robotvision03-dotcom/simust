@@ -68,6 +68,7 @@ COLOR_LATE = (0, 255, 255)
 COLOR_WRONG = (0, 0, 255)
 COLOR_HIP = (0, 255, 255)  # cyan for hip point
 COLOR_POLYGON = (0, 255, 0)  # green for polygon outline
+COLOR_GOAL_RECT = (0, 200, 255)  # suggested GOAL rectangle (visual only)
 
 STITCHED_WIDTH = 3840
 STITCHED_HEIGHT = 1080
@@ -162,6 +163,92 @@ GOAL_LINES = {
     "9L": {"p0": (642, 241), "p1": (647, 191)},
     "6L": {"p0": (1262, 181), "p1": (1273, 222)},
 }
+
+# Proposed GOAL mouth (visual / probe only — not used for scoring yet).
+# The software GOAL_LINES entry is the BOTTOM of a rectangle. The two posts
+# go "up" the image (smaller y) from the posts; the crossbar is the top.
+SUGGESTED_GOAL_HEIGHT_PX = 90
+SUGGESTED_GOAL_LINE_SLACK_PX = 12
+GOAL_PROBE_TRAVEL_S = 1.9
+GOAL_PROBE_ZONES = (
+    "line_center",
+    "post_a",
+    "post_b",
+    "upper_center_40",
+    "upper_center_90",
+    "upper_corner_a",
+    "upper_corner_b",
+    "outside_20",
+    "outside_40",
+    "outside_73",
+    "outside_100",
+    "outside_140",
+    "wide_a",
+    "wide_b",
+)
+
+
+def goal_up_axis(p0, p1):
+    """Unit perpendicular toward image-up (into the net if the camera faces the goal)."""
+    tx, ty = float(p1[0]) - float(p0[0]), float(p1[1]) - float(p0[1])
+    nlen = math.hypot(tx, ty) or 1.0
+    n1 = (-ty / nlen, tx / nlen)
+    n2 = (ty / nlen, -tx / nlen)
+    return n1 if n1[1] <= n2[1] else n2
+
+
+def goal_along_axis(p0, p1):
+    tx, ty = float(p1[0]) - float(p0[0]), float(p1[1]) - float(p0[1])
+    nlen = math.hypot(tx, ty) or 1.0
+    return (tx / nlen, ty / nlen), nlen
+
+
+def suggested_goal_corners(p0, p1, height=SUGGESTED_GOAL_HEIGHT_PX):
+    up = goal_up_axis(p0, p1)
+    a = (float(p0[0]), float(p0[1]))
+    b = (float(p1[0]), float(p1[1]))
+    c = (b[0] + up[0] * height, b[1] + up[1] * height)
+    d = (a[0] + up[0] * height, a[1] + up[1] * height)
+    return a, b, c, d
+
+
+def point_in_suggested_goal(point, p0, p1, height=SUGGESTED_GOAL_HEIGHT_PX,
+                            line_slack=SUGGESTED_GOAL_LINE_SLACK_PX, side_slack=8.0):
+    """True if point is in the proposed rectangle (bottom = software GOAL line)."""
+    along, width = goal_along_axis(p0, p1)
+    up = goal_up_axis(p0, p1)
+    vx, vy = float(point[0]) - float(p0[0]), float(point[1]) - float(p0[1])
+    t = vx * along[0] + vy * along[1]
+    h = vx * up[0] + vy * up[1]
+    return (-side_slack) <= t <= (width + side_slack) and (-line_slack) <= h <= (height + 8.0)
+
+
+def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
+    along, width = goal_along_axis(p0, p1)
+    up = goal_up_axis(p0, p1)
+    mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+    pitch = (-up[0], -up[1])
+
+    def add(origin, ax, ay, dist):
+        return (origin[0] + ax * dist, origin[1] + ay * dist)
+
+    table = {
+        "line_center": mid,
+        "post_a": (float(p0[0]), float(p0[1])),
+        "post_b": (float(p1[0]), float(p1[1])),
+        "upper_center_40": add(mid, up[0], up[1], 40.0),
+        "upper_center_90": add(mid, up[0], up[1], height),
+        "upper_corner_a": add(p0, up[0], up[1], height),
+        "upper_corner_b": add(p1, up[0], up[1], height),
+        "outside_20": add(mid, pitch[0], pitch[1], 20.0),
+        "outside_40": add(mid, pitch[0], pitch[1], 40.0),
+        "outside_73": add(mid, pitch[0], pitch[1], 73.0),
+        "outside_100": add(mid, pitch[0], pitch[1], 100.0),
+        "outside_140": add(mid, pitch[0], pitch[1], 140.0),
+        "wide_a": add(p0, -along[0], -along[1], 28.0),
+        "wide_b": add(p1, along[0], along[1], 28.0),
+    }
+    return table.get(name, mid)
 
 CAPTURE_TRIGGER_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "capture_trigger.txt")
 CAPTURE_OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1207,6 +1294,8 @@ class ArenaSimulator:
       Correct — arrive in the goal area during the session and do not come back.
       Late    — arrive after the session and do not come back.
       Wrong   — any other case.
+    When GOAL_PROBE is True the ball walks slowly through named zones so the
+    mouth can be judged by eye. Scoring is unchanged.
     """
 
     PLAYER_HOME = (280.0, 268.0)
@@ -1214,6 +1303,7 @@ class ArenaSimulator:
     PASS_CYCLE = ("correct", "miss", "late", "wrong")
     OTHER_CYCLE = ("correct", "miss", "late", "wrong")
     GOAL_CYCLE = ("correct", "late", "wrong")
+    GOAL_PROBE = True
 
     def __init__(self):
         self.action = None
@@ -1241,6 +1331,8 @@ class ArenaSimulator:
         self.hold_finish = False
         self.hold_xy = self.BALL_HOME
         self.hold_player = self.PLAYER_HOME
+        self.probe_name = ""
+        self.travel_s = 0.70
 
     def start_action(self, action, screens):
         self.action = (action or "").upper()
@@ -1266,6 +1358,8 @@ class ArenaSimulator:
         self.late_finish_xy = self._closest_screen_mid(self.late_hold_xy)
         self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
         self.start_xy = self.BALL_HOME
+        self.probe_name = ""
+        self.travel_s = 0.70
         # Screen 1's mouth covers the left-camera baseline; home sits inside it.
         # Start from the pitch side so in-session "late" / "wrong" are not already arrivals.
         if self.action == "GOAL" and self.line_p0 and self.line_p1:
@@ -1273,6 +1367,25 @@ class ArenaSimulator:
             depth = arrival_depth_for(goal_screen, "GOAL")
             if in_goal_area(self.BALL_HOME, self.line_p0, self.line_p1, depth):
                 self.start_xy = self._perp_from_mid(max(depth + 40.0, 110.0))
+            up = goal_up_axis(self.line_p0, self.line_p1)
+            mid = self.target_xy
+            self.start_xy = (mid[0] - up[0] * 150.0, mid[1] - up[1] * 150.0)
+            self.travel_s = GOAL_PROBE_TRAVEL_S
+            if self.GOAL_PROBE:
+                name = GOAL_PROBE_ZONES[self.outcome_index % len(GOAL_PROBE_ZONES)]
+                self.outcome_index += 1
+                self.probe_name = name
+                self.target_xy = goal_probe_xy(self.line_p0, self.line_p1, name)
+                self.intended = "correct"
+                dist, proj_t, _, _ = compute_projection(self.target_xy, self.line_p0, self.line_p1)
+                now_in = in_goal_area(self.target_xy, self.line_p0, self.line_p1, depth)
+                rect_in = point_in_suggested_goal(self.target_xy, self.line_p0, self.line_p1)
+                print(
+                    f"  [SIM] GOAL probe={name} screen={self.screens} target={self.target_xy} "
+                    f"dist={dist:.1f} proj_t={proj_t:.3f} current_band={now_in} "
+                    f"suggested_rect={rect_in}"
+                )
+                return
         self.intended = self._next_outcome(self.action)
         print(
             f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
@@ -1578,7 +1691,7 @@ class ArenaSimulator:
 
         if intended == "correct":
             if self.action == "GOAL":
-                u = min(1.0, t / 0.70)
+                u = min(1.0, t / max(0.20, self.travel_s))
                 bx, by = self._lerp(self.start_xy, target, u)
                 px, py = self._lerp(self.PLAYER_HOME, target, u * 0.22)
                 return bx, by, px, py
@@ -1680,10 +1793,36 @@ class ArenaSimulator:
             cv2.circle(frame, (cx, cy), 11, (0, 0, 0), -1)
             cv2.circle(frame, (cx, cy), 9, (255, 255, 255), -1)
             cv2.circle(frame, (cx, cy), 9, (0, 140, 255), 2)
-        label = f"ARENA SIM  {self.intended.upper()}" if (self.active or self.late_phase) else "ARENA SIMULATION"
+        if self.action == "GOAL" and self.line_p0 and self.line_p1:
+            self._draw_suggested_goal(frame)
+        if self.probe_name and (self.active or self.hold_finish):
+            dist, proj_t, _, _ = compute_projection(self.last_ball, self.line_p0, self.line_p1)
+            screen = self.screens[0] if self.screens else "8"
+            depth = arrival_depth_for(screen, "GOAL")
+            now_in = in_goal_area(self.last_ball, self.line_p0, self.line_p1, depth)
+            rect_in = point_in_suggested_goal(self.last_ball, self.line_p0, self.line_p1)
+            label = (
+                f"GOAL PROBE {self.probe_name}  dist={dist:.1f} proj={proj_t:.2f} "
+                f"band={'IN' if now_in else 'OUT'} rect={'IN' if rect_in else 'OUT'}"
+            )
+        elif self.active or self.late_phase:
+            label = f"ARENA SIM  {self.intended.upper()}"
+        else:
+            label = "ARENA SIMULATION"
         cv2.putText(frame, label, (12, frame.shape[0] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 220, 255), 2)
         return frame
+
+    def _draw_suggested_goal(self, frame):
+        h, w = frame.shape[:2]
+        sx = w / float(SIM_FRAME_WIDTH)
+        sy = h / float(SIM_FRAME_HEIGHT)
+        corners = suggested_goal_corners(self.line_p0, self.line_p1)
+        pts = [(int(x * sx), int(y * sy)) for x, y in corners]
+        for i in range(4):
+            cv2.line(frame, pts[i], pts[(i + 1) % 4], COLOR_GOAL_RECT, 2)
+        tx, ty = self.target_xy
+        cv2.drawMarker(frame, (int(tx * sx), int(ty * sy)), (0, 140, 255), cv2.MARKER_CROSS, 18, 2)
 
 class VideoSaver:
     def __init__(self):
@@ -2087,7 +2226,9 @@ class SimustRealtimeCamera:
 
     def get_goal_lines(self, screens, action, keypoints):
         lines = {}
-        if action in ["PRESS", "GOAL"] and keypoints:
+        # PRESS may use QR keypoints instead of the software line.
+        # GOAL always uses the software bottom line so the mouth can be seen.
+        if action == "PRESS" and keypoints:
             return lines
         for screen in screens:
             screen_str = str(screen)
@@ -2344,14 +2485,24 @@ class SimustRealtimeCamera:
         if not self.session_active or not self.active_goal_lines:
             return frame
 
+        h, w = frame.shape[:2]
+        sx = w / float(SIM_FRAME_WIDTH)
+        sy = h / float(SIM_FRAME_HEIGHT)
         for screen_name, line_data in self.active_goal_lines.items():
             x1, y1 = line_data['p0']
             x2, y2 = line_data['p1']
-            cv2.line(frame, (x1, y1), (x2, y2), COLOR_GOAL_LINE, 3)
-            cv2.circle(frame, (x1, y1), 5, (0, 0, 255), -1)
-            cv2.circle(frame, (x2, y2), 5, (0, 0, 255), -1)
-            cv2.putText(frame, f"GOAL {screen_name}", ((x1 + x2)//2 - 40, y1 - 10),
+            p0 = (int(x1 * sx), int(y1 * sy))
+            p1 = (int(x2 * sx), int(y2 * sy))
+            cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
+            cv2.circle(frame, p0, 5, (0, 0, 255), -1)
+            cv2.circle(frame, p1, 5, (0, 0, 255), -1)
+            cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            if str(screen_name) in ("1", "8"):
+                corners = suggested_goal_corners(line_data["p0"], line_data["p1"])
+                pts = [(int(x * sx), int(y * sy)) for x, y in corners]
+                for i in range(4):
+                    cv2.line(frame, pts[i], pts[(i + 1) % 4], COLOR_GOAL_RECT, 2)
         return frame
 
     def draw_results_overlay(self, frame):

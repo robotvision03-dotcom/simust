@@ -22,6 +22,8 @@ if "torch" not in sys.modules:
 import sim_outcome_audit as audit  # noqa: E402
 import simust_realtime as rt  # noqa: E402
 
+rt.ArenaSimulator.GOAL_PROBE = False
+
 
 def _analyze(action, screens, frames, after=None, session_s=3.2):
     start = datetime.strptime("12:00:00.000000", "%H:%M:%S.%f")
