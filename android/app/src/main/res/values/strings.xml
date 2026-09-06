@@ -4,9 +4,9 @@
     <string name="title_player">My SIMUST</string>
     <string name="title_lab">SIMUST Lab</string>
     <string name="subtitle_lab_online">Lab online · worldwide</string>
-    <string name="subtitle_lab_offline">Lab offline · start app.py on the PC</string>
+    <string name="subtitle_lab_offline">Lab offline.</string>
     <string name="subtitle_lab_online_net">Lab online · %1$s</string>
-    <string name="subtitle_lab_offline_net">Lab offline · %1$s · start app.py</string>
+    <string name="subtitle_lab_offline_net">Lab offline · %1$s</string>
     <string name="subtitle_host_unreachable">Cannot reach host · %1$s</string>
     <string name="subtitle_no_network">No internet · turn on SIM data or Wi‑Fi</string>
     <string name="subtitle_lab_lan">Same Wi‑Fi as the lab PC</string>
@@ -36,8 +36,8 @@
     <string name="settings">Settings</string>
     <string name="open_operator">Operator</string>
     <string name="open_player">Player</string>
-    <string name="help_text">Use Operator from any country on Wi‑Fi or tablet SIM data. The app talks to the public SIMUST host, which sends Realtime Play to the Netherlands lab. Sign in with your SIMUST account. Keep app.py running on the lab PC with lab.env so the button works and live results appear here. Pinch-zoom also works on the console.</string>
-    <string name="load_error">Could not load the SIMUST console. Check Settings and that the public host or lab app.py is running.</string>
-    <string name="load_error_offline">This tablet has no internet. Enable mobile data (SIM) or Wi‑Fi and tap Retry.</string>
+    <string name="help_text">This phone uses its own internet (SIM or Wi‑Fi) to reach the public SIMUST host. Open Operator, sign in, and start Realtime Play. The lab PC runs the test. Galaxy Z Flip 6 (Android 16) is supported on the cover and inner screens. If an older SIMUST APK would not install, uninstall it first and install this 2.3 build.</string>
+    <string name="load_error">Could not load the SIMUST console. Check Settings and that this phone has internet.</string>
+    <string name="load_error_offline">This phone has no internet. Enable mobile data (SIM) or Wi‑Fi and tap Retry.</string>
     <string name="retry">Retry</string>
 </resources>

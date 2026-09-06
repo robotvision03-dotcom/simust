@@ -56,6 +56,7 @@ from simust_security import (
 import simust_billing
 import simust_push
 import simust_remote
+from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
 
 if PUBLIC_MODE:
     cv2 = None
@@ -2431,9 +2432,6 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         num_tiles = len(slice_numbers)
         tile_width = width // num_tiles
 
-        CHART_CENTER_Y = 140
-        RING_RADIUS = 90
-        RING_THICKNESS = 22
         LABEL_VERTICAL_GAP = 20
         RING_TEXT_Y_OFFSET = -10
         LABEL_RECT_H = 65
@@ -2584,7 +2582,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
                 if num == 12:
                     draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aet_percent, 100)
-                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Reaction Time")
+                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Execution Time")
                 elif num == 3:
                     draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, avg_ae, 100)
                     draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
@@ -2604,7 +2602,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
                 if num == 12:
                     draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aet_display if aet_display != "-" else "-"])
-                    draw_metric_label(draw, "Reaction Time", center_x, rect_y)
+                    draw_metric_label(draw, "Execution Time", center_x, rect_y)
                 elif num == 3:
                     draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ae_display if ae_display != "-" else "-"])
                     draw_metric_label(draw, "Efficiency", center_x, rect_y)

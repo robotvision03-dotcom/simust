@@ -13,6 +13,12 @@ Press Esc to close.
 
 import sys
 import random
+try:
+    from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
+except ImportError:
+    CHART_CENTER_Y = 140
+    RING_RADIUS = 63
+    RING_THICKNESS = 15
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
@@ -66,7 +72,7 @@ class WaitingOverlay(QtWidgets.QWidget):
         # Slice layout
         self.slice_order = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         self.num_slices = len(self.slice_order)
-        self.radius = 60  # ring radius
+        self.radius = RING_RADIUS
 
         # Offsets per tile index (for slice numbers 2 and 3)
         # index 4 -> slice number 2, offset +25px
@@ -165,7 +171,7 @@ class WaitingOverlay(QtWidgets.QWidget):
 
             # Exact center of this tile (shifted for tiles with offset)
             cx = int((i + 0.5) * tile_width) + offset_x
-            cy = h // 2
+            cy = CHART_CENTER_Y
 
             # ---- Slice number (centered above the ring) ----
             painter.setPen(QColor(0, 255, 255))
@@ -183,12 +189,12 @@ class WaitingOverlay(QtWidgets.QWidget):
             if radius < 5:
                 radius = 5
 
-            # Background ring (dark)
-            painter.setPen(QPen(QColor(60, 60, 80), int(radius * 0.25)))
+            # Background ring (dark) — same thickness as results rings
+            painter.setPen(QPen(QColor(60, 60, 80), RING_THICKNESS))
             painter.drawEllipse(cx - radius, cy - radius, 2*radius, 2*radius)
 
             # Spinning arc (gold)
-            painter.setPen(QPen(QColor(255, 193, 7), int(radius * 0.3)))
+            painter.setPen(QPen(QColor(255, 193, 7), RING_THICKNESS + 2))
             painter.drawArc(
                 cx - radius, cy - radius,
                 2*radius, 2*radius,

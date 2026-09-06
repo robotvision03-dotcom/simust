@@ -1,17 +1,18 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "com.simust.playsmart"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.simust.playsmart"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 4
-        versionName = "2.2"
+        targetSdk = 36
+        versionCode = 5
+        versionName = "2.3"
     }
 
     buildTypes {
@@ -27,6 +28,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+kotlin {
+    jvmToolchain(17)
 }
 
 dependencies {
@@ -45,6 +50,7 @@ afterEvaluate {
             val named = "SIMUST-${android.defaultConfig.versionName}-debug.apk"
             src.copyTo(src.resolveSibling(named), overwrite = true)
             src.copyTo(rootProject.projectDir.resolve(named), overwrite = true)
+            src.copyTo(rootProject.projectDir.resolve("SIMUST-ZFlip6-2.3-debug.apk"), overwrite = true)
         }
     }
 }

@@ -24,6 +24,12 @@ from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QUrl
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 import vlc
+try:
+    from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
+except ImportError:
+    CHART_CENTER_Y = 140
+    RING_RADIUS = 63
+    RING_THICKNESS = 15
 
 # ============================================================
 # SETUP LOGGING
@@ -112,7 +118,7 @@ class WaitingOverlay(QtWidgets.QWidget):
         # Slice order must match the results video
         self.slice_order = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         self.num_slices = len(self.slice_order)
-        self.ring_radius = 60          # matches final video ring size
+        self.ring_radius = RING_RADIUS
 
         # Balls per slice (will be created on first paint)
         self.balls_by_slice = None
@@ -219,19 +225,19 @@ class WaitingOverlay(QtWidgets.QWidget):
         for i, slice_num in enumerate(self.slice_order):
             offset_x = self.content_offset.get(i, 0)
             cx = int((i + 0.5) * tile_width) + offset_x
-            cy = h // 2
+            cy = CHART_CENTER_Y
 
             # Ring
             radius = min(self.ring_radius, int(tile_width // 2))
             if radius < 5:
                 radius = 5
 
-            # Background ring
-            painter.setPen(QPen(QColor(60, 60, 80), int(radius * 0.25)))
+            # Background ring — same size and thickness as results rings
+            painter.setPen(QPen(QColor(60, 60, 80), RING_THICKNESS))
             painter.drawEllipse(cx - radius, cy - radius, 2*radius, 2*radius)
 
             # Spinning arc
-            painter.setPen(QPen(QColor(255, 193, 7), int(radius * 0.3)))
+            painter.setPen(QPen(QColor(255, 193, 7), RING_THICKNESS + 2))
             painter.drawArc(
                 cx - radius, cy - radius,
                 2*radius, 2*radius,

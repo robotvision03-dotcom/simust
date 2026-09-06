@@ -124,7 +124,8 @@ object Prefs {
         return when {
             sw >= 800 -> 115
             sw >= 600 -> 110
-            else -> DEFAULT_TEXT_ZOOM
+            sw >= 360 -> 105
+            else -> 100
         }
     }
 

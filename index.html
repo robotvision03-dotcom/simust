@@ -86,7 +86,7 @@
         .metric-ring .value { font-size: 22px; font-weight: 800; }
         .metric-ring .sub { font-size: 11px; color: #8090a5; }
         .ring-chart-wrapper { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; }
-        .ring-chart-wrapper canvas { max-height: 110px; max-width: 110px; margin: 0 auto; display: block; }
+        .ring-chart-wrapper canvas { max-height: 77px; max-width: 77px; margin: 0 auto; display: block; }
         .table-wrap { overflow-x: auto; margin-top: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--portal-panel); }
         .table-wrap table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 780px; }
         .table-wrap th { background: #050e1a; color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.4px; padding: 10px 8px; text-align: start; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -456,7 +456,7 @@
             var color = ringProps.color || '#d6b34b';
             var label = ringProps.label || '';
             var sub = ringProps.sub || '';
-            var size = ringProps.size || 90;
+            var size = ringProps.size || 63;
             var canvasRef = useRef(null);
             var chartRef = useRef(null);
             useEffect(function() {
@@ -544,7 +544,7 @@
                 chartRef.current.update('none');
             }, [rightPct, leftPct]);
             return React.createElement('div', { className: "ring-chart-wrapper" },
-                React.createElement('canvas', { ref: canvasRef, width: 90, height: 90, style: { maxWidth: 90, maxHeight: 90 } }),
+                React.createElement('canvas', { ref: canvasRef, width: 63, height: 63, style: { maxWidth: 63, maxHeight: 63 } }),
                 React.createElement('div', { className: "text-xs font-bold mt-1" }, 'AEP'),
                 React.createElement('div', { className: "text-xs text-gray-400" },
                     "R " + rightPct.toFixed(0) + "% / L " + leftPct.toFixed(0) + "%"
@@ -2979,7 +2979,7 @@
                 }, labOnline === true
                     ? 'Lab online — Realtime Play from this tablet runs on the training machine over the internet.'
                     : labOnline === false
-                        ? 'Lab offline — keep app.py running on the Netherlands PC with lab.env so this tablet can start tests.'
+                        ? 'Lab offline.'
                         : 'Connecting to the training lab…') : null,
                 // HEADER
                 React.createElement('div', { className: "simust-header" },

@@ -85,7 +85,7 @@ Write-Host "Building debug APK..."
 & "$Root\gradlew.bat" assembleDebug
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Gradle build failed. Keep this PC online so Gradle 9 can download."
-    Write-Host "If Studio asks for SDK Platform 35 or Build-Tools 36, accept it, then Build > Build APK(s)."
+    Write-Host "If Studio asks for SDK Platform 36 (Android 16) or Build-Tools 36, accept it, then Build > Build APK(s)."
     exit $LASTEXITCODE
 }
 
@@ -94,11 +94,14 @@ if (-not (Test-Path $apk)) {
     Write-Host "APK was not created at $apk"
     exit 1
 }
-$named = Join-Path $Root "SIMUST-2.2-debug.apk"
+$named = Join-Path $Root "SIMUST-2.3-debug.apk"
+$flip = Join-Path $Root "SIMUST-ZFlip6-2.3-debug.apk"
 Copy-Item $apk $named -Force
-Copy-Item $apk (Join-Path (Split-Path $apk) "SIMUST-2.2-debug.apk") -Force
+Copy-Item $apk $flip -Force
+Copy-Item $apk (Join-Path (Split-Path $apk) "SIMUST-2.3-debug.apk") -Force
 Write-Host "APK ready:"
 Write-Host "  $named"
+Write-Host "  $flip"
 Write-Host "  $apk"
 Write-Host "  (same file; Gradle always names the build app-debug.apk)"
 
@@ -122,10 +125,11 @@ You can also copy the APK to the tablet and open it:
 }
 
 Write-Host "Installing $apk"
+& $adb uninstall com.simust.playsmart | Out-Null
 & $adb install -r $apk
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host ""
-Write-Host "Installed. Open SIMUST Play Smart on the tablet."
+Write-Host "Installed. Open SIMUST on the Z Flip 6."
 Write-Host "Operator URL should stay: http://157.180.47.98/operator"
-Write-Host "Leave the Windows lab app.py running so Realtime Play works worldwide."
+Write-Host "Use the phone SIM or Wi-Fi. Leave the Windows lab app.py running."

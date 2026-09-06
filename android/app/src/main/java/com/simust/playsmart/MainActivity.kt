@@ -3,6 +3,7 @@ package com.simust.playsmart
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
@@ -74,7 +75,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.allowFileAccess = false
         settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.2"
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.3"
         applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {
@@ -132,6 +133,12 @@ class MainActivity : AppCompatActivity() {
 
         loadGui()
         statusHandler.post(statusTick)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyDisplayPrefs()
+        applyTextZoom()
     }
 
     override fun onResume() {

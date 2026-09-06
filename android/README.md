@@ -1,14 +1,27 @@
 # SIMUST Android app
 
-Tablet and phone console that uses the same operator UI as `index.html`. Works over the public internet — Wi‑Fi or tablet SIM data — from any country.
+Phone and tablet console that uses the same operator UI as `index.html`. Works over the public internet — Wi‑Fi or phone SIM data — from any country.
+
+## Galaxy Z Flip 6 (Android 16)
+
+This is the supported phone model for remote operator use.
+
+- Package: `com.simust.playsmart`
+- Version: **2.3** (versionCode 5)
+- Targets **Android 16** (API 36)
+- Uses the **phone internet** (SIM or Wi‑Fi). It does not need the lab Wi‑Fi.
+- Default operator URL: `http://157.180.47.98/operator`
+- Cover screen and inner screen both work. Rotation is auto.
+
+If a previous SIMUST APK would not install or would not open, uninstall that old app first, then install **2.3**. The earlier builds were missing the Kotlin plugin, so Android could not run the activity.
 
 ## Modes
 
-- **Public operator** (default): `http://157.180.47.98/operator` — sign in, press Realtime Play, watch live results. The Netherlands lab PC executes the test.
+- **Public operator** (default): `http://157.180.47.98/operator` — sign in, press Realtime Play, watch live results. The lab PC executes the test.
 - **Public player**: My SIMUST login and dashboard.
 - **Lab PC**: same Wi‑Fi as `app.py` only when you need a direct LAN link.
 
-## Tablet settings (adjustable)
+## Phone settings
 
 Open **Settings** in the app menu:
 
@@ -17,21 +30,29 @@ Open **Settings** in the app menu:
 - **Rotation**: auto, landscape, or portrait
 - Public host and lab PC address
 
-Pinch-zoom also works on the operator console. The toolbar shows whether the lab is online and whether the tablet is on **SIM / mobile data** or Wi‑Fi.
+Pinch-zoom also works on the operator console. The toolbar shows **Lab offline.** or Lab online, and whether the phone is on **SIM / mobile data** or Wi‑Fi.
 
-Default public host: `http://157.180.47.98`. Leave `app.py` running on the lab PC with `lab.env` so Realtime Play works worldwide.
+## Install on a Z Flip 6
 
-## Install on a real tablet
+Gradle writes:
 
-Gradle always writes:
+`android/app/build/outputs/apk/debug/app-debug.apk`
 
-`android\app\build\outputs\apk\debug\app-debug.apk`
+After `assembleDebug` a copy is also saved as:
 
-That **is** SIMUST 2.2. After `.\install-apk.bat` or `assembleDebug`, a copy is also saved as `android\SIMUST-2.2-debug.apk`.
+- `android/SIMUST-2.3-debug.apk`
+- `android/SIMUST-ZFlip6-2.3-debug.apk`
 
-Copy either file onto the tablet (USB, Drive, or email) and open it. Allow install from that source if Android asks.
+Copy either file onto the phone (USB, Drive, or email) and open it.
 
-Or with a USB cable and the SDK:
+1. Settings → Security → install unknown apps → allow the Files or Chrome app.
+2. Open the APK and tap Install.
+3. If Android says the app is already installed and conflicts, uninstall the old SIMUST first.
+4. Open SIMUST. Leave mode on **Public operator**.
+5. Turn on **mobile data or Wi‑Fi**. You do not need the lab network.
+6. Sign in and start Realtime Play. The public host talks to the lab.
+
+Or with a USB cable:
 
 ```powershell
 cd "C:\Users\siama\Documents\qr-based-sport-analyzer -sim"
@@ -40,7 +61,7 @@ cd android
 .\install-apk.bat
 ```
 
-On the tablet: Developer options → USB debugging ON. Wi‑Fi or SIM data both work. Operator URL should stay `http://157.180.47.98/operator`.
+On the phone: Developer options → USB debugging ON. Accept the RSA prompt.
 
 ## Windows lab PC
 
@@ -57,6 +78,8 @@ cd android
 ```
 
 If Gradle says only `What went wrong: 25.0.2`, pull again — this branch uses Gradle 9.3.1 for Android Studio’s Java 25.
+
+If Studio asks for **SDK Platform 36** (Android 16) or Build-Tools 36, accept it.
 
 ## Command-line build
 
