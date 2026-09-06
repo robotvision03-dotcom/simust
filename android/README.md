@@ -13,7 +13,7 @@ This is the supported phone model for remote operator use.
 - Default operator URL: `http://157.180.47.98/operator`
 - Cover screen and inner screen both work. Rotation is auto.
 
-If a previous SIMUST APK would not install or would not open, uninstall that old app first, then install **2.3**. The earlier builds were missing the Kotlin plugin, so Android could not run the activity.
+If a previous SIMUST APK would not install or would not open, uninstall that old app first, then install **2.3**. This project uses Android Gradle Plugin 9, which compiles Kotlin automatically. Build with Gradle 9.3.1 and SDK Platform 36.
 
 ## Modes
 
