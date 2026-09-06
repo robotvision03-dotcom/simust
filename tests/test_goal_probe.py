@@ -44,6 +44,7 @@ class GoalProbeCatalogTests(unittest.TestCase):
             for _ in range(len(rt.GOAL_PROBE_ZONES)):
                 sim.start_action("GOAL", ["8"])
                 seen.append(sim.probe_name)
+                self.assertEqual(sim.start_xy, (961.0, 82.0))
                 self.assertEqual(sim.intended, "correct")
                 self.assertGreaterEqual(sim.travel_s, 1.5)
             self.assertEqual(seen, list(rt.GOAL_PROBE_ZONES))

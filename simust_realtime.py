@@ -174,6 +174,11 @@ GOAL_CROSS_HORIZON_S = 1.4
 SUGGESTED_GOAL_HEIGHT_PX = 90  # probe marker only
 SUGGESTED_GOAL_LINE_SLACK_PX = 12
 GOAL_PROBE_TRAVEL_S = 1.9
+# Real send origin (far pitch, top of the camera). Screen 8 is the live pack.
+GOAL_SEND_ORIGIN = {
+    "8": (961.0, 82.0),
+    "1": (311.0, 103.0),
+}
 GOAL_PROBE_ZONES = (
     "line_center",
     "post_a",
@@ -190,6 +195,16 @@ GOAL_PROBE_ZONES = (
     "wide_a",
     "wide_b",
 )
+
+
+def goal_send_origin(screens):
+    """Where GOAL shots start. Live SF-30N is screen 8 → (961, 82)."""
+    ids = [str(s) for s in (screens or [])]
+    if "8" in ids:
+        return GOAL_SEND_ORIGIN["8"]
+    if "1" in ids:
+        return GOAL_SEND_ORIGIN["1"]
+    return GOAL_SEND_ORIGIN["8"]
 
 
 def goal_up_axis(p0, p1):
@@ -339,7 +354,10 @@ def first_goal_mouth_hit(positions, p0, p1):
 
 
 def left_goal_mouth(positions, p0, p1, after_t):
-    """True if the ball enters the mouth then goes back onto the pitch."""
+    """True if the ball enters the mouth then goes back out the far/top side.
+
+    Passing the bottom line toward the camera is a finish, not a come-back.
+    """
     if after_t is None or not positions:
         return False
     height = goal_mouth_height(p0, p1)
@@ -353,9 +371,9 @@ def left_goal_mouth(positions, p0, p1, after_t):
             away = 0
             continue
         _along_t, h, _w, _a, _u = goal_line_coords((x, y), p0, p1)
-        if seen and h < -20.0:
+        if seen and h > height + 16.0:
             away += 1
-            if away >= 3:
+            if away >= 2:
                 return True
     return False
 
@@ -1525,22 +1543,13 @@ class ArenaSimulator:
         # so late search can run; PASS/TARGET/PRESS stay on the home side so the
         # path never enters FINISH_DIST.
         if self.action == "GOAL":
+            origin = goal_send_origin(self.screens)
             self.miss_xy = self._perp_from_mid(78)
-            # Hold on the pitch, outside the mouth, so a late shot is not already in.
-            if self.line_p0 and self.line_p1:
-                up = goal_up_axis(self.line_p0, self.line_p1)
-                along, _w = goal_along_axis(self.line_p0, self.line_p1)
-                mid = self.target_xy
-                pitch = 160.0
-                self.late_hold_xy = self._clip(mid[0] - up[0] * pitch, mid[1] - up[1] * pitch)
-                self.late_start_xy = self._clip(
-                    self.late_hold_xy[0] + along[0] * 36.0,
-                    self.late_hold_xy[1] + along[1] * 36.0,
-                )
-            else:
-                self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=True)
+            # Late: stay near the send origin so the session never enters the mouth.
+            self.late_hold_xy = (origin[0] + 40.0, origin[1])
+            self.late_start_xy = origin
             self.goal_late_start_xy = self.late_start_xy
-            self.wrong_xy = self._offset_from_line(240)
+            self.wrong_xy = (origin[0] - 80.0, origin[1] + 10.0)
         else:
             self.miss_xy = self._offset_from_line(78)
             self.late_start_xy, self.late_hold_xy = self._late_local_pair(118.0, 44.0, goal=False)
@@ -1556,22 +1565,14 @@ class ArenaSimulator:
         if self.action == "GOAL" and self.line_p0 and self.line_p1:
             goal_screen = self.screens[0] if self.screens else "8"
             depth = arrival_depth_for(goal_screen, "GOAL")
-            if in_goal_area(self.BALL_HOME, self.line_p0, self.line_p1, depth):
-                self.start_xy = self._perp_from_mid(max(depth + 40.0, 110.0))
-            up = goal_up_axis(self.line_p0, self.line_p1)
-            mid = self.target_xy
-            self.start_xy = (mid[0] - up[0] * 150.0, mid[1] - up[1] * 150.0)
+            self.start_xy = goal_send_origin(self.screens)
             self.travel_s = GOAL_PROBE_TRAVEL_S
             if self.GOAL_PROBE:
                 name = GOAL_PROBE_ZONES[self.outcome_index % len(GOAL_PROBE_ZONES)]
                 self.outcome_index += 1
                 self.probe_name = name
                 self.target_xy = goal_probe_xy(self.line_p0, self.line_p1, name)
-                along_t, _h, _w, along, up = goal_line_coords(self.target_xy, self.line_p0, self.line_p1)
-                self.start_xy = (
-                    self.line_p0[0] + along[0] * along_t - up[0] * 150.0,
-                    self.line_p0[1] + along[1] * along_t - up[1] * 150.0,
-                )
+                self.start_xy = goal_send_origin(self.screens)
                 self.intended = "correct"
                 dist, proj_t, _, _ = compute_projection(self.target_xy, self.line_p0, self.line_p1)
                 now_in = in_goal_area(self.target_xy, self.line_p0, self.line_p1, depth)

@@ -77,12 +77,8 @@ def _travel(start, dest, arrive_s, hold_s, back=None, back_s=0.65, fps=25.0):
 
 
 def _outside_start(screen):
-    """Pitch-side start, in front of the goal (toward the camera)."""
-    line = rt.GOAL_LINES[screen]
-    p0, p1 = line["p0"], line["p1"]
-    up = rt.goal_up_axis(p0, p1)
-    mx, my = (p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0
-    return (mx - up[0] * 150.0, my - up[1] * 150.0)
+    """Real GOAL send origin for that screen."""
+    return rt.goal_send_origin([screen])
 
 
 def _beyond_post(p_end, p_other, extra=10.0):
@@ -188,22 +184,28 @@ class FinishingRuleTests(unittest.TestCase):
                 result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
                 self.assertEqual(result.get("Result"), "Correct", msg=(screen, name, result))
 
-    def test_goal_pitch_stay_is_wrong(self):
+    def test_goal_pass_through_line_toward_camera_is_correct(self):
+        """From the real origin, a shot that crosses the line and stops past it is a goal."""
         screen = "8"
         start = _outside_start(screen)
         p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
         dest = rt.goal_probe_xy(p0, p1, "outside_40")
         result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_goal_origin_sidestep_is_wrong(self):
+        """Stay near the send origin and never attack the line."""
+        start = rt.goal_send_origin(["8"])
+        dest = (start[0] - 80.0, start[1] + 10.0)
+        result = _analyze("GOAL", ["8"], _travel(start, dest, arrive_s=0.60, hold_s=2.4))
         self.assertEqual(result.get("Result"), "Wrong", msg=result)
 
-    def test_goal_wide_of_post_is_wrong(self):
-        screen = "8"
-        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
-        dest = rt.goal_probe_xy(p0, p1, "wide_a")
-        up = rt.goal_up_axis(p0, p1)
-        start = (dest[0] - up[0] * 150.0, dest[1] - up[1] * 150.0)
-        result = _analyze("GOAL", [screen], _travel(start, dest, arrive_s=0.70, hold_s=2.4))
-        self.assertEqual(result.get("Result"), "Wrong", msg=result)
+    def test_goal_send_origin_is_screen_8_live_point(self):
+        self.assertEqual(rt.goal_send_origin(["8"]), (961.0, 82.0))
+        self.assertEqual(rt.goal_send_origin(["1"]), (311.0, 103.0))
+        sim = rt.ArenaSimulator()
+        sim.start_action("GOAL", ["8"])
+        self.assertEqual(sim.start_xy, (961.0, 82.0))
 
     def test_goal_approach_dropout_is_correct(self):
         """Ball still heading through the mouth when detections stop."""
