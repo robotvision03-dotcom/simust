@@ -2475,7 +2475,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         def draw_text_inside_ring_on_pil(draw, center_x, center_y, lines, color=(255,255,255)):
             if not lines:
                 return
-            font_size = 36 if len(lines) > 1 else 42
+            font_size = 25 if len(lines) > 1 else 29
             font = get_segoe_font(font_size, bold=True)
             total_h = 0
             for line in lines:
@@ -2610,7 +2610,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac:.0f}%" if aac > 0 else "-"])
                     draw_metric_label(draw, "Accuracy", center_x, rect_y)
                 elif num == 4:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{total_distance:.1f} m" if total_distance > 0 else "-"])
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{total_distance:.0f}m" if total_distance > 0 else "-"])
                     draw_metric_label(draw, "Displacement", center_x, rect_y)
 
             footer = "SIMUST RESULTS – Analysis Complete"

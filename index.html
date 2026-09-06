@@ -1376,7 +1376,7 @@
                     'text-red-400') :
                 'text-gray-400';
             var aetDisplay = avgFinishingTime > 0 ? avgFinishingTime.toFixed(2) + 's' : '–';
-            var bdpDisplay = totalDistance > 0 ? totalDistance.toFixed(1) + ' m' : '–';
+            var bdpDisplay = totalDistance > 0 ? Math.round(totalDistance) + 'm' : '–';
             var avgDistPerAction = total > 0 ? (totalDistance / total) : 0;
             var avgDistDisplay = avgDistPerAction > 0 ? avgDistPerAction.toFixed(1) + ' m' : '–';
             var aeColor = avgAe >= 70 ? 'text-green-400' : avgAe >= 50 ? 'text-yellow-400' : 'text-red-400';
