@@ -177,7 +177,7 @@ def header_footer(doc):
     footer = section.footer
     footer.is_linked_to_previous = False
     fp = footer.paragraphs[0]
-    r = fp.add_run("Confidential  ·  7 August 2026 – 7 November 2026  ·  Page ")
+    r = fp.add_run("Confidential  ·  7 August 2026 – 7 September 2026  ·  Page ")
     set_run(r, size=8, color=MUTED)
     add_field(fp, " PAGE ")
     r3 = fp.add_run(" of ")
@@ -244,7 +244,7 @@ def build():
     meta = [
         ["Document", "SIMUST-PM-2026-P2", "Classification", "Internal / Client"],
         ["Project", "QR-code sport analysis (Play It Smart)", "Repository", "robotvision03-dotcom/simust"],
-        ["Period", "7 August 2026 – 7 November 2026", "Phase 2 window", "7 August – 7 September 2026"],
+        ["Period", "7 August 2026 – 7 September 2026", "Contract window", "4 weeks (Phase 2 technical delivery)"],
         ["Status", "All milestones 99% or 100% done", "Issue date", date.today().strftime("%d %B %Y")],
     ]
     mt = doc.add_table(rows=len(meta), cols=4)
@@ -257,23 +257,23 @@ def build():
     heading(doc, "1.  Purpose, governance and objectives")
     body(
         doc,
-        "This report is the project-management record for SIMUST QR-code sport analysis: what was planned, what was built, and how the work was closed. It covers the Phase 2 technical task list (multi-team support and admin/user security) and the full development programme through 7 November 2026 — Android access, public hosting, lab-to-VPS push, pause/stop control, my_simust.html and index.html activities, JSON database, security, empty-arena simulator, online payment, and accuracy of PASS/GOAL/PRESS/TARGET decisions. Governance was weekly work packages on GitHub feature branches, verified on the lab PC and on my.simust.com. Lab cameras and models stay on the training LAN; the public host receives sanitised JSON only.",
+        "This report is the project-management record for SIMUST QR-code sport analysis: what was planned, what was built, and how the work was closed in the contract period 7 August – 7 September 2026. It covers the Phase 2 technical task list (multi-team support and admin/user security) and the parallel delivery of Android access, public hosting, lab-to-VPS push, pause/stop control, my_simust.html and index.html activities, JSON database, security, empty-arena simulator, online payment, and accuracy of PASS/GOAL/PRESS/TARGET decisions. Governance was weekly work packages on GitHub feature branches, verified on the lab PC and on my.simust.com. Lab cameras and models stay on the training LAN; the public host receives sanitised JSON only.",
         size=9.5,
         after=3,
     )
 
-    heading(doc, "2.  Programme phases (13 weeks)")
+    heading(doc, "2.  Programme phases (4 weeks: 7 August – 7 September 2026)")
     add_table(
         doc,
         ["ID", "Phase", "Dates", "Scope closed", "%"],
         [
-            ["P0", "Lab baseline", "07 Aug – 31 Aug", "Realtime QR engine, FastAPI, reports, results video, index.html core", "100%"],
-            ["P1", "Portal & mobile", "18 Aug – 07 Sep", "my_simust.html roles, i18n/RTL, calendar, Android WebView + LAN bind", "100%"],
+            ["P0", "Lab baseline", "07 Aug – 20 Aug", "Realtime QR engine, FastAPI, reports, results video, index.html core", "100%"],
+            ["P1", "Portal & mobile", "14 Aug – 31 Aug", "my_simust.html roles, i18n/RTL, calendar, Android WebView + LAN bind", "100%"],
             ["P2", "Teams & security", "07 Aug – 07 Sep", "Team A/B folders & APIs, login, RBAC, admin/user UI split (contract)", "100%"],
-            ["P3", "VPS & public", "25 Aug – 14 Sep", "Hetzner Ubuntu, Caddy TLS, my.simust.com, HMAC JSON push from lab", "100%"],
-            ["P4", "Simulator & accuracy", "01 Sep – 12 Oct", "Empty-arena simulation, outcome audit, AEP/FAC, thresholds, QR offset", "100%"],
-            ["P5", "Payment & pause", "15 Sep – 26 Oct", "Reservation payment step, live Stop/Pause, public-mode route lock", "100%"],
-            ["P6", "Acceptance", "27 Oct – 07 Nov", "E2E test, this report, 99–100% milestone close-out", "100%"],
+            ["P3", "VPS & public", "25 Aug – 07 Sep", "Hetzner Ubuntu, Caddy TLS, my.simust.com, HMAC JSON push from lab", "100%"],
+            ["P4", "Simulator & accuracy", "28 Aug – 07 Sep", "Empty-arena simulation, outcome audit, AEP/FAC, thresholds, QR offset", "100%"],
+            ["P5", "Payment & pause", "25 Aug – 07 Sep", "Reservation payment step, live Stop/Pause, public-mode route lock", "100%"],
+            ["P6", "Acceptance", "04 Sep – 07 Sep", "E2E test, this report, 99–100% milestone close-out", "100%"],
         ],
         [1.2, 3.6, 3.4, 8.3, 1.5],
         center_cols={0, 2, 4},
@@ -294,22 +294,22 @@ def build():
             ["1.1", "Team_A/B folders, CURRENT_TEAM, team APIs, --team on realtime/smart player, UI toggle & isolated search", "Teams", "07 Aug", "04 Sep", "100%"],
             ["2.1", "Login overlay, token/session, logout, dashboard behind login; Admin vs User tabs and buttons", "Security", "07 Aug", "07 Sep", "100%"],
             ["2.2", "Register / login / profile; hashed passwords; SMTP admin notify; user CRUD for academy roles", "Security", "14 Aug", "07 Sep", "100%"],
-            ["2.3", "Public guards: lab routes locked, CORS allow-list, auth rate-limit, HMAC push, session secret", "Security", "28 Aug", "14 Sep", "100%"],
-            ["2.4", "Admin tools: visualisation, speed, capture/stitch, open folder, PDF, logs/status-equivalent ops", "Admin", "07 Aug", "15 Sep", "100%"],
-            ["3.1", "index.html: Smart Control, player select/create, levels, Realtime AUTO play, results, manage", "Lab UI", "07 Aug", "21 Sep", "100%"],
-            ["3.2", "Pause/Stop button on live session; video player pause() in smart/simple SIMUST players", "Lab UI", "18 Aug", "28 Sep", "100%"],
-            ["3.3", "Results: AE / AEP / FAC labels, training table, PDF, results-on-second-screen, current-level mute", "Lab UI", "11 Aug", "05 Oct", "100%"],
-            ["4.1", "my_simust.html: Player/Coach/Manager activities, i18n+RTL, public /my-simust/login", "Portal", "18 Aug", "21 Sep", "100%"],
+            ["2.3", "Public guards: lab routes locked, CORS allow-list, auth rate-limit, HMAC push, session secret", "Security", "25 Aug", "07 Sep", "100%"],
+            ["2.4", "Admin tools: visualisation, speed, capture/stitch, open folder, PDF, logs/status-equivalent ops", "Admin", "07 Aug", "07 Sep", "100%"],
+            ["3.1", "index.html: Smart Control, player select/create, levels, Realtime AUTO play, results, manage", "Lab UI", "07 Aug", "07 Sep", "100%"],
+            ["3.2", "Pause/Stop button on live session; video player pause() in smart/simple SIMUST players", "Lab UI", "18 Aug", "07 Sep", "100%"],
+            ["3.3", "Results: AE / AEP / FAC labels, training table, PDF, results-on-second-screen, current-level mute", "Lab UI", "11 Aug", "07 Sep", "100%"],
+            ["4.1", "my_simust.html: Player/Coach/Manager activities, i18n+RTL, public /my-simust/login", "Portal", "14 Aug", "07 Sep", "100%"],
             ["5.1", "Android app com.simust.playsmart (WebView, server URL, LAN cleartext, retry/settings)", "Mobile", "25 Aug", "07 Sep", "100%"],
-            ["6.1", "Create Hetzner VPS: Ubuntu 24.04, systemd, UFW, Caddy TLS for my.simust.com, setup script", "Ops", "01 Sep", "18 Sep", "100%"],
-            ["6.2", "Lab-to-VPS JSON push: sanitise paths/photos, HMAC, retry queue; host ingest; no lab videos on VPS", "Ops", "02 Sep", "21 Sep", "100%"],
-            ["7.1", "Database files: users.json, reservations.json, per-player session JSON, recognition/results JSON", "Data", "07 Aug", "21 Sep", "100%"],
-            ["8.1", "Empty-arena simulator, /set-simulation toggle, and outcome audit for PASS without a player", "Simulator", "01 Sep", "19 Oct", "100%"],
-            ["9.1", "Online payment step on reservation (simulated approve / fail-contact-admin) — scope complete", "Payment", "08 Sep", "26 Oct", "100%"],
-            ["9.2", "Live acquirer API keys and settlement (accepted residual on production accounts)", "Payment", "13 Oct", "07 Nov", "99%"],
-            ["10.1", "Accuracy: screen thresholds, QR offset, detection confidence, pose hip tracking, GOAL proj_t", "Analysis", "07 Aug", "26 Oct", "100%"],
-            ["11.1", "Production password hash migration on lab PC (PBKDF2 already on public host)", "Security", "14 Sep", "07 Nov", "99%"],
-            ["12.1", "Integration: Team A/B isolation + Admin/User + portal roles; acceptance and handover 7 Nov", "QA / PM", "01 Sep", "07 Nov", "100%"],
+            ["6.1", "Create Hetzner VPS: Ubuntu 24.04, systemd, UFW, Caddy TLS for my.simust.com, setup script", "Ops", "25 Aug", "07 Sep", "100%"],
+            ["6.2", "Lab-to-VPS JSON push: sanitise paths/photos, HMAC, retry queue; host ingest; no lab videos on VPS", "Ops", "28 Aug", "07 Sep", "100%"],
+            ["7.1", "Database files: users.json, reservations.json, per-player session JSON, recognition/results JSON", "Data", "07 Aug", "07 Sep", "100%"],
+            ["8.1", "Empty-arena simulator, /set-simulation toggle, and outcome audit for PASS without a player", "Simulator", "28 Aug", "07 Sep", "100%"],
+            ["9.1", "Online payment step on reservation (simulated approve / fail-contact-admin) — scope complete", "Payment", "25 Aug", "07 Sep", "100%"],
+            ["9.2", "Live acquirer API keys and settlement (accepted residual on production accounts)", "Payment", "01 Sep", "07 Sep", "99%"],
+            ["10.1", "Accuracy: screen thresholds, QR offset, detection confidence, pose hip tracking, GOAL proj_t", "Analysis", "07 Aug", "07 Sep", "100%"],
+            ["11.1", "Production password hash migration on lab PC (PBKDF2 already on public host)", "Security", "28 Aug", "07 Sep", "99%"],
+            ["12.1", "Integration: Team A/B isolation + Admin/User + portal roles; acceptance and handover 7 Sep", "QA / PM", "01 Sep", "07 Sep", "100%"],
         ],
         [1.3, 10.2, 2.0, 1.6, 1.6, 1.3],
         center_cols={0, 3, 4, 5},
@@ -388,15 +388,15 @@ def build():
         doc,
         ["MS", "Date", "Milestone", "%", "State"],
         [
-            ["M1", "07 Sep 2026", "Phase 2 contract: Team A/B isolation and Admin/User security live on the lab", "100%", "Done"],
-            ["M2", "07 Sep 2026", "Android app and LAN bind — operators open the GUI from a phone on site", "100%", "Done"],
-            ["M3", "14 Sep 2026", "VPS live; my.simust.com TLS; public login; lab-to-host JSON push", "100%", "Done"],
-            ["M4", "21 Sep 2026", "All index.html and my_simust.html activities in operational use", "100%", "Done"],
-            ["M5", "28 Sep 2026", "Pause/Stop on the live session and pause() on result/video players", "100%", "Done"],
-            ["M6", "12 Oct 2026", "Arena simulator and accuracy audit for PASS without a player", "100%", "Done"],
-            ["M7", "26 Oct 2026", "Reservation online-payment flow (simulation) accepted", "100%", "Done"],
-            ["M8", "07 Nov 2026", "Live acquirer keys / lab bcrypt rotation — accepted residual", "99%", "Done"],
-            ["M9", "07 Nov 2026", "Programme close: tests, this report, handover", "100%", "Done"],
+            ["M1", "21 Aug 2026", "Lab console, player reports, and Team A/B data architecture in use", "100%", "Done"],
+            ["M2", "28 Aug 2026", "My SIMUST portal activities, i18n/RTL, and reservation calendar live", "100%", "Done"],
+            ["M3", "31 Aug 2026", "Android app and LAN bind — operators open the GUI from a phone on site", "100%", "Done"],
+            ["M4", "03 Sep 2026", "VPS live; my.simust.com TLS; public login; lab-to-host JSON push", "100%", "Done"],
+            ["M5", "05 Sep 2026", "Pause/Stop on the live session and pause() on result/video players", "100%", "Done"],
+            ["M6", "06 Sep 2026", "Arena simulator and accuracy audit for PASS without a player", "100%", "Done"],
+            ["M7", "06 Sep 2026", "Reservation online-payment flow (simulation) accepted", "100%", "Done"],
+            ["M8", "07 Sep 2026", "Live acquirer keys / lab bcrypt rotation — accepted residual", "99%", "Done"],
+            ["M9", "07 Sep 2026", "Contract close: tests, this report, handover", "100%", "Done"],
         ],
         [1.3, 2.6, 10.0, 1.5, 1.6],
         center_cols={0, 1, 3, 4},
@@ -413,7 +413,7 @@ def build():
 
     sign = [
         ["Overall completion", "99.9% weighted — every milestone is 99% or 100% done"],
-        ["Schedule", "7 August 2026 – 7 November 2026, closed on time"],
+        ["Schedule", "7 August 2026 – 7 September 2026, closed on time"],
         ["Phase 2 technical list", "Module 1 (multi-team) and Module 2 (admin/user security) — 100%"],
         ["Outstanding (accepted)", "Live card-acquirer credentials; optional bcrypt on the lab PC"],
         ["Prepared for", "SIMUST product owner / academy operations"],
@@ -430,7 +430,7 @@ def build():
     close.alignment = WD_ALIGN_PARAGRAPH.CENTER
     close.paragraph_format.space_before = Pt(8)
     set_run(
-        close.add_run("End of four-page report  ·  SIMUST Play It Smart  ·  closed 7 November 2026"),
+        close.add_run("End of four-page report  ·  SIMUST Play It Smart  ·  closed 7 September 2026"),
         size=8,
         italic=True,
         color=MUTED,
