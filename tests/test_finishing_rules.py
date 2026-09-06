@@ -220,6 +220,25 @@ class FinishingRuleTests(unittest.TestCase):
         sim.start_action("GOAL", ["8"])
         self.assertEqual(sim.start_xy, (961.0, 82.0))
 
+    def test_goal_aims_rotate_corners_and_upper(self):
+        """Live GOAL shots must not all go to the line midpoint."""
+        sim = rt.ArenaSimulator()
+        seen_in = []
+        seen_out = []
+        targets = []
+        for _ in range(12):
+            sim.start_action("GOAL", ["8"])
+            targets.append(tuple(round(v, 1) for v in sim.target_xy))
+            if sim.intended in ("correct", "late"):
+                seen_in.append(sim.aim_name)
+            else:
+                seen_out.append(sim.aim_name)
+        self.assertGreaterEqual(len(set(targets)), 5)
+        self.assertTrue({"post_a", "post_b"} & set(seen_in))
+        self.assertIn("upper_center_40", seen_in)
+        self.assertTrue({"upper_center_90", "upper_corner_a", "upper_corner_b"} & set(seen_out))
+        self.assertNotEqual(seen_in[:4], ["line_center"] * len(seen_in[:4]))
+
     def test_goal_approach_dropout_is_correct(self):
         """Sparse detections that still enter the line + proj_t band stay Correct."""
         screen = "8"
@@ -260,6 +279,33 @@ class FinishingRuleTests(unittest.TestCase):
             self.assertTrue(sim.last_detected)
             depth = rt.arrival_depth_for("8", "GOAL")
             self.assertTrue(rt.in_goal_area(sim.last_ball, sim.line_p0, sim.line_p1, depth))
+        finally:
+            rt.time.time = prev_time
+
+    def test_target_physical_blur_and_dropouts_keep_scoring(self):
+        clock = audit.FakeClock(5000.0)
+        prev_time = rt.time.time
+        rt.time.time = clock.time
+        try:
+            sim = rt.ArenaSimulator()
+            sim.start_action("TARGET", ["9L"])
+            sim.intended = "correct"
+            misses = 0
+            detected = 0
+            max_blur = 0.0
+            for _ in range(50):
+                balls, _, _ = sim.step(rt.SIM_FRAME_WIDTH, rt.SIM_FRAME_HEIGHT)
+                max_blur = max(max_blur, sim.last_blur)
+                if balls:
+                    detected += 1
+                else:
+                    misses += 1
+                clock.advance(1.0 / 25.0)
+            self.assertGreater(detected, 10)
+            self.assertGreaterEqual(misses, 1)
+            self.assertGreater(max_blur, 1.5)
+            row = audit.run_case("TARGET", ["9L"], "correct", session_s=3.2, after_s=1.2)
+            self.assertEqual(row["actual"], "Correct", msg=row)
         finally:
             rt.time.time = prev_time
 

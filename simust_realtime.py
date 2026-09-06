@@ -189,6 +189,23 @@ GOAL_PROBE_ZONES = (
     "wide_a",
     "wide_b",
 )
+# Live GOAL aims: in-band finishes vs out-of-band misses. Never only the midpoint.
+GOAL_AIM_IN = (
+    "line_center",
+    "post_a",
+    "post_b",
+    "upper_center_40",
+    "outside_20",
+    "outside_40",
+    "wide_a",
+    "wide_b",
+)
+GOAL_AIM_OUT = (
+    "upper_center_90",
+    "upper_corner_a",
+    "upper_corner_b",
+    "sidestep",
+)
 
 
 def goal_send_origin(screens):
@@ -1373,10 +1390,11 @@ class ArenaSimulator:
                 come back toward the send origin.
       Late    — first reach the line after the session and do not come back.
       Wrong   — any other case (including a return toward the origin).
-    GOAL shots start at the real send origin and include physical camera facts:
-    the ball grows as it nears the camera, smears along its velocity, and YOLO
-    drops some fast/blurred frames. Passing the line toward the camera is a
-    finish. When GOAL_PROBE is True the ball walks slowly through named zones.
+    GOAL shots start at the real send origin and aim at rotating spots
+    (corners, up-center, up-corners, through the line) — not only the midpoint.
+    GOAL and TARGET include physical camera facts: the ball smears along its
+    velocity and YOLO drops some fast/blurred frames. GOAL also grows as it
+    nears the camera. PASS / PRESS stay crisp.
     """
 
     PLAYER_HOME = (280.0, 268.0)
@@ -1423,6 +1441,9 @@ class ArenaSimulator:
         self._miss_streak = 0
         self._goal_rng = random.Random(1808)
         self.goal_closeness = 0.0
+        self.aim_in_index = 0
+        self.aim_out_index = 0
+        self.aim_name = ""
 
     def start_action(self, action, screens):
         self.action = (action or "").upper()
@@ -1452,6 +1473,7 @@ class ArenaSimulator:
         self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
         self.start_xy = self.BALL_HOME
         self.probe_name = ""
+        self.aim_name = ""
         self.travel_s = 0.70
         self.last_step_ts = 0.0
         self._prev_ball = None
@@ -1472,6 +1494,7 @@ class ArenaSimulator:
                 name = GOAL_PROBE_ZONES[self.outcome_index % len(GOAL_PROBE_ZONES)]
                 self.outcome_index += 1
                 self.probe_name = name
+                self.aim_name = name
                 self.target_xy = goal_probe_xy(self.line_p0, self.line_p1, name)
                 self.start_xy = goal_send_origin(self.screens)
                 self.travel_s = GOAL_PROBE_TRAVEL_S
@@ -1483,6 +1506,22 @@ class ArenaSimulator:
                     f"dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
                 )
                 return
+            self.intended = self._next_outcome(self.action)
+            name, xy = self._next_goal_aim(self.intended)
+            self.aim_name = name
+            self.probe_name = name
+            self.target_xy = xy
+            if self.intended == "late":
+                self.late_finish_xy = xy
+            elif self.intended == "wrong":
+                self.wrong_xy = xy
+            dist, proj_t, _, _ = compute_projection(xy, self.line_p0, self.line_p1)
+            now_in = in_goal_area(xy, self.line_p0, self.line_p1, depth)
+            print(
+                f"  [SIM] GOAL → {self.screens} intended={self.intended.upper()} aim={name} "
+                f"target={xy} dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
+            )
+            return
         self.intended = self._next_outcome(self.action)
         print(
             f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
@@ -1517,6 +1556,22 @@ class ArenaSimulator:
         result = cycle[self.outcome_index % len(cycle)]
         self.outcome_index += 1
         return result
+
+    def _next_goal_aim(self, intended):
+        """Rotate GOAL destinations: corners / up-center / through, not only mid."""
+        if intended in ("correct", "late"):
+            name = GOAL_AIM_IN[self.aim_in_index % len(GOAL_AIM_IN)]
+            self.aim_in_index += 1
+        else:
+            name = GOAL_AIM_OUT[self.aim_out_index % len(GOAL_AIM_OUT)]
+            self.aim_out_index += 1
+        if name == "sidestep":
+            origin = goal_send_origin(self.screens)
+            return name, (origin[0] - 80.0, origin[1] + 10.0)
+        return name, goal_probe_xy(self.line_p0, self.line_p1, name)
+
+    def _uses_physical_ball(self):
+        return self.action in ("GOAL", "TARGET")
 
     def _line_target(self, screens):
         for screen in screens:
@@ -1859,8 +1914,21 @@ class ArenaSimulator:
         along = ((x - ox) * (mx - ox) + (y - oy) * (my - oy)) / (span * span)
         return max(0.0, min(1.45, along))
 
-    def _goal_should_detect(self, closeness, speed, blur, x, y):
-        """YOLO-style dropouts: fast + close + smeared balls are often missed."""
+    def _shot_closeness(self, x, y):
+        """0 at the shot origin, 1 at this action's target."""
+        if self.action == "GOAL":
+            return self._goal_closeness(x, y)
+        origin = self.start_xy or self.BALL_HOME
+        dest = self.target_xy or origin
+        ox, oy = origin
+        span = math.hypot(dest[0] - ox, dest[1] - oy) or 1.0
+        along = ((x - ox) * (dest[0] - ox) + (y - oy) * (dest[1] - oy)) / (span * span)
+        return max(0.0, min(1.15, along))
+
+    def _physical_should_detect(self, closeness, speed, blur, x, y):
+        """YOLO-style dropouts: fast + smeared balls are often missed."""
+        if self.action == "TARGET" and (closeness >= 0.86 or closeness <= 0.12):
+            return True
         if closeness < 0.14 or speed < 48.0:
             return True
         if x < 18 or y < 18 or x > SIM_FRAME_WIDTH - 18 or y > SIM_FRAME_HEIGHT - 18:
@@ -1901,14 +1969,19 @@ class ArenaSimulator:
         radius = 9.0
         blur = 0.0
         detected = True
-        if self.action == "GOAL":
-            closeness = self._goal_closeness(bx, by)
-            # Far pitch is a few pixels; near the camera the ball is a bit bigger.
-            radius = 5.0 + 11.0 * min(1.0, closeness) + 3.0 * max(0.0, closeness - 1.0)
+        if self._uses_physical_ball():
+            closeness = self._shot_closeness(bx, by)
+            if self.action == "GOAL":
+                radius = 5.0 + 11.0 * min(1.0, closeness) + 3.0 * max(0.0, closeness - 1.0)
+            else:
+                radius = 6.0 + 6.0 * min(1.0, closeness)
             speed = math.hypot(vx, vy)
-            # Indoor exposure ~1/80s. Apparent smear grows with closeness.
-            blur = min(42.0, speed * (1.0 / 80.0) * (0.75 + 1.55 * closeness) + radius * 0.35 * min(1.0, speed / 220.0))
-            detected = self._goal_should_detect(closeness, speed, blur, bx, by)
+            blur = min(
+                42.0,
+                speed * (1.0 / 80.0) * (0.75 + 1.55 * min(1.0, closeness))
+                + radius * 0.35 * min(1.0, speed / 220.0),
+            )
+            detected = self._physical_should_detect(closeness, speed, blur, bx, by)
             self._miss_streak = 0 if detected else (self._miss_streak + 1)
         self.last_ball_radius = radius
         self.last_blur = blur
@@ -1929,7 +2002,7 @@ class ArenaSimulator:
         stretch = max(0, int(blur * 0.45 * min(sx, sy)))
         balls = []
         if detected:
-            conf = 0.96 if self.action != "GOAL" else max(0.28, 0.94 - 0.035 * blur)
+            conf = 0.96 if not self._uses_physical_ball() else max(0.28, 0.94 - 0.035 * blur)
             balls.append({
                 "center": [bx_s, by_s],
                 "bbox": [bx_s - r_box - stretch, by_s - r_box, bx_s + r_box + stretch, by_s + r_box],
@@ -1951,27 +2024,28 @@ class ArenaSimulator:
             cv2.rectangle(overlay, (x1, y1), (x2, y2), (40, 180, 80), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
             cv2.ellipse(frame, ((x1 + x2) // 2, y1 + 16), (12, 14), 0, 0, 360, (20, 220, 90), -1)
-        if self.action == "GOAL":
-            frame = self._draw_goal_physical_ball(frame)
+        if self._uses_physical_ball():
+            frame = self._draw_physical_ball(frame)
         else:
             for ball in balls:
                 cx, cy = ball["center"]
                 cv2.circle(frame, (cx, cy), 11, (0, 0, 0), -1)
                 cv2.circle(frame, (cx, cy), 9, (255, 255, 255), -1)
                 cv2.circle(frame, (cx, cy), 9, (0, 140, 255), 2)
-        if self.probe_name and (self.active or self.hold_finish) and self.line_p0 and self.line_p1:
+        if self.action == "GOAL" and self.aim_name and (self.active or self.late_phase or self.hold_finish) and self.line_p0 and self.line_p1:
             dist, proj_t, _, _ = compute_projection(self.last_ball, self.line_p0, self.line_p1)
             screen = self.screens[0] if self.screens else "8"
             depth = arrival_depth_for(screen, "GOAL")
             now_in = in_goal_area(self.last_ball, self.line_p0, self.line_p1, depth)
-            label = (
-                f"GOAL PROBE {self.probe_name}  dist={dist:.1f} proj_t={proj_t:.2f} "
-                f"band={'IN' if now_in else 'OUT'}"
-            )
-        elif self.action == "GOAL" and (self.active or self.late_phase or self.hold_finish):
             det = "DET" if self.last_detected else "MISS"
             label = (
-                f"ARENA SIM  {self.intended.upper()}  r={self.last_ball_radius:.0f} "
+                f"GOAL AIM {self.aim_name}  {self.intended.upper()}  dist={dist:.1f} "
+                f"proj_t={proj_t:.2f} band={'IN' if now_in else 'OUT'} {det}"
+            )
+        elif self._uses_physical_ball() and (self.active or self.late_phase or self.hold_finish):
+            det = "DET" if self.last_detected else "MISS"
+            label = (
+                f"ARENA SIM  {self.action} {self.intended.upper()}  r={self.last_ball_radius:.0f} "
                 f"blur={self.last_blur:.0f} {det}"
             )
         elif self.active or self.late_phase:
@@ -1982,7 +2056,7 @@ class ArenaSimulator:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 220, 255), 2)
         return frame
 
-    def _draw_goal_physical_ball(self, frame):
+    def _draw_physical_ball(self, frame):
         """True ball with perspective size and a velocity smear, even on miss frames."""
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)

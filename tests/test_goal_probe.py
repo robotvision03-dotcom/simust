@@ -36,6 +36,18 @@ class GoalProbeCatalogTests(unittest.TestCase):
         self.assertFalse(rt.in_goal_area(upper, p0, p1, depth))
         self.assertFalse(rt.in_goal_area(far, p0, p1, depth))
 
+    def test_live_aim_lists_cover_corners_and_upper(self):
+        self.assertIn("post_a", rt.GOAL_AIM_IN)
+        self.assertIn("post_b", rt.GOAL_AIM_IN)
+        self.assertIn("upper_center_40", rt.GOAL_AIM_IN)
+        self.assertIn("upper_center_90", rt.GOAL_AIM_OUT)
+        self.assertIn("upper_corner_a", rt.GOAL_AIM_OUT)
+        p0, p1 = rt.GOAL_LINES["8"]["p0"], rt.GOAL_LINES["8"]["p1"]
+        depth = rt.arrival_depth_for("8", "GOAL")
+        for name in rt.GOAL_AIM_IN:
+            xy = rt.goal_probe_xy(p0, p1, name)
+            self.assertTrue(rt.in_goal_area(xy, p0, p1, depth), msg=name)
+
     def test_probe_cycles_named_zones_and_does_not_change_scoring_api(self):
         prev = rt.ArenaSimulator.GOAL_PROBE
         rt.ArenaSimulator.GOAL_PROBE = True
