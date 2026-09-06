@@ -220,6 +220,18 @@ class FinishingRuleTests(unittest.TestCase):
         sim.start_action("GOAL", ["8"])
         self.assertEqual(sim.start_xy, (961.0, 82.0))
 
+    def test_target_6l_6r_9l_9r_start_from_screen8_origin(self):
+        origin = (961.0, 82.0)
+        for screens in (["6L"], ["6R"], ["9L"], ["9R"]):
+            sim = rt.ArenaSimulator()
+            sim.start_action("TARGET", screens)
+            self.assertEqual(sim.start_xy, origin, msg=screens)
+            self.assertEqual(rt.target_send_origin(screens), origin)
+            self.assertIsNotNone(sim.line_p0)
+        other = rt.ArenaSimulator()
+        other.start_action("TARGET", ["2"])
+        self.assertEqual(other.start_xy, rt.ArenaSimulator.BALL_HOME)
+
     def test_goal_aims_rotate_corners_and_upper(self):
         """Live GOAL shots must not all go to the line midpoint."""
         sim = rt.ArenaSimulator()

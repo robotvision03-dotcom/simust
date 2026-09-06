@@ -173,6 +173,8 @@ GOAL_SEND_ORIGIN = {
     "8": (961.0, 82.0),
     "1": (311.0, 103.0),
 }
+# TARGET 6L/6R/9L/9R start from the same far-pitch point as GOAL screen 8.
+TARGET_FROM_SCREEN8_ORIGIN = frozenset({"6L", "6R", "9L", "9R"})
 GOAL_PROBE_ZONES = (
     "line_center",
     "post_a",
@@ -216,6 +218,20 @@ def goal_send_origin(screens):
     if "1" in ids:
         return GOAL_SEND_ORIGIN["1"]
     return GOAL_SEND_ORIGIN["8"]
+
+
+def target_uses_screen8_origin(screens):
+    for screen in screens or []:
+        if str(screen).strip().upper() in TARGET_FROM_SCREEN8_ORIGIN:
+            return True
+    return False
+
+
+def target_send_origin(screens):
+    """TARGET 6L/6R/9L/9R launch from the GOAL screen-8 origin (961, 82)."""
+    if target_uses_screen8_origin(screens):
+        return GOAL_SEND_ORIGIN["8"]
+    return None
 
 
 def goal_up_axis(p0, p1):
@@ -1472,6 +1488,14 @@ class ArenaSimulator:
         self.late_finish_xy = self._closest_screen_mid(self.late_hold_xy)
         self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
         self.start_xy = self.BALL_HOME
+        if self.action == "TARGET" and target_uses_screen8_origin(self.screens):
+            origin = target_send_origin(self.screens)
+            self.start_xy = origin
+            self.late_start_xy = origin
+            self.late_hold_xy = (origin[0] + 40.0, origin[1])
+            self.wrong_xy = (origin[0] - 80.0, origin[1] + 10.0)
+            self.late_finish_xy = self._closest_screen_mid(origin)
+            self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
         self.probe_name = ""
         self.aim_name = ""
         self.travel_s = 0.70
@@ -1525,7 +1549,8 @@ class ArenaSimulator:
         self.intended = self._next_outcome(self.action)
         print(
             f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
-            f"target={self.target_xy} late_hold={self.late_hold_xy} wrong={self.wrong_xy}"
+            f"start={self.start_xy} target={self.target_xy} "
+            f"late_hold={self.late_hold_xy} wrong={self.wrong_xy}"
         )
 
     def end_action(self):
@@ -1575,10 +1600,9 @@ class ArenaSimulator:
 
     def _line_target(self, screens):
         for screen in screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            p0, p1 = get_screen_info(screen, GOAL_LINES)
+            if p0 is None:
                 continue
-            p0, p1 = line["p0"], line["p1"]
             mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
             return mid, p0, p1
         return (640.0, 280.0), (600.0, 280.0), (680.0, 280.0)
@@ -1586,10 +1610,10 @@ class ArenaSimulator:
     def _min_dist_to_screens(self, pt):
         best = float("inf")
         for screen in self.screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            p0, p1 = get_screen_info(screen, GOAL_LINES)
+            if p0 is None:
                 continue
-            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            d, _ = get_effective_distance(pt, p0, p1)
             if d < best:
                 best = d
         return best
@@ -1606,11 +1630,10 @@ class ArenaSimulator:
         samples = [(220.0, 200.0), (400.0, 140.0), (180.0, 310.0), (450.0, 250.0),
                    (350.0, 180.0), (250.0, 120.0), (500.0, 300.0), (320.0, 220.0)]
         for screen in self.screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            p0, p1 = get_screen_info(screen, GOAL_LINES)
+            if p0 is None:
                 continue
-            self.line_p0, self.line_p1 = line["p0"], line["p1"]
-            p0, p1 = line["p0"], line["p1"]
+            self.line_p0, self.line_p1 = p0, p1
             self.target_xy = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
             samples.append(self._offset_from_line(min_clearance))
             samples.append(self._offset_from_line(min_clearance + 70))
@@ -1634,13 +1657,12 @@ class ArenaSimulator:
         best_mid = self.target_xy
         best_d = float("inf")
         for screen in self.screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            p0, p1 = get_screen_info(screen, GOAL_LINES)
+            if p0 is None:
                 continue
-            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            d, _ = get_effective_distance(pt, p0, p1)
             if d < best_d:
                 best_d = d
-                p0, p1 = line["p0"], line["p1"]
                 best_mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
         return best_mid
 
@@ -1649,15 +1671,15 @@ class ArenaSimulator:
         nearest = None
         nearest_d = float("inf")
         for screen in self.screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            cand0, cand1 = get_screen_info(screen, GOAL_LINES)
+            if cand0 is None:
                 continue
-            d, _ = get_effective_distance(pt, line["p0"], line["p1"])
+            d, _ = get_effective_distance(pt, cand0, cand1)
             if d < nearest_d:
                 nearest_d = d
-                nearest = line
+                nearest = (cand0, cand1)
         if nearest:
-            p0, p1 = nearest["p0"], nearest["p1"]
+            p0, p1 = nearest
         if not p0 or not p1:
             return self._clip(pt[0] + span, pt[1])
         tx, ty = p1[0] - p0[0], p1[1] - p0[1]
@@ -1675,18 +1697,18 @@ class ArenaSimulator:
         nearest = None
         nearest_d = float("inf")
         for screen in self.screens:
-            line = GOAL_LINES.get(str(screen))
-            if not line:
+            p0, p1 = get_screen_info(screen, GOAL_LINES)
+            if p0 is None:
                 continue
-            d, _ = get_effective_distance(home, line["p0"], line["p1"])
+            d, _ = get_effective_distance(home, p0, p1)
             if d < nearest_d:
                 nearest_d = d
-                nearest = line
+                nearest = (p0, p1)
         if not nearest:
             return home
         saved = (self.line_p0, self.line_p1, self.target_xy)
-        self.line_p0, self.line_p1 = nearest["p0"], nearest["p1"]
-        p0, p1 = nearest["p0"], nearest["p1"]
+        self.line_p0, self.line_p1 = nearest
+        p0, p1 = nearest
         self.target_xy = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
         chosen = home
         for dist in range(int(clearance), 280, 6):
@@ -1857,10 +1879,11 @@ class ArenaSimulator:
                     px, py = self._lerp(target, self.PLAYER_HOME, min(1.0, (t - 0.70) / 0.65))
                 bx, by = px + 16, py + 10
                 return bx, by, px, py
+            origin = self.start_xy or self.BALL_HOME
             if t <= 0.70:
-                bx, by = self._lerp(self.BALL_HOME, target, t / 0.70)
+                bx, by = self._lerp(origin, target, t / 0.70)
             else:
-                bx, by = self._lerp(target, self.BALL_HOME, min(1.0, (t - 0.70) / 0.65))
+                bx, by = self._lerp(target, origin, min(1.0, (t - 0.70) / 0.65))
             px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
             return bx, by, px, py
 
