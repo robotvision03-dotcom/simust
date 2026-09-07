@@ -1008,13 +1008,16 @@ def compute_total_player_distance(all_data: List[dict], sample_step: int = 4) ->
     if len(all_positions) < 2:
         return 0.0
     all_positions.sort(key=lambda p: p[0])
-    total_dist_px = 0.0
-    for i in range(1, len(all_positions)):
-        _, x1, y1 = all_positions[i-1]
-        _, x2, y2 = all_positions[i]
-        total_dist_px += math.hypot(x2 - x1, y2 - y1)
-    total_dist_meters = total_dist_px * PIXEL_TO_METER_SCALE
-    return total_dist_meters
+    try:
+        import simust_homography
+        return simust_homography.path_distance_meters(all_positions, fallback_m_per_px=PIXEL_TO_METER_SCALE)
+    except Exception:
+        total_dist_px = 0.0
+        for i in range(1, len(all_positions)):
+            _, x1, y1 = all_positions[i-1]
+            _, x2, y2 = all_positions[i]
+            total_dist_px += math.hypot(x2 - x1, y2 - y1)
+        return total_dist_px * PIXEL_TO_METER_SCALE
 
 def main():
     # Goal lines for 1280x360

@@ -68,6 +68,7 @@ LAB_ONLY_PREFIXES = (
     "/create-pdf-report",
     "/delete-player-report",
     "/stop-realtime-camera",
+    "/homography",
 )
 
 
@@ -256,7 +257,10 @@ def can_access_player(viewer: Optional[Dict[str, Any]], player_id: str, player_m
 
 
 def is_lab_only_path(path: str) -> bool:
-    return any(path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "-") for prefix in LAB_ONLY_PREFIXES)
+    normalized = (path or "").rstrip("/") or "/"
+    if normalized == "/homography/status":
+        return False
+    return any(normalized == prefix or normalized.startswith(prefix + "/") or normalized.startswith(prefix + "-") for prefix in LAB_ONLY_PREFIXES)
 
 
 def public_user_view(username: str, user: Dict[str, Any]) -> Dict[str, Any]:

@@ -78,6 +78,15 @@
         .clear-selection-btn { background: #1a2d4a; color: var(--red); border: 1px solid var(--line); padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; transition: 0.2s; }
         .clear-selection-btn:hover { background: #2a3d5a; }
         .refresh-btn { background: #07111f; padding: 6px 14px; border-radius: 6px; font-size: 11px; cursor: pointer; border: 1px solid var(--line); color: #dce7f5; font-weight: 700; transition: 0.2s; }
+        .calib-status { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; font-size: 13px; letter-spacing: 0.04em; }
+        .calib-ok { color: var(--green); }
+        .calib-bad { color: #f59e0b; }
+        .calib-stage { position: relative; display: inline-block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #040b14; }
+        .calib-stage img { display: block; max-width: 100%; height: auto; cursor: crosshair; user-select: none; }
+        .calib-dot { position: absolute; width: 16px; height: 16px; margin-left: -8px; margin-top: -8px; border-radius: 50%; background: #e74c3c; border: 2px solid #fff; pointer-events: none; }
+        .calib-dot span { position: absolute; left: 18px; top: -4px; color: #fff; font-size: 11px; font-weight: 800; text-shadow: 0 1px 3px #000; white-space: nowrap; }
+        .calib-test { position: absolute; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border-radius: 50%; background: #276ce5; border: 2px solid #fff; pointer-events: none; }
+        .homography-table input { width: 88px; background: #07111f; border: 1px solid var(--line); color: #fff; border-radius: 4px; padding: 6px 8px; }
         .refresh-btn:hover { border-color: var(--gold); color: var(--gold-light); }
         .auto-badge { background: var(--green); color: #07111f; border-radius: 6px; padding: 2px 8px; font-size: 10px; font-weight: 800; margin-inline-start: 8px; animation: pulse 1s infinite; }
         .metric-ring { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 14px 10px 10px 10px; text-align: center; transition: background 0.15s; display: flex; flex-direction: column; align-items: center; }
@@ -338,13 +347,19 @@
                 'unlock-level': true,
                 'lock-level': true,
                 'save-session-to-player': true,
-                'sync-live-to-host': true
+                'sync-live-to-host': true,
+                'homography/capture': true,
+                'homography/compute': true,
+                'homography/save': true,
+                'homography/reset': true,
+                'homography/test': true
             };
             var labGet = {
                 'playback-status': true,
                 'realtime-results': true,
                 'results': true,
-                'get-levels': true
+                'get-levels': true,
+                'homography/status': true
             };
             axios.interceptors.request.use(function(config) {
                 if (window.SIMUST_PUBLIC && window.SIMUST_TOKEN) {
@@ -367,11 +382,15 @@
                 }
                 var method = String(config.method || 'get').toLowerCase();
                 if (method === 'post' && labPost[name]) {
+                    var action = name;
+                    if (name.indexOf('homography/') === 0) {
+                        action = 'homography-' + name.slice('homography/'.length);
+                    }
                     config.url = '/remote/command';
-                    config.data = { action: name, payload: config.data || {} };
+                    config.data = { action: action, payload: config.data || {} };
                 } else if (method === 'get' && labGet[name]) {
                     config.url = '/remote/status';
-                    config._simustStatusKey = name;
+                    config._simustStatusKey = name === 'homography/status' ? 'homography' : name;
                 }
                 return config;
             });
@@ -1478,6 +1497,452 @@
                     )
                 ) :
                 null
+            );
+        };
+
+        // =====================================================================
+        // ADMIN SETTINGS – HOMOGRAPHY CALIBRATION
+        // =====================================================================
+        var HomographyCalibration = function() {
+            var camerasState = useState([]);
+            var cameras = camerasState[0];
+            var setCameras = camerasState[1];
+            var selectedState = useState('');
+            var selected = selectedState[0];
+            var setSelected = selectedState[1];
+            var calState = useState(null);
+            var calibration = calState[0];
+            var setCalibration = calState[1];
+            var frameUrlState = useState('');
+            var frameUrl = frameUrlState[0];
+            var setFrameUrl = frameUrlState[1];
+            var sizeState = useState({ w: 0, h: 0 });
+            var imageSize = sizeState[0];
+            var setImageSize = sizeState[1];
+            var pairsState = useState([]);
+            var pairs = pairsState[0];
+            var setPairs = pairsState[1];
+            var pendingState = useState(null);
+            var pendingA = pendingState[0];
+            var setPendingA = pendingState[1];
+            var testModeState = useState(false);
+            var testMode = testModeState[0];
+            var setTestMode = testModeState[1];
+            var testHitState = useState(null);
+            var testHit = testHitState[0];
+            var setTestHit = testHitState[1];
+            var msgState = useState('');
+            var message = msgState[0];
+            var setMessage = msgState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var imgRef = useRef(null);
+
+            var restorePairs = function(rec) {
+                if (rec && rec.pairs && rec.pairs.length) {
+                    return rec.pairs.map(function(p) {
+                        return {
+                            a: { u: p.a.u, v: p.a.v },
+                            b: { u: p.b.u, v: p.b.v },
+                            distance: p.distance
+                        };
+                    });
+                }
+                return [];
+            };
+
+            var applyStatus = function(list, cameraName) {
+                setCameras(list || []);
+                var name = cameraName || selected || (list && list[0] && list[0].camera) || '';
+                if (!name) return;
+                setSelected(name);
+                var rec = (list || []).find(function(c) { return c.camera === name; }) || null;
+                setCalibration(rec);
+                var restored = restorePairs(rec);
+                if (restored.length) {
+                    setPairs(restored);
+                    setPendingA(null);
+                    if (!window.SIMUST_PUBLIC) {
+                        setFrameUrl('/homography/saved-frame/' + encodeURIComponent(name) + '?t=' + Date.now());
+                    }
+                }
+            };
+
+            var loadStatus = function(cameraName) {
+                axios.get('/homography/status').then(function(res) {
+                    var data = res.data || {};
+                    var list = data.cameras || [];
+                    applyStatus(list, cameraName);
+                    var name = cameraName || selected || (list[0] && list[0].camera) || '';
+                    var frame = (data.frames || {})[name];
+                    if (frame && frame.data_url) {
+                        setFrameUrl(frame.data_url);
+                        if (frame.width && frame.height) setImageSize({ w: frame.width, h: frame.height });
+                    }
+                }).catch(function() {});
+            };
+
+            useEffect(function() {
+                loadStatus();
+            }, []);
+
+            var currentStatus = function() {
+                var rec = (cameras || []).find(function(c) { return c.camera === selected; }) || calibration;
+                return rec && rec.calibrated ? 'Calibrated' : 'Not Calibrated';
+            };
+
+            var captureFrame = function() {
+                if (!selected) return;
+                setBusy(true);
+                setTestHit(null);
+                if (window.SIMUST_PUBLIC) {
+                    setMessage('Asking the training lab to capture this camera…');
+                    var started = Date.now();
+                    axios.post('/homography/capture', { camera: selected }).then(function() {
+                        var poll = function() {
+                            axios.get('/homography/status').then(function(res) {
+                                var data = res.data || {};
+                                applyStatus(data.cameras || [], selected);
+                                var frame = (data.frames || {})[selected];
+                                var fresh = frame && frame.data_url && (!frame.captured_at || (frame.captured_at * 1000) >= started - 8000);
+                                if (fresh) {
+                                    setFrameUrl(frame.data_url);
+                                    if (frame.width && frame.height) setImageSize({ w: frame.width, h: frame.height });
+                                    setMessage('Click Point A, then Point B on the ground. Enter the real-world distance between them (example: 5.0 metres). Add at least two pairs.');
+                                    setBusy(false);
+                                    return;
+                                }
+                                if (Date.now() - started > 22000) {
+                                    setMessage('Lab did not return a camera frame. Check that the training PC is online.');
+                                    setBusy(false);
+                                    return;
+                                }
+                                setTimeout(poll, 1000);
+                            }).catch(function(e) {
+                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not read lab calibration status');
+                                setBusy(false);
+                            });
+                        };
+                        setTimeout(poll, 900);
+                    }).catch(function(e) {
+                        setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not request a lab camera frame');
+                        setBusy(false);
+                    });
+                    return;
+                }
+                setMessage('Capturing camera frame at tracking resolution…');
+                axios.get('/homography/frame/' + encodeURIComponent(selected), { responseType: 'blob' }).then(function(res) {
+                    var url = URL.createObjectURL(res.data);
+                    setFrameUrl(url);
+                    var w = parseInt(res.headers['x-image-width'] || '0', 10);
+                    var h = parseInt(res.headers['x-image-height'] || '0', 10);
+                    if (w && h) setImageSize({ w: w, h: h });
+                    setMessage('Click Point A, then Point B on the ground. Enter the real-world distance between them (example: 5.0 metres). Add at least two pairs.');
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not capture camera frame');
+                }).finally(function() { setBusy(false); });
+            };
+
+            var loadSavedFrame = function() {
+                if (!selected) return;
+                if (window.SIMUST_PUBLIC) {
+                    axios.get('/homography/status').then(function(res) {
+                        var frame = ((res.data || {}).frames || {})[selected];
+                        if (frame && frame.data_url) {
+                            setFrameUrl(frame.data_url);
+                            if (frame.width && frame.height) setImageSize({ w: frame.width, h: frame.height });
+                        }
+                    }).catch(function() {});
+                    return;
+                }
+                setFrameUrl('/homography/saved-frame/' + encodeURIComponent(selected) + '?t=' + Date.now());
+            };
+
+            var eventToImage = function(ev) {
+                var img = imgRef.current;
+                if (!img || !img.naturalWidth) return null;
+                var rect = img.getBoundingClientRect();
+                var x = (ev.clientX - rect.left) * (img.naturalWidth / rect.width);
+                var y = (ev.clientY - rect.top) * (img.naturalHeight / rect.height);
+                return { u: Math.round(x * 10) / 10, v: Math.round(y * 10) / 10 };
+            };
+
+            var onImageClick = function(ev) {
+                var pt = eventToImage(ev);
+                if (!pt) return;
+                if (testMode) {
+                    axios.post('/homography/test', { camera: selected, u: pt.u, v: pt.v }).then(function(res) {
+                        if (res.data && res.data.status === 'queued') {
+                            var started = Date.now();
+                            var poll = function() {
+                                axios.get('/homography/status').then(function(st) {
+                                    var last = ((st.data || {}).last_test || {})[selected];
+                                    if (last && Number(last.u) === pt.u && Number(last.v) === pt.v) {
+                                        setTestHit({ u: pt.u, v: pt.v, x: last.x, y: last.y });
+                                        setMessage('Test: (' + pt.u.toFixed(0) + ', ' + pt.v.toFixed(0) + ') px → (' +
+                                            Number(last.x).toFixed(2) + ', ' + Number(last.y).toFixed(2) + ') m');
+                                        return;
+                                    }
+                                    if (Date.now() - started > 12000) {
+                                        setMessage('Test sent to the lab. Status updates when the training PC is online.');
+                                        return;
+                                    }
+                                    setTimeout(poll, 800);
+                                }).catch(function() {
+                                    setMessage('Could not read lab test result');
+                                });
+                            };
+                            setTimeout(poll, 900);
+                            return;
+                        }
+                        setTestHit({ u: pt.u, v: pt.v, x: res.data.x, y: res.data.y });
+                        setMessage('Test: (' + pt.u.toFixed(0) + ', ' + pt.v.toFixed(0) + ') px → (' +
+                            res.data.x.toFixed(2) + ', ' + res.data.y.toFixed(2) + ') m');
+                    }).catch(function(e) {
+                        setMessage((e.response && e.response.data && e.response.data.detail) || 'Test failed');
+                    });
+                    return;
+                }
+                if (!pendingA) {
+                    setPendingA(pt);
+                    setMessage('Point A: (' + pt.u.toFixed(1) + ', ' + pt.v.toFixed(1) + '). Now click Point B.');
+                    return;
+                }
+                setPairs(pairs.concat([{ a: pendingA, b: pt, distance: '' }]));
+                setPendingA(null);
+                setMessage('Pair ' + (pairs.length + 1) + ' added. Enter the real-world distance in metres, then click the next pair if needed.');
+            };
+
+            var updateDistance = function(idx, value) {
+                setPairs(pairs.map(function(p, i) {
+                    if (i !== idx) return p;
+                    return Object.assign({}, p, { distance: value });
+                }));
+            };
+
+            var removePair = function(idx) {
+                setPairs(pairs.filter(function(_, i) { return i !== idx; }));
+            };
+
+            var readyPairs = function() {
+                return pairs.filter(function(p) { return p.a && p.b && Number(p.distance) > 0; });
+            };
+
+            var payloadPairs = function() {
+                return {
+                    camera: selected,
+                    pairs: readyPairs().map(function(p) {
+                        return {
+                            a: { u: Number(p.a.u), v: Number(p.a.v) },
+                            b: { u: Number(p.b.u), v: Number(p.b.v) },
+                            distance: Number(p.distance)
+                        };
+                    }),
+                    image_width: imageSize.w || (imgRef.current && imgRef.current.naturalWidth) || 0,
+                    image_height: imageSize.h || (imgRef.current && imgRef.current.naturalHeight) || 0
+                };
+            };
+
+            var computeCalibration = function() {
+                setBusy(true);
+                axios.post('/homography/compute', payloadPairs()).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        setMessage('Sent to the lab. Computing homography on the training PC…');
+                        setTimeout(function() { loadStatus(selected); setBusy(false); setMessage('Lab received the pairs. Save Calibration to store them on the training PC.'); }, 2500);
+                        return;
+                    }
+                    setMessage('Calibration valid. RMSE ' + res.data.rmse_m + ' m. Save to use it in tests.');
+                    setTestMode(false);
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Calibration failed');
+                    setBusy(false);
+                });
+            };
+
+            var saveCalibration = function() {
+                setBusy(true);
+                axios.post('/homography/save', payloadPairs()).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        setMessage('Saving calibration on the training lab…');
+                        setTimeout(function() {
+                            loadStatus(selected);
+                            setBusy(false);
+                            setMessage('Save sent to the lab. Status updates when the training PC is online.');
+                        }, 2500);
+                        return;
+                    }
+                    setMessage('Saved homography for ' + selected + '. Tests will load this automatically.');
+                    loadStatus(selected);
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
+                    setBusy(false);
+                });
+            };
+
+            var resetCalibration = function() {
+                if (!window.confirm('Reset homography for ' + selected + '?')) return;
+                axios.post('/homography/reset', { camera: selected }).then(function() {
+                    setPairs([]);
+                    setPendingA(null);
+                    setTestHit(null);
+                    setTestMode(false);
+                    setMessage('Calibration reset.');
+                    loadStatus(selected);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Reset failed');
+                });
+            };
+
+            var selectCamera = function(name) {
+                setSelected(name);
+                setTestMode(false);
+                setTestHit(null);
+                var rec = (cameras || []).find(function(c) { return c.camera === name; });
+                setCalibration(rec || null);
+                if (rec && rec.pairs && rec.pairs.length) {
+                    setPairs(restorePairs(rec));
+                    setPendingA(null);
+                    loadSavedFrame();
+                } else {
+                    setPairs([]);
+                    setPendingA(null);
+                    setFrameUrl('');
+                }
+            };
+
+            var onFrameLoad = function() {
+                var img = imgRef.current;
+                if (img && img.naturalWidth) {
+                    setImageSize({ w: img.naturalWidth, h: img.naturalHeight });
+                }
+            };
+
+            var statusClass = currentStatus() === 'Calibrated' ? 'calib-ok' : 'calib-bad';
+
+            return React.createElement('div', { className: 'mt-2' },
+                React.createElement('h2', { className: 'text-2xl font-black gold-accent mb-2' }, 'Settings'),
+                React.createElement('p', { className: 'text-sm text-gray-400 mb-6' },
+                    'Click two ground points for each measured length. Homography uses those distances — you do not enter world X/Y. Hip tracking is unchanged.'),
+                React.createElement('div', { className: 'panel p-5 mb-6' },
+                    React.createElement('h3', { className: 'gold-accent font-bold mb-4' }, 'Homography Calibration'),
+                    React.createElement('div', { className: 'flex flex-wrap items-center gap-4 mb-4' },
+                        React.createElement('label', { className: 'text-sm font-bold' }, 'Camera'),
+                        React.createElement('select', {
+                            className: 'search-input',
+                            style: { maxWidth: '220px' },
+                            value: selected,
+                            onChange: function(e) { selectCamera(e.target.value); }
+                        }, (cameras.length ? cameras : [{ camera: 'camera-1' }, { camera: 'camera-8' }]).map(function(c) {
+                            return React.createElement('option', { key: c.camera, value: c.camera }, c.camera);
+                        })),
+                        React.createElement('span', { className: 'calib-status ' + statusClass }, currentStatus())
+                    ),
+                    React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
+                        React.createElement('button', { className: 'btn-primary', disabled: busy, onClick: captureFrame }, 'Calibrate'),
+                        React.createElement('button', { className: 'btn-results', disabled: busy || readyPairs().length < 2, onClick: computeCalibration }, 'Compute Homography'),
+                        React.createElement('button', { className: 'btn-realtime', disabled: busy || readyPairs().length < 2, onClick: saveCalibration }, 'Save Calibration'),
+                        React.createElement('button', { className: 'btn-danger', disabled: busy, onClick: resetCalibration }, 'Reset Calibration'),
+                        React.createElement('button', {
+                            className: testMode ? 'btn-resume' : 'refresh-btn',
+                            disabled: currentStatus() !== 'Calibrated',
+                            onClick: function() { setTestMode(!testMode); setTestHit(null); setMessage(testMode ? '' : 'Test mode: click the image to read metres.'); }
+                        }, 'Test Calibration')
+                    ),
+                    message ? React.createElement('p', { className: 'text-sm mb-4', style: { color: '#ead48f' } }, message) : null,
+                    frameUrl ?
+                    React.createElement('div', { className: 'calib-stage mb-4' },
+                        React.createElement('img', {
+                            src: frameUrl,
+                            alt: selected + ' calibration frame',
+                            ref: imgRef,
+                            onLoad: onFrameLoad,
+                            onClick: onImageClick,
+                            draggable: false
+                        }),
+                        pairs.map(function(p, i) {
+                            var img = imgRef.current;
+                            var dots = [];
+                            if (p.a) dots.push({ pt: p.a, label: (i + 1) + 'A' });
+                            if (p.b) dots.push({ pt: p.b, label: (i + 1) + 'B' });
+                            return dots.map(function(d) {
+                                var left = img && img.naturalWidth ? (d.pt.u / img.naturalWidth) * 100 : 0;
+                                var top = img && img.naturalHeight ? (d.pt.v / img.naturalHeight) * 100 : 0;
+                                return React.createElement('div', {
+                                    key: 'pt-' + i + d.label,
+                                    className: 'calib-dot',
+                                    style: { left: left + '%', top: top + '%' }
+                                }, React.createElement('span', null, d.label));
+                            });
+                        }),
+                        pendingA ? React.createElement('div', {
+                            className: 'calib-dot',
+                            style: {
+                                left: (imgRef.current && imgRef.current.naturalWidth ? (pendingA.u / imgRef.current.naturalWidth) * 100 : 0) + '%',
+                                top: (imgRef.current && imgRef.current.naturalHeight ? (pendingA.v / imgRef.current.naturalHeight) * 100 : 0) + '%',
+                                background: '#276ce5'
+                            }
+                        }, React.createElement('span', null, 'A')) : null,
+                        testHit ? React.createElement('div', {
+                            className: 'calib-test',
+                            style: {
+                                left: (imgRef.current && imgRef.current.naturalWidth ? (testHit.u / imgRef.current.naturalWidth) * 100 : 0) + '%',
+                                top: (imgRef.current && imgRef.current.naturalHeight ? (testHit.v / imgRef.current.naturalHeight) * 100 : 0) + '%'
+                            }
+                        }, React.createElement('span', {
+                            style: { position: 'absolute', left: '14px', top: '-2px', color: '#7ca8f8', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }
+                        }, testHit.x.toFixed(2) + ', ' + testHit.y.toFixed(2) + ' m')) : null
+                    ) :
+                    React.createElement('div', { className: 'panel p-8 text-center text-gray-400 mb-4' },
+                        'Press Calibrate to capture the selected camera view (same 360px height used in tests).'
+                    ),
+                    React.createElement('div', { className: 'table-wrap homography-table' },
+                        React.createElement('table', null,
+                            React.createElement('thead', null,
+                                React.createElement('tr', null,
+                                    React.createElement('th', null, 'Pair'),
+                                    React.createElement('th', null, 'Point A (u, v)'),
+                                    React.createElement('th', null, 'Point B (u, v)'),
+                                    React.createElement('th', null, 'Real-world distance between these two points (meters)'),
+                                    React.createElement('th', null, '')
+                                )
+                            ),
+                            React.createElement('tbody', null,
+                                pairs.length ?
+                                pairs.map(function(p, i) {
+                                    return React.createElement('tr', { key: 'row-' + i },
+                                        React.createElement('td', null, i + 1),
+                                        React.createElement('td', null, p.a ? p.a.u.toFixed(1) + ', ' + p.a.v.toFixed(1) : '—'),
+                                        React.createElement('td', null, p.b ? p.b.u.toFixed(1) + ', ' + p.b.v.toFixed(1) : '—'),
+                                        React.createElement('td', null,
+                                            React.createElement('input', {
+                                                type: 'number',
+                                                step: '0.01',
+                                                min: '0',
+                                                placeholder: 'e.g. 5.0',
+                                                value: p.distance,
+                                                onChange: function(e) { updateDistance(i, e.target.value); },
+                                                style: { width: '120px' }
+                                            })
+                                        ),
+                                        React.createElement('td', null,
+                                            React.createElement('button', { className: 'clear-selection-btn', onClick: function() { removePair(i); } }, 'Remove')
+                                        )
+                                    );
+                                }) :
+                                React.createElement('tr', null,
+                                    React.createElement('td', { colSpan: 5, className: 'text-center text-gray-400' },
+                                        pendingA
+                                            ? 'Point A selected at (' + pendingA.u.toFixed(1) + ', ' + pendingA.v.toFixed(1) + '). Click Point B.'
+                                            : 'Click Point A and Point B on the image. Example distance: 5.0 metres. Add a second pair for the other side of the ground rectangle.'
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
             );
         };
 
@@ -2951,6 +3416,7 @@
             }, [selectedLevel]);
 
             var isAdmin = role === 'admin';
+            var isOperatorStaff = isAdmin || role === 'coach' || role === 'manager';
             var menuState = useState(false);
             var menuOpen = menuState[0];
             var setMenuOpen = menuState[1];
@@ -2997,7 +3463,10 @@
                                         closeMenu(); } }, t('results')) : null,
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('manage');
-                                        closeMenu(); } }, t('managePlayers')) : null
+                                        closeMenu(); } }, t('managePlayers')) : null,
+                                isOperatorStaff ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('settings');
+                                        closeMenu(); } }, 'Settings') : null
                             )
                         ),
                         React.createElement('h1', { className: "text-3xl font-black" },
@@ -3033,6 +3502,12 @@
                         onClick: function() { setActiveTab('manage'); },
                         className: "tab-button" + (activeTab === 'manage' ? ' active' : '')
                     }, t("managePlayers")) :
+                    null,
+                    isOperatorStaff ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('settings'); },
+                        className: "tab-button" + (activeTab === 'settings' ? ' active' : '')
+                    }, "Settings") :
                     null
                 ),
 
@@ -3046,6 +3521,8 @@
                         searchQuery: searchQuery,
                         setSearchQuery: setSearchQuery
                     }) :
+                    activeTab === 'settings' && isOperatorStaff ?
+                    React.createElement(HomographyCalibration, null) :
                     activeTab === 'results' && isAdmin ?
                     React.createElement(React.Fragment, null,
                         React.createElement('div', { className: "flex justify-between items-center mb-4 flex-wrap gap-2" },

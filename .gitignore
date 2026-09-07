@@ -31,4 +31,6 @@ Thumbs.db
 *.onnx
 *.weights
 *.zip
+homography_frames/
+homography_calibration.json
 *.pyc

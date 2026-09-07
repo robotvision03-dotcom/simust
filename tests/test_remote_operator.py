@@ -50,6 +50,10 @@ class RemoteQueueTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             simust_remote.enqueue("cameras", {}, "coach1")
 
+    def test_homography_actions_are_allowed(self):
+        item = simust_remote.enqueue("homography-save", {"camera": "camera-1"}, "admin")
+        self.assertEqual(item["action"], "homography-save")
+
     def test_status_roundtrip(self):
         simust_remote.set_status({"playback-status": {"state": "playing"}})
         status = simust_remote.get_status()

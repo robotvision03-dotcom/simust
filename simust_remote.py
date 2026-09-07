@@ -21,12 +21,18 @@ ALLOWED_ACTIONS = {
     "lab-upsert-player",
     "unlock-level",
     "lock-level",
+    "homography-capture",
+    "homography-compute",
+    "homography-save",
+    "homography-reset",
+    "homography-test",
 }
 
 GET_STATUS_KEYS = {
     "playback-status": "playback-status",
     "realtime-results": "realtime-results",
     "results": "results",
+    "homography": "homography",
 }
 
 COMMANDS_FILE = os.environ.get("SIMUST_REMOTE_FILE", "remote_commands.json")

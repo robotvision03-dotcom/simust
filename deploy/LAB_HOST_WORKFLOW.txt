@@ -1,5 +1,7 @@
 SIMUST lab PC  <--------push / pull-------->  Hetzner VPS (My SIMUST)
 index.html + app.py                            http://157.180.47.98/login
+                                               http://157.180.47.98/operator
+                                               (same index.html: Smart Control, Results, Settings)
 C:\Users\siama\Documents\simust_reports        /opt/simust/simust_reports
 users.json                                     /opt/simust/users.json
 

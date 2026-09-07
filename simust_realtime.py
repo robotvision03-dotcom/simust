@@ -125,6 +125,11 @@ GOAL_POST_SLACK = 0.10  # posts of screens 1 and 8 count as the goal mouth
 
 PIXEL_TO_METER_SCALE = 0.0259
 
+try:
+    import simust_homography
+except Exception:
+    simust_homography = None
+
 # Screen-specific thresholds (PASS, TARGET, GOAL)
 SCREEN_CORRECT_THRESHOLDS = {
     '2': 22,  '3': 30,  '4': 10,   '5': 10,   '6': 13,  '7': 22,
@@ -2395,6 +2400,14 @@ class SimustRealtimeCamera:
         self.recording_active = True
         self.video_started = False
 
+        if simust_homography is not None:
+            store = simust_homography.load_store()
+            for cam in (simust_homography.LEFT_CAMERA, simust_homography.RIGHT_CAMERA):
+                rec = simust_homography.public_camera_status(
+                    cam, simust_homography.camera_record(store, cam)
+                )
+                print(f"Homography {cam}: {rec['status']}")
+
         self.start_between_sessions()
 
     def start_between_sessions(self):
@@ -2448,13 +2461,19 @@ class SimustRealtimeCamera:
             # Sample every 4th frame (step=4)
             sampled = self.all_player_positions[::4]
             if len(sampled) > 1:
-                total_dist_px = 0.0
-                for i in range(1, len(sampled)):
-                    _, x1, y1 = sampled[i-1]
-                    _, x2, y2 = sampled[i]
-                    total_dist_px += math.hypot(x2 - x1, y2 - y1)
-                total_distance_meters = total_dist_px * PIXEL_TO_METER_SCALE
-                print(f"[DEBUG] Total pixel distance (hip, sampled): {total_dist_px:.2f} px → {total_distance_meters:.2f} m")
+                if simust_homography is not None:
+                    total_distance_meters = simust_homography.path_distance_meters(
+                        sampled, fallback_m_per_px=PIXEL_TO_METER_SCALE
+                    )
+                    print(f"[DEBUG] Total hip distance (homography, sampled): {total_distance_meters:.2f} m")
+                else:
+                    total_dist_px = 0.0
+                    for i in range(1, len(sampled)):
+                        _, x1, y1 = sampled[i-1]
+                        _, x2, y2 = sampled[i]
+                        total_dist_px += math.hypot(x2 - x1, y2 - y1)
+                    total_distance_meters = total_dist_px * PIXEL_TO_METER_SCALE
+                    print(f"[DEBUG] Total pixel distance (hip, sampled): {total_dist_px:.2f} px → {total_distance_meters:.2f} m")
             else:
                 print("[DEBUG] Not enough sampled hip positions (need >1).")
         else:
@@ -3264,7 +3283,7 @@ class SimustRealtimeCamera:
         print("Real-time results displayed on screen and saved to file")
         print("Saving each result with video_index for per‑video results")
         print("Economy of Play: total video distance computed using every 8th frame")
-        print("Distance converted to meters using calibration: 0.01492 m/pixel")
+        print("Distance converted to meters using ground-plane homography when calibrated")
         print("=" * 60 + "\n")
 
         try:

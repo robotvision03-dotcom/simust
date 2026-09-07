@@ -19,7 +19,7 @@ import asyncio
 import math
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, ValidationError
 import sys
 import threading
@@ -31,6 +31,7 @@ import re
 import hashlib
 import json
 import uuid
+import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -54,6 +55,7 @@ from simust_security import (
     verify_password,
 )
 import simust_billing
+import simust_homography
 import simust_push
 import simust_remote
 from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
@@ -1296,7 +1298,13 @@ async def root():
 @app.get("/index.html", response_class=FileResponse)
 async def operator_console():
     """Same operator GUI as the lab index.html, for tablets and the public Android app."""
-    return FileResponse("index.html")
+    return FileResponse(
+        "index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.get("/app-config")
@@ -2055,7 +2063,218 @@ async def capture_frame():
     raise HTTPException(408, "Capture timeout – ensure realtime is running.")
 
 # ============================================================
-# HELPER: Compute total distance from recognition.json  
+# HOMOGRAPHY CALIBRATION (admin / lab)
+# ============================================================
+
+def _homography_camera_names() -> List[str]:
+    names = []
+    for name in (recorder_settings.CAMERAS or {}):
+        if str(name).lower().startswith("qr"):
+            continue
+        names.append(name)
+    if not names:
+        names = [simust_homography.LEFT_CAMERA, simust_homography.RIGHT_CAMERA]
+    return names
+
+
+def _homography_camera_url(camera_name: str) -> str:
+    cfg = (recorder_settings.CAMERAS or {}).get(camera_name) or {}
+    url = cfg.get("address") or ""
+    if not url:
+        raise HTTPException(404, f"Camera not found: {camera_name}")
+    return url
+
+
+_homography_previews: Dict[str, dict] = {}
+_homography_last_test: Dict[str, Any] = {}
+
+
+def _store_homography_preview(camera_name: str, jpeg: bytes, width: int, height: int) -> dict:
+    preview = {
+        "data_url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii"),
+        "width": int(width),
+        "height": int(height),
+        "captured_at": time.time(),
+    }
+    _homography_previews[camera_name] = preview
+    os.makedirs(simust_homography.FRAME_DIR, exist_ok=True)
+    path = os.path.join(simust_homography.FRAME_DIR, f"{camera_name}_preview.jpg")
+    with open(path, "wb") as handle:
+        handle.write(jpeg)
+    return preview
+
+
+def homography_status_snapshot() -> dict:
+    store = simust_homography.load_store()
+    cameras = []
+    for name in _homography_camera_names():
+        cameras.append(simust_homography.public_camera_status(name, simust_homography.camera_record(store, name)))
+    return {
+        "cameras": cameras,
+        "frames": dict(_homography_previews),
+        "last_test": dict(_homography_last_test),
+    }
+
+
+def _grab_homography_frame(camera_name: str) -> dict:
+    url = _homography_camera_url(camera_name)
+    jpeg, width, height = simust_homography.grab_camera_jpeg(url)
+    return _store_homography_preview(camera_name, jpeg, width, height)
+
+
+@app.get("/homography/status")
+async def homography_status():
+    if PUBLIC_MODE:
+        status = simust_remote.get_status() or {}
+        return status.get("homography") or {"cameras": [], "frames": {}}
+    return homography_status_snapshot()
+
+
+@app.get("/homography/calibration/{camera_name}")
+async def homography_get_calibration(camera_name: str):
+    store = simust_homography.load_store()
+    return simust_homography.public_camera_status(camera_name, simust_homography.camera_record(store, camera_name))
+
+
+@app.post("/homography/capture")
+async def homography_capture(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    camera_name = (data.get("camera") or data.get("camera_name") or "").strip()
+    if not camera_name:
+        raise HTTPException(400, "camera is required")
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Calibration is only available on the training machine.")
+    try:
+        preview = _grab_homography_frame(camera_name)
+    except TimeoutError as exc:
+        raise HTTPException(408, str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, f"Could not capture frame: {exc}")
+    return {"status": "success", "camera": camera_name, **preview}
+
+
+@app.get("/homography/frame/{camera_name}")
+async def homography_capture_frame(camera_name: str):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Calibration is only available on the training machine.")
+    try:
+        preview = _grab_homography_frame(camera_name)
+    except TimeoutError as exc:
+        raise HTTPException(408, str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, f"Could not capture frame: {exc}")
+    jpeg = base64.b64decode(preview["data_url"].split(",", 1)[-1])
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={"X-Image-Width": str(preview["width"]), "X-Image-Height": str(preview["height"])},
+    )
+
+
+@app.get("/homography/saved-frame/{camera_name}")
+async def homography_saved_frame(camera_name: str):
+    store = simust_homography.load_store()
+    rec = simust_homography.camera_record(store, camera_name)
+    path = rec.get("frame_file") or os.path.join(simust_homography.FRAME_DIR, f"{camera_name}.jpg")
+    preview = os.path.join(simust_homography.FRAME_DIR, f"{camera_name}_preview.jpg")
+    for candidate in (path, preview):
+        if candidate and os.path.isfile(candidate):
+            return FileResponse(candidate, media_type="image/jpeg")
+    raise HTTPException(404, "No saved calibration frame")
+
+
+@app.post("/homography/compute")
+async def homography_compute(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    try:
+        result = simust_homography.compute_from_payload(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"status": "success", **result}
+
+
+@app.post("/homography/save")
+async def homography_save(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    camera_name = (data.get("camera") or data.get("camera_name") or "").strip()
+    if not camera_name:
+        raise HTTPException(400, "camera is required")
+    width = int(data.get("image_width") or 0)
+    height = int(data.get("image_height") or 0)
+    preview = os.path.join(simust_homography.FRAME_DIR, f"{camera_name}_preview.jpg")
+    frame_jpeg = None
+    if os.path.isfile(preview):
+        with open(preview, "rb") as handle:
+            frame_jpeg = handle.read()
+    try:
+        saved = simust_homography.save_camera_calibration(
+            camera_name,
+            data.get("image_points") or [],
+            data.get("world_points") or [],
+            width,
+            height,
+            frame_jpeg,
+            pairs=data.get("pairs"),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"status": "success", "calibration": saved}
+
+
+@app.post("/homography/reset")
+async def homography_reset(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    camera_name = (data.get("camera") or data.get("camera_name") or "").strip()
+    if not camera_name:
+        raise HTTPException(400, "camera is required")
+    return {"status": "success", "calibration": simust_homography.reset_camera_calibration(camera_name)}
+
+
+@app.post("/homography/test")
+async def homography_test(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    camera_name = (data.get("camera") or data.get("camera_name") or "").strip()
+    u = data.get("u")
+    v = data.get("v")
+    if u is None or v is None:
+        raise HTTPException(400, "u and v pixel coordinates are required")
+    store = simust_homography.load_store()
+    rec = simust_homography.camera_record(store, camera_name)
+    if not simust_homography.is_calibrated(rec):
+        raise HTTPException(400, "Camera is not calibrated")
+    world = simust_homography.pixel_to_world(float(u), float(v), rec.get("H"))
+    if world is None:
+        raise HTTPException(400, "Could not transform this pixel")
+    result = {"status": "success", "x": world[0], "y": world[1], "u": float(u), "v": float(v), "camera": camera_name}
+    _homography_last_test[camera_name] = result
+    return result
+
+
+# ============================================================
+# HELPER: Compute total distance from recognition.json
 # ============================================================
 
 def compute_total_distance_from_recognition(session_folder: str) -> float:
@@ -2090,12 +2309,7 @@ def compute_total_distance_from_recognition(session_folder: str) -> float:
     sampled = all_positions[::4]
     if len(sampled) < 2:
         return 0.0
-    total_dist_px = 0.0
-    for i in range(1, len(sampled)):
-        _, x1, y1 = sampled[i-1]
-        _, x2, y2 = sampled[i]
-        total_dist_px += math.hypot(x2 - x1, y2 - y1)
-    return total_dist_px * PIXEL_TO_METER_SCALE
+    return simust_homography.path_distance_meters(sampled, fallback_m_per_px=PIXEL_TO_METER_SCALE)
 
 # ============================================================
 # SLICE VIDEO SELECTION BASED ON DECISION ACCURACY
@@ -3830,6 +4044,11 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "pause-realtime",
     "set-simulation",
     "set-visualization",
+    "homography-capture",
+    "homography-compute",
+    "homography-save",
+    "homography-reset",
+    "homography-test",
 }
 
 
@@ -3897,7 +4116,12 @@ def _lab_local_url(path: str) -> str:
 
 def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -> Any:
     body = json.dumps(payload or {}).encode("utf-8") if method != "GET" else None
-    timeout = 40 if path.lstrip("/").startswith("start-realtime") else 15
+    timeout = 15
+    path_name = path.lstrip("/")
+    if path_name.startswith("start-realtime"):
+        timeout = 40
+    elif path_name.startswith("homography"):
+        timeout = 25
     req = urllib.request.Request(
         _lab_local_url(path),
         data=body,
@@ -3933,6 +4157,10 @@ def _publish_lab_status() -> None:
         status["results"] = results
     except Exception:
         status["results"] = {}
+    try:
+        status["homography"] = homography_status_snapshot()
+    except Exception:
+        status["homography"] = {"cameras": [], "frames": {}}
     simust_push.push_lab_status(status)
 
 
@@ -3944,6 +4172,11 @@ def _run_queued_operator_command(command: dict) -> None:
         return
     payload["_remote"] = True
     payload["_queued_at"] = command.get("created_at")
+    if action.startswith("homography-"):
+        suffix = action[len("homography-"):]
+        _lab_local_request("POST", f"/homography/{suffix}", payload)
+        _publish_lab_status()
+        return
     _lab_local_request("POST", f"/{action}", payload)
     logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
 
