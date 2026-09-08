@@ -70,12 +70,13 @@ class MainActivity : AppCompatActivity() {
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // Always fetch the latest /operator HTML (Pause/Stop, lab-link, remote Stop).
+        settings.cacheMode = WebSettings.LOAD_NO_CACHE
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowContentAccess = true
         settings.allowFileAccess = false
         settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.3"
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.4"
         applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {
@@ -244,13 +245,12 @@ class MainActivity : AppCompatActivity() {
         val transport = NetworkStatus.transportLabel(this)
         Thread {
             try {
-                val url = java.net.URL(Prefs.getPublicHost(this) + "/app-config")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-                val online = text.contains("\"lab_online\": true") || text.contains("\"lab_online\":true")
+                // Prefer lightweight public /lab-link so an expired WebView login
+                // cannot make the native toolbar say Lab offline.
+                val host = Prefs.getPublicHost(this)
+                val online = readLabOnline(host + "/lab-link")
+                    ?: readLabOnline(host + "/app-config")
+                    ?: false
                 runOnUiThread {
                     supportActionBar?.subtitle = getString(
                         if (online) R.string.subtitle_lab_online_net else R.string.subtitle_lab_offline_net,
@@ -265,6 +265,28 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun readLabOnline(url: String): Boolean? {
+        return try {
+            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            conn.disconnect()
+            if (code !in 200..299) return null
+            when {
+                text.contains("\"lab_online\": true") || text.contains("\"lab_online\":true") -> true
+                text.contains("\"lab_online\": false") || text.contains("\"lab_online\":false") -> false
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun loadGui() {
         errorPanel.visibility = View.GONE
         val url = Prefs.getLaunchUrl(this)
@@ -272,6 +294,7 @@ class MainActivity : AppCompatActivity() {
         titleForMode()
         applyTextZoom()
         invalidateOptionsMenu()
+        webView.clearCache(false)
         webView.loadUrl(url)
     }
 }

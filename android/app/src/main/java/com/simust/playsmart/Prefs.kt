@@ -130,8 +130,14 @@ object Prefs {
     }
 
     private fun withAppFlag(url: String): String {
-        return if (url.contains("app=android")) url else {
-            url + if (url.contains("?")) "&app=android" else "?app=android"
+        var out = url
+        if (!out.contains("app=android")) {
+            out += if (out.contains("?")) "&app=android" else "?app=android"
         }
+        // Bust WebView cache when the operator HTML changes with the APK.
+        if (!out.contains("v=")) {
+            out += if (out.contains("?")) "&v=2.4" else "?v=2.4"
+        }
+        return out
     }
 }

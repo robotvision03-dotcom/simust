@@ -10,8 +10,8 @@ android {
         applicationId = "com.simust.playsmart"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.3"
+        versionCode = 6
+        versionName = "2.4"
     }
 
     buildTypes {
@@ -45,7 +45,8 @@ afterEvaluate {
             val named = "SIMUST-${android.defaultConfig.versionName}-debug.apk"
             src.copyTo(src.resolveSibling(named), overwrite = true)
             src.copyTo(rootProject.projectDir.resolve(named), overwrite = true)
-            src.copyTo(rootProject.projectDir.resolve("SIMUST-ZFlip6-2.3-debug.apk"), overwrite = true)
+            val zflip = "SIMUST-ZFlip6-${android.defaultConfig.versionName}-debug.apk"
+            src.copyTo(rootProject.projectDir.resolve(zflip), overwrite = true)
         }
     }
 }
