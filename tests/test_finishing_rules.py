@@ -123,31 +123,32 @@ class FinishingRuleTests(unittest.TestCase):
             row = audit.run_case("GOAL", [screen], "wrong", session_s=3.2, after_s=1.2)
             self.assertEqual(row["actual"], "Wrong", msg=(screen, row))
 
-    def test_goal_return_during_session_is_wrong(self):
+    def test_goal_return_during_session_is_miss(self):
+        """Enter near the line then go outside without holding the finish → Miss."""
         for screen in ("8", "1"):
             start = _outside_start(screen)
             mid = rt.ArenaSimulator()._line_target([screen])[0]
             session = _travel(start, mid, arrive_s=0.70, hold_s=0.20, back=start, back_s=0.65)
             result = _analyze("GOAL", [screen], session)
-            self.assertEqual(result.get("Result"), "Wrong", msg=(screen, result))
+            self.assertEqual(result.get("Result"), "Miss", msg=(screen, result))
 
-    def test_goal_return_after_session_is_wrong(self):
+    def test_goal_return_after_session_is_miss(self):
         screen = "8"
         start = _outside_start(screen)
         mid = rt.ArenaSimulator()._line_target([screen])[0]
         session = _travel(start, mid, arrive_s=0.70, hold_s=2.4)
         after = _travel(mid, start, arrive_s=0.65, hold_s=0.40)
         result = _analyze("GOAL", [screen], session, after=after)
-        self.assertEqual(result.get("Result"), "Wrong", msg=result)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
 
-    def test_goal_late_then_return_is_wrong(self):
+    def test_goal_late_then_return_is_miss(self):
         screen = "8"
         start = _outside_start(screen)
         mid = rt.ArenaSimulator()._line_target([screen])[0]
         session = _travel(start, start, arrive_s=0.20, hold_s=3.0)
         after = _travel(start, mid, arrive_s=0.40, hold_s=0.10, back=start, back_s=0.50)
         result = _analyze("GOAL", [screen], session, after=after)
-        self.assertEqual(result.get("Result"), "Wrong", msg=result)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
 
     def test_pass_return_after_session_is_correct(self):
         screen = "2"
@@ -236,20 +237,36 @@ class FinishingRuleTests(unittest.TestCase):
         """Live GOAL shots must not all go to the line midpoint."""
         sim = rt.ArenaSimulator()
         seen_in = []
+        seen_miss = []
         seen_out = []
         targets = []
-        for _ in range(12):
+        for _ in range(16):
             sim.start_action("GOAL", ["8"])
             targets.append(tuple(round(v, 1) for v in sim.target_xy))
             if sim.intended in ("correct", "late"):
                 seen_in.append(sim.aim_name)
+            elif sim.intended == "miss":
+                seen_miss.append(sim.aim_name)
             else:
                 seen_out.append(sim.aim_name)
         self.assertGreaterEqual(len(set(targets)), 5)
-        self.assertTrue({"post_a", "post_b"} & set(seen_in))
+        self.assertTrue({"post_a", "post_b", "corner_in_a", "corner_in_b"} & set(seen_in))
         self.assertIn("upper_center_40", seen_in)
+        self.assertTrue(seen_miss)
+        self.assertTrue({"near_out_a", "near_out_b", "corner_in_a", "outside_20"} & set(seen_miss))
         self.assertTrue({"upper_center_90", "upper_corner_a", "upper_corner_b"} & set(seen_out))
         self.assertNotEqual(seen_in[:4], ["line_center"] * len(seen_in[:4]))
+
+    def test_goal_sim_miss_enters_then_leaves(self):
+        row = audit.run_case("GOAL", ["8"], "miss", session_s=3.2, after_s=1.2)
+        self.assertEqual(row["actual"], "Miss", msg=row)
+
+    def test_goal_corner_spots_are_in_band(self):
+        p0, p1 = rt.GOAL_LINES["8"]["p0"], rt.GOAL_LINES["8"]["p1"]
+        depth = rt.arrival_depth_for("8", "GOAL")
+        for name in ("corner_in_a", "corner_in_b", "near_out_a", "near_out_b", "post_a", "post_b"):
+            xy = rt.goal_probe_xy(p0, p1, name)
+            self.assertTrue(rt.in_goal_area(xy, p0, p1, depth), msg=(name, xy))
 
     def test_goal_approach_dropout_is_correct(self):
         """Sparse detections that still enter the line + proj_t band stay Correct."""
