@@ -2277,15 +2277,34 @@ async def homography_test(req: Request):
 # HELPER: Compute total distance from recognition.json
 # ============================================================
 
-def compute_total_distance_from_recognition(session_folder: str) -> float:
+def compute_total_distance_from_recognition(session_folder: str, video_index: Optional[int] = None) -> float:
     json_path = os.path.join(session_folder, "recognition.json")
+    results_path = os.path.join(session_folder, "results.json")
     if not os.path.exists(json_path):
         return 0.0
     try:
-        with open(json_path, 'r') as f:
+        with open(json_path, 'r', encoding='utf-8') as f:
             blocks = json.load(f)
     except Exception:
         return 0.0
+    results = []
+    if os.path.exists(results_path):
+        try:
+            with open(results_path, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+        except Exception:
+            results = []
+        if video_index is not None and results:
+            try:
+                import simust_realtime as _rt
+                by_video = _rt.compute_distances_by_video(
+                    blocks, results, fallback_m_per_px=PIXEL_TO_METER_SCALE
+                )
+                return float(by_video.get(int(video_index), 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+            except Exception:
+                return 0.0
     all_positions = []
     for block in blocks:
         start_time_str = block.get('start_time')
@@ -2458,19 +2477,24 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
 
 # ---------- generate_results_video_from_results ----------
 def generate_results_video_from_results(results_list, output_path, duration_seconds=5, is_final=False,
-                                        slice_video_path=None, session_folder=None):
+                                        slice_video_path=None, session_folder=None, video_index=None):
     try:
-        # ---- Compute total BDP (Body Displacement) by summing per‑action BDP ----
+        # Prefer metres already stamped on this video's results; else hips for this video only.
         total_distance = 0.0
         for r in results_list:
-            total_distance += r.get('bpd', 0.0)
-        logger.info(f"Sum of BDPs from results_list: {total_distance:.2f} m")
+            try:
+                total_distance = max(total_distance, float(r.get('total_distance') or r.get('bpd') or 0.0))
+            except (TypeError, ValueError):
+                pass
+        logger.info(f"Stored total_distance from results_list: {total_distance:.2f} m")
 
         if total_distance == 0 and session_folder and os.path.exists(os.path.join(session_folder, "recognition.json")):
-            computed_distance = compute_total_distance_from_recognition(session_folder)
+            computed_distance = compute_total_distance_from_recognition(
+                session_folder, video_index=video_index
+            )
             if computed_distance > 0:
                 total_distance = computed_distance
-                logger.info(f"Fallback: using computed total distance from recognition.json: {total_distance:.2f} m")
+                logger.info(f"Fallback: recognition hip distance (video={video_index}): {total_distance:.2f} m")
             else:
                 logger.warning("computed_distance from recognition.json is 0, BDP will show '-'.")
 
@@ -3055,10 +3079,22 @@ async def create_video_results(req: Request):
     try:
         data = await req.json()
         directory = data.get("directory")
+        report_path = data.get("report_path")
         video_index = data.get("video_index", 1)
+        try:
+            video_index = int(video_index)
+        except (TypeError, ValueError):
+            video_index = 1
         spawn_display = should_spawn_screen2_display(data.get("display", True))
         if not spawn_display:
             kill_screen2_result_helpers()
+
+        # Player sends report_path (recognition.json); convert to session folder.
+        if (not directory or not os.path.exists(directory)) and report_path:
+            if os.path.isdir(report_path):
+                directory = report_path
+            elif os.path.isfile(report_path):
+                directory = os.path.dirname(report_path)
 
         # If directory not provided, fallback to newest realtime folder
         if not directory or not os.path.exists(directory):
@@ -3076,6 +3112,30 @@ async def create_video_results(req: Request):
 
         with open(results_json_path, 'r', encoding='utf-8') as f:
             all_results = json.load(f)
+
+        # Fill missing per-video metres before rendering (mid-session videos).
+        recognition_path = os.path.join(directory, "recognition.json")
+        if os.path.exists(recognition_path):
+            try:
+                import simust_realtime as _rt
+                with open(recognition_path, "r", encoding="utf-8") as f:
+                    blocks = json.load(f)
+                by_video = _rt.compute_distances_by_video(blocks, all_results)
+                changed = False
+                for row in all_results:
+                    try:
+                        vid = int(row.get("video_index") or 1)
+                    except (TypeError, ValueError):
+                        vid = 1
+                    metres = float(by_video.get(vid, 0.0))
+                    if metres > 0 and float(row.get("total_distance") or 0) <= 0:
+                        row["total_distance"] = metres
+                        changed = True
+                if changed:
+                    with open(results_json_path, "w", encoding="utf-8") as f:
+                        json.dump(all_results, f, indent=2, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning("Could not stamp per-video distances: %s", exc)
 
         # Filter by video_index (if any match)
         video_results = [r for r in all_results if r.get('video_index') == video_index]
@@ -3095,7 +3155,8 @@ async def create_video_results(req: Request):
             duration_seconds=20,
             is_final=False,
             slice_video_path=None,
-            session_folder=directory
+            session_folder=directory,
+            video_index=video_index,
         )
 
         if not success:

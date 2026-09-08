@@ -93,10 +93,25 @@ class FinishingRuleTests(unittest.TestCase):
             row = audit.run_case(action, screens, "correct", session_s=3.2, after_s=1.2)
             self.assertEqual(row["actual"], "Correct", msg=(action, row))
 
-    def test_pass_press_target_miss_is_arrive_and_stay(self):
-        for action, screens in (("PASS", ["2"]), ("TARGET", ["9L"]), ("PRESS", ["2"])):
+    def test_pass_target_miss_is_arrive_and_stay(self):
+        for action, screens in (("PASS", ["2"]), ("TARGET", ["9L"])):
             row = audit.run_case(action, screens, "miss", session_s=3.2, after_s=1.2)
             self.assertEqual(row["actual"], "Miss", msg=(action, row))
+
+    def test_press_arrive_without_return_is_correct_not_miss(self):
+        """PRESS has no Miss: reaching the zone is Correct even if the player stays."""
+        row = audit.run_case("PRESS", ["2"], "miss", session_s=3.2, after_s=1.2)
+        self.assertEqual(row["actual"], "Correct", msg=row)
+        screen = "3"
+        start = (314.0, 110.0)
+        dest = (83.0, 142.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
+        for row_frame in session:
+            row_frame["p"] = row_frame["b"]
+            row_frame["b"] = []
+        result = _analyze("PRESS", [screen], session)
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+        self.assertNotEqual(result.get("Result"), "Miss")
 
     def test_pass_press_target_late_after_session(self):
         for action, screens in (("PASS", ["2"]), ("TARGET", ["9L"]), ("PRESS", ["2"])):
@@ -320,6 +335,152 @@ class FinishingRuleTests(unittest.TestCase):
             self.assertEqual(row["actual"], "Correct", msg=row)
         finally:
             rt.time.time = prev_time
+
+    def test_pass_static_far_blob_is_not_a_return(self):
+        """S5/S10: a persistent junk ball on the far camera must not flip Miss to Correct."""
+        screen = "13"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
+        junk = [{"t": round(i * 0.04, 3), "b": [[724, 134]], "p": [[280, 268]], "hp": [280, 268]} for i in range(30)]
+        result = _analyze("PASS", [screen], session, after=junk)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_pass_player_ball_after_long_gap_is_not_a_return(self):
+        """Do not treat a later action (t > 2.5s) as this shot bouncing back."""
+        screen = "13"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
+        later = _travel((334, 123), (350, 160), arrive_s=0.40, hold_s=0.40)
+        for row in later:
+            row["t"] = round(row["t"] + 16.0, 3)
+        result = _analyze("PASS", [screen], session, after=later)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_pass_between_motion_after_dropout_is_miss(self):
+        """Last-of-video: arrive, disappear, then player-side motion ~2.5s later is Miss."""
+        screen = "13"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=0.05)
+        # BETWEEN starts after session; first ball appears after a long dropout.
+        after = []
+        for i in range(40):
+            t = round(0.05 + i * 0.04, 3)
+            after.append({"t": t, "b": [], "p": [[280, 268]], "hp": [280, 268]})
+        for i in range(20):
+            t = round(2.0 + i * 0.04, 3)
+            after.append({"t": t, "b": [[380, 300 - i], [380, 300 - i]], "p": [[280, 268]], "hp": [280, 268]})
+            after[-1]["b"] = [[380, 300 - i]]
+        result = _analyze("PASS", [screen], session, after=after, session_s=1.0)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_press_post_graze_50px_is_correct(self):
+        """S31: PRESS near screen-3 post (~50px) counts as Correct (no return required)."""
+        screen = "3"
+        start = (314.0, 110.0)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = (83.0, 142.0)
+        depth = rt.arrival_depth_for(screen, "PRESS")
+        self.assertTrue(
+            rt.in_goal_area(dest, p0, p1, depth, post_radius=rt.PRESS_POST_RADIUS),
+            msg=(dest, depth),
+        )
+        session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
+        for row in session:
+            row["p"] = row["b"]
+            row["b"] = []
+        result = _analyze("PRESS", [screen], session)
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_compute_distances_by_video_splits_hips(self):
+        blocks = [
+            {
+                "id": "S1",
+                "action": "PASS",
+                "start_time": "10:00:00.000000",
+                "data": [
+                    {"t": 0.0, "hp": [100, 200]},
+                    {"t": 0.2, "hp": [140, 200]},
+                    {"t": 0.4, "hp": [180, 200]},
+                    {"t": 0.6, "hp": [220, 200]},
+                ],
+            },
+            {
+                "id": "BETWEEN",
+                "action": "BETWEEN_SESSIONS",
+                "start_time": "10:00:01.000000",
+                "data": [{"t": 0.0, "hp": [220, 200]}, {"t": 0.2, "hp": [260, 200]}],
+            },
+            {
+                "id": "S2",
+                "action": "PASS",
+                "start_time": "10:00:10.000000",
+                "data": [
+                    {"t": 0.0, "hp": [300, 200]},
+                    {"t": 0.2, "hp": [340, 200]},
+                    {"t": 0.4, "hp": [380, 200]},
+                    {"t": 0.6, "hp": [420, 200]},
+                ],
+            },
+        ]
+        results = [
+            {"id": "S1", "video_index": 1, "total_distance": 0},
+            {"id": "S2", "video_index": 2, "total_distance": 0},
+        ]
+        by_v = rt.compute_distances_by_video(blocks, results, fallback_m_per_px=0.0259)
+        self.assertIn(1, by_v)
+        self.assertIn(2, by_v)
+        self.assertGreater(by_v[1], 0)
+        self.assertGreater(by_v[2], 0)
+
+    def test_pass_late_uses_finish_band_not_tiny_screen_threshold(self):
+        """S9/S13: PASS late uses the 100px arrival band, not 10–30px screen gates."""
+        screen = "14"
+        start = rt.ArenaSimulator.BALL_HOME
+        session = _travel(start, start, arrive_s=0.20, hold_s=3.0)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = ((p0[0] + p1[0]) / 2.0 - 50.0, (p0[1] + p1[1]) / 2.0)
+        after = _travel(start, dest, arrive_s=0.50, hold_s=0.50)
+        result = _analyze("PASS", [screen], session, after=after)
+        self.assertEqual(result.get("Result"), "Late", msg=result)
+        self.assertGreater(result.get("Min Distance (px)") or 0, 30)
+
+    def test_pass_post_graze_then_return_is_correct(self):
+        """S4/S24: 35–45px from a keypoint still counts as arrival if the ball comes back."""
+        screen = "3"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0 = rt.GOAL_LINES[screen]["p0"]
+        dest = (p0[0] + 28.0, p0[1] - 28.0)
+        depth = rt.arrival_depth_for(screen, "PASS")
+        self.assertTrue(rt.in_goal_area(dest, rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"], depth, post_radius=rt.PASS_POST_RADIUS))
+        session = _travel(start, dest, arrive_s=0.70, hold_s=0.15, back=start, back_s=0.80)
+        result = _analyze("PASS", [screen], session)
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_pass_near_post_then_disappear_is_miss(self):
+        """S19: enter the graze band and never return to the player → Miss."""
+        screen = "14"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0 = rt.GOAL_LINES[screen]["p0"]
+        dest = (p0[0] - 20.0, p0[1] - 25.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
+        result = _analyze("PASS", [screen], session)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_displacement_polygon_is_not_drawn_before_detection_hook(self):
+        self.assertGreater(rt.LATE_ANALYSIS_DELAY, 2.0)
+        src = open(os.path.join(ROOT, "simust_realtime.py"), encoding="utf-8")
+        try:
+            text = src.read()
+        finally:
+            src.close()
+        self.assertNotIn("cv2.polylines(stitched", text)
+        self.assertIn("cv2.polylines(frame", text)
 
 
 if __name__ == "__main__":

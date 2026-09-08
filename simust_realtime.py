@@ -57,7 +57,7 @@ SAVE_EVERY_N_ACTIONS = 1
 DEFAULT_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
 SIMUST_PLAYER_DIRECTORY = "C:/Users/siama/Documents/simust_player"
 
-DETECTION_CONF = 0.2
+DETECTION_CONF = 0.12  # lower to keep blurred / distant balls (GOAL motion blur)
 MAX_PLAYERS = 2
 
 COLOR_BALL = (255, 0, 0)
@@ -122,6 +122,14 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
 GOAL_POST_SLACK = 0.10  # posts of screens 1 and 8 count as the goal mouth
+GOAL_POST_RADIUS = 30.0  # GOAL mouth endpoints
+PASS_POST_RADIUS = 45.0  # PASS/TARGET graze near left/right keypoints
+PRESS_POST_RADIUS = 70.0  # PRESS player can finish slightly past the short screen segment
+BALL_TRACK_MAX_STEP_PX = 280  # ignore distant junk blobs as the same ball
+BALL_RETURN_MAX_GAP_SEC = 0.75  # long dropout + far reappear = not a bounce (last-of-video Miss)
+BALL_RETURN_GAP_NEAR_PX = 100  # after a long dropout, only keep the ball if it reappears nearby
+BALL_RETURN_MAX_AFTER_ARRIVE = 1.25  # unused legacy; gap rule handles false returns
+LATE_ANALYSIS_DELAY = LATE_SEARCH_DURATION  # wait for BETWEEN frames before scoring
 
 PIXEL_TO_METER_SCALE = 0.0259
 
@@ -140,7 +148,7 @@ SCREEN_CORRECT_THRESHOLDS = {
 
 # Screen-specific thresholds for PRESS
 PRESS_SCREEN_THRESHOLDS = {
-    '2': 120,   '7': 120,   '9': 120,   '14': 120,
+    '2': 120,   '3': 120,   '7': 120,   '9': 120,   '13': 120,   '14': 120,
 }
 
 # GOAL-specific thresholds (overrides)
@@ -602,6 +610,58 @@ class DetectionTracker:
 # UPDATED ANALYSIS FUNCTIONS (from code A – simplified logic)
 # ============================================================================
 
+def post_radius_for(action_type):
+    if action_type == "GOAL":
+        return GOAL_POST_RADIUS
+    if action_type == "PRESS":
+        return PRESS_POST_RADIUS
+    return PASS_POST_RADIUS
+
+
+def finishing_return_origin(action_type, screens, track):
+    """Player/send side of a come-back. Junk lights on the far camera are not a return."""
+    if action_type == "GOAL":
+        return goal_send_origin(screens)
+    if action_type == "TARGET":
+        origin = target_send_origin(screens)
+        if origin is not None:
+            return origin
+    if track:
+        return (float(track[0][1]), float(track[0][2]))
+    return ArenaSimulator.BALL_HOME
+
+
+def append_continuing_ball(
+    track,
+    extra,
+    max_step_px=BALL_TRACK_MAX_STEP_PX,
+    max_gap_sec=BALL_RETURN_MAX_GAP_SEC,
+    gap_near_px=BALL_RETURN_GAP_NEAR_PX,
+):
+    """Keep one ball identity.
+
+    Far jumps are ignored. A long dropout that reappears far away (typical
+    last-of-video BETWEEN motion) ends the track. A brief dropout near the
+    screen can still continue into a real bounce.
+    """
+    merged = list(track or [])
+    extra_f = extra or []
+    if extra_f and len(extra_f) >= 3:
+        extra_f = filter_static_ball_positions(extra_f) or []
+    prev = (merged[-1][0], merged[-1][1], merged[-1][2]) if merged else None
+    for t, x, y in extra_f:
+        if prev is not None:
+            dt = float(t) - float(prev[0])
+            dist = math.hypot(float(x) - prev[1], float(y) - prev[2])
+            if dist > max_step_px:
+                continue
+            if dt > max_gap_sec and dist > gap_near_px:
+                break
+        merged.append((t, x, y))
+        prev = (float(t), float(x), float(y))
+    return merged
+
+
 def get_positions_from_data(data, key, scale=SCALE):
     positions = []
     for entry in data:
@@ -909,21 +969,27 @@ def search_late_across_blocks(current_index: int, all_data: List[dict],
         if not filtered:
             continue
 
-        use_near = action_type in ['PASS']
-        if use_near:
-            near_positions = filter_positions_near_goal_lines(filtered, screens, goal_lines)
-            if not is_ball_moving(near_positions):
-                continue
-        else:
-            if not is_ball_moving(filtered):
-                continue
+        if not is_ball_moving(filtered):
+            continue
 
         best_screen_block, best_dist_block, best_time_block, best_proj_block = find_min_distance_to_screens(
             filtered, screens, goal_lines, require_movement=False
         )
 
         if best_screen_block is not None:
-            threshold = get_threshold(best_screen_block)
+            depth = arrival_depth_for(best_screen_block, action_type)
+            p0, p1 = get_screen_info(best_screen_block, goal_lines)
+            hit = False
+            if p0 is not None:
+                for t, x, y in filtered:
+                    if in_goal_area(
+                        (x, y), p0, p1, depth, post_radius=post_radius_for(action_type)
+                    ):
+                        hit = True
+                        break
+            if not hit:
+                continue
+            threshold = depth
             if best_dist_block <= threshold:
                 absolute_time = offset + (best_time_block if best_time_block is not None else 0)
                 if absolute_time <= LATE_SEARCH_DURATION and best_dist_block < best_dist:
@@ -976,6 +1042,8 @@ def get_positions_from_blocks_after(current_index, all_data, key, action_end_tim
 
         time_offset = (block_start - session_start_time).total_seconds()
         for t, x, y in positions:
+            if offset + t > time_window:
+                continue
             extra_positions.append((t + time_offset, x, y))
 
     return extra_positions
@@ -997,21 +1065,21 @@ def arrival_depth_for(screen, action_type):
     return float(max(FINISH_DIST, threshold))
 
 
-def in_goal_area(point, p0, p1, depth):
+def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
     """Goal mouth including posts. Cameras face screens 1 and 8."""
     dist, proj_t, d_left, d_right = compute_projection(point, p0, p1)
     if dist <= depth and (-GOAL_POST_SLACK) <= proj_t <= (1.0 + GOAL_POST_SLACK):
         return True
-    post_r = min(float(depth), 30.0)
+    post_r = min(float(depth), float(post_radius))
     return d_left <= post_r or d_right <= post_r
 
 
-def first_arrival_time(positions, screen, goal_lines, depth):
+def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_POST_RADIUS):
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None:
         return None
     for t, x, y in positions:
-        if in_goal_area((x, y), p0, p1, depth):
+        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius):
             return t
     return None
 
@@ -1019,13 +1087,14 @@ def first_arrival_time(positions, screen, goal_lines, depth):
 def best_arrival_in_positions(positions, screens, goal_lines, action_type):
     best = None
     depth_used = None
+    post_r = post_radius_for(action_type)
     for screen in screens:
         p0, p1 = get_screen_info(screen, goal_lines)
         if p0 is None:
             continue
         depth = arrival_depth_for(screen, action_type)
         for t, x, y in positions:
-            if not in_goal_area((x, y), p0, p1, depth):
+            if not in_goal_area((x, y), p0, p1, depth, post_radius=post_r):
                 continue
             eff, proj = get_effective_distance((x, y), p0, p1)
             if best is None or eff < best[0]:
@@ -1034,7 +1103,7 @@ def best_arrival_in_positions(positions, screens, goal_lines, action_type):
     return best, depth_used
 
 
-def departed_goal_area(positions, screen, goal_lines, arrive_time, depth):
+def departed_goal_area(positions, screen, goal_lines, arrive_time, depth, post_radius=GOAL_POST_RADIUS):
     """True if the object leaves the goal area after the arrival time."""
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None or arrive_time is None:
@@ -1044,10 +1113,10 @@ def departed_goal_area(positions, screen, goal_lines, arrive_time, depth):
     for t, x, y in positions:
         if t + 1e-6 < arrive_time:
             continue
-        if in_goal_area((x, y), p0, p1, depth):
+        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius):
             seen_in = True
             continue
-        if seen_in and t > arrive_time + 0.08 and not in_goal_area((x, y), p0, p1, leave_depth):
+        if seen_in and t > arrive_time + 0.08 and not in_goal_area((x, y), p0, p1, leave_depth, post_radius=post_radius):
             return True
     return False
 
@@ -1064,15 +1133,17 @@ def on_origin_side(point, p0, p1, origin):
     return line_side_sign(point, p0, p1) * line_side_sign(origin, p0, p1) > 1e-6
 
 
-def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, depth):
-    """GOAL come-back: leave the line band back toward the far-pitch origin.
+def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, depth, origin=None, post_radius=GOAL_POST_RADIUS, max_after_arrive=None):
+    """Come-back: leave the line band back toward the send/player origin.
 
     Continuing past the line toward the camera is a finish, not a return.
+    Long dropouts are already removed by append_continuing_ball for PASS/TARGET.
     """
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None or arrive_time is None:
         return False
-    origin = goal_send_origin(screens)
+    if origin is None:
+        origin = goal_send_origin(screens)
     leave_depth = float(depth) * 1.15
     seen_in = False
     away = 0
@@ -1080,13 +1151,13 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
         if t + 1e-6 < arrive_time:
             continue
         pt = (x, y)
-        if in_goal_area(pt, p0, p1, depth):
+        if in_goal_area(pt, p0, p1, depth, post_radius=post_radius):
             seen_in = True
             away = 0
             continue
         if not seen_in or t <= arrive_time + 0.08:
             continue
-        if in_goal_area(pt, p0, p1, leave_depth):
+        if in_goal_area(pt, p0, p1, leave_depth, post_radius=post_radius):
             continue
         if on_origin_side(pt, p0, p1, origin):
             away += 1
@@ -1097,12 +1168,14 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
     return False
 
 
-def extended_track(positions, action_index, all_data, key, action_end_time, session_start_time, window=2.5):
+def extended_track(positions, action_index, all_data, key, action_end_time, session_start_time, window=2.5, continue_ball=False):
     extra = []
     if action_end_time is not None and session_start_time is not None:
         extra = get_positions_from_blocks_after(
             action_index, all_data, key, action_end_time, session_start_time, time_window=window
         )
+    if continue_ball:
+        return append_continuing_ball(positions, extra)
     if not extra:
         return list(positions or [])
     merged = list(positions or []) + list(extra)
@@ -1112,6 +1185,61 @@ def extended_track(positions, action_index, all_data, key, action_end_time, sess
 # ================================================================
 # Helper to compute AEP orientation for a single action (from code A)
 # ================================================================
+
+def compute_distances_by_video(blocks, results, fallback_m_per_px=PIXEL_TO_METER_SCALE):
+    """Hip path length (metres) for each video_index from recognition + results."""
+    action_vid = {}
+    for row in results or []:
+        sid = row.get("id")
+        if not sid:
+            continue
+        try:
+            action_vid[sid] = int(row.get("video_index") or 1)
+        except (TypeError, ValueError):
+            action_vid[sid] = 1
+    cur_v = None
+    by_v = defaultdict(list)
+    for block in blocks or []:
+        sid = block.get("id")
+        if sid and sid in action_vid:
+            cur_v = action_vid[sid]
+        if cur_v is None:
+            continue
+        st = block.get("start_time")
+        if not st:
+            continue
+        try:
+            block_start = datetime.strptime(st, "%H:%M:%S.%f")
+        except Exception:
+            continue
+        for entry in block.get("data") or []:
+            hp = entry.get("hp")
+            if hp is None or not isinstance(hp, list) or len(hp) != 2:
+                continue
+            by_v[cur_v].append(
+                (block_start + timedelta(seconds=float(entry.get("t", 0.0) or 0.0)), hp[0], hp[1])
+            )
+    out = {}
+    for vid, pts in by_v.items():
+        pts = sorted(pts, key=lambda p: p[0])
+        step = 4 if len(pts) >= 8 else 1
+        sampled = pts[::step]
+        if len(sampled) < 2:
+            out[vid] = 0.0
+            continue
+        if simust_homography is not None:
+            out[vid] = float(
+                simust_homography.path_distance_meters(sampled, fallback_m_per_px=fallback_m_per_px)
+            )
+        else:
+            total = 0.0
+            for i in range(1, len(sampled)):
+                _, x1, y1 = sampled[i - 1]
+                _, x2, y2 = sampled[i]
+                total += math.hypot(float(x2) - float(x1), float(y2) - float(y1))
+            out[vid] = total * float(fallback_m_per_px)
+    return out
+
 
 def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> str:
     """
@@ -1264,7 +1392,8 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
     session_duration = track[-1][0] if track else 0
     movement, direction = analyze_movement(track)
     full_track = extended_track(
-        track, action_index, all_data, key, action_end_time, session_start_time
+        track, action_index, all_data, key, action_end_time, session_start_time,
+        continue_ball=(action_type in ("PASS", "TARGET")),
     )
 
     result = 'Wrong'
@@ -1284,14 +1413,18 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
         arrival, depth = best_arrival_in_positions(track, screens, goal_lines, action_type)
         if arrival is not None:
             best_eff_dist, best_min_time, best_screen, best_proj_t = arrival
-            arrive_t = first_arrival_time(track, best_screen, goal_lines, depth)
+            arrive_t = first_arrival_time(
+                track, best_screen, goal_lines, depth, post_radius=post_radius_for(action_type)
+            )
             if arrive_t is None:
                 arrive_t = best_min_time
-            came_back = departed_goal_area(
-                full_track, best_screen, goal_lines, arrive_t, depth
+            origin = finishing_return_origin(action_type, screens, track)
+            came_back = returned_toward_origin(
+                full_track, best_screen, screens, goal_lines, arrive_t, depth,
+                origin=origin, post_radius=post_radius_for(action_type),
             )
-            # Arrive and come back = Correct. Arrive and stay = Miss.
-            if came_back:
+            # PRESS: reach the zone = Correct (no Miss). PASS/TARGET: return = Correct, stay = Miss.
+            if action_type == 'PRESS' or came_back:
                 result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{best_min_time:.3f}"
@@ -2453,57 +2586,42 @@ class SimustRealtimeCamera:
             self.save_between_sessions_block()
             self.between_sessions_active = False
 
-        # --- Compute total player distance from in‑memory hip positions (sampled every 4 frames) ---
-        print("\n[DEBUG] Computing total distance from in‑memory blocks (sampled every 4 frames)...")
-        total_distance_meters = 0.0
-
-        if len(self.all_player_positions) > 1:
-            # Sample every 4th frame (step=4)
-            sampled = self.all_player_positions[::4]
-            if len(sampled) > 1:
-                if simust_homography is not None:
-                    total_distance_meters = simust_homography.path_distance_meters(
-                        sampled, fallback_m_per_px=PIXEL_TO_METER_SCALE
-                    )
-                    print(f"[DEBUG] Total hip distance (homography, sampled): {total_distance_meters:.2f} m")
-                else:
-                    total_dist_px = 0.0
-                    for i in range(1, len(sampled)):
-                        _, x1, y1 = sampled[i-1]
-                        _, x2, y2 = sampled[i]
-                        total_dist_px += math.hypot(x2 - x1, y2 - y1)
-                    total_distance_meters = total_dist_px * PIXEL_TO_METER_SCALE
-                    print(f"[DEBUG] Total pixel distance (hip, sampled): {total_dist_px:.2f} px → {total_distance_meters:.2f} m")
-            else:
-                print("[DEBUG] Not enough sampled hip positions (need >1).")
-        else:
-            print("[DEBUG] Not enough hip positions to compute distance (need >1).")
-
-        # Update the first action's total_distance
-        if self.stats['results']:
-            self.stats['results'][0]['total_distance'] = total_distance_meters
-            results_json_path = os.path.join(self.recording_dir, "results.json")
-            if os.path.exists(results_json_path):
-                try:
-                    with open(results_json_path, 'r', encoding='utf-8') as f:
-                        all_results = json.load(f)
-                    if all_results:
-                        all_results[0]['total_distance'] = total_distance_meters
-                        with open(results_json_path, 'w', encoding='utf-8') as f:
-                            json.dump(all_results, f, indent=2, ensure_ascii=False)
-                        print(f"[DEBUG] Updated results.json with distance {total_distance_meters:.2f} m")
-                except Exception as e:
-                    print(f"[DEBUG] Error updating results.json: {e}")
-            else:
-                with open(results_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(self.stats['results'], f, indent=2, ensure_ascii=False)
-                print(f"[DEBUG] Created results.json with distance {total_distance_meters:.2f} m")
+        # --- Per-video hip distance into every result of that video ---
+        print("\n[DEBUG] Computing per-video hip distance from recognition.json...")
+        try:
+            self._write_per_video_distances()
+        except Exception as e:
+            print(f"[DEBUG] Error writing per-video distances: {e}")
 
         self.video_saver.stop()
         self.save_recognition_json()
         self.recording_active = False
         self.video_started = False
         self.video_saver = VideoSaver()
+
+    def _write_per_video_distances(self):
+        """Stamp total_distance on each result from hips of that video only."""
+        if simust_homography is None:
+            return
+        results_json_path = os.path.join(self.recording_dir, "results.json")
+        recognition_path = os.path.join(self.recording_dir, "recognition.json")
+        if not os.path.exists(results_json_path) or not os.path.exists(recognition_path):
+            return
+        with open(results_json_path, "r", encoding="utf-8") as f:
+            all_results = json.load(f)
+        with open(recognition_path, "r", encoding="utf-8") as f:
+            blocks = json.load(f)
+        if not all_results:
+            return
+        by_video = compute_distances_by_video(blocks, all_results)
+        for row in all_results:
+            vid = int(row.get("video_index") or 1)
+            row["total_distance"] = float(by_video.get(vid, 0.0))
+        with open(results_json_path, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=2, ensure_ascii=False)
+        self.stats["results"] = all_results
+        for vid, metres in sorted(by_video.items()):
+            print(f"[DEBUG] Video {vid} hip distance: {metres:.2f} m")
 
     def save_recognition_json(self):
         if not self.recording_dir:
@@ -2714,7 +2832,7 @@ class SimustRealtimeCamera:
             if self.analysis_timer:
                 self.analysis_timer.cancel()
             self.analysis_started_at = time.time()
-            self.analysis_timer = threading.Timer(1.5, self._perform_late_analysis)
+            self.analysis_timer = threading.Timer(LATE_ANALYSIS_DELAY, self._perform_late_analysis)
             self.analysis_timer.daemon = True
             self.analysis_timer.start()
 
@@ -2864,6 +2982,10 @@ class SimustRealtimeCamera:
         mid_x = w // 2
 
         frame = self.draw_goal_lines(frame)
+
+        if POLYGON_POINTS:
+            pts = np.array(POLYGON_POINTS, dtype=np.int32)
+            cv2.polylines(frame, [pts], True, COLOR_POLYGON, 2)
 
         if session_active:
             cv2.putText(frame, "SESSION ACTIVE", (w//2 - 80, 30),
@@ -3195,7 +3317,7 @@ class SimustRealtimeCamera:
             if self.analysis_timer:
                 self.analysis_timer.cancel()
                 started = self.analysis_started_at or self._pause_started_at
-                self._paused_analysis_remaining = max(0.05, 1.5 - (self._pause_started_at - started))
+                self._paused_analysis_remaining = max(0.05, LATE_ANALYSIS_DELAY - (self._pause_started_at - started))
                 self.analysis_timer = None
             print("PAUSED — detection, analysis, and saving frozen")
 
@@ -3322,11 +3444,6 @@ class SimustRealtimeCamera:
                 stitched = self.stitch_frames(left, right)
                 if stitched is None:
                     continue
-
-                # ----- DRAW POLYGON ON THE STITCHED FRAME (for saved video) -----
-                if POLYGON_POINTS:
-                    pts = np.array(POLYGON_POINTS, dtype=np.int32)
-                    cv2.polylines(stitched, [pts], True, COLOR_POLYGON, 2)
 
                 if stitched is not None and os.path.exists(CAPTURE_TRIGGER_FILE):
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -730,8 +730,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.per_video_results_ready.emit("")
             return
         backend_url = "http://127.0.0.1:8000/create-video-results"
+        session_dir = os.path.dirname(report_path) if report_path else ""
         payload = {
             "report_path": report_path,
+            "directory": session_dir,
             "start_time": start_time,
             "end_time": end_time,
             "video_index": video_num,
