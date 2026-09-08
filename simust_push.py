@@ -57,6 +57,14 @@ def _load_local_env() -> None:
 _load_local_env()
 PUSH_URL = os.environ.get("SIMUST_PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("SIMUST_PUSH_KEY", "").strip()
+_PLACEHOLDER_KEYS = {
+    "",
+    "PASTE_VPS_PUSH_KEY_HERE",
+    "paste-the-key-from-the-vps-root-simust-lab.env",
+    "paste-the-key-from-the-vps-/opt/simust/.env-SIMUST_PUSH_KEY",
+    "changeme",
+    "change-me",
+}
 _users_push_lock = threading.Lock()
 _users_push_at = 0.0
 _users_pull_lock = threading.Lock()
@@ -70,7 +78,26 @@ os.makedirs(QUEUE_DIR, exist_ok=True)
 
 
 def push_configured() -> bool:
-    return bool(PUSH_URL and PUSH_KEY)
+    if not PUSH_URL or not PUSH_KEY:
+        return False
+    if PUSH_KEY.strip() in _PLACEHOLDER_KEYS:
+        return False
+    if "PASTE" in PUSH_KEY.upper() or "paste-the-key" in PUSH_KEY.lower():
+        return False
+    return True
+
+
+def push_config_problem() -> str:
+    """Human-readable reason the lab cannot go online on the public operator."""
+    if not PUSH_URL:
+        return "SIMUST_PUSH_URL missing in lab.env"
+    if not PUSH_KEY or PUSH_KEY.strip() in _PLACEHOLDER_KEYS or "PASTE" in PUSH_KEY.upper():
+        return (
+            "SIMUST_PUSH_KEY in lab.env is still a placeholder. "
+            "On the VPS run: grep SIMUST_PUSH_KEY /opt/simust/.env "
+            "then paste that value into lab.env and restart app.py"
+        )
+    return ""
 
 
 def sanitize_session(session_report: Dict[str, Any]) -> Dict[str, Any]:
@@ -573,10 +600,14 @@ def ack_remote_commands(ids: list) -> None:
         logger.warning("Remote command ack failed: %s", exc)
 
 
-def push_lab_status(status: Dict[str, Any]) -> None:
+def push_lab_status(status: Dict[str, Any], raise_errors: bool = False) -> None:
     if not push_configured():
+        if raise_errors:
+            raise RuntimeError(push_config_problem() or "push not configured")
         return
     try:
         _post({"kind": "lab_status", "status": status or {}})
     except Exception as exc:
         logger.warning("Lab status push failed: %s", exc)
+        if raise_errors:
+            raise

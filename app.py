@@ -1027,19 +1027,64 @@ def _parse_queued_at(value) -> Optional[float]:
 
 
 def should_ignore_remote_stop(data: Optional[dict]) -> bool:
-    """Leftover Stop commands must not abort the next test."""
+    """Ignore Stop only when nothing is running.
+
+    Do not use VPS vs lab wall-clock comparisons: clock skew was causing live
+    remote Stop commands to be dropped while the lab kept playing.
+    Command TTL on the host already expires ancient queued stops.
+    """
     payload = data or {}
     abort = bool(payload.get("abort") or payload.get("discard") or payload.get("operator_stop"))
     if not abort:
         return False
-    if not _realtime_is_running():
-        return True
-    if not payload.get("_remote"):
-        return False
-    queued_at = _parse_queued_at(payload.get("_queued_at"))
-    if queued_at and _realtime_session_started_at and queued_at < (_realtime_session_started_at - 5):
-        return True
-    return False
+    return not _realtime_is_running()
+
+
+def apply_stop_realtime(data: Optional[dict] = None) -> dict:
+    """Stop / abort realtime playback. Used by HTTP and the remote command loop."""
+    global smart_player_process, realtime_camera_process, realtime_aborted, realtime_active_player_id
+    global _realtime_session_active
+    data = data or {}
+    if should_ignore_remote_stop(data):
+        # Still sweep stray player/camera processes from a lost session handle.
+        if data.get("_remote") and bool(data.get("abort") or data.get("discard") or data.get("operator_stop")):
+            logger.info("Remote stop with no tracked session — sweeping stray realtime processes")
+            force_kill_smart_player()
+            kill_process_tree(realtime_camera_process)
+            realtime_camera_process = None
+            write_pause_setting(False)
+            write_playback_status("idle", "Ready for the next test")
+        else:
+            logger.info("Ignoring remote stop-realtime; no current test to abort")
+            write_pause_setting(False)
+        return {"status": "ignored", "aborted": False, "discarded": [], "message": "No active test"}
+    abort = bool(data.get("abort") or data.get("discard") or data.get("operator_stop"))
+    logger.info("Stopping realtime playback (abort=%s, remote=%s)...", abort, bool(data.get("_remote")))
+    write_pause_setting(False)
+    if abort:
+        realtime_aborted = True
+        write_playback_status("aborted", "Operator stopped. Session discarded.")
+    force_kill_smart_player()
+    kill_process_tree(realtime_camera_process)
+    realtime_camera_process = None
+    discarded = []
+    if abort:
+        discarded = discard_aborted_realtime_folders()
+        clear_live_snapshot(realtime_active_player_id)
+        write_playback_status("idle", "Ready for the next test")
+    _realtime_session_active = False
+    try:
+        speed_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "simust_speed.txt")
+        if os.path.exists(speed_file):
+            os.remove(speed_file)
+    except Exception:
+        pass
+    return {
+        "status": "success",
+        "aborted": abort,
+        "discarded": discarded,
+        "message": "Test stopped. Nothing was saved." if abort else "Realtime playback stopped",
+    }
 
 
 def discard_aborted_realtime_folders() -> list:
@@ -1254,6 +1299,16 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not flush push queue: %s", exc)
         if not PUBLIC_MODE:
             try:
+                # Prove the VPS accepts this key; otherwise /operator stays Lab offline.
+                simust_push.push_lab_status({"lab_online": True, "boot": True}, raise_errors=True)
+                logger.info("Lab online heartbeat sent to the public host")
+            except Exception as exc:
+                logger.error(
+                    "Lab→host link FAILED (%s). /operator will show Lab offline. "
+                    "Check SIMUST_PUSH_KEY matches /opt/simust/.env on the VPS.",
+                    exc,
+                )
+            try:
                 users = load_users()
                 simust_push.push_accounts_async(users)
                 simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
@@ -1275,6 +1330,20 @@ async def lifespan(app: FastAPI):
                 threading.Thread(target=_remote_operator_loop, daemon=True, name="simust-remote-ops").start()
             except Exception as exc:
                 logger.warning("Could not sync accounts/reports on startup: %s", exc)
+    elif not PUBLIC_MODE:
+        problem = simust_push.push_config_problem() or "SIMUST_PUSH_URL / SIMUST_PUSH_KEY not set"
+        logger.error(
+            "PUBLIC OPERATOR WILL STAY LAB OFFLINE: %s. "
+            "Edit lab.env next to app.py, then restart.",
+            problem,
+        )
+        print("\n" + "=" * 60)
+        print("LAB OFFLINE on http://157.180.47.98/operator")
+        print(problem)
+        print("1) On VPS:  grep SIMUST_PUSH_KEY /opt/simust/.env")
+        print("2) Put that key in lab.env as SIMUST_PUSH_KEY=...")
+        print("3) Restart this app.py")
+        print("=" * 60 + "\n")
     yield
     logger.info("App shutdown")
     force_kill_smart_player()
@@ -1335,6 +1404,19 @@ async def app_config():
         "worldwide": True,
         "lab_online": True if not PUBLIC_MODE else bool((simust_remote.get_status() or {}).get("lab_online")),
     }
+
+
+@app.get("/lab-link")
+async def lab_link_status():
+    """Public (no auth) lab online flag for the operator banner. Auth failures must not look like Lab offline."""
+    if not PUBLIC_MODE:
+        return {"lab_online": True, "updated_at": ""}
+    status = simust_remote.get_status() or {}
+    return {
+        "lab_online": bool(status.get("lab_online")),
+        "updated_at": status.get("updated_at") or "",
+    }
+
 
 @app.get("/cameras")
 async def get_cameras():
@@ -1677,45 +1759,12 @@ async def start_realtime_playback(req: Request):
 
 @app.post("/stop-realtime")
 async def stop_realtime(req: Request):
-    global smart_player_process, realtime_camera_process, realtime_aborted, realtime_active_player_id
-    global _realtime_session_active
     try:
         try:
             data = await req.json()
         except Exception:
             data = {}
-        data = data or {}
-        if should_ignore_remote_stop(data):
-            logger.info("Ignoring remote stop-realtime; no current test to abort")
-            write_pause_setting(False)
-            return {"status": "ignored", "aborted": False, "discarded": [], "message": "No active test"}
-        abort = bool(data.get("abort") or data.get("discard") or data.get("operator_stop"))
-        logger.info("Stopping realtime playback (abort=%s)...", abort)
-        write_pause_setting(False)
-        if abort:
-            realtime_aborted = True
-            write_playback_status("aborted", "Operator stopped. Session discarded.")
-        force_kill_smart_player()
-        kill_process_tree(realtime_camera_process)
-        realtime_camera_process = None
-        discarded = []
-        if abort:
-            discarded = discard_aborted_realtime_folders()
-            clear_live_snapshot(realtime_active_player_id)
-            write_playback_status("idle", "Ready for the next test")
-        _realtime_session_active = False
-        try:
-            speed_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "simust_speed.txt")
-            if os.path.exists(speed_file):
-                os.remove(speed_file)
-        except Exception:
-            pass
-        return {
-            "status": "success",
-            "aborted": abort,
-            "discarded": discarded,
-            "message": "Test stopped. Nothing was saved." if abort else "Realtime playback stopped",
-        }
+        return apply_stop_realtime(data or {})
     except Exception as e:
         logger.error(f"Failed to stop realtime: {e}")
         raise HTTPException(500, f"Failed to stop: {str(e)}")
@@ -4245,8 +4294,15 @@ def _run_queued_operator_command(command: dict) -> None:
         return
     payload["_remote"] = True
     payload["_queued_at"] = command.get("created_at")
+    if command.get("created_ts") is not None:
+        payload["_queued_ts"] = command.get("created_ts")
     try:
-        if action.startswith("homography-"):
+        # Stop in-process so HTTP self-calls cannot drop/ignore the abort.
+        if action == "stop-realtime":
+            result = apply_stop_realtime(payload)
+            if (result or {}).get("status") == "ignored":
+                logger.warning("Remote stop-realtime returned ignored: %s", (result or {}).get("message"))
+        elif action.startswith("homography-"):
             suffix = action[len("homography-"):]
             _lab_local_request("POST", f"/homography/{suffix}", payload)
         else:

@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -117,10 +118,11 @@ class StaleRemoteStopTests(unittest.TestCase):
         simust_app._realtime_session_active = True
         self.assertFalse(simust_app.should_ignore_remote_stop({"abort": True}))
 
-    def test_stale_remote_stop_before_session_is_ignored(self):
+    def test_active_remote_stop_is_honored_even_if_queued_string_is_old(self):
+        """Clock-skewed created_at strings must not drop a live Stop."""
         simust_app._realtime_session_active = True
-        simust_app._realtime_session_started_at = 2_000_000_000
-        self.assertTrue(simust_app.should_ignore_remote_stop({
+        simust_app._realtime_session_started_at = time.time()
+        self.assertFalse(simust_app.should_ignore_remote_stop({
             "_remote": True,
             "abort": True,
             "_queued_at": "2020-01-01T00:00:00",

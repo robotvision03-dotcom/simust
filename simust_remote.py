@@ -98,6 +98,7 @@ def enqueue(action: str, payload: Dict[str, Any], actor: str) -> Dict[str, Any]:
         "payload": payload or {},
         "actor": actor or "",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "created_ts": time.time(),
     }
     with _LOCK:
         state = _load()

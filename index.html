@@ -215,6 +215,23 @@
         html.simust-android .slider::before { height: 26px; width: 26px; }
         html.simust-android input:checked + .slider::before { transform: translateX(32px); }
         html.simust-android .lab-link-banner { font-size: 13px; padding: 10px 16px; }
+        .transport-bar {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 24px;
+            padding: 12px 0 14px;
+            background: linear-gradient(180deg, var(--portal-panel) 70%, transparent);
+        }
+        html.simust-android .transport-bar {
+            padding-top: 8px;
+            margin-inline: -4px;
+            padding-inline: 4px;
+        }
         html.simust-android .table-wrap { -webkit-overflow-scrolling: touch; }
         html.simust-android .toast { inset-inline-end: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
         @media (orientation: landscape) {
@@ -2086,7 +2103,11 @@
             var loginErrorState = useState('');
             var loginError = loginErrorState[0];
             var setLoginError = loginErrorState[1];
-            var labOnlineState = useState(window.SIMUST_PUBLIC ? null : true);
+            var labOnlineState = useState(window.SIMUST_PUBLIC
+                ? (window.SIMUST_APP_CONFIG && window.SIMUST_APP_CONFIG.lab_online === true ? true
+                    : window.SIMUST_APP_CONFIG && window.SIMUST_APP_CONFIG.lab_online === false ? false
+                    : null)
+                : true);
             var labOnline = labOnlineState[0];
             var setLabOnline = labOnlineState[1];
             var langState = useState(typeof simustGetLang === 'function' ? simustGetLang() : 'en');
@@ -3196,7 +3217,13 @@
                                 axios.get('/remote/status').then(function(st) {
                                     var err = st.data && st.data.last_remote_error;
                                     var act = st.data && st.data.last_remote_action;
-                                    if (err && act === 'start-realtime-playback') {
+                                    var errAt = st.data && st.data.last_remote_error_at;
+                                    var errMs = 0;
+                                    if (errAt) {
+                                        errMs = Date.parse(String(errAt).replace(' ', 'T')) || 0;
+                                    }
+                                    // Ignore stale errors from a previous start attempt.
+                                    if (err && act === 'start-realtime-playback' && errMs >= waitStartedAt - 1000) {
                                         failLabStart("Lab failed to start Realtime Play: " + err);
                                     }
                                 }).catch(function() {});
@@ -3291,7 +3318,43 @@
                     });
                 }
                 if (realtimeRunningRef.current || realtimeRunning) {
-                    axios.post("/stop-realtime", abort ? { abort: true } : {}).catch(function(e) { console.error(e); });
+                    var stopPayload = abort
+                        ? { abort: true, discard: true, operator_stop: true }
+                        : {};
+                    axios.post("/stop-realtime", stopPayload).then(function() {
+                        if (!window.SIMUST_PUBLIC) return;
+                        var tries = 0;
+                        var verify = function() {
+                            tries += 1;
+                            axios.get('/remote/status').then(function(st) {
+                                var pb = st.data && st.data['playback-status'];
+                                var state = (pb && pb.state) || '';
+                                var err = st.data && st.data.last_remote_error;
+                                var act = st.data && st.data.last_remote_action;
+                                if (state === 'idle' || state === 'aborted' || state === '') {
+                                    showToast(abort
+                                        ? "Stop sent to lab. Session discarded."
+                                        : "Realtime stopped", 'success');
+                                    return;
+                                }
+                                if (err && act === 'stop-realtime') {
+                                    showToast("Lab did not stop: " + err, 'error');
+                                    return;
+                                }
+                                if (tries < 8) {
+                                    setTimeout(verify, 1000);
+                                    return;
+                                }
+                                showToast("Stop queued — if the lab keeps playing, restart lab app.py", 'info');
+                            }).catch(function() {
+                                if (tries < 8) setTimeout(verify, 1000);
+                            });
+                        };
+                        setTimeout(verify, 1500);
+                    }).catch(function(e) {
+                        console.error(e);
+                        showToast("Could not send Stop to the lab", 'error');
+                    });
                 }
                 realtimeRunningRef.current = false;
                 setRealtimeRunning(false);
@@ -3304,7 +3367,9 @@
                 clearAutoStopTimeout();
                 autoStopDeadlineRef.current = 0;
                 showToast(abort
-                    ? "Test stopped. Nothing was saved. Ready for the next test."
+                    ? (window.SIMUST_PUBLIC
+                        ? "Stopping on the lab…"
+                        : "Test stopped. Nothing was saved. Ready for the next test.")
                     : "Realtime stopped", 'info');
             };
 
@@ -3407,11 +3472,52 @@
 
             useEffect(function() {
                 if (!window.SIMUST_PUBLIC || !loggedIn) return;
+                var sessionExpired = false;
                 var tick = function() {
-                    axios.get('/remote/status').then(function(res) {
+                    // Banner uses a public endpoint so an expired Windows login token
+                    // cannot paint "Lab offline" while the lab is actually online.
+                    axios.get('/lab-link').then(function(res) {
                         setLabOnline(!!(res.data && res.data.lab_online));
                     }).catch(function() {
-                        setLabOnline(false);
+                        // Keep last known banner state on transient network errors.
+                    });
+                    if (!window.SIMUST_TOKEN || sessionExpired) return;
+                    axios.get('/remote/status').then(function(res) {
+                        if (res.data && typeof res.data.lab_online === 'boolean') {
+                            setLabOnline(!!res.data.lab_online);
+                        }
+                        var pb = res.data && res.data['playback-status'];
+                        var state = (pb && pb.state) || '';
+                        var active = state === 'playing' || state === 'paused' || state === 'loading' || state === 'playing_final';
+                        if (active && !sessionAbortedRef.current) {
+                            if (!realtimeRunningRef.current) {
+                                realtimeRunningRef.current = true;
+                                setRealtimeRunning(true);
+                            }
+                            if (state === 'paused' || (pb && pb.paused)) {
+                                if (!realtimePausedRef.current) {
+                                    realtimePausedRef.current = true;
+                                    setRealtimePaused(true);
+                                }
+                            } else if (realtimePausedRef.current) {
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
+                            }
+                        }
+                    }).catch(function(err) {
+                        var status = err && err.response && err.response.status;
+                        if (status === 401 || status === 403) {
+                            sessionExpired = true;
+                            try {
+                                window.SIMUST_TOKEN = '';
+                                delete axios.defaults.headers.common.Authorization;
+                                localStorage.removeItem('simust-operator-token');
+                                localStorage.removeItem('simust-operator-user');
+                            } catch (e) {}
+                            setLoggedIn(false);
+                            setUsername('');
+                            setLoginError('Session expired. Sign in again.');
+                        }
                     });
                 };
                 tick();
@@ -3651,7 +3757,7 @@
                                 simulationEnabled ? 'ON' : 'OFF'
                             )
                         ),
-                        React.createElement('div', { className: "flex flex-wrap gap-4 items-center mb-6" },
+                        React.createElement('div', { className: "transport-bar" },
                             React.createElement('button', {
                                 onClick: startRealtimePlayback,
                                 disabled: labBlocked || !selectedPlayerId || !selectedLevel || realtimeRunning ||
@@ -3685,18 +3791,18 @@
                                 !realtimeRunning ? React.createElement('span', { className: "auto-badge" },
                                     "AUTO") : null
                             ),
-                            realtimeRunning ?
                             React.createElement('button', {
                                 onClick: togglePausePlayback,
-                                className: "btn-primary px-6 py-2 font-bold " + (realtimePaused ? "btn-resume" : "btn-pause")
-                            }, realtimePaused ? t("play") : t("pause")) :
-                            null,
-                            realtimeRunning ?
+                                disabled: !realtimeRunning,
+                                className: "btn-primary px-6 py-2 font-bold " + (realtimePaused ? "btn-resume" : "btn-pause") +
+                                    (!realtimeRunning ? " opacity-50" : "")
+                            }, realtimePaused ? t("play") : t("pause")),
                             React.createElement('button', {
                                 onClick: function() { stopPlayback({ abort: true }); },
-                                className: "btn-primary btn-danger px-6 py-2 font-bold"
-                            }, t("stop")) :
-                            null,
+                                disabled: !realtimeRunning,
+                                className: "btn-primary btn-danger px-6 py-2 font-bold" +
+                                    (!realtimeRunning ? " opacity-50" : "")
+                            }, t("stop")),
                             React.createElement('button', {
                                 onClick: displayResultsOnScreen2,
                                 className: "btn-primary btn-results px-6 py-2 font-bold",
