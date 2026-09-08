@@ -3140,6 +3140,7 @@
                     armAutoStopTimeout(autoStopRemainingRef.current);
 
                     var sawActivePlayback = false;
+                    var waitStartedAt = Date.now();
                     var finishFromStatus = function() {
                         if (sessionAbortedRef.current || realtimePausedRef.current) return;
                         if (!realtimeRunningRef.current && sessionSavedRef.current) return;
@@ -3166,11 +3167,44 @@
                         }
                     };
 
+                    var failLabStart = function(msg) {
+                        realtimeRunningRef.current = false;
+                        setRealtimeRunning(false);
+                        sessionSavedRef.current = true;
+                        if (liveIntervalRef.current) {
+                            clearInterval(liveIntervalRef.current);
+                            liveIntervalRef.current = null;
+                        }
+                        if (autoStopTimeoutRef.current) {
+                            clearTimeout(autoStopTimeoutRef.current);
+                            autoStopTimeoutRef.current = null;
+                        }
+                        if (realtimeMonitorInterval.current) {
+                            clearTimeout(realtimeMonitorInterval.current);
+                            realtimeMonitorInterval.current = null;
+                        }
+                        setError(msg);
+                        showToast(msg, 'error');
+                    };
+
                     var checkStatus = function() {
                         if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
                         axios.get("/playback-status").then(function(statusRes) {
                             if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
                             var state = statusRes.data && statusRes.data.state ? statusRes.data.state : '';
+                            if (window.SIMUST_PUBLIC && !sawActivePlayback) {
+                                axios.get('/remote/status').then(function(st) {
+                                    var err = st.data && st.data.last_remote_error;
+                                    var act = st.data && st.data.last_remote_action;
+                                    if (err && act === 'start-realtime-playback') {
+                                        failLabStart("Lab failed to start Realtime Play: " + err);
+                                    }
+                                }).catch(function() {});
+                                if (Date.now() - waitStartedAt > 28000) {
+                                    failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
+                                    return;
+                                }
+                            }
                             if (state === "aborted") {
                                 sessionAbortedRef.current = true;
                                 sessionSavedRef.current = true;
@@ -3198,18 +3232,7 @@
                                 return;
                             }
                             if (state === "error") {
-                                realtimeRunningRef.current = false;
-                                setRealtimeRunning(false);
-                                sessionSavedRef.current = true;
-                                if (liveIntervalRef.current) {
-                                    clearInterval(liveIntervalRef.current);
-                                    liveIntervalRef.current = null;
-                                }
-                                if (autoStopTimeoutRef.current) {
-                                    clearTimeout(autoStopTimeoutRef.current);
-                                    autoStopTimeoutRef.current = null;
-                                }
-                                setError("Playback error occurred");
+                                failLabStart("Playback error occurred");
                                 return;
                             }
                             if (state === "idle" && sawActivePlayback) {

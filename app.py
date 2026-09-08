@@ -11,6 +11,8 @@ import tempfile
 import subprocess
 import multiprocessing
 import urllib.parse
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -4189,9 +4191,19 @@ def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -
         method=method,
         headers={"Content-Type": "application/json"} if body is not None else {},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-    return json.loads(raw) if raw else {}
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"lab {method} /{path_name} -> HTTP {exc.code}: {detail}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"lab {method} /{path_name} failed: {exc}") from exc
 
 
 def _publish_lab_status() -> None:
@@ -4233,13 +4245,37 @@ def _run_queued_operator_command(command: dict) -> None:
         return
     payload["_remote"] = True
     payload["_queued_at"] = command.get("created_at")
-    if action.startswith("homography-"):
-        suffix = action[len("homography-"):]
-        _lab_local_request("POST", f"/homography/{suffix}", payload)
-        _publish_lab_status()
-        return
-    _lab_local_request("POST", f"/{action}", payload)
-    logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
+    try:
+        if action.startswith("homography-"):
+            suffix = action[len("homography-"):]
+            _lab_local_request("POST", f"/homography/{suffix}", payload)
+        else:
+            _lab_local_request("POST", f"/{action}", payload)
+        logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
+        simust_push.push_lab_status({
+            "lab_online": True,
+            "last_remote_action": action,
+            "last_remote_error": "",
+            "last_remote_ok_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+    except Exception as exc:
+        detail = str(exc)
+        try:
+            if hasattr(exc, "read"):
+                detail = exc.read().decode("utf-8", errors="replace")[:400]
+        except Exception:
+            pass
+        logger.warning("Remote operator command failed (%s): %s", action, detail)
+        try:
+            simust_push.push_lab_status({
+                "lab_online": True,
+                "last_remote_action": action,
+                "last_remote_error": detail[:400],
+                "last_remote_error_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+        except Exception:
+            pass
+        raise
 
 
 def _remote_operator_loop() -> None:
@@ -4254,6 +4290,8 @@ def _remote_operator_loop() -> None:
                         done.append(command["id"])
                 except Exception as exc:
                     logger.warning("Remote operator command failed: %s", exc)
+                    if command.get("id"):
+                        done.append(command["id"])
             if done:
                 simust_push.ack_remote_commands(done)
             _publish_lab_status()
