@@ -24,6 +24,7 @@ class GoalProbeCatalogTests(unittest.TestCase):
     def test_zone_catalog_has_line_corners_and_outside(self):
         names = set(rt.GOAL_PROBE_ZONES)
         self.assertTrue({"line_center", "post_a", "post_b", "upper_corner_a", "upper_corner_b"} <= names)
+        self.assertTrue({"corner_in_a", "corner_in_b", "near_out_a", "near_out_b"} <= names)
         self.assertTrue({"outside_20", "outside_73", "outside_140", "wide_a", "wide_b"} <= names)
 
     def test_line_band_contains_center_not_upper_or_far(self):
@@ -39,7 +40,9 @@ class GoalProbeCatalogTests(unittest.TestCase):
     def test_live_aim_lists_cover_corners_and_upper(self):
         self.assertIn("post_a", rt.GOAL_AIM_IN)
         self.assertIn("post_b", rt.GOAL_AIM_IN)
+        self.assertIn("corner_in_a", rt.GOAL_AIM_IN)
         self.assertIn("upper_center_40", rt.GOAL_AIM_IN)
+        self.assertIn("near_out_a", rt.GOAL_AIM_MISS)
         self.assertIn("upper_center_90", rt.GOAL_AIM_OUT)
         self.assertIn("upper_corner_a", rt.GOAL_AIM_OUT)
         p0, p1 = rt.GOAL_LINES["8"]["p0"], rt.GOAL_LINES["8"]["p1"]
@@ -47,6 +50,9 @@ class GoalProbeCatalogTests(unittest.TestCase):
         for name in rt.GOAL_AIM_IN:
             xy = rt.goal_probe_xy(p0, p1, name)
             self.assertTrue(rt.in_goal_area(xy, p0, p1, depth), msg=name)
+        for name in rt.GOAL_AIM_MISS:
+            xy = rt.goal_probe_xy(p0, p1, name)
+            self.assertTrue(rt.in_goal_area(xy, p0, p1, depth), msg=("miss", name))
 
     def test_probe_cycles_named_zones_and_does_not_change_scoring_api(self):
         prev = rt.ArenaSimulator.GOAL_PROBE

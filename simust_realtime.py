@@ -122,6 +122,10 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
 GOAL_POST_SLACK = 0.10  # posts of screens 1 and 8 count as the goal mouth
+# Leave the mouth slightly past the band so a clear exit is not sticky.
+GOAL_LEAVE_DEPTH_FACTOR = 1.10
+# Near the line, keep detections on (stronger finishing evidence).
+GOAL_FORCE_DETECT_CLOSENESS = 0.88
 
 PIXEL_TO_METER_SCALE = 0.0259
 
@@ -138,7 +142,7 @@ PRESS_SCREEN_THRESHOLDS = {
     '2': 120,   '7': 120,   '9': 120,   '14': 120,
 }
 
-# GOAL-specific thresholds (overrides)
+# GOAL-specific thresholds (overrides). Goal line geometry stays fixed.
 GOAL_SCREEN_THRESHOLDS = {
     '8': 73,
     '1': 73,
@@ -179,10 +183,14 @@ GOAL_PROBE_ZONES = (
     "line_center",
     "post_a",
     "post_b",
+    "corner_in_a",
+    "corner_in_b",
     "upper_center_40",
     "upper_center_90",
     "upper_corner_a",
     "upper_corner_b",
+    "near_out_a",
+    "near_out_b",
     "outside_20",
     "outside_40",
     "outside_73",
@@ -191,16 +199,29 @@ GOAL_PROBE_ZONES = (
     "wide_a",
     "wide_b",
 )
-# Live GOAL aims: in-band finishes vs out-of-band misses. Never only the midpoint.
+# Live GOAL aims: corners / posts / through-line finishes vs true outs and near-miss exits.
 GOAL_AIM_IN = (
     "line_center",
     "post_a",
     "post_b",
+    "corner_in_a",
+    "corner_in_b",
     "upper_center_40",
     "outside_20",
     "outside_40",
     "wide_a",
     "wide_b",
+)
+# Enter the mouth near the line / corners, then leave outside → Miss.
+GOAL_AIM_MISS = (
+    "near_out_a",
+    "near_out_b",
+    "outside_20",
+    "corner_in_a",
+    "corner_in_b",
+    "wide_a",
+    "wide_b",
+    "upper_center_40",
 )
 GOAL_AIM_OUT = (
     "upper_center_90",
@@ -262,10 +283,16 @@ def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
         "line_center": mid,
         "post_a": (float(p0[0]), float(p0[1])),
         "post_b": (float(p1[0]), float(p1[1])),
+        # Corners of the goal mouth (into the net, near each post).
+        "corner_in_a": add(p0, up[0], up[1], 22.0),
+        "corner_in_b": add(p1, up[0], up[1], 22.0),
         "upper_center_40": add(mid, up[0], up[1], 40.0),
         "upper_center_90": add(mid, up[0], up[1], height),
         "upper_corner_a": add(p0, up[0], up[1], height),
         "upper_corner_b": add(p1, up[0], up[1], height),
+        # Near the line on the pitch side (enter area, can leave outside → Miss).
+        "near_out_a": add(p0, pitch[0], pitch[1], 28.0),
+        "near_out_b": add(p1, pitch[0], pitch[1], 28.0),
         "outside_20": add(mid, pitch[0], pitch[1], 20.0),
         "outside_40": add(mid, pitch[0], pitch[1], 40.0),
         "outside_73": add(mid, pitch[0], pitch[1], 73.0),
@@ -279,12 +306,16 @@ def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
 
 def analyze_goal_with_context(action_id, screens, track, full_track, session_duration,
                               movement, direction, goal_lines):
-    """GOAL only: software goal line + proj_t (posts included). No Miss.
+    """GOAL only: software goal line + proj_t (posts included).
 
     Arrival is in_goal_area: perpendicular distance <= screen threshold and a
-    valid projection (proj_t in [-slack, 1+slack], posts count). Come-back is
-    only a return toward the far-pitch send origin. Passing the line toward
-    the camera is a finish, not a return.
+    valid projection (proj_t in [-slack, 1+slack], posts count).
+
+    Correct / Late — reach the mouth and stay (no return toward send origin).
+    Miss — enter the goal area near the line, then go outside without holding
+            the finish (did not "hit" the screen as a completed goal).
+    Wrong — never enter the goal area (or only far out-of-band aims).
+    Passing the line toward the camera is a finish, not a return.
     """
     arrival, depth = best_arrival_in_positions(track, screens, goal_lines, "GOAL")
     extra = [p for p in (full_track or []) if p[0] > session_duration + 1e-6]
@@ -302,12 +333,19 @@ def analyze_goal_with_context(action_id, screens, track, full_track, session_dur
 
     if arrival is not None:
         eff, t_hit, screen, proj = arrival
-        if not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
+        if returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
+            # Entered the mouth / near the line, then left outside → Miss.
+            result = "Miss"
+            evidence = (eff, t_hit, screen, proj)
+        else:
             result = "Correct"
             evidence = (eff, t_hit, screen, proj)
     elif late_arrival is not None:
         eff, t_hit, screen, proj = late_arrival
-        if not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, late_depth):
+        if returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, late_depth):
+            result = "Miss"
+            evidence = (eff, t_hit, screen, proj)
+        else:
             result = "Late"
             evidence = (eff, t_hit, screen, proj)
 
@@ -1034,7 +1072,7 @@ def departed_goal_area(positions, screen, goal_lines, arrive_time, depth):
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None or arrive_time is None:
         return False
-    leave_depth = float(depth) * 1.15
+    leave_depth = float(depth) * GOAL_LEAVE_DEPTH_FACTOR
     seen_in = False
     for t, x, y in positions:
         if t + 1e-6 < arrive_time:
@@ -1068,7 +1106,7 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
     if p0 is None or arrive_time is None:
         return False
     origin = goal_send_origin(screens)
-    leave_depth = float(depth) * 1.15
+    leave_depth = float(depth) * GOAL_LEAVE_DEPTH_FACTOR
     seen_in = False
     away = 0
     for t, x, y in positions:
@@ -1404,8 +1442,10 @@ class ArenaSimulator:
     GOAL (cameras face screens 1 and 8; posts count):
       Correct — reach the goal line / proj_t band during the session and do not
                 come back toward the send origin.
+      Miss    — enter the goal area near the line / corners, then go outside
+                (did not hold a screen finish).
       Late    — first reach the line after the session and do not come back.
-      Wrong   — any other case (including a return toward the origin).
+      Wrong   — never enter the goal area (far out-of-band aims).
     GOAL shots start at the real send origin and aim at rotating spots
     (corners, up-center, up-corners, through the line) — not only the midpoint.
     GOAL and TARGET include physical camera facts: the ball smears along its
@@ -1417,8 +1457,8 @@ class ArenaSimulator:
     BALL_HOME = (302.0, 282.0)
     PASS_CYCLE = ("correct", "miss", "late", "wrong")
     OTHER_CYCLE = ("correct", "miss", "late", "wrong")
-    GOAL_CYCLE = ("correct", "late", "wrong")
-    GOAL_PROBE = False
+    GOAL_CYCLE = ("correct", "miss", "late", "wrong")
+    GOAL_PROBE = os.environ.get("SIMUST_GOAL_PROBE", "").strip().lower() in ("1", "true", "yes", "on")
 
     def __init__(self):
         self.action = None
@@ -1459,6 +1499,7 @@ class ArenaSimulator:
         self.goal_closeness = 0.0
         self.aim_in_index = 0
         self.aim_out_index = 0
+        self.aim_miss_index = 0
         self.aim_name = ""
 
     def start_action(self, action, screens):
@@ -1539,6 +1580,10 @@ class ArenaSimulator:
                 self.late_finish_xy = xy
             elif self.intended == "wrong":
                 self.wrong_xy = xy
+            elif self.intended == "miss":
+                # Near-line / corner entry, then exit back toward the origin.
+                self.target_xy = xy
+                self.miss_xy = goal_send_origin(self.screens)
             dist, proj_t, _, _ = compute_projection(xy, self.line_p0, self.line_p1)
             now_in = in_goal_area(xy, self.line_p0, self.line_p1, depth)
             print(
@@ -1560,13 +1605,20 @@ class ArenaSimulator:
             self.hold_finish = False
             self.late_start_ts = time.time()
             self.late_from_xy = self.last_ball
-        elif self.intended == "miss" or (self.intended == "correct" and self.action == "GOAL"):
+        elif self.intended == "correct" and self.action == "GOAL":
             # Stay in the goal after the QR so after-session frames do not look like a return.
             self.late_phase = False
             self.hold_finish = True
             self.hold_xy = self.last_ball
             self.hold_player = self.last_player
+        elif self.intended == "miss" and self.action != "GOAL":
+            # PASS/TARGET/PRESS miss: arrive and stay.
+            self.late_phase = False
+            self.hold_finish = True
+            self.hold_xy = self.last_ball
+            self.hold_player = self.last_player
         else:
+            # GOAL miss already left outside during the session — do not hold.
             self.late_phase = False
             self.hold_finish = False
             self.action = None
@@ -1587,6 +1639,9 @@ class ArenaSimulator:
         if intended in ("correct", "late"):
             name = GOAL_AIM_IN[self.aim_in_index % len(GOAL_AIM_IN)]
             self.aim_in_index += 1
+        elif intended == "miss":
+            name = GOAL_AIM_MISS[self.aim_miss_index % len(GOAL_AIM_MISS)]
+            self.aim_miss_index += 1
         else:
             name = GOAL_AIM_OUT[self.aim_out_index % len(GOAL_AIM_OUT)]
             self.aim_out_index += 1
@@ -1888,7 +1943,21 @@ class ArenaSimulator:
             return bx, by, px, py
 
         if intended == "miss":
-            # Arrive in the goal area and stay — no come-back.
+            if self.action == "GOAL":
+                # Enter the goal area near the line/corners, then go outside → Miss.
+                go_s = max(0.35, min(0.75, self.travel_s))
+                back_s = 0.70
+                origin = self.start_xy or goal_send_origin(self.screens)
+                if t <= go_s:
+                    u = min(1.0, t / go_s)
+                    u_pix = u ** 1.25
+                    bx, by = self._lerp(origin, target, u_pix)
+                else:
+                    u = min(1.0, (t - go_s) / back_s)
+                    bx, by = self._lerp(target, origin, u)
+                px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.2) * 0.18)
+                return bx, by, px, py
+            # Arrive in the goal area and stay — no come-back (PASS/TARGET/PRESS).
             u = min(1.0, t / 0.70)
             if is_press:
                 px, py = self._lerp(self.PLAYER_HOME, target, u)
@@ -1951,6 +2020,9 @@ class ArenaSimulator:
     def _physical_should_detect(self, closeness, speed, blur, x, y):
         """YOLO-style dropouts: fast + smeared balls are often missed."""
         if self.action == "TARGET" and (closeness >= 0.86 or closeness <= 0.12):
+            return True
+        # Stronger near-line finishing evidence for GOAL.
+        if self.action == "GOAL" and closeness >= GOAL_FORCE_DETECT_CLOSENESS:
             return True
         if closeness < 0.14 or speed < 48.0:
             return True
