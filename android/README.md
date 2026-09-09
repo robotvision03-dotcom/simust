@@ -7,7 +7,7 @@ Phone and tablet console that uses the same operator UI as `index.html`. Works o
 This is the supported phone model for remote operator use.
 
 - Package: `com.simust.playsmart`
-- Version: **2.5** (versionCode 7)
+- Version: **2.6** (versionCode 8)
 - Targets **Android 16** (API 36)
 - Uses the **phone internet** (SIM or Wi‑Fi). It does not need the lab Wi‑Fi.
 - Default operator URL: `http://157.180.47.98/operator`
@@ -15,7 +15,7 @@ This is the supported phone model for remote operator use.
 - Native toolbar polls public `/lab-link` for Lab online / offline.
 - WebView loads operator HTML without cache so Pause / Stop / player-search / remote abort updates appear after a VPS deploy.
 
-If a previous SIMUST APK would not install or would not open, uninstall that old app first, then install **2.5**. This project uses Android Gradle Plugin 9, which compiles Kotlin automatically. Build with Gradle 9.3.1 and SDK Platform 36.
+If a previous SIMUST APK would not install or would not open, uninstall that old app first, then install **2.6**. This project uses Android Gradle Plugin 9, which compiles Kotlin automatically. Build with Gradle 9.3.1 and SDK Platform 36.
 
 ## Modes
 
@@ -42,8 +42,8 @@ Gradle writes:
 
 After `assembleDebug` a copy is also saved as:
 
-- `android/SIMUST-2.5-debug.apk`
-- `android/SIMUST-ZFlip6-2.5-debug.apk`
+- `android/SIMUST-2.6-debug.apk`
+- `android/SIMUST-ZFlip6-2.6-debug.apk`
 
 Copy either file onto the phone (USB, Drive, or email) and open it.
 
