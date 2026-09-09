@@ -10,8 +10,9 @@ sys.path.insert(0, ROOT)
 os.environ.setdefault("SIMUST_PUBLIC_MODE", "1")
 os.environ.setdefault("SIMUST_SESSION_SECRET", "test-session-secret-not-for-production")
 
+import simust_progress  # noqa: E402
 import simust_push  # noqa: E402
-from app import apply_session_progress  # noqa: E402
+from app import ALL_LEVELS, apply_session_progress  # noqa: E402
 
 
 class ReservationMergeTests(unittest.TestCase):
@@ -40,19 +41,16 @@ class ReservationMergeTests(unittest.TestCase):
 
 class FoundationProgressTests(unittest.TestCase):
     def _player(self):
-        return {
+        users = {
             "james": {
                 "name": "James",
                 "surname": "Winston",
                 "role": "player",
-                "progress": {
-                    "current_level": "L00-Foundation",
-                    "unlocked_levels": ["L00-Foundation"],
-                    "completed_levels": [],
-                    "challenge_results": {},
-                },
+                "progress": simust_progress.default_progress(),
             }
         }
+        simust_progress.grant_reservation_credits(users, "james", 120, "setup", ALL_LEVELS)
+        return users
 
     def test_sf30n_does_not_unlock_entry(self):
         users = self._player()
@@ -66,13 +64,14 @@ class FoundationProgressTests(unittest.TestCase):
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["subdirectory"], "SF-30N")
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["aac"], 90.0)
 
-    def test_sf180n_unlocks_entry(self):
+    def test_sf180n_marks_entry_eligible(self):
         users = self._player()
         stats = {"correct": 8, "late": 1, "wrong": 1, "miss": 0, "avg_ae": 82.0}
         apply_session_progress(users, "james", "L00-Foundation", "SF-180N", stats)
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
+        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["eligible_levels"])
+        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
 
 
 class SanitizeSessionTests(unittest.TestCase):

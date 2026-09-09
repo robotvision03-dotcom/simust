@@ -457,8 +457,11 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
                 "email": account.get("email", ""),
                 "progress": account.get("progress") or {
                     "current_level": "L00-Foundation",
-                    "unlocked_levels": ["L00-Foundation"],
+                    "unlocked_levels": [],
+                    "unlocked_playlists": [],
                     "completed_levels": [],
+                    "eligible_levels": [],
+                    "session_credits": 0,
                     "challenge_results": {},
                 },
             }
@@ -468,8 +471,16 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
         for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
             if not existing.get(field) and account.get(field):
                 existing[field] = account[field]
-        if account.get("progress") and not existing.get("progress"):
-            existing["progress"] = account["progress"]
+        if account.get("progress"):
+            try:
+                import simust_progress
+
+                existing["progress"] = simust_progress.merge_progress(
+                    existing.get("progress"), account.get("progress")
+                )
+            except Exception:
+                if not existing.get("progress"):
+                    existing["progress"] = account["progress"]
         if account.get("password_hash") and not existing.get("password"):
             existing["password"] = account["password_hash"]
     return added
@@ -481,6 +492,7 @@ def pull_and_merge_accounts(
     reports_dir: str = "",
     load_reservations_fn=None,
     save_reservations_fn=None,
+    apply_reservation_unlocks_fn=None,
 ) -> list:
     global _users_pull_at
     now = time.time()
@@ -500,8 +512,8 @@ def pull_and_merge_accounts(
     if remote_accounts:
         local = load_users_fn()
         added = merge_remote_accounts(local, remote_accounts)
+        save_users_fn(local)
         if added:
-            save_users_fn(local)
             if reports_dir:
                 for username in added:
                     try:
@@ -522,6 +534,11 @@ def pull_and_merge_accounts(
             save_reservations_fn(local_res)
             if added_res:
                 logger.info("Imported %s reservation(s) from My SIMUST", added_res)
+            if apply_reservation_unlocks_fn:
+                try:
+                    apply_reservation_unlocks_fn(local_res)
+                except Exception as exc:
+                    logger.warning("Could not sync session unlocks from reservations: %s", exc)
     return added
 
 
