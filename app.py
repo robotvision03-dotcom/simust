@@ -728,76 +728,11 @@ PLAYER_REPORTS_DIR = os.environ.get("SIMUST_REPORTS_DIR", _DEFAULT_REPORTS_DIR)
 REALTIME_RECORDINGS_DIR = os.environ.get("SIMUST_REALTIME_DIR", _DEFAULT_REALTIME_DIR)
 ANIMATIONS_DIR = os.environ.get("SIMUST_ANIMATIONS_DIR", _DEFAULT_ANIMATIONS_DIR)
 
-FLUSH_ANALYSIS_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "flush_analysis_trigger.txt")
-
 # Ensure directories exist
 os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
 os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
 os.makedirs(REALTIME_RECORDINGS_DIR, exist_ok=True)
 os.makedirs(ANIMATIONS_DIR, exist_ok=True)
-
-
-def _recognition_action_ids(recognition_path: str) -> List[str]:
-    if not recognition_path or not os.path.isfile(recognition_path):
-        return []
-    try:
-        with open(recognition_path, "r", encoding="utf-8") as f:
-            blocks = json.load(f)
-    except Exception:
-        return []
-    ids = []
-    for block in blocks or []:
-        action = str(block.get("action") or "").upper()
-        bid = str(block.get("id") or "")
-        if action in ("PASS", "TARGET", "PRESS", "GOAL") and bid.startswith("S"):
-            ids.append(bid)
-    return ids
-
-
-def request_flush_pending_analysis_and_wait(directory: str, timeout_s: float = 4.0) -> dict:
-    """
-    Ask simust_realtime to flush delayed late/wrong analysis, then wait until
-    results.json covers recognition action ids (or timeout).
-    Prevents per-video results from being built before the last Wrong is saved.
-    """
-    recognition_path = os.path.join(directory, "recognition.json")
-    results_path = os.path.join(directory, "results.json")
-    expected = set(_recognition_action_ids(recognition_path))
-    try:
-        with open(FLUSH_ANALYSIS_FILE, "w", encoding="utf-8") as f:
-            f.write("1\n")
-    except Exception as exc:
-        logger.warning("Could not write flush analysis trigger: %s", exc)
-
-    deadline = time.time() + max(0.5, float(timeout_s))
-    last_have = set()
-    while time.time() < deadline:
-        have = set()
-        if os.path.isfile(results_path):
-            try:
-                with open(results_path, "r", encoding="utf-8") as f:
-                    rows = json.load(f)
-                have = {str(r.get("id") or "") for r in (rows or []) if r.get("id")}
-            except Exception:
-                have = set()
-        last_have = have
-        if expected and expected.issubset(have):
-            missing = []
-            break
-        missing = sorted(expected - have) if expected else []
-        time.sleep(0.12)
-    else:
-        missing = sorted(expected - last_have) if expected else []
-
-    # Small settle so save-results-to-json disk write is visible.
-    time.sleep(0.15)
-    return {
-        "expected": sorted(expected),
-        "have": sorted(last_have),
-        "missing": missing,
-        "ready": (not expected) or (not missing),
-    }
-
 
 def write_visualization_setting(enabled):
     """Atomically write visualization on/off so the realtime process can pick it up."""
@@ -2153,23 +2088,7 @@ async def save_results_to_json(req: Request):
         results.append(action_result)
         with open(results_json_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-
-        # Save Wrong clip immediately (same folder as realtime_recording.avi),
-        # so per-video results never race the delayed analysis timer.
-        saved_clips = []
-        try:
-            if str(action_result.get("result") or "").strip().lower() == "wrong":
-                saved_clips = save_wrong_finish_clips(
-                    session_folder, [action_result], video_index=action_result.get("video_index")
-                )
-        except Exception as clip_exc:
-            logger.warning("Could not save wrong-finish clip on result write: %s", clip_exc)
-
-        return {
-            "status": "success",
-            "total_results": len(results),
-            "wrong_clip_files": saved_clips,
-        }
+        return {"status": "success", "total_results": len(results)}
     except Exception as e:
         logger.error(f"save-results-to-json error: {e}")
         return {"status": "error", "message": str(e)}
@@ -2607,437 +2526,6 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
         else:
             return 'N/A'
 
-# ---------- wrong-finish review helpers (per-video results) ----------
-def _parse_realtime_folder_wall_time(session_folder: str) -> Optional[datetime]:
-    """Parse realtime_YYYYMMDD_HHMMSS_mmm folder name into a wall-clock datetime."""
-    name = os.path.basename(os.path.normpath(session_folder or ""))
-    m = re.match(r"^realtime_(\d{8})_(\d{6})_(\d{1,6})$", name)
-    if not m:
-        return None
-    try:
-        base = datetime.strptime(f"{m.group(1)}_{m.group(2)}", "%Y%m%d_%H%M%S")
-        frac = m.group(3).ljust(6, "0")[:6]
-        return base.replace(microsecond=int(frac))
-    except ValueError:
-        return None
-
-
-def _parse_hms_time(value: str) -> Optional[datetime]:
-    if not value or not isinstance(value, str):
-        return None
-    text = value.strip()
-    for fmt in ("%H:%M:%S.%f", "%H:%M:%S"):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _seconds_from_session_wall(hms: str, session_wall: datetime) -> Optional[float]:
-    t = _parse_hms_time(hms)
-    if t is None or session_wall is None:
-        return None
-    combined = session_wall.replace(
-        hour=t.hour, minute=t.minute, second=t.second, microsecond=t.microsecond
-    )
-    return (combined - session_wall).total_seconds()
-
-
-def collect_wrong_finish_clip_specs(session_folder, results_list, video_index=None):
-    """
-    Build clip windows for Wrong finishing actions in this video.
-    Timing comes from recognition.json relative to the realtime folder wall clock
-    (same origin as realtime_recording.avi).
-    """
-    if not session_folder or not results_list:
-        return []
-    recording_path = os.path.join(session_folder, "realtime_recording.avi")
-    recognition_path = os.path.join(session_folder, "recognition.json")
-    if not os.path.isfile(recording_path) or not os.path.isfile(recognition_path):
-        return []
-
-    session_wall = _parse_realtime_folder_wall_time(session_folder)
-    try:
-        with open(recognition_path, "r", encoding="utf-8") as f:
-            blocks = json.load(f)
-    except Exception as exc:
-        logger.warning("Could not load recognition for wrong clips: %s", exc)
-        return []
-    if not isinstance(blocks, list):
-        return []
-
-    if session_wall is None:
-        # Fallback: earliest recognition start_time on an arbitrary date.
-        starts = [_parse_hms_time(b.get("start_time")) for b in blocks]
-        starts = [s for s in starts if s is not None]
-        if not starts:
-            return []
-        earliest = min(starts)
-        session_wall = datetime(1900, 1, 1, earliest.hour, earliest.minute, earliest.second, earliest.microsecond)
-
-    by_id = {}
-    for block in blocks:
-        bid = block.get("id")
-        if bid and bid not in by_id:
-            by_id[bid] = block
-
-    specs = []
-    for row in results_list:
-        if str(row.get("result") or "").strip().lower() != "wrong":
-            continue
-        if video_index is not None:
-            try:
-                if int(row.get("video_index") or 1) != int(video_index):
-                    continue
-            except (TypeError, ValueError):
-                pass
-        action_id = row.get("id")
-        block = by_id.get(action_id) if action_id else None
-        if not block:
-            continue
-        start_s = _seconds_from_session_wall(block.get("start_time"), session_wall)
-        end_s = _seconds_from_session_wall(block.get("end_time"), session_wall)
-        if start_s is None or end_s is None:
-            continue
-        if end_s <= start_s:
-            end_s = start_s + 1.0
-        # Focus on the finishing window (end of action + brief late look).
-        clip_start = max(start_s, end_s - 1.5)
-        clip_end = end_s + 1.0
-        if clip_end - clip_start < 0.6:
-            clip_end = clip_start + 0.6
-        specs.append({
-            "id": str(action_id),
-            "action": str(row.get("action") or block.get("action") or ""),
-            "start_s": float(clip_start),
-            "end_s": float(clip_end),
-            "recording_path": recording_path,
-        })
-    return specs
-
-
-def extract_session_clip_frames(recording_path, start_s, end_s, target_fps=10.0, max_frames=60):
-    """Read a short window from the session AVI without loading the whole file.
-
-    Handles live/growing MJPG files where frame_count may be 0 or stale, and
-    clamps windows that fall past the currently written duration.
-    """
-    if cv2 is None or not recording_path or not os.path.isfile(recording_path):
-        return []
-    cap = cv2.VideoCapture(recording_path)
-    if not cap.isOpened():
-        return []
-    try:
-        src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 25.0
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        duration = (frame_count / src_fps) if frame_count > 0 else 0.0
-        start_s = max(0.0, float(start_s))
-        end_s = float(end_s)
-        if end_s <= start_s:
-            end_s = start_s + 1.0
-        want = max(0.6, end_s - start_s)
-
-        if duration > 0:
-            if start_s >= max(0.0, duration - 0.05):
-                # Clip window is past what is written so far — use the tail.
-                end_s = duration
-                start_s = max(0.0, duration - want)
-            else:
-                end_s = min(end_s, duration)
-            if end_s <= start_s:
-                end_s = min(duration, start_s + want)
-
-        step = max(1, int(round(src_fps / max(1.0, float(target_fps)))))
-        frames = []
-
-        # POS_MSEC is more reliable than frame index on MJPG while recording.
-        cap.set(cv2.CAP_PROP_POS_MSEC, start_s * 1000.0)
-        reads = 0
-        max_reads = max(max_frames * step + 5, int((want + 1.0) * src_fps) + 5)
-        while len(frames) < max_frames and reads < max_reads:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            reads += 1
-            pos_s = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
-            if pos_s > end_s + 0.2 and frames:
-                break
-            if ((reads - 1) % step) == 0:
-                frames.append(frame)
-
-        if not frames and frame_count > 0:
-            # Last-resort: grab the end of the file.
-            start_frame = max(0, frame_count - int(want * src_fps) - 1)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            grabbed = 0
-            while len(frames) < max_frames:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if (grabbed % step) == 0:
-                    frames.append(frame)
-                grabbed += 1
-        return frames
-    finally:
-        cap.release()
-
-
-def save_wrong_finish_clips(session_folder, results_list, video_index=None, ffmpeg_exe=None):
-    """
-    Save each Wrong finishing action as wrong_finish_<id>.mp4 in the session
-    folder (same directory as realtime_recording.avi).
-    Returns list of saved file paths.
-    """
-    if not session_folder or not os.path.isdir(session_folder):
-        return []
-    specs = collect_wrong_finish_clip_specs(session_folder, results_list, video_index=video_index)
-    if not specs:
-        return []
-
-    if not ffmpeg_exe:
-        for candidate in (
-            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-            r"C:\ffmpeg\bin\ffmpeg.exe",
-            "ffmpeg",
-        ):
-            try:
-                subprocess.run([candidate, "-version"], capture_output=True, timeout=5)
-                ffmpeg_exe = candidate
-                break
-            except Exception:
-                continue
-        ffmpeg_exe = ffmpeg_exe or "ffmpeg"
-
-    saved = []
-    for spec in specs:
-        action_id = "".join(ch for ch in str(spec["id"]) if ch.isalnum() or ch in ("-", "_")) or "action"
-        out_path = os.path.join(session_folder, f"wrong_finish_{action_id}.mp4")
-        start_s = max(0.0, float(spec["start_s"]))
-        dur = max(0.6, float(spec["end_s"]) - start_s)
-        recording = spec["recording_path"]
-        ok = False
-        try:
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-ss", f"{start_s:.3f}",
-                "-i", recording,
-                "-t", f"{dur:.3f}",
-                "-an",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                out_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            ok = result.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 0
-            if not ok:
-                logger.warning(
-                    "ffmpeg wrong clip save failed for %s: %s",
-                    action_id, (result.stderr or "")[-800:],
-                )
-        except Exception as exc:
-            logger.warning("ffmpeg wrong clip save error for %s: %s", action_id, exc)
-            ok = False
-
-        if not ok:
-            # OpenCV fallback from extracted frames
-            frames = extract_session_clip_frames(
-                recording, spec["start_s"], spec["end_s"], target_fps=12.0, max_frames=80,
-            )
-            if not frames:
-                logger.warning("Could not save wrong clip for %s (no frames)", action_id)
-                continue
-            h, w = frames[0].shape[:2]
-            tmp_avi = out_path.replace(".mp4", "_tmp.avi")
-            writer = cv2.VideoWriter(tmp_avi, cv2.VideoWriter_fourcc(*"MJPG"), 12.0, (w, h))
-            if not writer.isOpened():
-                continue
-            try:
-                for fr in frames:
-                    writer.write(fr)
-            finally:
-                writer.release()
-            try:
-                enc = subprocess.run(
-                    [
-                        ffmpeg_exe, "-y", "-i", tmp_avi,
-                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                        "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path,
-                    ],
-                    capture_output=True, text=True, timeout=90,
-                )
-                ok = enc.returncode == 0 and os.path.isfile(out_path)
-            except Exception:
-                ok = False
-            try:
-                if os.path.exists(tmp_avi):
-                    os.remove(tmp_avi)
-            except Exception:
-                pass
-
-        if ok:
-            saved.append(out_path)
-            logger.info("Saved wrong-finish clip: %s", out_path)
-    return saved
-
-
-def list_wrong_finish_clip_files(session_folder):
-    """Return sorted wrong_finish_*.mp4 paths in the session folder."""
-    if not session_folder or not os.path.isdir(session_folder):
-        return []
-    try:
-        names = sorted(
-            f for f in os.listdir(session_folder)
-            if f.lower().startswith("wrong_finish_") and f.lower().endswith(".mp4")
-        )
-    except Exception:
-        return []
-    return [os.path.join(session_folder, n) for n in names]
-
-
-def _frames_from_video_file(path, target_fps=10.0, max_frames=80):
-    if cv2 is None or not path or not os.path.isfile(path):
-        return []
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        return []
-    frames = []
-    try:
-        src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 25.0
-        step = max(1, int(round(src_fps / max(1.0, float(target_fps)))))
-        idx = 0
-        while len(frames) < max_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if idx % step == 0:
-                frames.append(frame)
-            idx += 1
-    finally:
-        cap.release()
-    return frames
-
-
-def load_wrong_finish_clip_banks(session_folder, results_list, video_index=None, target_fps=10.0):
-    """Load Wrong-finishing clips for strip playback (disk files first, then extract)."""
-    banks = []
-    labels = []
-    loaded_paths = set()
-
-    # 1) Prefer already-saved wrong_finish_*.mp4 (written when Wrong is scored).
-    for path in list_wrong_finish_clip_files(session_folder):
-        frames = _frames_from_video_file(path, target_fps=target_fps, max_frames=80)
-        if not frames:
-            continue
-        banks.append(frames)
-        base = os.path.splitext(os.path.basename(path))[0]
-        labels.append(base.replace("wrong_finish_", "").replace("_", " ") + " WRONG")
-        loaded_paths.add(os.path.normcase(os.path.abspath(path)))
-
-    # 2) Also cover Wrong rows that may not have a file yet.
-    specs = collect_wrong_finish_clip_specs(session_folder, results_list, video_index=video_index)
-    for spec in specs:
-        action_id = "".join(ch for ch in str(spec["id"]) if ch.isalnum() or ch in ("-", "_")) or "action"
-        saved_path = os.path.join(session_folder or "", f"wrong_finish_{action_id}.mp4")
-        abs_saved = os.path.normcase(os.path.abspath(saved_path)) if saved_path else ""
-        if abs_saved in loaded_paths:
-            continue
-        frames = []
-        if os.path.isfile(saved_path):
-            frames = _frames_from_video_file(saved_path, target_fps=target_fps, max_frames=80)
-        if not frames:
-            frames = extract_session_clip_frames(
-                spec["recording_path"], spec["start_s"], spec["end_s"],
-                target_fps=target_fps, max_frames=60,
-            )
-        if not frames:
-            logger.warning(
-                "Empty wrong clip for %s (%.2f–%.2fs)",
-                spec["id"], spec["start_s"], spec["end_s"],
-            )
-            continue
-        banks.append(frames)
-        labels.append(f"{spec['id']} {spec['action']} WRONG".strip())
-        if abs_saved:
-            loaded_paths.add(abs_saved)
-    return banks, labels
-
-
-def paint_wrong_finish_slices(canvas, clip_banks, labels, frame_index, tile_width, slice_numbers,
-                              slice_a=14, slice_b=2):
-    """
-    Composite wrong-finish clips into empty slice columns (default 14 and 2),
-    same 14-strip layout used by coach final results videos.
-    """
-    if canvas is None or not clip_banks:
-        return canvas
-    try:
-        idx_a = slice_numbers.index(slice_a)
-        idx_b = slice_numbers.index(slice_b)
-    except ValueError:
-        idx_a, idx_b = 2, 4
-
-    height = canvas.shape[0]
-
-    def _fit(frame):
-        if frame is None or getattr(frame, "size", 0) == 0:
-            return np.zeros((height, tile_width, 3), dtype=np.uint8)
-        return cv2.resize(frame, (tile_width, height), interpolation=cv2.INTER_AREA)
-
-    # Pair / cycle: bank0 → section 14, bank1 → section 2, then next pair…
-    pair = (frame_index // max(1, max(len(b) for b in clip_banks))) % max(1, (len(clip_banks) + 1) // 2)
-    left_i = min(pair * 2, len(clip_banks) - 1)
-    right_i = min(left_i + 1, len(clip_banks) - 1) if len(clip_banks) > 1 else left_i
-    left_bank = clip_banks[left_i]
-    right_bank = clip_banks[right_i]
-    lf = left_bank[frame_index % len(left_bank)]
-    rf = right_bank[frame_index % len(right_bank)]
-
-    xa = idx_a * tile_width
-    xb = idx_b * tile_width
-    canvas[:, xa:xa + tile_width] = _fit(lf)
-    canvas[:, xb:xb + tile_width] = _fit(rf)
-
-    la = labels[left_i] if left_i < len(labels) else ""
-    lb = labels[right_i] if right_i < len(labels) else ""
-    if la:
-        cv2.putText(canvas, la[:26], (xa + 6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-    if lb:
-        cv2.putText(canvas, lb[:26], (xb + 6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-    return canvas
-
-
-def build_wrong_finish_review_frames(clip_frame_lists, width, height, tile_width, slice_numbers,
-                                    labels=None):
-    """Legacy helper: full-canvas review frames using slices 14 and 2."""
-    if not clip_frame_lists:
-        return []
-    labels = labels or []
-    dark = np.zeros((height, width, 3), dtype=np.uint8)
-    dark[:] = (10, 12, 18)
-    n = max(len(b) for b in clip_frame_lists)
-    # Cover at least one full cycle through pairs
-    pairs = max(1, (len(clip_frame_lists) + 1) // 2)
-    out = []
-    for fi in range(n * pairs):
-        canvas = dark.copy()
-        paint_wrong_finish_slices(
-            canvas, clip_frame_lists, labels, fi, tile_width, slice_numbers,
-            slice_a=14, slice_b=2,
-        )
-        out.append(canvas)
-    return out
-
-
-def append_wrong_finish_review_to_results_video(
-    output_path, session_folder, results_list, video_index=None,
-    width=3712, height=512, ffmpeg_exe="ffmpeg",
-):
-    """Deprecated: wrong clips are integrated into the main per-video encode now."""
-    logger.info("append_wrong_finish_review skipped (clips integrated into results strip)")
-    return False
-
-
 # ---------- generate_results_video_from_results ----------
 def generate_results_video_from_results(results_list, output_path, duration_seconds=5, is_final=False,
                                         slice_video_path=None, session_folder=None, video_index=None):
@@ -3226,30 +2714,6 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 logger.info("Per-video will sample coach clip via ffmpeg/stream (%.0fs @ 2 FPS)", video_duration)
             else:
                 logger.info("Using static background for per-video (%.0fs)", video_duration)
-
-        # Wrong-finish clips: integrate into empty strip sections 14 & 2 (like coach
-        # slice video under the HUD), not as a separate appended segment.
-        wrong_clip_banks = []
-        wrong_clip_labels = []
-        integrate_wrong_slices = False
-        if not is_final and session_folder:
-            # Always persist wrong clips beside realtime_recording.avi first.
-            try:
-                save_wrong_finish_clips(session_folder, results_list, video_index=video_index)
-            except Exception as save_exc:
-                logger.warning("Could not save wrong-finish clip files: %s", save_exc)
-            wrong_clip_banks, wrong_clip_labels = load_wrong_finish_clip_banks(
-                session_folder, results_list, video_index=video_index, target_fps=10.0,
-            )
-            if wrong_clip_banks:
-                integrate_wrong_slices = True
-                output_fps = 10
-                video_duration = float(duration_seconds) if duration_seconds and duration_seconds > 0 else 20.0
-                total_frames = max(1, int(round(video_duration * output_fps)))
-                logger.info(
-                    "Integrating %s wrong-finish clip(s) into slice sections 14 & 2 (%.0fs @ %s FPS)",
-                    len(wrong_clip_banks), video_duration, output_fps,
-                )
 
         temp_avi = output_path.replace(".mp4", "_temp.avi")
 
@@ -3454,25 +2918,12 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         static_frame = static_bg.copy()
         static_frame[overlay_mask] = overlay[overlay_mask]
 
-        def composite_frame(base, frame_i=0):
-            """Coach-style composite: strip background + HUD overlay.
-
-            When wrong-finish clips exist, they play in empty sections 14 & 2
-            under the metric rings (same idea as final coach slice video).
-            """
-            if base is None or getattr(base, "size", 0) == 0:
-                out_img = static_bg.copy()
-            else:
-                out_img = base
-                if out_img.shape[1] != width or out_img.shape[0] != height:
-                    out_img = cv2.resize(out_img, (width, height), interpolation=cv2.INTER_AREA)
-                else:
-                    out_img = out_img.copy()
-            if integrate_wrong_slices and wrong_clip_banks:
-                paint_wrong_finish_slices(
-                    out_img, wrong_clip_banks, wrong_clip_labels, frame_i,
-                    tile_width, slice_numbers, slice_a=14, slice_b=2,
-                )
+        def composite_frame(base):
+            if base is None or base.size == 0:
+                return static_frame
+            if base.shape[1] != width or base.shape[0] != height:
+                base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
+            out_img = base
             out_img[overlay_mask] = overlay[overlay_mask]
             return out_img
 
@@ -3486,13 +2937,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         # Fast path: one ffmpeg pass composites the static HUD onto the coach clip
         # and encodes H.264 (plus audio) without an MJPEG temp file or a second mux.
-        # Skip when wrong clips must be animated into sections 14 & 2.
         overlay_png = output_path.replace(".mp4", "_overlay.png")
         static_png = output_path.replace(".mp4", "_static.png")
         encoded = False
         try:
-            if integrate_wrong_slices:
-                raise RuntimeError("use OpenCV path for integrated wrong-finish slices")
             overlay_bgra = cv2.cvtColor(overlay, cv2.COLOR_BGR2BGRA)
             overlay_bgra[:, :, 3] = np.where(overlay_mask, 255, 0).astype(np.uint8)
             if not cv2.imwrite(overlay_png, overlay_bgra):
@@ -3550,8 +2998,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 ]
                 encoded = run_ffmpeg(cmd, timeout=60)
         except Exception as e:
-            if "integrated wrong-finish" not in str(e):
-                logger.warning("ffmpeg overlay encode failed, using OpenCV fallback: %s", e)
+            logger.warning("ffmpeg overlay encode failed, using OpenCV fallback: %s", e)
             encoded = False
         finally:
             for tmp in (overlay_png, static_png):
@@ -3565,7 +3012,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             logger.info("Video generation completed (ffmpeg overlay): %s", output_path)
             return True
 
-        # Fallback / wrong-slice path: stream frames, then one ultrafast x264 encode.
+        # Fallback: stream frames (no full-clip RAM load), then one ultrafast x264 encode.
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         out = cv2.VideoWriter(temp_avi, fourcc, output_fps, (width, height))
         if not out.isOpened():
@@ -3573,26 +3020,20 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             return False
 
         written = 0
-        if integrate_wrong_slices:
-            for fi in range(max(total_frames, 1)):
-                out.write(composite_frame(None, fi))
-                written += 1
-        elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+        if use_slice_video and slice_video_path and os.path.exists(slice_video_path):
             cap = cv2.VideoCapture(slice_video_path)
             if not cap.isOpened():
                 logger.warning("Could not reopen slice video for streaming; using static overlay")
-                for fi in range(max(total_frames, 1)):
-                    out.write(composite_frame(None, fi))
+                for _ in range(max(total_frames, 1)):
+                    out.write(static_frame)
                     written += 1
             elif is_final:
-                fi = 0
                 while True:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    out.write(composite_frame(frame, fi))
+                    out.write(composite_frame(frame))
                     written += 1
-                    fi += 1
                 cap.release()
             else:
                 source_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -3604,7 +3045,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 want = 0
                 while written < total_frames:
                     if want < len(indices) and src_i > indices[want]:
-                        out.write(composite_frame(last if last is not None else None, written))
+                        out.write(composite_frame(last if last is not None else static_frame))
                         written += 1
                         want += 1
                         continue
@@ -3613,17 +3054,17 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                         break
                     last = frame
                     if src_i == indices[min(want, len(indices) - 1)]:
-                        out.write(composite_frame(frame, written))
+                        out.write(composite_frame(frame))
                         written += 1
                         want += 1
                     src_i += 1
                 while written < total_frames:
-                    out.write(composite_frame(last if last is not None else None, written))
+                    out.write(composite_frame(last if last is not None else static_frame))
                     written += 1
                 cap.release()
         else:
-            for fi in range(max(total_frames, 1)):
-                out.write(composite_frame(None, fi))
+            for _ in range(max(total_frames, 1)):
+                out.write(static_frame)
                 written += 1
 
         out.release()
@@ -3720,26 +3161,8 @@ async def create_video_results(req: Request):
             logger.error(f"results.json not found in {directory}")
             return {"status": "error", "message": "results.json not found"}
 
-        # Last action (often Wrong/Late) is scored on a delayed timer. Flush it
-        # before reading results.json so wrong-finish clips are included.
-        flush_info = request_flush_pending_analysis_and_wait(directory, timeout_s=6.0)
-        logger.info(
-            "Pre-results flush ready=%s expected=%s have=%s missing=%s",
-            flush_info.get("ready"),
-            flush_info.get("expected"),
-            flush_info.get("have"),
-            flush_info.get("missing"),
-        )
-
-        # Re-read after flush (Wrong often lands in the last second).
         with open(results_json_path, 'r', encoding='utf-8') as f:
             all_results = json.load(f)
-        if flush_info.get("missing"):
-            # One more short wait then re-read — covers slow save-results-to-json.
-            time.sleep(1.0)
-            request_flush_pending_analysis_and_wait(directory, timeout_s=2.0)
-            with open(results_json_path, 'r', encoding='utf-8') as f:
-                all_results = json.load(f)
 
         # Fill missing per-video metres before rendering (mid-session videos).
         recognition_path = os.path.join(directory, "recognition.json")
@@ -3774,61 +3197,6 @@ async def create_video_results(req: Request):
         if not video_results:
             return {"status": "error", "message": "No results available"}
 
-        # Persist Wrong clips next to realtime_recording.avi, then build results.
-        # Also wait briefly for save-results-to-json to finish writing wrong_finish_*.mp4
-        # (that path often wins the race against this endpoint).
-        saved_wrong_clips = save_wrong_finish_clips(
-            directory, video_results, video_index=video_index
-        )
-        wait_deadline = time.time() + 3.0
-        while time.time() < wait_deadline:
-            disk_clips = list_wrong_finish_clip_files(directory)
-            has_wrong_row = any(
-                str(r.get("result") or "").strip().lower() == "wrong" for r in video_results
-            )
-            if disk_clips:
-                saved_wrong_clips = disk_clips
-                break
-            if not has_wrong_row:
-                # Reload — Wrong may have landed after flush.
-                try:
-                    with open(results_json_path, "r", encoding="utf-8") as f:
-                        all_results = json.load(f)
-                    video_results = [
-                        r for r in all_results if r.get("video_index") == video_index
-                    ] or all_results
-                    has_wrong_row = any(
-                        str(r.get("result") or "").strip().lower() == "wrong"
-                        for r in video_results
-                    )
-                    if has_wrong_row:
-                        saved_wrong_clips = save_wrong_finish_clips(
-                            directory, video_results, video_index=video_index
-                        )
-                        if saved_wrong_clips:
-                            break
-                except Exception:
-                    pass
-            time.sleep(0.2)
-
-        # Final reload so Wrong rows are included when building the strip.
-        try:
-            with open(results_json_path, "r", encoding="utf-8") as f:
-                all_results = json.load(f)
-            video_results = [
-                r for r in all_results if r.get("video_index") == video_index
-            ] or all_results
-        except Exception:
-            pass
-
-        saved_wrong_clips = list_wrong_finish_clip_files(directory) or saved_wrong_clips
-        logger.info(
-            "Saved %s wrong-finish clip file(s) in %s: %s",
-            len(saved_wrong_clips),
-            directory,
-            [os.path.basename(p) for p in saved_wrong_clips],
-        )
-
         video_path = os.path.join(directory, f"results_video_{video_index}.mp4")
         logger.info(f"Generating results video for video {video_index}: {video_path}")
 
@@ -3842,55 +3210,11 @@ async def create_video_results(req: Request):
             video_index=video_index,
         )
 
-        # If wrong clips exist on disk but the first encode missed them (race), rebuild once.
-        if success and list_wrong_finish_clip_files(directory):
-            try:
-                banks, _labels = load_wrong_finish_clip_banks(
-                    directory, video_results, video_index=video_index, target_fps=10.0
-                )
-                # Heuristic: HUD-only encode is ~2 FPS / ~40 frames / tiny file.
-                needs_rebuild = False
-                if banks and os.path.isfile(video_path):
-                    cap = cv2.VideoCapture(video_path) if cv2 is not None else None
-                    if cap is not None and cap.isOpened():
-                        nframes = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-                        cap.release()
-                        if nframes <= 45 or fps <= 2.5 or os.path.getsize(video_path) < 250000:
-                            needs_rebuild = True
-                    else:
-                        needs_rebuild = True
-                if needs_rebuild and banks:
-                    logger.info(
-                        "Rebuilding results video with %s wrong-finish clip(s) in slices 14 & 2",
-                        len(banks),
-                    )
-                    success = generate_results_video_from_results(
-                        video_results,
-                        video_path,
-                        duration_seconds=20,
-                        is_final=False,
-                        slice_video_path=None,
-                        session_folder=directory,
-                        video_index=video_index,
-                    )
-            except Exception as rebuild_exc:
-                logger.warning("Wrong-slice rebuild skipped: %s", rebuild_exc)
-
         if not success:
             return {"status": "error", "message": "Video generation failed"}
 
         if not os.path.exists(video_path):
             return {"status": "error", "message": "Video file not created"}
-
-        wrong_specs = collect_wrong_finish_clip_specs(
-            directory, video_results, video_index=video_index
-        )
-        saved_wrong_clips = list_wrong_finish_clip_files(directory) or saved_wrong_clips
-        logger.info(
-            "Per-video results ready video_index=%s wrong_finish_clips=%s saved_files=%s path=%s",
-            video_index, len(wrong_specs), len(saved_wrong_clips), video_path,
-        )
 
         if spawn_display:
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3901,13 +3225,7 @@ async def create_video_results(req: Request):
                 subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
             else:
                 logger.error("Player script not found")
-        return {
-            "status": "success",
-            "video_path": video_path,
-            "wrong_finish_clips": max(len(wrong_specs), len(saved_wrong_clips)),
-            "wrong_finish_review": bool(wrong_specs or saved_wrong_clips),
-            "wrong_clip_files": saved_wrong_clips,
-        }
+        return {"status": "success", "video_path": video_path}
 
     except Exception as e:
         logger.error(f"create-video-results error: {e}", exc_info=True)

@@ -723,9 +723,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.check_timer.start()
 
     def _do_per_video_request(self, video_num, start_time, end_time):
-        # Give delayed Wrong/Late analysis time to land (and save wrong_finish_*.mp4)
-        # before we ask the backend to build the results strip.
-        time.sleep(2.8)
         report_path = self._find_latest_report()
         video_path = ""
         if not report_path:
@@ -745,7 +742,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         }
         try:
             if HAS_REQUESTS:
-                response = requests.post(backend_url, json=payload, timeout=120)
+                response = requests.post(backend_url, json=payload, timeout=30)
                 if response.status_code == 200:
                     data = response.json()
                     candidate = data.get("video_path") or ""
@@ -763,7 +760,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     data=json.dumps(payload).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=90) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     data = json.loads(resp.read().decode("utf-8") or "{}")
                     candidate = data.get("video_path") or ""
                     if candidate and os.path.exists(candidate):
@@ -796,31 +793,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.total_videos,
             "Playing per-video results...",
         )
-        logger.info("Playing per-video results: %s", video_path)
+        logger.info("Playing per-video results for 20s: %s", video_path)
         self._play_local_clip(video_path, rate=1.0)
-        # Prefer full media length so wrong-finish review after the HUD is visible.
-        QTimer.singleShot(500, lambda: self._arm_per_video_results_timer(video_path))
-
-    def _arm_per_video_results_timer(self, video_path):
-        play_ms = PER_VIDEO_RESULTS_MS
-        try:
-            length = int(self.player.get_length() or 0)
-            if length > 1000:
-                play_ms = length + 600
-            else:
-                # Fallback: probe file duration (VLC length may still be 0).
-                import cv2
-                cap = cv2.VideoCapture(video_path)
-                fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-                frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
-                cap.release()
-                if fps > 0 and frames > 0:
-                    play_ms = int(1000.0 * frames / fps) + 600
-        except Exception as exc:
-            logger.warning("Could not probe per-video results duration: %s", exc)
-        play_ms = max(play_ms, PER_VIDEO_RESULTS_MS)
-        logger.info("Per-video results play window: %sms", play_ms)
-        self._arm_timer(play_ms, self._finish_per_video_results)
+        self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
 
     def _finish_per_video_results(self):
         if self.results_timer:

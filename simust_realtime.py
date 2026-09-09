@@ -77,7 +77,6 @@ HALF_WIDTH = STITCHED_WIDTH // 2
 VIZ_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
 SIM_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
 PAUSE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
-FLUSH_ANALYSIS_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "flush_analysis_trigger.txt")
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
 SIM_FRAME_WIDTH = 1280
@@ -3771,19 +3770,6 @@ class SimustRealtimeCamera:
                     os.remove(CAPTURE_TRIGGER_FILE)
                     with open(os.path.join(CAPTURE_OUTPUT_DIR, "last_capture.txt"), 'w') as f:
                         f.write(capture_path)
-
-                # Per-video results asks us to finish delayed Wrong/Late analysis now.
-                if os.path.exists(FLUSH_ANALYSIS_FILE):
-                    try:
-                        with self.session_lock:
-                            self._flush_pending_analysis_locked()
-                        print("  [FLUSH] Pending analysis flushed for per-video results")
-                    except Exception as flush_exc:
-                        print(f"  [FLUSH] Failed: {flush_exc}")
-                    try:
-                        os.remove(FLUSH_ANALYSIS_FILE)
-                    except Exception:
-                        pass
 
                 if not recording_started_for_video and stitched is not None:
                     h, w = stitched.shape[:2]
