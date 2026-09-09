@@ -3375,7 +3375,20 @@
                                 var state = (pb && pb.state) || '';
                                 var err = st.data && st.data.last_remote_error;
                                 var act = st.data && st.data.last_remote_action;
-                                if (state === 'idle' || state === 'aborted' || state === '') {
+                                var released = (
+                                    state === 'idle' ||
+                                    state === 'aborted' ||
+                                    state === 'completed' ||
+                                    state === '' ||
+                                    state === 'playing_results' ||
+                                    state === 'playing_final'
+                                );
+                                // Always drop the local running latch after Stop.
+                                realtimeRunningRef.current = false;
+                                setRealtimeRunning(false);
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
+                                if (released) {
                                     showToast(abort
                                         ? "Stop sent to lab. Session discarded."
                                         : "Realtime stopped", 'success');
@@ -3391,6 +3404,10 @@
                                 }
                                 showToast("Stop queued — if the lab keeps playing, restart lab app.py", 'info');
                             }).catch(function() {
+                                realtimeRunningRef.current = false;
+                                setRealtimeRunning(false);
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
                                 if (tries < 8) setTimeout(verify, 1000);
                             });
                         };
@@ -3551,8 +3568,10 @@
                         }
                         var pb = res.data && res.data['playback-status'];
                         var state = (pb && pb.state) || '';
-                        var active = state === 'playing' || state === 'paused' || state === 'loading' || state === 'playing_final';
-                        if (active && !sessionAbortedRef.current) {
+                        // Only real training playback keeps Stop/Pause armed.
+                        // playing_final / playing_results / completed must release the buttons.
+                        var livePlay = state === 'playing' || state === 'paused' || state === 'loading';
+                        if (livePlay && !sessionAbortedRef.current && !sessionSavedRef.current) {
                             if (!realtimeRunningRef.current) {
                                 realtimeRunningRef.current = true;
                                 setRealtimeRunning(true);
@@ -3566,6 +3585,15 @@
                                 realtimePausedRef.current = false;
                                 setRealtimePaused(false);
                             }
+                        } else if (realtimeRunningRef.current && (
+                            sessionAbortedRef.current ||
+                            sessionSavedRef.current ||
+                            !livePlay
+                        )) {
+                            realtimeRunningRef.current = false;
+                            setRealtimeRunning(false);
+                            realtimePausedRef.current = false;
+                            setRealtimePaused(false);
                         }
                     }).catch(function(err) {
                         var status = err && err.response && err.response.status;
