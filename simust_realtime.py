@@ -2574,10 +2574,8 @@ class SimustRealtimeCamera:
             return
 
         # ---- Ensure any pending analysis is completed before saving ----
-        if self.analysis_timer:
-            self.analysis_timer.cancel()
-            self._perform_late_analysis()
-            self.analysis_timer = None
+        with self.session_lock:
+            self._flush_pending_analysis_locked()
 
         if self.session_active:
             self._execute_end(get_current_time_ms(), time.time())
@@ -2712,64 +2710,87 @@ class SimustRealtimeCamera:
         return combined
 
     def _perform_late_analysis(self):
-        """Delayed analysis: computes result and sends to backend, but does NOT append the block (it's already in qr_blocks)."""
+        """Delayed analysis (timer thread). Acquires session_lock."""
         with self.session_lock:
-            if self.pending_analysis is None:
-                return
+            self._perform_late_analysis_locked()
 
-            action_data = self.pending_analysis['action_data']
-            action_type = self.pending_analysis['action_type']
-            video_index = self.pending_analysis['video_index']
-            block_id = self.pending_analysis['block_id']
-            screens = self.pending_analysis['screens']
+    def _perform_late_analysis_locked(self):
+        """Compute one pending result. Caller must hold session_lock."""
+        if self.pending_analysis is None:
+            return
 
-            combined_blocks = self._blocks_for_late_analysis()
-            action_index = 0
-            for i, block in enumerate(combined_blocks):
-                if block.get("id") == block_id:
-                    action_index = i
-                    break
+        action_data = self.pending_analysis['action_data']
+        action_type = self.pending_analysis['action_type']
+        video_index = self.pending_analysis['video_index']
+        block_id = self.pending_analysis['block_id']
+        screens = self.pending_analysis['screens']
 
-            analysis_result = analyze_action_with_context(
-                action_data,
-                GOAL_LINES,
-                action_type,
-                combined_blocks,
-                action_index
-            )
+        combined_blocks = self._blocks_for_late_analysis()
+        action_index = 0
+        for i, block in enumerate(combined_blocks):
+            if block.get("id") == block_id:
+                action_index = i
+                break
 
-            # Build result entry
-            result_entry = {
-                'id': block_id,
-                'action': action_type,
-                'screens': screens,
-                'result': analysis_result['Result'],
-                'winning_screen': analysis_result['Winning Screen'],
-                'min_dist': analysis_result['Min Distance (px)'],
-                'movement': analysis_result['Movement (px)'],
-                'direction': analysis_result['Direction'],
-                'aep': analysis_result.get('AEP', 'N/A'),
-                'session_duration': analysis_result['Session Duration (s)'],
-                'video_index': video_index,
-                'finishing_time': analysis_result.get('Time of Min (s)', 0.0),
-                'total_distance': 0.0,   # will be set in stop_recording
-                'ae': analysis_result.get('AE', 0.0)
+        analysis_result = analyze_action_with_context(
+            action_data,
+            GOAL_LINES,
+            action_type,
+            combined_blocks,
+            action_index
+        )
+
+        result_entry = {
+            'id': block_id,
+            'action': action_type,
+            'screens': screens,
+            'result': analysis_result['Result'],
+            'winning_screen': analysis_result['Winning Screen'],
+            'min_dist': analysis_result['Min Distance (px)'],
+            'movement': analysis_result['Movement (px)'],
+            'direction': analysis_result['Direction'],
+            'aep': analysis_result.get('AEP', 'N/A'),
+            'session_duration': analysis_result['Session Duration (s)'],
+            'video_index': video_index,
+            'finishing_time': analysis_result.get('Time of Min (s)', 0.0),
+            'total_distance': 0.0,
+            'ae': analysis_result.get('AE', 0.0)
+        }
+
+        self.stats['results'].append(result_entry)
+        try:
+            payload = {
+                'session_folder': self.recording_dir,
+                'action_result': result_entry
             }
+            requests.post('http://127.0.0.1:8000/save-results-to-json', json=payload, timeout=1)
+        except Exception as e:
+            print(f"Failed to save result to results.json: {e}")
 
-            # Store in stats and send to backend
-            self.stats['results'].append(result_entry)
+        print(
+            f"  RESULT {block_id} {action_type}: {result_entry['result']} "
+            f"(video {video_index}, dur={result_entry['session_duration']})"
+        )
+        self.pending_analysis = None
+        self.analysis_timer = None
+
+    def _flush_pending_analysis_locked(self):
+        """Finish the previous shot before scheduling the next (required for T1.2)."""
+        if self.analysis_timer:
             try:
-                payload = {
-                    'session_folder': self.recording_dir,
-                    'action_result': result_entry
-                }
-                requests.post('http://127.0.0.1:8000/save-results-to-json', json=payload, timeout=1)
-            except Exception as e:
-                print(f"Failed to save result to results.json: {e}")
-
-            # Clear pending
-            self.pending_analysis = None
+                self.analysis_timer.cancel()
+            except Exception:
+                pass
             self.analysis_timer = None
+        if self.pending_analysis is not None:
+            self._perform_late_analysis_locked()
+
+    def _schedule_late_analysis_locked(self, delay=None):
+        delay = LATE_ANALYSIS_DELAY if delay is None else float(delay)
+        self.analysis_started_at = time.time()
+        self.analysis_timer = threading.Timer(delay, self._perform_late_analysis)
+        self.analysis_timer.daemon = True
+        self.analysis_timer.start()
 
     def _end_session_locked(self, current_time_str, current_timestamp):
         """End the active session. Must be called with self.session_lock held."""
@@ -2805,52 +2826,33 @@ class SimustRealtimeCamera:
             if video_index < 1:
                 video_index = 1
 
-            # Build combined_blocks for analysis (including the new block and between-session data)
-            combined_blocks = self.qr_blocks.copy()   # includes the new block
-            if self.between_session_data:
-                between_block = {
-                    "id": "BETWEEN",
-                    "action": "BETWEEN_SESSIONS",
-                    "screens": [],
-                    "start_time": self.between_session_start_time,
-                    "end_time": current_time_str,
-                    "data": self.between_session_data
-                }
-                combined_blocks.append(between_block)
-                print(f"  Including between‑session data ({len(self.between_session_data)} frames) for analysis.")
+            # CRITICAL (SF-30N T1.2): action end → next QR is often < LATE_ANALYSIS_DELAY.
+            # Cancelling the timer without flushing dropped all but the last 1–2 labels
+            # per video and made totals wrong.
+            self._flush_pending_analysis_locked()
 
             self.pending_analysis = {
-                'action_data': self.current_qr_block,    # original block (same data)
+                'action_data': self.current_qr_block,
                 'screens': self.current_screens,
                 'action_type': self.current_action,
                 'block_id': self.current_block_id,
                 'video_index': video_index,
-                'combined_blocks': combined_blocks,
             }
-
-            # Schedule delayed analysis (timer) – this will compute result and send to backend
-            if self.analysis_timer:
-                self.analysis_timer.cancel()
-            self.analysis_started_at = time.time()
-            self.analysis_timer = threading.Timer(LATE_ANALYSIS_DELAY, self._perform_late_analysis)
-            self.analysis_timer.daemon = True
-            self.analysis_timer.start()
+            self._schedule_late_analysis_locked()
 
             # ---- Clear current_qr_block ----
             self.current_qr_block = None
 
-            # We no longer print result here because it will be computed later.
-            # However, we keep the end print to show the session has ended.
             duration = current_timestamp - self.session_start_timestamp
             session_fps_avg = self.session_fps_sum / self.session_frame_count if self.session_frame_count > 0 else 0
 
             print(f"{'-'*50}")
             print(f"SESSION END - Frames: {self.session_frame_count} | Duration: {duration:.2f}s | Avg FPS: {session_fps_avg:.1f}")
             print(f"End: {offset_end_time_str}")
-            print(f"Analysis scheduled (will include between‑session frames).")
+            print(f"Analysis scheduled (will include between-session frames).")
             print(f"{'='*50}\n")
 
-            self.save_recognition_json()   # saves immediately, includes the new block
+            self.save_recognition_json()
 
         self.active_goal_lines = {}
         self.current_action = None
@@ -2932,10 +2934,11 @@ class SimustRealtimeCamera:
 
     def draw_results_overlay(self, frame):
         h, w = frame.shape[:2]
-        panel_x = w - 350
+        panel_x = w - 360
         panel_y = 10
-        panel_w = 340
-        panel_h = 230
+        panel_w = 350
+        results = self.stats['results'][-8:] if self.stats['results'] else []
+        panel_h = max(230, 40 + 28 * max(1, len(results)))
 
         overlay = frame.copy()
         cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
@@ -2946,34 +2949,27 @@ class SimustRealtimeCamera:
         cv2.line(frame, (panel_x + 10, panel_y + 30), (panel_x + panel_w - 10, panel_y + 30), (255, 255, 255), 1)
 
         y_offset = 50
-        results = self.stats['results'][-5:] if self.stats['results'] else []
-
         for i, result in enumerate(results):
             action_id = result.get('id', '')
             action_type = result.get('action', '')
             action_result = result.get('result', '')
             winning = result.get('winning_screen', '')
-            movement = result.get('movement', 0)
-            direction = result.get('direction', '')
-            aep = result.get('aep', 'N/A')
-            ae = result.get('ae', 0.0)
 
             if action_result == 'Correct':
                 color = COLOR_CORRECT
             elif action_result == 'Late':
                 color = COLOR_LATE
+            elif action_result == 'Miss':
+                color = (0, 165, 255)
             else:
                 color = COLOR_WRONG
 
             text = f"{action_id} {action_type}: {action_result}"
             if winning and winning != 'N/A':
-                text += f" → {winning}"
-            if movement > 0:
-                text += f" [{movement}px {direction}]"
-            text += f" AEP:{aep} AE:{ae:.1f}"
+                text += f" -> {winning}"
 
-            cv2.putText(frame, text, (panel_x + 10, panel_y + y_offset + i * 25),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            cv2.putText(frame, text, (panel_x + 10, panel_y + y_offset + i * 28),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
 
         return frame
 
