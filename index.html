@@ -1019,9 +1019,18 @@
                     React.createElement('input', {
                         type: "text",
                         className: "search-input flex-1 min-w-[200px]",
-                        placeholder: t("searchPlaceholder"),
+                        placeholder: t("searchPlaceholder") || "Type a name — then click a suggestion",
                         value: searchQuery,
-                        onChange: function(e) { onSearch(e.target.value); }
+                        autoComplete: "off",
+                        onChange: function(e) { onSearch(e.target.value); },
+                        onKeyDown: function(e) {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (filteredPlayers.length === 1) {
+                                    onSelectPlayer(filteredPlayers[0]);
+                                }
+                            }
+                        }
                     }),
                     React.createElement('button', { onClick: onClearSelection, className: "clear-selection-btn" },
                         "✕ Clear")
@@ -2175,6 +2184,9 @@
             var selectedPlayerIdState = useState(null);
             var selectedPlayerId = selectedPlayerIdState[0];
             var setSelectedPlayerId = selectedPlayerIdState[1];
+            var selectedPlayerIdRef = useRef(null);
+            var playersRef = useRef([]);
+            var searchTimerRef = useRef(null);
             var showAddPlayerState = useState(false);
             var showAddPlayer = showAddPlayerState[0];
             var setShowAddPlayer = showAddPlayerState[1];
@@ -2345,6 +2357,7 @@
                 }
                 setAnalysisResults([]);
                 setReportData(null);
+                selectedPlayerIdRef.current = null;
                 setSelectedPlayerId(null);
                 setSearchQuery("");
                 setFilteredPlayers([]);
@@ -2398,15 +2411,14 @@
                             }
                         });
                         setPlayers(merged);
+                        playersRef.current = merged;
                         localStorage.setItem("simust_players", JSON.stringify(merged));
-                        if (merged.length > 0) {
-                            if (!selectedPlayerId) {
-                                setSelectedPlayerId(merged[0].id);
-                                updateProgressForPlayer(merged[0]);
-                            } else {
-                                var player = merged.find(function(p) { return p.id === selectedPlayerId; });
-                                if (player) updateProgressForPlayer(player);
-                            }
+                        // Never auto-pick a default player (e.g. first row "omid").
+                        // Keep the operator's explicit selection stable across refreshes.
+                        var currentId = selectedPlayerIdRef.current;
+                        if (currentId) {
+                            var player = merged.find(function(p) { return p.id === currentId; });
+                            if (player) updateProgressForPlayer(player);
                         }
                         return merged;
                     }
@@ -2433,12 +2445,11 @@
                                 });
                             });
                             setPlayers(updated);
+                            playersRef.current = updated;
                             localStorage.setItem("simust_players", JSON.stringify(updated));
-                            if (updated.length > 0 && !selectedPlayerId) {
-                                setSelectedPlayerId(updated[0].id);
-                                updateProgressForPlayer(updated[0]);
-                            } else if (selectedPlayerId) {
-                                var p2 = updated.find(function(p) { return p.id === selectedPlayerId; });
+                            var currentId2 = selectedPlayerIdRef.current;
+                            if (currentId2) {
+                                var p2 = updated.find(function(p) { return p.id === currentId2; });
                                 if (p2) updateProgressForPlayer(p2);
                             }
                             return updated;
@@ -2450,6 +2461,7 @@
 
             var savePlayers = function(updated) {
                 localStorage.setItem("simust_players", JSON.stringify(updated));
+                playersRef.current = updated;
                 setPlayers(updated);
             };
 
@@ -2484,37 +2496,52 @@
                 return blob.indexOf(lower) !== -1;
             };
 
-            var performSearch = function(query) {
-                setSearchQuery(query);
-                if (!query.trim()) { setFilteredPlayers([]);
-                    setShowSearchResults(false); return; }
-                var lower = query.toLowerCase().trim();
-                loadPlayers().then(function(list) {
-                var source = (list && list.length) ? list : players;
+            var applySearchSuggestions = function(query, list) {
+                var lower = (query || '').toLowerCase().trim();
+                if (!lower) {
+                    setFilteredPlayers([]);
+                    setShowSearchResults(false);
+                    return;
+                }
+                var source = (list && list.length) ? list : (playersRef.current || []);
                 var filtered = source.filter(function(p) { return playerMatchesQuery(p, lower); });
                 setFilteredPlayers(filtered);
                 setShowSearchResults(true);
-                var exact = source.find(function(p) { return String(p.playerId || '').toLowerCase() === lower || String(p.id || '').toLowerCase() === lower; });
-                if (exact) {
-                    if (selectedPlayerId === exact.id) {
-                        clearResultsDisplay();
-                    }
-                    setSelectedPlayerId(exact.id);
-                    setShowSearchResults(false);
-                    setSearchQuery(exact.playerId);
-                    updateProgressForPlayer(exact);
-                    loadPlayerSessionsFromBackend(exact.id);
-                    showToast("Selected: " + exact.name + ' ' + exact.surname, 'success');
+            };
+
+            // Suggest while typing; do NOT auto-select. Operator must click a suggestion
+            // (or press Enter when there is exactly one match).
+            var performSearch = function(query) {
+                setSearchQuery(query);
+                if (searchTimerRef.current) {
+                    clearTimeout(searchTimerRef.current);
+                    searchTimerRef.current = null;
                 }
-                });
+                if (!query.trim()) {
+                    setFilteredPlayers([]);
+                    setShowSearchResults(false);
+                    return;
+                }
+                applySearchSuggestions(query, playersRef.current);
+                searchTimerRef.current = setTimeout(function() {
+                    loadPlayers().then(function(list) {
+                        applySearchSuggestions(query, list);
+                    });
+                }, 350);
             };
 
             var selectPlayerFromSearch = function(player) {
-                if (selectedPlayerId === player.id) {
+                if (!player) return;
+                if (searchTimerRef.current) {
+                    clearTimeout(searchTimerRef.current);
+                    searchTimerRef.current = null;
+                }
+                if (selectedPlayerIdRef.current === player.id) {
                     clearResultsDisplay();
                 }
+                selectedPlayerIdRef.current = player.id;
                 setSelectedPlayerId(player.id);
-                setSearchQuery(player.playerId);
+                setSearchQuery((player.name || '') + (player.surname ? (' ' + player.surname) : ''));
                 setShowSearchResults(false);
                 setFilteredPlayers([]);
                 updateProgressForPlayer(player);
@@ -2523,6 +2550,11 @@
             };
 
             var clearSelection = function() {
+                if (searchTimerRef.current) {
+                    clearTimeout(searchTimerRef.current);
+                    searchTimerRef.current = null;
+                }
+                selectedPlayerIdRef.current = null;
                 setSelectedPlayerId(null);
                 setSearchQuery("");
                 setFilteredPlayers([]);
@@ -2566,8 +2598,11 @@
                     player.sessions = [];
                     player.progress = player.progress || { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"], completed_levels: [] };
                     savePlayers(players.concat([player]));
+                    selectedPlayerIdRef.current = player.id;
                     setSelectedPlayerId(player.id);
-                    setSearchQuery(player.playerId);
+                    setSearchQuery((player.name || '') + (player.surname ? (' ' + player.surname) : ''));
+                    setShowSearchResults(false);
+                    setFilteredPlayers([]);
                     updateProgressForPlayer(player);
                     setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
                     setShowAddPlayer(false);
@@ -2620,9 +2655,14 @@
             var deletePlayer = function(playerId) {
                 var updated = players.filter(function(p) { return p.id !== playerId; });
                 savePlayers(updated);
-                if (selectedPlayerId === playerId) { setSelectedPlayerId(null);
+                if (selectedPlayerIdRef.current === playerId || selectedPlayerId === playerId) {
+                    selectedPlayerIdRef.current = null;
+                    setSelectedPlayerId(null);
                     setSearchQuery("");
-                    setPlayerSessions([]); }
+                    setFilteredPlayers([]);
+                    setShowSearchResults(false);
+                    setPlayerSessions([]);
+                }
                 showToast("Player deleted", 'info');
             };
             var requestDelete = function(playerId, playerName) {
@@ -2773,13 +2813,11 @@
 
             // ----- FETCH RESULTS -----
             var fetchRealtimeResults = function(showLoading, forceApply) {
-                if (sessionAbortedRef.current || realtimePausedRef.current) {
+                // Manual Refresh (forceApply) must always run, even if paused.
+                if (!forceApply && (sessionAbortedRef.current || realtimePausedRef.current)) {
                     return Promise.resolve(false);
                 }
                 if (showLoading === undefined) showLoading = true;
-                if (!forceApply && !showLoading && activeTabRef.current === 'results') {
-                    return Promise.resolve(false);
-                }
                 var epoch = resultsEpochRef.current;
                 if (showLoading) setLoadingAnalysis(true);
                 return axios.get("/realtime-results").then(function(res) {
@@ -2798,6 +2836,11 @@
                                 parseFloat(a.session_duration) : null;
                             var ae = (a.ae !== undefined && a.ae !== null && a.ae !== 'N/A') ? parseFloat(a
                                 .ae) : null;
+                            var timeOfMin = null;
+                            if (a.time_of_min !== undefined && a.time_of_min !== null && a.time_of_min !== 'N/A' && a.time_of_min !== '-') {
+                                timeOfMin = parseFloat(a.time_of_min);
+                                if (isNaN(timeOfMin)) timeOfMin = null;
+                            }
                             var videoIndex = a.video_index || a.videoIndex;
                             if (videoIndex === undefined || videoIndex === null) {
                                 var fromId = getVideoIndexFromId(a.id);
@@ -2810,6 +2853,7 @@
                                     '',
                                 result: a.result || 'N/A',
                                 winning_screen: a.winning_screen || 'N/A',
+                                time_of_min: timeOfMin,
                                 session_duration: sessionDur,
                                 movement: a.movement || 0,
                                 direction: a.direction || 'NONE',
@@ -3143,7 +3187,7 @@
 
                     var hostSyncTick = 0;
                     liveIntervalRef.current = setInterval(function() {
-                        if (activeTabRef.current === 'results') return;
+                        // Keep pulling results even while the RESULTS tab is open.
                         if (realtimePausedRef.current) return;
                         fetchRealtimeResults(false);
                         hostSyncTick += 1;
@@ -3331,7 +3375,20 @@
                                 var state = (pb && pb.state) || '';
                                 var err = st.data && st.data.last_remote_error;
                                 var act = st.data && st.data.last_remote_action;
-                                if (state === 'idle' || state === 'aborted' || state === '') {
+                                var released = (
+                                    state === 'idle' ||
+                                    state === 'aborted' ||
+                                    state === 'completed' ||
+                                    state === '' ||
+                                    state === 'playing_results' ||
+                                    state === 'playing_final'
+                                );
+                                // Always drop the local running latch after Stop.
+                                realtimeRunningRef.current = false;
+                                setRealtimeRunning(false);
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
+                                if (released) {
                                     showToast(abort
                                         ? "Stop sent to lab. Session discarded."
                                         : "Realtime stopped", 'success');
@@ -3347,6 +3404,10 @@
                                 }
                                 showToast("Stop queued — if the lab keeps playing, restart lab app.py", 'info');
                             }).catch(function() {
+                                realtimeRunningRef.current = false;
+                                setRealtimeRunning(false);
+                                realtimePausedRef.current = false;
+                                setRealtimePaused(false);
                                 if (tries < 8) setTimeout(verify, 1000);
                             });
                         };
@@ -3409,7 +3470,11 @@
 
             var forceRefreshReport = function() {
                 showToast("Refreshing report…", 'info');
-                fetchRealtimeResults(true, true);
+                fetchRealtimeResults(true, true).then(function(ok) {
+                    if (!ok) {
+                        showToast("No live results yet. Run Realtime Play, or open a saved session.", 'info');
+                    }
+                });
             };
 
             // ----- EFFECTS -----
@@ -3423,6 +3488,20 @@
             useEffect(function() {
                 activeTabRef.current = activeTab;
             }, [activeTab]);
+
+            // When opening RESULTS, load the latest live report immediately.
+            useEffect(function() {
+                if (activeTab !== 'results') return;
+                fetchRealtimeResults(true, true);
+            }, [activeTab]);
+
+            useEffect(function() {
+                selectedPlayerIdRef.current = selectedPlayerId;
+            }, [selectedPlayerId]);
+
+            useEffect(function() {
+                playersRef.current = players;
+            }, [players]);
 
             useEffect(function() {
                 clearResultsDisplay();
@@ -3464,6 +3543,7 @@
                 }
                 return function() {
                     clearInterval(hostPlayerRefresh);
+                    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
                     if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
@@ -3488,8 +3568,10 @@
                         }
                         var pb = res.data && res.data['playback-status'];
                         var state = (pb && pb.state) || '';
-                        var active = state === 'playing' || state === 'paused' || state === 'loading' || state === 'playing_final';
-                        if (active && !sessionAbortedRef.current) {
+                        // Only real training playback keeps Stop/Pause armed.
+                        // playing_final / playing_results / completed must release the buttons.
+                        var livePlay = state === 'playing' || state === 'paused' || state === 'loading';
+                        if (livePlay && !sessionAbortedRef.current && !sessionSavedRef.current) {
                             if (!realtimeRunningRef.current) {
                                 realtimeRunningRef.current = true;
                                 setRealtimeRunning(true);
@@ -3503,6 +3585,15 @@
                                 realtimePausedRef.current = false;
                                 setRealtimePaused(false);
                             }
+                        } else if (realtimeRunningRef.current && (
+                            sessionAbortedRef.current ||
+                            sessionSavedRef.current ||
+                            !livePlay
+                        )) {
+                            realtimeRunningRef.current = false;
+                            setRealtimeRunning(false);
+                            realtimePausedRef.current = false;
+                            setRealtimePaused(false);
                         }
                     }).catch(function(err) {
                         var status = err && err.response && err.response.status;

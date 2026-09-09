@@ -132,7 +132,7 @@
             trainingLevel: "Training Level",
             selectLevel: "Select Level",
             unlock: "Unlock",
-            searchPlaceholder: "Search by SIMUST ID or Name...",
+            searchPlaceholder: "Type name or ID — click a suggestion to select",
             selected: "SELECTED:",
             invalidLogin: "Invalid username or password",
             reservationNav: "Calendar",
