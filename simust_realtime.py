@@ -110,7 +110,14 @@ POLYGON_POINTS = [
 # ============================================================================
 SCALE = 1.0
 CORRECT_THRESHOLD = 40
-LATE_SEARCH_DURATION = 2.5
+LATE_SEARCH_DURATION = 2.5          # max late window (slow / long-gap videos)
+LATE_SEARCH_MIN = 0.30              # never search less than this after a QR
+LATE_SEARCH_GAP_MARGIN = 0.05       # leave a slice before the next action starts
+SHORT_SESSION_SEC = 1.8             # T1.2-style QR windows
+SHORT_FINISH_DIST = 35.0            # tighter mouth band on short tempo (in-session)
+LATE_NEXT_PEEK = 0.22               # short tempo: early frames of next shot may finish previous
+PEEK_BETWEEN_MAX_DIST = 140.0       # only peek if BETWEEN already closed toward the target
+LATE_OVER_CORRECT_MARGIN = 8.0      # prefer clear Late over a weak in-session Correct
 MIN_MOVEMENT_THRESHOLD = 33
 MOVEMENT_RADIUS = 120
 LEAVE_THRESHOLD = 200          # kept but not used in simplified check
@@ -129,7 +136,7 @@ BALL_TRACK_MAX_STEP_PX = 280  # ignore distant junk blobs as the same ball
 BALL_RETURN_MAX_GAP_SEC = 0.75  # long dropout + far reappear = not a bounce (last-of-video Miss)
 BALL_RETURN_GAP_NEAR_PX = 100  # after a long dropout, only keep the ball if it reappears nearby
 BALL_RETURN_MAX_AFTER_ARRIVE = 1.25  # unused legacy; gap rule handles false returns
-LATE_ANALYSIS_DELAY = LATE_SEARCH_DURATION  # wait for BETWEEN frames before scoring
+LATE_ANALYSIS_DELAY = LATE_SEARCH_DURATION  # default; live path uses dynamic_late_window when known
 
 PIXEL_TO_METER_SCALE = 0.0259
 
@@ -925,83 +932,303 @@ def search_goal_late(current_index: int, all_data: List[dict],
 # ============================================================================
 # Late search for PASS / TARGET / PRESS – respects time limit and movement
 # ============================================================================
+def _parse_block_start(block) -> Optional[datetime]:
+    start_str = (block or {}).get("start_time")
+    if not start_str:
+        return None
+    try:
+        return datetime.strptime(str(start_str), "%H:%M:%S.%f")
+    except Exception:
+        try:
+            return datetime.strptime(str(start_str)[:15], "%H:%M:%S.%f")
+        except Exception:
+            return None
+
+
+def is_scored_action_block(block) -> bool:
+    action = str((block or {}).get("action") or "").upper()
+    ident = str((block or {}).get("id") or "")
+    return action in ("PASS", "TARGET", "PRESS", "GOAL") and ident.startswith("S")
+
+
+def wall_gap_until_next_action(action_index: int, all_data: List[dict], action_end_time: Optional[datetime]) -> Optional[float]:
+    """Wall-clock seconds until the next scored action starts (ignores BETWEEN length)."""
+    if action_end_time is None or not all_data:
+        return None
+    for idx in range(int(action_index) + 1, len(all_data)):
+        block = all_data[idx]
+        if not is_scored_action_block(block):
+            continue
+        nxt = _parse_block_start(block)
+        if nxt is None:
+            continue
+        return max(0.0, (nxt - action_end_time).total_seconds())
+    return None
+
+
+def between_duration_until_next(action_index: int, all_data: List[dict]) -> Optional[float]:
+    """Max relative t in BETWEEN_SESSIONS blocks before the next scored action."""
+    if not all_data:
+        return None
+    best = None
+    for idx in range(int(action_index) + 1, len(all_data)):
+        block = all_data[idx]
+        if is_scored_action_block(block):
+            break
+        action = str((block or {}).get("action") or "").upper()
+        if action != "BETWEEN_SESSIONS":
+            continue
+        data = block.get("data") or []
+        if not data:
+            continue
+        tmax = max(float(e.get("t") or 0.0) for e in data)
+        best = tmax if best is None else max(best, tmax)
+    return best
+
+
+def gap_until_next_action(action_index: int, all_data: List[dict], action_end_time: Optional[datetime]) -> Optional[float]:
+    """Seconds available for late search until the next scored action.
+
+    Fast SF-30N often stamps action end_time equal to the next QR start (wall gap 0).
+    In that case use the BETWEEN block duration (real inter-shot frames).
+    """
+    if not all_data:
+        return None
+    wall_gap = wall_gap_until_next_action(action_index, all_data, action_end_time)
+    between_gap = between_duration_until_next(action_index, all_data)
+    if between_gap is not None and (wall_gap is None or wall_gap < float(LATE_SEARCH_MIN)):
+        return float(between_gap)
+    if wall_gap is not None:
+        return float(wall_gap)
+    return float(between_gap) if between_gap is not None else None
+
+
+def is_short_tempo_action(
+    action_index: int,
+    all_data: List[dict],
+    action_end_time: Optional[datetime],
+    wall_session: Optional[float] = None,
+) -> bool:
+    """True for T1.2-style spacing (short BETWEEN / zero wall gap to next QR)."""
+    wall_gap = wall_gap_until_next_action(action_index, all_data, action_end_time)
+    between_gap = between_duration_until_next(action_index, all_data)
+    if wall_gap is not None:
+        if wall_gap < float(LATE_SEARCH_MIN):
+            return bool(between_gap is not None and 0 < float(between_gap) < 1.25)
+        return bool(0 < float(wall_gap) < 1.25)
+    if wall_session is not None:
+        return bool(0 < float(wall_session) < float(SHORT_SESSION_SEC))
+    return False
+
+
+def dynamic_late_window(
+    action_index: int,
+    all_data: List[dict],
+    action_end_time: Optional[datetime],
+    session_duration: Optional[float] = None,
+) -> float:
+    """Late/return search window scaled to the real BETWEEN gap.
+
+    Slow/long-gap videos keep up to 2.5s. Fast T1.2 (~0.5–0.9s gap) shrinks so
+    the next shot's ball is not counted as this shot's Late/Correct return.
+    """
+    gap = gap_until_next_action(action_index, all_data, action_end_time)
+    if gap is None:
+        return float(LATE_SEARCH_DURATION)
+    return float(
+        min(
+            float(LATE_SEARCH_DURATION),
+            max(float(LATE_SEARCH_MIN), float(gap) - float(LATE_SEARCH_GAP_MARGIN)),
+        )
+    )
+
+
+def dynamic_analysis_delay(recent_gap_sec: Optional[float] = None, session_duration: Optional[float] = None) -> float:
+    """Live label delay: wait for BETWEEN frames, but not longer than the tempo allows."""
+    if recent_gap_sec is None and session_duration is None:
+        return float(LATE_ANALYSIS_DELAY)
+    gap = float(recent_gap_sec) if recent_gap_sec is not None else float(LATE_SEARCH_DURATION)
+    return float(
+        min(
+            float(LATE_SEARCH_DURATION),
+            max(float(LATE_SEARCH_MIN), gap - float(LATE_SEARCH_GAP_MARGIN)),
+        )
+    )
+
+
+def _between_approach_stats(block, screens) -> Tuple[bool, float]:
+    """Whether BETWEEN ball closes on a target, and how close it got."""
+    positions = get_positions_from_data((block or {}).get("data") or [], "b", SCALE)
+    filtered = filter_static_ball_positions(positions) or positions
+    if len(filtered) < 2:
+        return False, float("inf")
+    best_improve = -1e9
+    best_min = float("inf")
+    for screen in screens or []:
+        p0, p1 = get_screen_info(screen, GOAL_LINES)
+        if p0 is None:
+            continue
+        dists = [compute_projection((x, y), p0, p1)[0] for _, x, y in filtered]
+        best_improve = max(best_improve, float(dists[0]) - float(dists[-1]))
+        best_min = min(best_min, min(dists))
+    return best_improve > 15.0, float(best_min)
+
+
+def _late_hit_on_send_side(filtered, screen, screens, action_type, thresh):
+    """Late contact must still be on the send/player side (or bounce back)."""
+    p0, p1 = get_screen_info(screen, GOAL_LINES)
+    if p0 is None:
+        return False, None, None, None
+    origin = finishing_return_origin(action_type, screens, filtered)
+    post_r = post_radius_for(action_type)
+    first_side = None
+    best_return = None
+    for t, x, y in filtered:
+        if not in_goal_area((x, y), p0, p1, thresh, post_radius=post_r):
+            continue
+        eff, proj = get_effective_distance((x, y), p0, p1)
+        if on_origin_side((x, y), p0, p1, origin):
+            if first_side is None or eff < first_side[0]:
+                first_side = (eff, t, proj)
+        else:
+            came = returned_toward_origin(
+                filtered, screen, screens, GOAL_LINES, t, thresh,
+                origin=origin, post_radius=post_r,
+            )
+            if came and (best_return is None or eff < best_return[0]):
+                best_return = (eff, t, proj)
+    pick = first_side or best_return
+    if pick is None:
+        return False, None, None, None
+    return True, pick[1], pick[0], pick[2]
+
+
 def search_late_across_blocks(current_index: int, all_data: List[dict],
                                screens: List[str], goal_lines: Dict,
                                key: str, action_end_time: datetime,
-                               action_type: str) -> Tuple[bool, Optional[str], Optional[float], float, Optional[float]]:
+                               action_type: str,
+                               late_window: Optional[float] = None,
+                               session_duration: Optional[float] = None) -> Tuple[bool, Optional[str], Optional[float], float, Optional[float]]:
     """
     Returns: (found, screen, time_offset, distance, proj_t)
     Used for non-GOAL actions.
+
+    Never steals a deep finish from the next scored action. On short tempo, a
+    gated peek into the first LATE_NEXT_PEEK seconds of the next shot covers
+    finishes that land as the next QR appears (common on T1.2).
     """
     if current_index + 1 >= len(all_data):
         return False, None, None, float('inf'), None
 
+    window = float(LATE_SEARCH_DURATION if late_window is None else late_window)
+    short = session_duration is not None and 0 < float(session_duration) < float(SHORT_SESSION_SEC)
+    thresh = float(FINISH_DIST)
     best_screen = None
     best_dist = float('inf')
     best_time = None
     best_proj_t = None
-
-    def get_threshold(screen: str) -> float:
-        return get_threshold_for_screen(screen, action_type)
+    between_block = None
+    bet_approach = False
+    bet_min = float('inf')
 
     for idx in range(current_index + 1, len(all_data)):
         block = all_data[idx]
-        block_start_str = block.get('start_time')
-        if not block_start_str:
+        scored = is_scored_action_block(block)
+        action = str((block or {}).get("action") or "").upper()
+        block_start = _parse_block_start(block)
+        if block_start is None:
             continue
-        try:
-            block_start = datetime.strptime(block_start_str, "%H:%M:%S.%f")
-        except:
-            continue
-
         offset = (block_start - action_end_time).total_seconds()
-        if offset > LATE_SEARCH_DURATION:
-            break
 
-        block_data = block.get('data', [])
+        if action == "BETWEEN_SESSIONS":
+            between_block = block
+            bet_approach, bet_min = _between_approach_stats(block, screens)
+
+        if scored:
+            allow_peek = short and (
+                between_block is None
+                or (bet_approach and bet_min <= float(PEEK_BETWEEN_MAX_DIST))
+            )
+            if not allow_peek:
+                break
+            block_data = [
+                e for e in (block.get("data") or [])
+                if float(e.get("t") or 0.0) <= float(LATE_NEXT_PEEK)
+            ]
+            if not block_data:
+                break
+        else:
+            if offset > window:
+                break
+            block_data = block.get("data") or []
+
         if not block_data:
+            if scored:
+                break
             continue
+
         positions = get_positions_from_data(block_data, key, SCALE)
         if not positions:
+            if scored:
+                break
             continue
 
         filtered = filter_static_ball_positions(positions)
         if not filtered:
+            if scored:
+                break
             continue
-
         if not is_ball_moving(filtered):
+            if scored:
+                break
             continue
 
-        best_screen_block, best_dist_block, best_time_block, best_proj_block = find_min_distance_to_screens(
-            filtered, screens, goal_lines, require_movement=False
-        )
+        for screen in screens:
+            if short:
+                ok, arrive_t, eff, proj = _late_hit_on_send_side(
+                    filtered, screen, screens, action_type, thresh
+                )
+                if not ok:
+                    continue
+            else:
+                best_screen_block, best_dist_block, best_time_block, best_proj_block = find_min_distance_to_screens(
+                    filtered, [screen], goal_lines, require_movement=False
+                )
+                if best_screen_block is None:
+                    continue
+                p0, p1 = get_screen_info(screen, goal_lines)
+                hit = False
+                if p0 is not None:
+                    for t, x, y in filtered:
+                        if in_goal_area(
+                            (x, y), p0, p1, thresh, post_radius=post_radius_for(action_type)
+                        ):
+                            hit = True
+                            break
+                if not hit or best_dist_block > thresh:
+                    continue
+                arrive_t = best_time_block
+                eff = best_dist_block
+                proj = best_proj_block
 
-        if best_screen_block is not None:
-            depth = arrival_depth_for(best_screen_block, action_type)
-            p0, p1 = get_screen_info(best_screen_block, goal_lines)
-            hit = False
-            if p0 is not None:
-                for t, x, y in filtered:
-                    if in_goal_area(
-                        (x, y), p0, p1, depth, post_radius=post_radius_for(action_type)
-                    ):
-                        hit = True
-                        break
-            if not hit:
-                continue
-            threshold = depth
-            if best_dist_block <= threshold:
-                absolute_time = offset + (best_time_block if best_time_block is not None else 0)
-                if absolute_time <= LATE_SEARCH_DURATION and best_dist_block < best_dist:
-                    best_dist = best_dist_block
-                    best_screen = best_screen_block
-                    best_time = absolute_time
-                    best_proj_t = best_proj_block
+            if scored or offset < float(LATE_SEARCH_MIN):
+                absolute_time = float(arrive_t or 0.0)
+            else:
+                absolute_time = float(offset) + float(arrive_t or 0.0)
+
+            if absolute_time <= window and eff < best_dist:
+                best_dist = float(eff)
+                best_screen = screen
+                best_time = absolute_time
+                best_proj_t = proj
+
+        if scored:
+            break
 
     if best_screen is not None:
         return True, best_screen, best_time, best_dist, best_proj_t
-    else:
-        return False, None, None, float('inf'), None
+    return False, None, None, float('inf'), None
+
 
 def analyze_movement(unique_positions):
     if len(unique_positions) < 2:
@@ -1020,6 +1247,8 @@ def get_positions_from_blocks_after(current_index, all_data, key, action_end_tim
     extra_positions = []
     for idx in range(current_index + 1, len(all_data)):
         block = all_data[idx]
+        if is_scored_action_block(block):
+            break
         block_start_str = block.get('start_time')
         if not block_start_str:
             continue
@@ -1058,11 +1287,15 @@ def check_ball_return(positions, screen, goal_lines, min_time, threshold, sessio
     return departed_goal_area(positions, screen, goal_lines, min_time, depth)
 
 
-def arrival_depth_for(screen, action_type):
+def arrival_depth_for(screen, action_type, session_duration=None):
     threshold = get_threshold_for_screen(screen, action_type)
     if action_type == "GOAL":
         return float(threshold)
-    return float(max(FINISH_DIST, threshold))
+    finish = float(FINISH_DIST)
+    if session_duration is not None and session_duration > 0 and session_duration < SHORT_SESSION_SEC:
+        # T1.2: the wide 100px band creates false Correct from near-screen noise.
+        finish = float(SHORT_FINISH_DIST)
+    return float(max(finish, threshold))
 
 
 def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
@@ -1084,7 +1317,7 @@ def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_PO
     return None
 
 
-def best_arrival_in_positions(positions, screens, goal_lines, action_type):
+def best_arrival_in_positions(positions, screens, goal_lines, action_type, session_duration=None):
     best = None
     depth_used = None
     post_r = post_radius_for(action_type)
@@ -1092,7 +1325,7 @@ def best_arrival_in_positions(positions, screens, goal_lines, action_type):
         p0, p1 = get_screen_info(screen, goal_lines)
         if p0 is None:
             continue
-        depth = arrival_depth_for(screen, action_type)
+        depth = arrival_depth_for(screen, action_type, session_duration=session_duration)
         for t, x, y in positions:
             if not in_goal_area((x, y), p0, p1, depth, post_radius=post_r):
                 continue
@@ -1390,9 +1623,20 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
         track = filter_static_ball_positions(positions) or positions
 
     session_duration = track[-1][0] if track else 0
+    wall_session = None
+    if action_end_time is not None and session_start_time is not None:
+        wall_session = (action_end_time - session_start_time).total_seconds()
+    short_tempo = is_short_tempo_action(
+        action_index, all_data, action_end_time, wall_session=wall_session
+    )
+    tempo_duration = float(session_duration) if session_duration else float(wall_session or 0)
     movement, direction = analyze_movement(track)
+    late_window = dynamic_late_window(
+        action_index, all_data, action_end_time, session_duration=tempo_duration
+    )
     full_track = extended_track(
         track, action_index, all_data, key, action_end_time, session_start_time,
+        window=late_window,
         continue_ball=(action_type in ("PASS", "TARGET")),
     )
 
@@ -1410,7 +1654,10 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
         )
 
     if action_type in ('PASS', 'TARGET', 'PRESS'):
-        arrival, depth = best_arrival_in_positions(track, screens, goal_lines, action_type)
+        arrival, depth = best_arrival_in_positions(
+            track, screens, goal_lines, action_type,
+            session_duration=tempo_duration if short_tempo else None,
+        )
         if arrival is not None:
             best_eff_dist, best_min_time, best_screen, best_proj_t = arrival
             arrive_t = first_arrival_time(
@@ -1423,8 +1670,36 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                 full_track, best_screen, screens, goal_lines, arrive_t, depth,
                 origin=origin, post_radius=post_radius_for(action_type),
             )
-            # PRESS: reach the zone = Correct (no Miss). PASS/TARGET: return = Correct, stay = Miss.
-            if action_type == 'PRESS' or came_back:
+            came_back_in_session = returned_toward_origin(
+                track, best_screen, screens, goal_lines, arrive_t, depth,
+                origin=origin, post_radius=post_radius_for(action_type),
+            )
+            # Finish that only completes at the last in-session frame (return after
+            # the QR) is Late — covers T1.2 boundary finishes and end-of-video S10.
+            near_session_end = (
+                session_duration > 0
+                and arrive_t is not None
+                and arrive_t >= max(0.0, session_duration - 0.12)
+            )
+            if action_type == 'PRESS':
+                result = 'Correct'
+                winning_screen = best_screen
+                display_time = f"{best_min_time:.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
+            elif came_back and came_back_in_session:
+                result = 'Correct'
+                winning_screen = best_screen
+                display_time = f"{best_min_time:.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
+            elif came_back and near_session_end and not came_back_in_session:
+                result = 'Late'
+                winning_screen = best_screen
+                display_time = f"{best_min_time:.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
+            elif came_back:
                 result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{best_min_time:.3f}"
@@ -1434,10 +1709,35 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                 result = 'Miss'
                 winning_screen = best_screen
                 min_dist_display = best_eff_dist
+
+            # Short tempo: a weak in-session graze should lose to a clear BETWEEN/peek Late.
+            if (
+                result in ('Correct', 'Miss')
+                and short_tempo
+                and action_end_time is not None
+                and action_type in ('PASS', 'TARGET')
+            ):
+                found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
+                    action_index, all_data, screens, goal_lines, key, action_end_time, action_type,
+                    late_window=late_window,
+                    session_duration=tempo_duration if short_tempo else max(float(tempo_duration), float(SHORT_SESSION_SEC)),
+                )
+                if found_late and (
+                    min_dist_display is None
+                    or float(late_dist) + float(LATE_OVER_CORRECT_MARGIN) < float(min_dist_display)
+                ):
+                    result = 'Late'
+                    winning_screen = late_screen
+                    display_time = f"{late_time:.3f}"
+                    display_duration = f"{session_duration:.3f}"
+                    min_dist_display = late_dist
+                    best_proj_t = late_proj
         else:
             if action_end_time is not None:
                 found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
-                    action_index, all_data, screens, goal_lines, key, action_end_time, action_type
+                    action_index, all_data, screens, goal_lines, key, action_end_time, action_type,
+                    late_window=late_window,
+                    session_duration=tempo_duration if short_tempo else max(float(tempo_duration), float(SHORT_SESSION_SEC)),
                 )
                 if found_late:
                     result = 'Late'
@@ -2479,6 +2779,8 @@ class SimustRealtimeCamera:
         # Delayed analysis support
         self.pending_analysis = None
         self.analysis_timer = None
+        self._recent_between_gap = None
+        self._last_session_duration = None
         self.analysis_started_at = 0
         self.operator_paused = False
         self._pause_lock = threading.Lock()
@@ -2529,6 +2831,8 @@ class SimustRealtimeCamera:
         self.last_video_index = 1
         self.pending_analysis = None
         self.analysis_timer = None
+        self._recent_between_gap = None
+        self._last_session_duration = None
 
         self.recording_active = True
         self.video_started = False
@@ -2565,6 +2869,14 @@ class SimustRealtimeCamera:
             "data": self.between_session_data
         }
         self.qr_blocks.append(block)
+        try:
+            start = datetime.strptime(block["start_time"], "%H:%M:%S.%f")
+            end = datetime.strptime(end_time, "%H:%M:%S.%f")
+            self._recent_between_gap = max(0.0, (end - start).total_seconds())
+        except Exception:
+            n = len(block.get("data") or [])
+            if n:
+                self._recent_between_gap = n / 30.0
         self.between_session_data = []
         self.save_recognition_json()
         print(f"  Between sessions: {len(block['data'])} frames ({block['start_time']} -> {block['end_time']})")
@@ -2773,6 +3085,8 @@ class SimustRealtimeCamera:
         )
         self.pending_analysis = None
         self.analysis_timer = None
+        self._recent_between_gap = None
+        self._last_session_duration = None
 
     def _flush_pending_analysis_locked(self):
         """Finish the previous shot before scheduling the next (required for T1.2)."""
@@ -2786,7 +3100,12 @@ class SimustRealtimeCamera:
             self._perform_late_analysis_locked()
 
     def _schedule_late_analysis_locked(self, delay=None):
-        delay = LATE_ANALYSIS_DELAY if delay is None else float(delay)
+        if delay is None:
+            delay = dynamic_analysis_delay(
+                recent_gap_sec=getattr(self, "_recent_between_gap", None),
+                session_duration=getattr(self, "_last_session_duration", None),
+            )
+        delay = float(delay)
         self.analysis_started_at = time.time()
         self.analysis_timer = threading.Timer(delay, self._perform_late_analysis)
         self.analysis_timer.daemon = True
@@ -2831,6 +3150,8 @@ class SimustRealtimeCamera:
             # per video and made totals wrong.
             self._flush_pending_analysis_locked()
 
+            duration = current_timestamp - self.session_start_timestamp
+            self._last_session_duration = float(duration)
             self.pending_analysis = {
                 'action_data': self.current_qr_block,
                 'screens': self.current_screens,
@@ -2843,13 +3164,16 @@ class SimustRealtimeCamera:
             # ---- Clear current_qr_block ----
             self.current_qr_block = None
 
-            duration = current_timestamp - self.session_start_timestamp
             session_fps_avg = self.session_fps_sum / self.session_frame_count if self.session_frame_count > 0 else 0
 
             print(f"{'-'*50}")
             print(f"SESSION END - Frames: {self.session_frame_count} | Duration: {duration:.2f}s | Avg FPS: {session_fps_avg:.1f}")
             print(f"End: {offset_end_time_str}")
-            print(f"Analysis scheduled (will include between-session frames).")
+            print(
+                f"Analysis scheduled "
+                f"(delay={dynamic_analysis_delay(self._recent_between_gap, self._last_session_duration):.2f}s, "
+                f"gap_hint={self._recent_between_gap})."
+            )
             print(f"{'='*50}\n")
 
             self.save_recognition_json()
