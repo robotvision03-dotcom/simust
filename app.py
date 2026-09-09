@@ -83,7 +83,7 @@ app.add_middleware(
     allow_origins=_CORS_ORIGINS,
     allow_credentials=_CORS_ORIGINS != ["*"],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-SIMUST-PUSH-KEY", "X-SIMUST-TS", "X-SIMUST-SIGN"],
+    allow_headers=["Authorization", "Content-Type", "X-SIMUST-PUSH-KEY", "X-SIMUST-TS", "X-SIMUST-NONCE", "X-SIMUST-SIGN"],
 )
 
 
@@ -3968,6 +3968,7 @@ async def ingest_player_data(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4130,6 +4131,7 @@ async def export_accounts(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4214,6 +4216,7 @@ async def export_remote_commands(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4352,7 +4355,13 @@ def _remote_operator_loop() -> None:
                 simust_push.ack_remote_commands(done)
             _publish_lab_status()
         except Exception as exc:
-            logger.warning("Remote operator loop: %s", exc)
+            detail = str(exc)
+            try:
+                if hasattr(exc, "read"):
+                    detail = f"{exc}: {exc.read().decode('utf-8', errors='replace')[:200]}"
+            except Exception:
+                pass
+            logger.warning("Remote operator loop: %s", detail)
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
