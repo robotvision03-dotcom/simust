@@ -1680,13 +1680,13 @@ class ArenaSimulator:
             dist, proj_t, _, _ = compute_projection(xy, self.line_p0, self.line_p1)
             now_in = in_goal_area(xy, self.line_p0, self.line_p1, depth)
             print(
-                f"  [SIM] GOAL → {self.screens} intended={self.intended.upper()} aim={name} "
+                f"  [SIM] GOAL -> {self.screens} intended={self.intended.upper()} aim={name} "
                 f"target={xy} dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
             )
             return
         self.intended = self._next_outcome(self.action)
         print(
-            f"  [SIM] {self.action} → {self.screens} intended={self.intended.upper()} "
+            f"  [SIM] {self.action} -> {self.screens} intended={self.intended.upper()} "
             f"start={self.start_xy} target={self.target_xy} "
             f"late_hold={self.late_hold_xy} wrong={self.wrong_xy}"
         )
