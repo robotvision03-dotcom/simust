@@ -2239,6 +2239,7 @@
             var autoStopDeadlineRef = useRef(0);
             var realtimeRunningRef = useRef(false);
             var realtimePausedRef = useRef(false);
+            var selectedPlayerIdRef = useRef(null);
             var activeTabRef = useRef(activeTab);
             var resultsEpochRef = useRef(0);
             var visualizationEnabledRef = useRef(false);
@@ -2346,6 +2347,7 @@
                 setAnalysisResults([]);
                 setReportData(null);
                 setSelectedPlayerId(null);
+                selectedPlayerIdRef.current = null;
                 setSearchQuery("");
                 setFilteredPlayers([]);
                 setShowSearchResults(false);
@@ -2399,14 +2401,12 @@
                         });
                         setPlayers(merged);
                         localStorage.setItem("simust_players", JSON.stringify(merged));
-                        if (merged.length > 0) {
-                            if (!selectedPlayerId) {
-                                setSelectedPlayerId(merged[0].id);
-                                updateProgressForPlayer(merged[0]);
-                            } else {
-                                var player = merged.find(function(p) { return p.id === selectedPlayerId; });
-                                if (player) updateProgressForPlayer(player);
-                            }
+                        // Keep empty until the operator searches/selects. Never auto-pick
+                        // merged[0] (that was jumping back to a default like "Omid Omid").
+                        var currentId = selectedPlayerIdRef.current;
+                        if (currentId) {
+                            var player = merged.find(function(p) { return p.id === currentId; });
+                            if (player) updateProgressForPlayer(player);
                         }
                         return merged;
                     }
@@ -2434,11 +2434,9 @@
                             });
                             setPlayers(updated);
                             localStorage.setItem("simust_players", JSON.stringify(updated));
-                            if (updated.length > 0 && !selectedPlayerId) {
-                                setSelectedPlayerId(updated[0].id);
-                                updateProgressForPlayer(updated[0]);
-                            } else if (selectedPlayerId) {
-                                var p2 = updated.find(function(p) { return p.id === selectedPlayerId; });
+                            var currentId2 = selectedPlayerIdRef.current;
+                            if (currentId2) {
+                                var p2 = updated.find(function(p) { return p.id === currentId2; });
                                 if (p2) updateProgressForPlayer(p2);
                             }
                             return updated;
@@ -2486,35 +2484,34 @@
 
             var performSearch = function(query) {
                 setSearchQuery(query);
-                if (!query.trim()) { setFilteredPlayers([]);
-                    setShowSearchResults(false); return; }
-                var lower = query.toLowerCase().trim();
-                loadPlayers().then(function(list) {
-                var source = (list && list.length) ? list : players;
-                var filtered = source.filter(function(p) { return playerMatchesQuery(p, lower); });
-                setFilteredPlayers(filtered);
-                setShowSearchResults(true);
-                var exact = source.find(function(p) { return String(p.playerId || '').toLowerCase() === lower || String(p.id || '').toLowerCase() === lower; });
-                if (exact) {
-                    if (selectedPlayerId === exact.id) {
-                        clearResultsDisplay();
-                    }
-                    setSelectedPlayerId(exact.id);
+                if (!query.trim()) {
+                    setFilteredPlayers([]);
                     setShowSearchResults(false);
-                    setSearchQuery(exact.playerId);
-                    updateProgressForPlayer(exact);
-                    loadPlayerSessionsFromBackend(exact.id);
-                    showToast("Selected: " + exact.name + ' ' + exact.surname, 'success');
+                    return;
                 }
+                var lower = query.toLowerCase().trim();
+                var applySuggestions = function(source) {
+                    var list = source || [];
+                    var filtered = list.filter(function(p) { return playerMatchesQuery(p, lower); });
+                    setFilteredPlayers(filtered);
+                    setShowSearchResults(true);
+                };
+                // Prefer in-memory players for instant suggestions; refresh in background.
+                if (players && players.length) {
+                    applySuggestions(players);
+                }
+                loadPlayers().then(function(list) {
+                    applySuggestions((list && list.length) ? list : players);
                 });
             };
 
             var selectPlayerFromSearch = function(player) {
-                if (selectedPlayerId === player.id) {
+                if (selectedPlayerIdRef.current === player.id) {
                     clearResultsDisplay();
                 }
+                selectedPlayerIdRef.current = player.id;
                 setSelectedPlayerId(player.id);
-                setSearchQuery(player.playerId);
+                setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                 setShowSearchResults(false);
                 setFilteredPlayers([]);
                 updateProgressForPlayer(player);
@@ -2523,6 +2520,7 @@
             };
 
             var clearSelection = function() {
+                selectedPlayerIdRef.current = null;
                 setSelectedPlayerId(null);
                 setSearchQuery("");
                 setFilteredPlayers([]);
@@ -2566,8 +2564,9 @@
                     player.sessions = [];
                     player.progress = player.progress || { current_level: "L00-Foundation", unlocked_levels: ["L00-Foundation"], completed_levels: [] };
                     savePlayers(players.concat([player]));
+                    selectedPlayerIdRef.current = player.id;
                     setSelectedPlayerId(player.id);
-                    setSearchQuery(player.playerId);
+                    setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                     updateProgressForPlayer(player);
                     setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
                     setShowAddPlayer(false);
@@ -2620,9 +2619,12 @@
             var deletePlayer = function(playerId) {
                 var updated = players.filter(function(p) { return p.id !== playerId; });
                 savePlayers(updated);
-                if (selectedPlayerId === playerId) { setSelectedPlayerId(null);
+                if (selectedPlayerId === playerId) {
+                    selectedPlayerIdRef.current = null;
+                    setSelectedPlayerId(null);
                     setSearchQuery("");
-                    setPlayerSessions([]); }
+                    setPlayerSessions([]);
+                }
                 showToast("Player deleted", 'info');
             };
             var requestDelete = function(playerId, playerName) {
@@ -3251,8 +3253,15 @@
                                 setRealtimePaused(false);
                                 resumeAutoStopTimeout();
                             }
-                            if (state === "playing" || state === "playing_final" || state === "loading") {
+                            if (state === "playing" || state === "loading") {
                                 sawActivePlayback = true;
+                            }
+                            // Training finished — release Play as soon as final summary starts
+                            // (do not wait up to ~60s for playing_final to become completed).
+                            if (state === "playing_final") {
+                                sawActivePlayback = true;
+                                finishFromStatus();
+                                return;
                             }
                             if (state === "completed" || state === "closed") {
                                 finishFromStatus();
@@ -3266,15 +3275,15 @@
                                 finishFromStatus();
                                 return;
                             }
-                            realtimeMonitorInterval.current = setTimeout(checkStatus, 1500);
+                            realtimeMonitorInterval.current = setTimeout(checkStatus, sawActivePlayback ? 600 : 1000);
                         }).catch(function(e) {
                             console.warn("Playback status check failed:", e);
                             if (realtimeRunningRef.current && !sessionSavedRef.current) {
-                                realtimeMonitorInterval.current = setTimeout(checkStatus, 2000);
+                                realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
                             }
                         });
                     };
-                    realtimeMonitorInterval.current = setTimeout(checkStatus, 2000);
+                    realtimeMonitorInterval.current = setTimeout(checkStatus, 800);
                 }).catch(function(e) {
                     setError("Failed to start: " + (e.response ? e.response.data.detail : e.message));
                     realtimeRunningRef.current = false;
@@ -3341,16 +3350,16 @@
                                     showToast("Lab did not stop: " + err, 'error');
                                     return;
                                 }
-                                if (tries < 8) {
-                                    setTimeout(verify, 1000);
+                                if (tries < 10) {
+                                    setTimeout(verify, 400);
                                     return;
                                 }
                                 showToast("Stop queued — if the lab keeps playing, restart lab app.py", 'info');
                             }).catch(function() {
-                                if (tries < 8) setTimeout(verify, 1000);
+                                if (tries < 10) setTimeout(verify, 400);
                             });
                         };
-                        setTimeout(verify, 1500);
+                        setTimeout(verify, 400);
                     }).catch(function(e) {
                         console.error(e);
                         showToast("Could not send Stop to the lab", 'error');
@@ -3425,6 +3434,7 @@
             }, [activeTab]);
 
             useEffect(function() {
+                selectedPlayerIdRef.current = selectedPlayerId;
                 clearResultsDisplay();
                 if (liveIntervalRef.current) {
                     clearInterval(liveIntervalRef.current);
@@ -3488,7 +3498,8 @@
                         }
                         var pb = res.data && res.data['playback-status'];
                         var state = (pb && pb.state) || '';
-                        var active = state === 'playing' || state === 'paused' || state === 'loading' || state === 'playing_final';
+                        // playing_final = training done; do not keep Play locked for the summary clip.
+                        var active = state === 'playing' || state === 'paused' || state === 'loading';
                         if (active && !sessionAbortedRef.current) {
                             if (!realtimeRunningRef.current) {
                                 realtimeRunningRef.current = true;
@@ -3503,6 +3514,20 @@
                                 realtimePausedRef.current = false;
                                 setRealtimePaused(false);
                             }
+                        } else if (
+                            realtimeRunningRef.current
+                            && (state === 'idle' || state === 'completed' || state === 'closed'
+                                || state === 'playing_final' || state === 'aborted')
+                        ) {
+                            // Lab finished or stopped — free Play/Stop promptly.
+                            if (state === 'aborted') {
+                                sessionAbortedRef.current = true;
+                                sessionSavedRef.current = true;
+                            }
+                            realtimeRunningRef.current = false;
+                            setRealtimeRunning(false);
+                            realtimePausedRef.current = false;
+                            setRealtimePaused(false);
                         }
                     }).catch(function(err) {
                         var status = err && err.response && err.response.status;
@@ -3521,7 +3546,7 @@
                     });
                 };
                 tick();
-                var id = setInterval(tick, 2000);
+                var id = setInterval(tick, 1000);
                 return function() { clearInterval(id); };
             }, [loggedIn]);
 

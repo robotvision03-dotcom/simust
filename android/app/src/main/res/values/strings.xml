@@ -36,7 +36,7 @@
     <string name="settings">Settings</string>
     <string name="open_operator">Operator</string>
     <string name="open_player">Player</string>
-    <string name="help_text">This phone uses its own internet (SIM or Wi‑Fi) to reach the public SIMUST host. Open Operator, sign in, and start Realtime Play. The lab PC runs the test. Use Pause/Stop during a live test. Galaxy Z Flip 6 (Android 16) is supported on the cover and inner screens. If an older SIMUST APK would not install, uninstall it first and install this 2.4 build.</string>
+    <string name="help_text">This phone uses its own internet (SIM or Wi‑Fi) to reach the public SIMUST host. Open Operator, sign in, and start Realtime Play. The lab PC runs the test. Use Pause/Stop during a live test. Galaxy Z Flip 6 (Android 16) is supported on the cover and inner screens. If an older SIMUST APK would not install, uninstall it first and install this 2.5 build.</string>
     <string name="load_error">Could not load the SIMUST console. Check Settings and that this phone has internet.</string>
     <string name="load_error_offline">This phone has no internet. Enable mobile data (SIM) or Wi‑Fi and tap Retry.</string>
     <string name="retry">Retry</string>

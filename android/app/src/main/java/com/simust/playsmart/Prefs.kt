@@ -135,9 +135,11 @@ object Prefs {
             out += if (out.contains("?")) "&app=android" else "?app=android"
         }
         // Bust WebView cache when the operator HTML changes with the APK.
-        if (!out.contains("v=")) {
-            out += if (out.contains("?")) "&v=2.4" else "?v=2.4"
-        }
+        out = out
+            .replace(Regex("""&v=[^&]*"""), "")
+            .replace(Regex("""\?v=[^&]*&"""), "?")
+            .replace(Regex("""\?v=[^&]*$"""), "")
+        out += if (out.contains("?")) "&v=2.5" else "?v=2.5"
         return out
     }
 }
