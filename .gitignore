@@ -21,6 +21,14 @@ android/*.iml
 android/.cxx/
 android/.idea/
 android/*.apk
+android-mysimust/.gradle/
+android-mysimust/build/
+android-mysimust/app/build/
+android-mysimust/local.properties
+android-mysimust/*.iml
+android-mysimust/.cxx/
+android-mysimust/.idea/
+android-mysimust/*.apk
 .DS_Store
 Thumbs.db
 *.mp4
