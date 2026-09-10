@@ -132,11 +132,19 @@ def public_account_payload(username: str, user: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def _sign(body: bytes, ts: str) -> str:
-    return hmac.new(PUSH_KEY.encode("utf-8"), f"{ts}.".encode("utf-8") + body, hashlib.sha256).hexdigest()
+def _sign(body: bytes, ts: str, nonce: str = "") -> str:
+    material = f"{ts}.{nonce}.".encode("utf-8") + body if nonce else f"{ts}.".encode("utf-8") + body
+    return hmac.new(PUSH_KEY.encode("utf-8"), material, hashlib.sha256).hexdigest()
 
 
-def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, body: bytes, path: str = "") -> None:
+def verify_ingest_headers(
+    key_header: str,
+    ts_header: str,
+    sign_header: str,
+    body: bytes,
+    path: str = "",
+    nonce_header: str = "",
+) -> None:
     if not PUSH_KEY:
         raise PermissionError("SIMUST_PUSH_KEY is not set on this host")
     if not key_header or not hmac.compare_digest(key_header, PUSH_KEY):
@@ -145,14 +153,26 @@ def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, bod
         ts = int(ts_header or "0")
     except ValueError:
         raise PermissionError("Invalid push timestamp")
-    if abs(int(time.time()) - ts) > 300:
-        raise PermissionError("Push timestamp too old")
-    expect = _sign(body, str(ts))
-    if not sign_header or not hmac.compare_digest(sign_header, expect):
-        raise PermissionError("Invalid push signature")
-    digest = hashlib.sha256(body).hexdigest()
-    stamp = f"{ts}:{path}:{digest}"
+    # Accept second or millisecond timestamps (labs may send either).
     now = time.time()
+    ts_sec = ts / 1000.0 if ts > 10_000_000_000 else float(ts)
+    if abs(now - ts_sec) > 300:
+        raise PermissionError("Push timestamp too old")
+    nonce = (nonce_header or "").strip()
+    expect = _sign(body, str(ts), nonce)
+    # Backward compatible: older labs signed without nonce.
+    if not sign_header or not (
+        hmac.compare_digest(sign_header, expect)
+        or (nonce and hmac.compare_digest(sign_header, _sign(body, str(ts), "")))
+    ):
+        raise PermissionError("Invalid push signature")
+    # Empty-body GETs (command/account pull) repeat every ~1s from the lab.
+    # Two lab processes in the same second must not 401 each other as "replay".
+    path_norm = (path or "").rstrip("/")
+    if not body and path_norm.endswith(("export-remote-commands", "export-accounts")):
+        return
+    digest = hashlib.sha256(body).hexdigest()
+    stamp = f"{ts}:{nonce}:{path}:{digest}"
     with _seen_ingest_lock:
         stale = [key for key, seen_at in _seen_ingest.items() if now - seen_at > 300]
         for key in stale:
@@ -162,19 +182,26 @@ def verify_ingest_headers(key_header: str, ts_header: str, sign_header: str, bod
         _seen_ingest[stamp] = now
 
 
+def _auth_headers(body: bytes) -> Dict[str, str]:
+    ts = str(int(time.time()))
+    nonce = f"{time.time_ns():x}"
+    return {
+        "X-SIMUST-PUSH-KEY": PUSH_KEY,
+        "X-SIMUST-TS": ts,
+        "X-SIMUST-NONCE": nonce,
+        "X-SIMUST-SIGN": _sign(body, ts, nonce),
+    }
+
+
 def _post(payload: Dict[str, Any]) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    ts = str(int(time.time()))
+    headers = {"Content-Type": "application/json"}
+    headers.update(_auth_headers(body))
     req = urllib.request.Request(
         PUSH_URL,
         data=body,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-SIMUST-PUSH-KEY": PUSH_KEY,
-            "X-SIMUST-TS": ts,
-            "X-SIMUST-SIGN": _sign(body, ts),
-        },
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         if resp.status >= 300:
@@ -357,16 +384,11 @@ def pull_remote_accounts() -> Dict[str, Any]:
     url = export_accounts_url()
     if not url or not PUSH_KEY:
         return {}
-    ts = str(int(time.time()))
     body = b""
     req = urllib.request.Request(
         url,
         method="GET",
-        headers={
-            "X-SIMUST-PUSH-KEY": PUSH_KEY,
-            "X-SIMUST-TS": ts,
-            "X-SIMUST-SIGN": _sign(body, ts),
-        },
+        headers=_auth_headers(body),
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -378,16 +400,11 @@ def pull_remote_state() -> Dict[str, Any]:
     url = export_accounts_url()
     if not url or not PUSH_KEY:
         return {}
-    ts = str(int(time.time()))
     body = b""
     req = urllib.request.Request(
         url,
         method="GET",
-        headers={
-            "X-SIMUST-PUSH-KEY": PUSH_KEY,
-            "X-SIMUST-TS": ts,
-            "X-SIMUST-SIGN": _sign(body, ts),
-        },
+        headers=_auth_headers(body),
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -440,8 +457,11 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
                 "email": account.get("email", ""),
                 "progress": account.get("progress") or {
                     "current_level": "L00-Foundation",
-                    "unlocked_levels": ["L00-Foundation"],
+                    "unlocked_levels": [],
+                    "unlocked_playlists": [],
                     "completed_levels": [],
+                    "eligible_levels": [],
+                    "session_credits": 0,
                     "challenge_results": {},
                 },
             }
@@ -451,8 +471,16 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
         for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
             if not existing.get(field) and account.get(field):
                 existing[field] = account[field]
-        if account.get("progress") and not existing.get("progress"):
-            existing["progress"] = account["progress"]
+        if account.get("progress"):
+            try:
+                import simust_progress
+
+                existing["progress"] = simust_progress.merge_progress(
+                    existing.get("progress"), account.get("progress")
+                )
+            except Exception:
+                if not existing.get("progress"):
+                    existing["progress"] = account["progress"]
         if account.get("password_hash") and not existing.get("password"):
             existing["password"] = account["password_hash"]
     return added
@@ -464,6 +492,7 @@ def pull_and_merge_accounts(
     reports_dir: str = "",
     load_reservations_fn=None,
     save_reservations_fn=None,
+    apply_reservation_unlocks_fn=None,
 ) -> list:
     global _users_pull_at
     now = time.time()
@@ -483,8 +512,8 @@ def pull_and_merge_accounts(
     if remote_accounts:
         local = load_users_fn()
         added = merge_remote_accounts(local, remote_accounts)
+        save_users_fn(local)
         if added:
-            save_users_fn(local)
             if reports_dir:
                 for username in added:
                     try:
@@ -505,6 +534,11 @@ def pull_and_merge_accounts(
             save_reservations_fn(local_res)
             if added_res:
                 logger.info("Imported %s reservation(s) from My SIMUST", added_res)
+            if apply_reservation_unlocks_fn:
+                try:
+                    apply_reservation_unlocks_fn(local_res)
+                except Exception as exc:
+                    logger.warning("Could not sync session unlocks from reservations: %s", exc)
     return added
 
 
@@ -574,16 +608,11 @@ def pull_remote_commands() -> list:
     url = export_remote_commands_url()
     if not url or not PUSH_KEY:
         return []
-    ts = str(int(time.time()))
     body = b""
     req = urllib.request.Request(
         url,
         method="GET",
-        headers={
-            "X-SIMUST-PUSH-KEY": PUSH_KEY,
-            "X-SIMUST-TS": ts,
-            "X-SIMUST-SIGN": _sign(body, ts),
-        },
+        headers=_auth_headers(body),
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode("utf-8"))

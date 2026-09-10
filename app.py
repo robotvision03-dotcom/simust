@@ -58,6 +58,7 @@ from simust_security import (
 )
 import simust_billing
 import simust_homography
+import simust_progress
 import simust_push
 import simust_remote
 from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
@@ -83,7 +84,7 @@ app.add_middleware(
     allow_origins=_CORS_ORIGINS,
     allow_credentials=_CORS_ORIGINS != ["*"],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-SIMUST-PUSH-KEY", "X-SIMUST-TS", "X-SIMUST-SIGN"],
+    allow_headers=["Authorization", "Content-Type", "X-SIMUST-PUSH-KEY", "X-SIMUST-TS", "X-SIMUST-NONCE", "X-SIMUST-SIGN"],
 )
 
 
@@ -151,12 +152,7 @@ def ensure_admin_account() -> None:
         "gender": "",
         "email": ADMIN_NOTIFY_EMAIL,
         "password": hash_password(password),
-        "progress": {
-            "current_level": "L00-Foundation",
-            "unlocked_levels": ["L00-Foundation"],
-            "completed_levels": [],
-            "challenge_results": {},
-        },
+        "progress": simust_progress.default_progress(),
     }
     save_users(users)
     logging.getLogger(__name__).info("Created missing admin sign-in on this host")
@@ -355,6 +351,36 @@ def _assert_slot_free(bookings: list, start: datetime, end: datetime) -> None:
             raise HTTPException(409, "That time overlaps an existing reservation")
 
 
+def _grant_session_unlocks_for_booking(
+    player_id: str,
+    duration_minutes: int,
+    reservation_id: str,
+    payment_status: str,
+) -> dict:
+    """Paid / waived / lab bookings grant 30-minute session credits and open next levels."""
+    status = str(payment_status or "").strip().lower()
+    if status not in ("paid", "admin_waived", "lab"):
+        return {"credits_added": 0, "unlocked_now": []}
+    users = load_users()
+    if player_id not in users:
+        return {"credits_added": 0, "unlocked_now": []}
+    result = simust_progress.grant_reservation_credits(
+        users,
+        player_id,
+        duration_minutes,
+        reservation_id,
+        ALL_LEVELS,
+    )
+    if result.get("credits_added") or result.get("unlocked_now"):
+        save_users(users)
+        try:
+            if not PUBLIC_MODE:
+                simust_push.push_accounts_async(users)
+        except Exception:
+            logger.exception("Could not push progress after session unlock grant")
+    return result
+
+
 def _insert_reservation(
     *,
     username: str,
@@ -380,11 +406,21 @@ def _insert_reservation(
             "payment_status": payment_status,
             "amount_eur": amount_eur,
             "source": source,
+            "duration_minutes": int(duration),
         }
         if payment_ref:
             created["payment_ref"] = payment_ref
         bookings.append(created)
         save_reservations(bookings)
+    try:
+        unlock = _grant_session_unlocks_for_booking(
+            username, duration, created["id"], payment_status
+        )
+        if unlock.get("unlocked_now"):
+            created["unlocked_now"] = unlock["unlocked_now"]
+            created["session_credits"] = unlock.get("session_credits", 0)
+    except Exception:
+        logger.exception("Session unlock grant failed for reservation %s", created.get("id"))
     return created
 
 
@@ -634,7 +670,7 @@ def get_level_thresholds(level_id: str) -> Tuple[float, float]:
 
 
 def apply_session_progress(users: dict, player_id: str, level_played: str, subdirectory: str, statistics: dict) -> bool:
-    """Update unlocks from a finished session. Returns True if users should be saved."""
+    """Update results / eligibility from a finished session. Unlocks come from paid credits."""
     if not player_id or player_id not in users:
         return False
     if level_played not in ALL_LEVELS:
@@ -644,20 +680,18 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     total = correct + late + (statistics.get("wrong", 0) or 0) + (statistics.get("miss", 0) or 0)
     aac = (correct + late) / total * 100 if total > 0 else 0.0
     ae = float(statistics.get("avg_ae", 0.0) or 0.0)
-    progress = users[player_id].setdefault("progress", {
-        "current_level": "L00-Foundation",
-        "unlocked_levels": ["L00-Foundation"],
-        "completed_levels": [],
-        "challenge_results": {},
-    })
-    unlocked_levels = progress.setdefault("unlocked_levels", ["L00-Foundation"])
+    progress = simust_progress.ensure_progress(users[player_id])
+    ok, _reason = simust_progress.can_play(progress, level_played, subdirectory)
+    if not ok:
+        return False
     completed_levels = progress.setdefault("completed_levels", [])
     challenge_results = progress.setdefault("challenge_results", {})
-    if level_played not in unlocked_levels or level_played in completed_levels:
+    # Foundation stays replayable; later challenges stop after a pass is recorded.
+    if level_played != simust_progress.FOUNDATION_LEVEL and level_played in completed_levels:
         return False
     th_acc, th_ae = get_level_thresholds(level_played)
     passed = False
-    if level_played == "L00-Foundation":
+    if level_played == simust_progress.FOUNDATION_LEVEL:
         if subdirectory == "SF-180N":
             passed = aac >= th_acc and ae >= th_ae
     else:
@@ -668,20 +702,15 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
         "passed": passed,
         "subdirectory": subdirectory or "",
     }
-    if passed:
-        completed_levels.append(level_played)
-        challenge_results[level_played] = result
-        next_level = get_next_level(level_played)
-        if next_level and next_level not in unlocked_levels:
-            unlocked_levels.append(next_level)
-            progress["current_level"] = next_level
-        progress["completed_levels"] = completed_levels
-        progress["unlocked_levels"] = unlocked_levels
-        progress["challenge_results"] = challenge_results
-        users[player_id]["progress"] = progress
-        return True
     challenge_results[level_played] = result
     progress["challenge_results"] = challenge_results
+    if passed:
+        if level_played != simust_progress.FOUNDATION_LEVEL:
+            if level_played not in completed_levels:
+                completed_levels.append(level_played)
+            progress["completed_levels"] = completed_levels
+        next_level = get_next_level(level_played)
+        simust_progress.mark_score_eligible(progress, level_played, next_level, ALL_LEVELS)
     users[player_id]["progress"] = progress
     return True
 
@@ -697,6 +726,14 @@ def drop_live_snapshot(player_id: str, index: list) -> list:
         except OSError:
             pass
     return [row for row in (index or []) if row.get("session_id") != live_id]
+
+def _apply_reservation_unlocks(reservations: list) -> None:
+    users = load_users()
+    opened = simust_progress.sync_unlocks_from_reservations(users, reservations or [], ALL_LEVELS)
+    if opened:
+        save_users(users)
+        logger.info("Applied %s session unlock(s) from reservations", opened)
+
 
 # Force TCP for RTSP (more reliable than UDP)
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
@@ -1313,7 +1350,12 @@ async def lifespan(app: FastAPI):
                 simust_push.push_accounts_async(users)
                 simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
                 simust_push.pull_and_merge_accounts(
-                    load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
+                    load_users,
+                    save_users,
+                    PLAYER_REPORTS_DIR,
+                    load_reservations,
+                    save_reservations,
+                    apply_reservation_unlocks_fn=_apply_reservation_unlocks,
                 )
 
                 def _pull_loop():
@@ -1321,7 +1363,12 @@ async def lifespan(app: FastAPI):
                         time.sleep(15)
                         try:
                             simust_push.pull_and_merge_accounts(
-                                load_users, save_users, PLAYER_REPORTS_DIR, load_reservations, save_reservations
+                                load_users,
+                                save_users,
+                                PLAYER_REPORTS_DIR,
+                                load_reservations,
+                                save_reservations,
+                                apply_reservation_unlocks_fn=_apply_reservation_unlocks,
                             )
                         except Exception as pull_exc:
                             logger.warning("Account pull loop: %s", pull_exc)
@@ -1610,28 +1657,19 @@ async def start_realtime_playback(req: Request):
         if level_id not in ALL_LEVELS:
             raise HTTPException(400, f"Invalid level: {level_id}")
 
-        # --- Check if level is unlocked for this player ---
+        # --- Paid session unlock gate ---
         if player_id:
             users = load_users()
             if player_id not in users:
                 raise HTTPException(404, "Player not found")
 
-            # Ensure progress exists
-            if "progress" not in users[player_id]:
-                users[player_id]["progress"] = {
-                    "current_level": "L00-Foundation",
-                    "unlocked_levels": ["L00-Foundation"],
-                    "completed_levels": [],
-                    "challenge_results": {}
-                }
-                save_users(users)
+            progress = simust_progress.ensure_progress(users[player_id])
+            users[player_id]["progress"] = progress
+            save_users(users)
 
-            progress = users[player_id].get("progress", {})
-            unlocked = progress.get("unlocked_levels", [])
-
-            # Allow L00-Foundation always, even if not in unlocked list
-            if level_id != "L00-Foundation" and level_id not in unlocked:
-                raise HTTPException(403, f"Level {level_id} is not unlocked for this player")
+            ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
+            if not ok:
+                raise HTTPException(403, reason)
 
         level_path = get_level_path(level_id)
 
@@ -3617,21 +3655,35 @@ async def unlock_level(req: Request):
         if player_id not in users:
             raise HTTPException(404, "Player not found")
 
-        progress = users[player_id].get("progress", {})
-        unlocked = progress.get("unlocked_levels", [])
+        progress = simust_progress.ensure_progress(users[player_id])
+        unlocked = list(progress.get("unlocked_levels") or [])
+        playlists = list(progress.get("unlocked_playlists") or [])
+        if level_id == simust_progress.FOUNDATION_LEVEL:
+            # Admin force-unlock of Foundation opens all SF playlists.
+            for name in simust_progress.FOUNDATION_PLAYLISTS:
+                if name not in playlists:
+                    playlists.append(name)
+            progress["unlocked_playlists"] = playlists
         if level_id not in unlocked:
             unlocked.append(level_id)
             progress["unlocked_levels"] = unlocked
-            # Optionally update current_level to the first unlocked not completed
             completed = progress.get("completed_levels", [])
             for lvl in ALL_LEVELS:
                 if lvl in unlocked and lvl not in completed:
                     progress["current_level"] = lvl
                     break
+            # Remove from eligible once manually unlocked
+            eligible = [e for e in (progress.get("eligible_levels") or []) if e != level_id]
+            progress["eligible_levels"] = eligible
             users[player_id]["progress"] = progress
             save_users(users)
             return {"status": "success", "message": f"Level {level_id} unlocked for player {player_id}"}
         else:
+            if level_id == simust_progress.FOUNDATION_LEVEL and playlists != list(progress.get("unlocked_playlists") or []):
+                progress["unlocked_playlists"] = playlists
+                users[player_id]["progress"] = progress
+                save_users(users)
+                return {"status": "success", "message": f"Foundation playlists unlocked for player {player_id}"}
             return {"status": "info", "message": "Level already unlocked"}
     except HTTPException:
         raise
@@ -3654,13 +3706,13 @@ async def lock_level(req: Request):
             raise HTTPException(400, "Invalid level ID")
 
         if level_id == "L00-Foundation":
-            raise HTTPException(400, "Foundation cannot be locked")
+            raise HTTPException(400, "Lock Foundation playlists via booking policy; Foundation umbrella cannot be locked here")
 
         users = load_users()
         if player_id not in users:
             raise HTTPException(404, "Player not found")
 
-        progress = users[player_id].get("progress", {})
+        progress = simust_progress.ensure_progress(users[player_id])
         unlocked = list(progress.get("unlocked_levels", []))
         completed = list(progress.get("completed_levels", []))
 
@@ -3669,12 +3721,12 @@ async def lock_level(req: Request):
 
         unlocked = [lvl for lvl in unlocked if lvl != level_id]
         completed = [lvl for lvl in completed if lvl != level_id]
-        if "L00-Foundation" not in unlocked:
-            unlocked.insert(0, "L00-Foundation")
+        if simust_progress.FOUNDATION_LEVEL not in unlocked and (progress.get("unlocked_playlists") or []):
+            unlocked.insert(0, simust_progress.FOUNDATION_LEVEL)
 
         current = progress.get("current_level")
         if current == level_id or current not in unlocked:
-            current = "L00-Foundation"
+            current = simust_progress.FOUNDATION_LEVEL if simust_progress.FOUNDATION_LEVEL in unlocked else (unlocked[0] if unlocked else "")
             for lvl in ALL_LEVELS:
                 if lvl in unlocked and lvl not in completed:
                     current = lvl
@@ -3805,17 +3857,12 @@ async def get_players(request: Request):
             player_id = username
             # Ensure progress exists
             if "progress" not in user_data:
-                user_data["progress"] = {
-                    "current_level": "L00-Foundation",
-                    "unlocked_levels": ["L00-Foundation"],
-                    "completed_levels": [],
-                    "challenge_results": {}
-                }
+                user_data["progress"] = simust_progress.default_progress()
                 # Save the updated user data
                 users[username] = user_data
                 save_users(users)
 
-            progress = user_data.get("progress", {})
+            progress = simust_progress.ensure_progress(user_data)
             avg_ae, avg_acc = compute_player_ae_acc(player_id)
             players.append({
                 "id": player_id,
@@ -3852,7 +3899,7 @@ async def get_players(request: Request):
             team = ""
             age = ""
             image = ""
-            progress = {"current_level": "L00-Foundation", "unlocked_levels": ["L00-Foundation"], "completed_levels": []}
+            progress = simust_progress.default_progress()
             if os.path.exists(index_file):
                 try:
                     with open(index_file, 'r') as f:
@@ -3935,12 +3982,7 @@ async def lab_upsert_player(req: Request):
         "role": "player",
     })
     existing.setdefault("password", "")
-    existing.setdefault("progress", {
-        "current_level": "L00-Foundation",
-        "unlocked_levels": ["L00-Foundation"],
-        "completed_levels": [],
-        "challenge_results": {},
-    })
+    existing.setdefault("progress", simust_progress.default_progress())
     users[player_id] = existing
     save_users(users)
     ensure_player_workspace(player_id)
@@ -3968,6 +4010,7 @@ async def ingest_player_data(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -3998,17 +4041,14 @@ async def ingest_player_data(request: Request):
             if value not in (None, ""):
                 merged[field] = value
         if account.get("progress"):
-            merged["progress"] = account.get("progress")
+            merged["progress"] = simust_progress.merge_progress(
+                existing.get("progress"), account.get("progress")
+            )
         if account.get("password_hash"):
             merged["password"] = account["password_hash"]
         merged.setdefault("role", account.get("role") or "player")
         if not merged.get("progress"):
-            merged["progress"] = {
-                "current_level": "L00-Foundation",
-                "unlocked_levels": ["L00-Foundation"],
-                "completed_levels": [],
-                "challenge_results": {},
-            }
+            merged["progress"] = simust_progress.default_progress()
         users[username] = merged
 
     if kind == "accounts":
@@ -4035,6 +4075,10 @@ async def ingest_player_data(request: Request):
                 deleted_ids=data.get("deleted_ids") or [],
             )
             save_reservations(local)
+        try:
+            _apply_reservation_unlocks(local)
+        except Exception:
+            logger.exception("Could not apply session unlocks after reservation ingest")
         logger.info("Ingested reservation sync from lab (added %s)", added)
         return {"status": "success", "added": added}
 
@@ -4130,6 +4174,7 @@ async def export_accounts(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4214,6 +4259,7 @@ async def export_remote_commands(request: Request):
             request.headers.get("x-simust-sign", ""),
             body,
             path=str(request.url.path or ""),
+            nonce_header=request.headers.get("x-simust-nonce", ""),
         )
     except PermissionError as exc:
         raise HTTPException(401, str(exc))
@@ -4352,7 +4398,13 @@ def _remote_operator_loop() -> None:
                 simust_push.ack_remote_commands(done)
             _publish_lab_status()
         except Exception as exc:
-            logger.warning("Remote operator loop: %s", exc)
+            detail = str(exc)
+            try:
+                if hasattr(exc, "read"):
+                    detail = f"{exc}: {exc.read().decode('utf-8', errors='replace')[:200]}"
+            except Exception:
+                pass
+            logger.warning("Remote operator loop: %s", detail)
     
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
@@ -4530,13 +4582,8 @@ async def register(req: Request):
     # pbkdf2 on the public host; legacy MD5 hashes are upgraded on next sign-in
     hashed = hash_password(password)
 
-    # Initialize progress
-    progress = {
-        "current_level": "L00-Foundation",
-        "unlocked_levels": ["L00-Foundation"],
-        "completed_levels": [],
-        "challenge_results": {}
-    }
+    # Initialize progress — locked until a paid 30-minute booking unlocks content
+    progress = simust_progress.default_progress()
 
     users[username] = {
         "password": hashed,
@@ -4817,6 +4864,18 @@ async def confirm_reservation_payment(req: Request):
             if item.get("payment_ref") == session_id:
                 public = _public_reservation(item)
                 public["duration_minutes"] = duration
+                try:
+                    unlock = _grant_session_unlocks_for_booking(
+                        username,
+                        duration,
+                        item.get("id") or session_id,
+                        item.get("payment_status") or "paid",
+                    )
+                    if unlock.get("unlocked_now"):
+                        public["unlocked_now"] = unlock["unlocked_now"]
+                        public["session_credits"] = unlock.get("session_credits", 0)
+                except Exception:
+                    logger.exception("Session unlock grant failed for existing payment %s", session_id)
                 return public
     created = _insert_reservation(
         username=username,
@@ -4862,6 +4921,15 @@ async def stripe_webhook(request: Request):
     with RESERVATION_LOCK:
         for item in load_reservations():
             if item.get("payment_ref") == session_id:
+                try:
+                    _grant_session_unlocks_for_booking(
+                        username,
+                        duration,
+                        item.get("id") or session_id,
+                        item.get("payment_status") or "paid",
+                    )
+                except Exception:
+                    logger.exception("Session unlock grant failed for webhook existing %s", session_id)
                 return {"status": "exists"}
     created = _insert_reservation(
         username=username,

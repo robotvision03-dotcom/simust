@@ -119,6 +119,28 @@ class IngestReplayTests(unittest.TestCase):
         try:
             simust_push.verify_ingest_headers("test-push-key", ts, sign, body, path="/internal/export-accounts")
             simust_push.verify_ingest_headers("test-push-key", ts, sign, body, path="/internal/export-remote-commands")
+            # Same empty GET may repeat in the same second (two lab processes / retries).
+            simust_push.verify_ingest_headers("test-push-key", ts, sign, body, path="/internal/export-remote-commands")
+        finally:
+            simust_push.PUSH_KEY = prev
+            simust_push._seen_ingest.clear()
+
+    def test_nonce_allows_same_post_body_twice(self):
+        import simust_push
+        prev = simust_push.PUSH_KEY
+        simust_push.PUSH_KEY = "test-push-key"
+        simust_push._seen_ingest.clear()
+        ts = str(int(__import__("time").time()))
+        body = b'{"kind":"lab_status","status":{"lab_online":true}}'
+        try:
+            s1 = simust_push._sign(body, ts, "n1")
+            s2 = simust_push._sign(body, ts, "n2")
+            simust_push.verify_ingest_headers(
+                "test-push-key", ts, s1, body, path="/internal/ingest-player-data", nonce_header="n1"
+            )
+            simust_push.verify_ingest_headers(
+                "test-push-key", ts, s2, body, path="/internal/ingest-player-data", nonce_header="n2"
+            )
         finally:
             simust_push.PUSH_KEY = prev
             simust_push._seen_ingest.clear()
