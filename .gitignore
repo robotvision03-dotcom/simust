@@ -32,5 +32,5 @@ Thumbs.db
 *.weights
 *.zip
 homography_frames/
-homography_calibration.json
+# Keep homography_calibration.json tracked so lab/VPS share the same H matrix.
 *.pyc
