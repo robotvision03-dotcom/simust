@@ -52,6 +52,10 @@ TARGET_FPS = 25.0
 QR_OFFSET_SECONDS = QR_OFFSET_FRAMES / TARGET_FPS
 MAX_SESSION_DURATION = 5.0
 QR_COOLDOWN = 0.5
+# Require continuous QR absence before ending a session / clearing last_raw_data.
+# Brief decoder flicker otherwise splits one action into a ghost Wrong + a real one
+# (e.g. SF-60N 40 → 41 with duplicate consecutive screens).
+QR_DISAPPEAR_DEBOUNCE = 0.35
 SAVE_EVERY_N_ACTIONS = 1
 
 DEFAULT_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
@@ -1420,7 +1424,12 @@ def extended_track(positions, action_index, all_data, key, action_end_time, sess
 # ================================================================
 
 def compute_distances_by_video(blocks, results, fallback_m_per_px=PIXEL_TO_METER_SCALE):
-    """Hip path length (metres) for each video_index from recognition + results."""
+    """Hip path length (metres) for each video_index from recognition + results.
+
+    Counts hip samples on action blocks only (PASS/GOAL/…). BETWEEN standing /
+    rest frames are excluded — noisy hips while waiting for the next QR were
+    inflating each video (e.g. ~5 m of play → ~19 m) and breaking final sums.
+    """
     action_vid = {}
     for row in results or []:
         sid = row.get("id")
@@ -1430,14 +1439,15 @@ def compute_distances_by_video(blocks, results, fallback_m_per_px=PIXEL_TO_METER
             action_vid[sid] = int(row.get("video_index") or 1)
         except (TypeError, ValueError):
             action_vid[sid] = 1
-    cur_v = None
+
     by_v = defaultdict(list)
     for block in blocks or []:
         sid = block.get("id")
-        if sid and sid in action_vid:
-            cur_v = action_vid[sid]
-        if cur_v is None:
+        if not sid or sid not in action_vid:
             continue
+        if str(block.get("action") or "").upper() in ("BETWEEN_SESSIONS", "BETWEEN", ""):
+            continue
+        cur_v = action_vid[sid]
         st = block.get("start_time")
         if not st:
             continue
@@ -2736,7 +2746,8 @@ class SimustRealtimeCamera:
             "last_raw_data": None,
             "last_detection_time": 0,
             "cooldown": QR_COOLDOWN,
-            "detection_count": 0
+            "detection_count": 0,
+            "missing_since": None,
         }
 
         self.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
@@ -3122,6 +3133,11 @@ class SimustRealtimeCamera:
         if self.simulation_enabled:
             self.simulator.end_action()
 
+        # Allow a later reappearance of the same QR content to start a new action.
+        if getattr(self, "qr_state", None) is not None:
+            self.qr_state["last_raw_data"] = None
+            self.qr_state["missing_since"] = None
+
         if self.current_qr_block:
             if self.session_data:
                 self.current_qr_block["data"] = self.session_data
@@ -3265,9 +3281,11 @@ class SimustRealtimeCamera:
 
         # Transparent label panel: text only (no filled background) so it
         # does not cover the pitch in realtime_recording.avi.
+        # Black text stays readable on the light green pitch.
+        label_color = (0, 0, 0)
         cv2.putText(frame, "RESULTS", (panel_x + 10, panel_y + 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.line(frame, (panel_x + 10, panel_y + 30), (panel_x + panel_w - 10, panel_y + 30), (255, 255, 255), 1)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
+        cv2.line(frame, (panel_x + 10, panel_y + 30), (panel_x + panel_w - 10, panel_y + 30), label_color, 1)
 
         y_offset = 50
         for i, result in enumerate(results):
@@ -3276,21 +3294,12 @@ class SimustRealtimeCamera:
             action_result = result.get('result', '')
             winning = result.get('winning_screen', '')
 
-            if action_result == 'Correct':
-                color = COLOR_CORRECT
-            elif action_result == 'Late':
-                color = COLOR_LATE
-            elif action_result == 'Miss':
-                color = (0, 165, 255)
-            else:
-                color = COLOR_WRONG
-
             text = f"{action_id} {action_type}: {action_result}"
             if winning and winning != 'N/A':
                 text += f" -> {winning}"
 
             cv2.putText(frame, text, (panel_x + 10, panel_y + y_offset + i * 28),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.42, label_color, 1)
 
         return frame
 
@@ -3455,6 +3464,21 @@ class SimustRealtimeCamera:
         raw_data, bbox = detect_qr_in_roi(frame, self.qr_roi)
         action, screens, keypoints = parse_qr_data(raw_data) if raw_data else ("", [], [])
 
+        if raw_data:
+            self.qr_state["missing_since"] = None
+            # Same QR returned during end-offset: treat as flicker, keep session.
+            if (
+                self.pending_end
+                and self.qr_state["last_raw_data"] is not None
+                and raw_data == self.qr_state["last_raw_data"]
+            ):
+                self.pending_end = False
+        elif self.current_qr_block or self.session_active or self.pending_start:
+            if self.qr_state["missing_since"] is None:
+                self.qr_state["missing_since"] = current_timestamp
+        else:
+            self.qr_state["missing_since"] = None
+
         is_new_qr = (raw_data and raw_data != self.qr_state["last_raw_data"] and action and screens and
                     (current_timestamp - self.qr_state["last_detection_time"] >= self.qr_state["cooldown"]))
 
@@ -3480,16 +3504,23 @@ class SimustRealtimeCamera:
             self.qr_state["last_raw_data"] = raw_data
             self.qr_state["last_detection_time"] = current_timestamp
             self.qr_state["detection_count"] += 1
+            self.qr_state["missing_since"] = None
             self.schedule_session_start(action, screens, keypoints, block_id, current_time_str, current_timestamp)
 
             if bbox is not None and len(bbox) > 0 and self.visualization_enabled:
                 pts = bbox[0].astype(int)
                 cv2.polylines(frame, [pts], True, COLOR_QR, 2)
 
-        elif not raw_data and self.current_qr_block and not self.pending_end:
-            # QR disappeared – schedule session end AND reset last_raw_data so that
-            # a reappearance with identical content will be detected as new.
-            self.qr_state["last_raw_data"] = None  # <-- FIX: allow identical QR to be detected again
+        elif (
+            not raw_data
+            and self.current_qr_block
+            and not self.pending_end
+            and self.qr_state["missing_since"] is not None
+            and (current_timestamp - self.qr_state["missing_since"]) >= QR_DISAPPEAR_DEBOUNCE
+        ):
+            # QR gone long enough – end session. Keep last_raw_data until the
+            # session actually ends so a brief return during the end-offset
+            # cancels pending_end instead of spawning a ghost new action.
             self.schedule_session_end(current_time_str, current_timestamp)
         elif self.session_active and (current_timestamp - self.session_start_timestamp) > MAX_SESSION_DURATION:
             self._execute_end(current_time_str, current_timestamp)

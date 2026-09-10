@@ -2564,40 +2564,331 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
         else:
             return 'N/A'
 
+# ---------- results-video metric helpers ----------
+SECTION_METRICS_FILENAME = "video_section_metrics.json"
+
+
+def _parse_positive_float(value):
+    if value is None or value == "" or value == "-":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if num > 0 else None
+
+
+def distance_m_display(metres) -> int:
+    """Whole metres printed in results rings (same as f'{m:.0f}m')."""
+    try:
+        m = float(metres or 0.0)
+    except (TypeError, ValueError):
+        return 0
+    if m <= 0:
+        return 0
+    return int(f"{m:.0f}")
+
+
+def section_metrics_path(session_folder: str) -> str:
+    return os.path.join(session_folder, SECTION_METRICS_FILENAME)
+
+
+def load_saved_section_metrics(session_folder: str) -> list:
+    path = section_metrics_path(session_folder)
+    if not session_folder or not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            sections = data.get("sections") or []
+        elif isinstance(data, list):
+            sections = data
+        else:
+            sections = []
+        return [s for s in sections if isinstance(s, dict)]
+    except Exception:
+        return []
+
+
+def save_section_metrics_entry(session_folder: str, video_index: int, metrics: dict) -> None:
+    """Persist the exact rings shown on results_video_N so final can sum/average them."""
+    if not session_folder:
+        return
+    try:
+        os.makedirs(session_folder, exist_ok=True)
+        path = section_metrics_path(session_folder)
+        sections = load_saved_section_metrics(session_folder)
+        raw_dist = float(metrics.get("total_distance") or 0.0)
+        # Prefer the metres actually drawn on the ring when provided.
+        if metrics.get("distance_m_display") is not None:
+            shown = int(metrics.get("distance_m_display") or 0)
+        else:
+            shown = distance_m_display(raw_dist)
+        entry = {
+            "video_index": int(video_index),
+            "total_distance": raw_dist,
+            "distance_m_display": shown,
+            "aac": float(metrics.get("aac") or 0.0),
+            "avg_ae": float(metrics.get("avg_ae") or 0.0),
+            "ae_display": metrics.get("ae_display") or "-",
+            "aet": metrics.get("aet"),
+            "aet_percent": float(metrics.get("aet_percent") or 0.0),
+            "aet_display": metrics.get("aet_display") or "-",
+            "correct": int(metrics.get("correct") or 0),
+            "late": int(metrics.get("late") or 0),
+            "wrong": int(metrics.get("wrong") or 0),
+            "miss": int(metrics.get("miss") or 0),
+            "total_actions": int(metrics.get("total_actions") or 0),
+        }
+        replaced = False
+        for i, old in enumerate(sections):
+            try:
+                if int(old.get("video_index") or 0) == int(video_index):
+                    sections[i] = entry
+                    replaced = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if not replaced:
+            sections.append(entry)
+        sections.sort(key=lambda s: int(s.get("video_index") or 0))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"sections": sections}, f, indent=2, ensure_ascii=False)
+        logger.info(
+            "Saved section metrics video %s: %sm (raw %.3f)",
+            video_index, shown, raw_dist,
+        )
+    except Exception as exc:
+        logger.warning("Could not save section metrics for video %s: %s", video_index, exc)
+
+
+def summarize_results_section_metrics(results_list):
+    """Per-section (one playlist video) rings: AET / AE / ACC / displacement stamp max."""
+    results_list = list(results_list or [])
+    total_distance = 0.0
+    for r in results_list:
+        try:
+            total_distance = max(total_distance, float(r.get("total_distance") or r.get("bpd") or 0.0))
+        except (TypeError, ValueError):
+            pass
+
+    correct = sum(1 for r in results_list if r.get("result") == "Correct")
+    late = sum(1 for r in results_list if r.get("result") == "Late")
+    wrong = sum(1 for r in results_list if r.get("result") == "Wrong")
+    miss = sum(1 for r in results_list if r.get("result") == "Miss")
+    total_actions = len(results_list)
+    aac = ((correct + late) / total_actions) * 100 if total_actions > 0 else 0.0
+
+    ae_values = []
+    for r in results_list:
+        try:
+            if r.get("ae") is not None:
+                ae_values.append(float(r.get("ae")))
+        except (TypeError, ValueError):
+            pass
+    avg_ae = (sum(ae_values) / len(ae_values)) if ae_values else 0.0
+
+    correct_times = []
+    correct_ratios = []
+    for r in results_list:
+        if r.get("result") != "Correct":
+            continue
+        tm = r.get("finishing_time")
+        if tm is None or tm == 0 or tm == "0" or tm == "-":
+            tm = r.get("time_of_min")
+        tm = _parse_positive_float(tm)
+        sd = _parse_positive_float(r.get("session_duration"))
+        if tm is None:
+            continue
+        correct_times.append(tm)
+        if sd is not None:
+            correct_ratios.append(tm / sd)
+
+    if correct_times:
+        aet = sum(correct_times) / len(correct_times)
+        if correct_ratios:
+            avg_ratio = sum(correct_ratios) / len(correct_ratios)
+            aet_percent = max(0.0, min(100.0, (1.0 - avg_ratio) * 100.0))
+        else:
+            aet_percent = 0.0
+        aet_display = f"{aet:.2f}s"
+    else:
+        aet = None
+        aet_percent = 0.0
+        aet_display = "-"
+
+    return {
+        "total_distance": float(total_distance),
+        "correct": correct,
+        "late": late,
+        "wrong": wrong,
+        "miss": miss,
+        "total_actions": total_actions,
+        "aac": float(aac),
+        "avg_ae": float(avg_ae),
+        "ae_display": f"{avg_ae:.0f}%" if avg_ae > 0 else "-",
+        "aet": aet,
+        "aet_percent": float(aet_percent),
+        "aet_display": aet_display,
+    }
+
+
+def _combine_section_metrics(section_metrics):
+    section_metrics = [m for m in (section_metrics or []) if isinstance(m, dict)]
+    if not section_metrics:
+        return summarize_results_section_metrics([])
+
+    # Final displacement = sum of the whole metres each video board already showed
+    # (3+3+11=17), never sum-then-round of raw floats (17.61→18) and never
+    # recompute from recognition.json.
+    display_sum = 0
+    for m in section_metrics:
+        if m.get("distance_m_display") is not None:
+            try:
+                display_sum += int(m.get("distance_m_display") or 0)
+                continue
+            except (TypeError, ValueError):
+                pass
+        display_sum += distance_m_display(m.get("total_distance"))
+    total_distance = float(display_sum)
+
+    aac = sum(float(m.get("aac") or 0.0) for m in section_metrics) / len(section_metrics)
+    avg_ae = sum(float(m.get("avg_ae") or 0.0) for m in section_metrics) / len(section_metrics)
+    aets = [m.get("aet") for m in section_metrics if m.get("aet") is not None]
+    aet_percents = [
+        float(m.get("aet_percent") or 0.0)
+        for m in section_metrics
+        if m.get("aet") is not None
+    ]
+    if aets:
+        aet = sum(float(a) for a in aets) / len(aets)
+        aet_percent = sum(aet_percents) / len(aet_percents) if aet_percents else 0.0
+        aet_display = f"{aet:.2f}s"
+    else:
+        aet = None
+        aet_percent = 0.0
+        aet_display = "-"
+
+    return {
+        "total_distance": float(total_distance),
+        "distance_m_display": int(display_sum),
+        "correct": sum(int(m.get("correct") or 0) for m in section_metrics),
+        "late": sum(int(m.get("late") or 0) for m in section_metrics),
+        "wrong": sum(int(m.get("wrong") or 0) for m in section_metrics),
+        "miss": sum(int(m.get("miss") or 0) for m in section_metrics),
+        "total_actions": sum(int(m.get("total_actions") or 0) for m in section_metrics),
+        "aac": float(aac),
+        "avg_ae": float(avg_ae),
+        "ae_display": f"{avg_ae:.0f}%" if avg_ae > 0 else "-",
+        "aet": aet,
+        "aet_percent": float(aet_percent),
+        "aet_display": aet_display,
+        "section_metrics": section_metrics,
+    }
+
+
+def aggregate_final_section_metrics(all_results, session_folder=None):
+    """Final rings from saved per-video boards only (sum/avg). No recognition recompute."""
+    saved = load_saved_section_metrics(session_folder) if session_folder else []
+    if saved:
+        logger.info(
+            "Final metrics summing %d saved video board(s): %s → %sm",
+            len(saved),
+            " + ".join(
+                str(
+                    s.get("distance_m_display")
+                    if s.get("distance_m_display") is not None
+                    else distance_m_display(s.get("total_distance"))
+                )
+                for s in saved
+            ),
+            sum(
+                int(s.get("distance_m_display"))
+                if s.get("distance_m_display") is not None
+                else distance_m_display(s.get("total_distance"))
+                for s in saved
+            ),
+        )
+        return _combine_section_metrics(saved)
+
+    # Fallback only when no per-video boards were saved (legacy sessions).
+    all_results = list(all_results or [])
+    by_video_rows = {}
+    for row in all_results:
+        try:
+            vid = int(row.get("video_index") or 1)
+        except (TypeError, ValueError):
+            vid = 1
+        by_video_rows.setdefault(vid, []).append(row)
+
+    section_metrics = []
+    for vid in sorted(by_video_rows):
+        m = summarize_results_section_metrics(by_video_rows[vid])
+        m["distance_m_display"] = distance_m_display(m.get("total_distance"))
+        section_metrics.append(m)
+
+    if not section_metrics:
+        return summarize_results_section_metrics(all_results)
+    return _combine_section_metrics(section_metrics)
+
+
 # ---------- generate_results_video_from_results ----------
 def generate_results_video_from_results(results_list, output_path, duration_seconds=5, is_final=False,
                                         slice_video_path=None, session_folder=None, video_index=None):
     try:
-        # Prefer metres already stamped on this video's results; else hips for this video only.
-        total_distance = 0.0
-        for r in results_list:
-            try:
-                total_distance = max(total_distance, float(r.get('total_distance') or r.get('bpd') or 0.0))
-            except (TypeError, ValueError):
-                pass
-        logger.info(f"Stored total_distance from results_list: {total_distance:.2f} m")
-
-        if total_distance == 0 and session_folder and os.path.exists(os.path.join(session_folder, "recognition.json")):
-            computed_distance = compute_total_distance_from_recognition(
-                session_folder, video_index=video_index
+        if is_final:
+            metrics = aggregate_final_section_metrics(results_list, session_folder=session_folder)
+            logger.info(
+                "Final metrics: distance=%.2fm (sum of %d videos), AET=%s, AE=%s, ACC=%.1f%%",
+                metrics["total_distance"],
+                len(metrics.get("section_metrics") or []),
+                metrics["aet_display"],
+                metrics["ae_display"],
+                metrics["aac"],
             )
-            if computed_distance > 0:
-                total_distance = computed_distance
-                logger.info(f"Fallback: recognition hip distance (video={video_index}): {total_distance:.2f} m")
-            else:
-                logger.warning("computed_distance from recognition.json is 0, BDP will show '-'.")
+        else:
+            metrics = summarize_results_section_metrics(results_list)
+            # Prefer recomputed hips for this video when available (avoids stale mid-session stamps).
+            if session_folder and video_index is not None:
+                computed_distance = compute_total_distance_from_recognition(
+                    session_folder, video_index=video_index
+                )
+                if computed_distance > 0:
+                    metrics["total_distance"] = computed_distance
+            elif metrics["total_distance"] == 0 and session_folder:
+                computed_distance = compute_total_distance_from_recognition(
+                    session_folder, video_index=video_index
+                )
+                if computed_distance > 0:
+                    metrics["total_distance"] = computed_distance
 
-        correct = sum(1 for r in results_list if r.get('result') == 'Correct')
-        late = sum(1 for r in results_list if r.get('result') == 'Late')
-        wrong = sum(1 for r in results_list if r.get('result') == 'Wrong')
-        miss = sum(1 for r in results_list if r.get('result') == 'Miss')
-        total_actions = len(results_list)
+        total_distance = float(metrics["total_distance"] or 0.0)
+        if metrics.get("distance_m_display") is not None:
+            try:
+                distance_shown = int(metrics.get("distance_m_display") or 0)
+            except (TypeError, ValueError):
+                distance_shown = distance_m_display(total_distance)
+        else:
+            distance_shown = distance_m_display(total_distance)
+        metrics["distance_m_display"] = distance_shown
+        # Keep total_distance aligned with the metres printed on the ring.
+        if is_final:
+            total_distance = float(distance_shown)
+            metrics["total_distance"] = total_distance
 
-        aac = ((correct + late) / total_actions) * 100 if total_actions > 0 else 0
-
-        ae_values = [r.get('ae', 0.0) for r in results_list if r.get('ae') is not None]
-        avg_ae = sum(ae_values) / len(ae_values) if ae_values else 0.0
-        ae_display = f"{avg_ae:.0f}%" if avg_ae > 0 else "-"
+        correct = metrics["correct"]
+        late = metrics["late"]
+        wrong = metrics["wrong"]
+        miss = metrics["miss"]
+        total_actions = metrics["total_actions"]
+        aac = float(metrics["aac"] or 0.0)
+        avg_ae = float(metrics["avg_ae"] or 0.0)
+        ae_display = metrics["ae_display"]
+        aet = metrics["aet"]
+        aet_percent = float(metrics["aet_percent"] or 0.0)
+        aet_display = metrics["aet_display"]
+        logger.info(f"Stored total_distance from results_list: {total_distance:.2f} m (display {distance_shown}m)")
 
         if is_final:
             selected_video = get_slice_video_for_accuracy(avg_ae)
@@ -2614,35 +2905,6 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         REFERENCE_DISTANCE_METERS = 77.0
         economy_percent = min(100.0, (total_distance / REFERENCE_DISTANCE_METERS) * 100) if total_distance > 0 else 0
-
-        correct_times = []
-        correct_ratios = []
-        for r in results_list:
-            if r.get('result') == 'Correct':
-                tm = r.get('finishing_time')
-                if tm is None or tm == 0:
-                    tm = r.get('time_of_min')
-                sd = r.get('session_duration')
-                try:
-                    tm = float(tm) if tm is not None else None
-                except (ValueError, TypeError):
-                    tm = None
-                try:
-                    sd = float(sd) if sd is not None else None
-                except (ValueError, TypeError):
-                    sd = None
-                if tm is not None and tm > 0 and sd is not None and sd > 0:
-                    correct_times.append(tm)
-                    correct_ratios.append(tm / sd)
-        if correct_times:
-            aet = sum(correct_times) / len(correct_times)
-            avg_ratio = sum(correct_ratios) / len(correct_ratios)
-            aet_percent = max(0, min(100, (1 - avg_ratio) * 100))
-            aet_display = f"{aet:.2f}s"
-        else:
-            aet = None
-            aet_percent = 0
-            aet_display = "-"
 
         # ---- Probe coach/slice clip (metadata only; never decode every frame into RAM) ----
         width, height = 3712, 512
@@ -2937,7 +3199,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac:.0f}%" if aac > 0 else "-"])
                     draw_metric_label(draw, "Accuracy", center_x, rect_y)
                 elif num == 4:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{total_distance:.0f}m" if total_distance > 0 else "-"])
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{distance_shown}m" if distance_shown > 0 else "-"])
                     draw_metric_label(draw, "Displacement", center_x, rect_y)
 
             footer = "SIMUST RESULTS – Analysis Complete"
@@ -3217,7 +3479,7 @@ async def create_video_results(req: Request):
                     except (TypeError, ValueError):
                         vid = 1
                     metres = float(by_video.get(vid, 0.0))
-                    if metres > 0 and float(row.get("total_distance") or 0) <= 0:
+                    if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
                         row["total_distance"] = metres
                         changed = True
                 if changed:
@@ -3253,6 +3515,15 @@ async def create_video_results(req: Request):
 
         if not os.path.exists(video_path):
             return {"status": "error", "message": "Video file not created"}
+
+        # Remember the exact rings shown on this video for the final board.
+        # Do not recompute again later — final only sums these saved values.
+        section = summarize_results_section_metrics(video_results)
+        recomputed = compute_total_distance_from_recognition(directory, video_index=video_index)
+        if recomputed > 0:
+            section["total_distance"] = recomputed
+        section["distance_m_display"] = distance_m_display(section.get("total_distance"))
+        save_section_metrics_entry(directory, video_index, section)
 
         if spawn_display:
             script_dir = os.path.dirname(os.path.abspath(__file__))
