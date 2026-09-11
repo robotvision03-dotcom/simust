@@ -2,6 +2,8 @@
 
 Phone and tablet console that uses the same operator UI as `index.html`. Works over the public internet — Wi‑Fi or phone SIM data — from any country.
 
+> **Two apps:** this folder is **SIMUST** (operator / lab console). The player portal app is **`android-mysimust/`** (**My SIMUST**, package `com.simust.mysimust`, opens `http://157.180.47.98/login`).
+
 ## Galaxy Z Flip 6 (Android 16)
 
 This is the supported phone model for remote operator use.

@@ -2469,8 +2469,12 @@
                 setPlayers(updated);
             };
 
-            var updateProgressForPlayer = function(player) {
+            var updateProgressForPlayer = function(player, options) {
                 if (!player) return;
+                options = options || {};
+                // preferDefaults: only when picking a player. Progress refreshes must
+                // NOT overwrite a manual SF-30N / level choice with the highest unlock.
+                var preferDefaults = !!options.preferDefaults;
                 var progress = player.progress || {};
                 var unlocked = progress.unlocked_levels || [];
                 var playlists = progress.unlocked_playlists || [];
@@ -2484,23 +2488,43 @@
                 setCurrentLevel(current);
                 setSessionCredits(credits);
                 setEligibleLevels(eligible);
-                // Prefer Foundation when any SF playlist is open
-                if (playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1) {
-                    setSelectedLevel("L00-Foundation");
-                    setSelectedSubdirectory(playlists[playlists.length - 1] || "");
+
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
+
+                if (preferDefaults) {
+                    if (defaultFoundation) {
+                        setSelectedLevel("L00-Foundation");
+                        setSelectedSubdirectory(playlists[playlists.length - 1] || "");
+                    } else if (highest) {
+                        setSelectedLevel(highest);
+                        setSelectedSubdirectory("");
+                    } else if (current && unlocked.indexOf(current) !== -1) {
+                        setSelectedLevel(current);
+                        setSelectedSubdirectory("");
+                    } else if (unlocked.length > 0) {
+                        setSelectedLevel(unlocked[0]);
+                        setSelectedSubdirectory("");
+                    } else {
+                        setSelectedLevel("L00-Foundation");
+                        setSelectedSubdirectory("");
+                    }
                     return;
                 }
-                var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                if (highest) {
-                    setSelectedLevel(highest);
-                } else if (current && unlocked.indexOf(current) !== -1) {
-                    setSelectedLevel(current);
-                } else if (unlocked.length > 0) {
-                    setSelectedLevel(unlocked[0]);
-                } else {
-                    setSelectedLevel("L00-Foundation");
-                    setSelectedSubdirectory("");
-                }
+
+                setSelectedLevel(function(prev) {
+                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
+                    if (defaultFoundation) return "L00-Foundation";
+                    if (highest) return highest;
+                    if (current && unlocked.indexOf(current) !== -1) return current;
+                    if (unlocked.length > 0) return unlocked[0];
+                    return prev || "L00-Foundation";
+                });
+                setSelectedSubdirectory(function(prev) {
+                    if (prev && playlists.indexOf(prev) !== -1) return prev;
+                    // Keep empty (user must pick) or clear if previous choice is no longer unlocked.
+                    return "";
+                });
             };
 
             var playerMatchesQuery = function(p, lower) {
@@ -2544,7 +2568,7 @@
                 setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                 setShowSearchResults(false);
                 setFilteredPlayers([]);
-                updateProgressForPlayer(player);
+                updateProgressForPlayer(player, { preferDefaults: true });
                 loadPlayerSessionsFromBackend(player.id);
                 showToast("Selected: " + player.name + ' ' + player.surname, 'success');
             };
@@ -2600,7 +2624,7 @@
                     selectedPlayerIdRef.current = player.id;
                     setSelectedPlayerId(player.id);
                     setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
-                    updateProgressForPlayer(player);
+                    updateProgressForPlayer(player, { preferDefaults: true });
                     setNewPlayer({ name: "", surname: "", playerId: "", club: "", birthday: "", age: "", image: null });
                     setShowAddPlayer(false);
                     setError("");

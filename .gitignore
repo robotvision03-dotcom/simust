@@ -21,16 +21,17 @@ android/*.iml
 android/.cxx/
 android/.idea/
 android/*.apk
-.DS_Store
-Thumbs.db
-*.mp4
-*.avi
-*.mkv
-*.mov
-*.pt
-*.onnx
-*.weights
-*.zip
-homography_frames/
-# Keep homography_calibration.json tracked so lab/VPS share the same H matrix.
-*.pyc
+android-mysimust/.gradle/
+android-mysimust/build/
+android-mysimust/app/build/
+android-mysimust/local.properties
+android-mysimust/*.iml
+android-mysimust/.cxx/
+android-mysimust/.idea/
+# Android signing / Play Store (never commit real keystores or passwords)
+*.jks
+*.keystore
+android*/keystore.properties
+android*/play-upload*.json
+android-mysimust/keystore.properties
+android/keystore.properties

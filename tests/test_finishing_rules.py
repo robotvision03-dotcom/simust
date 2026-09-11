@@ -437,6 +437,53 @@ class FinishingRuleTests(unittest.TestCase):
         self.assertIn(2, by_v)
         self.assertGreater(by_v[1], 0)
         self.assertGreater(by_v[2], 0)
+        # Action-only: BETWEEN hips must never inflate either section.
+        # S1 path: 100→220 = 120px; S2: 300→420 = 120px (step sampling may change slightly).
+        self.assertLess(by_v[1], 120 * 0.0259 * 1.2)
+        self.assertLess(by_v[2], 120 * 0.0259 * 1.2)
+        blocks_same = [
+            {
+                "id": "S1",
+                "action": "PASS",
+                "start_time": "10:00:00.000000",
+                "data": [
+                    {"t": 0.0, "hp": [100, 200]},
+                    {"t": 0.2, "hp": [140, 200]},
+                    {"t": 0.4, "hp": [180, 200]},
+                    {"t": 0.6, "hp": [220, 200]},
+                ],
+            },
+            {
+                "id": "BETWEEN",
+                "action": "BETWEEN_SESSIONS",
+                "start_time": "10:00:01.000000",
+                "data": [
+                    {"t": 0.0, "hp": [220, 200]},
+                    {"t": 0.2, "hp": [260, 200]},
+                    {"t": 0.4, "hp": [300, 200]},
+                    {"t": 0.6, "hp": [340, 200]},
+                ],
+            },
+            {
+                "id": "S2",
+                "action": "PASS",
+                "start_time": "10:00:02.000000",
+                "data": [
+                    {"t": 0.0, "hp": [340, 200]},
+                    {"t": 0.2, "hp": [380, 200]},
+                    {"t": 0.4, "hp": [420, 200]},
+                    {"t": 0.6, "hp": [460, 200]},
+                ],
+            },
+        ]
+        results_same = [
+            {"id": "S1", "video_index": 1, "total_distance": 0},
+            {"id": "S2", "video_index": 1, "total_distance": 0},
+        ]
+        same_v = rt.compute_distances_by_video(blocks_same, results_same, fallback_m_per_px=0.0259)
+        # 100→460 action span without BETWEEN would be longer; WITH between excluded
+        # distance is only S1(100→220)+S2(340→460) = 240px worth, not 360px continuous.
+        self.assertLess(same_v[1], 360 * 0.0259 * 0.95)
 
     def test_pass_late_uses_finish_band_not_tiny_screen_threshold(self):
         """S9/S13: PASS late uses the 100px arrival band, not 10–30px screen gates."""

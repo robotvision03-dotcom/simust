@@ -1,4 +1,4 @@
-package com.simust.playsmart
+package com.simust.mysimust
 
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -36,11 +36,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var errorPanel: LinearLayout
     private lateinit var progressBar: ProgressBar
     private var lastUrl: String = ""
-    private var lastTextZoom: Int = 0
     private val statusHandler = Handler(Looper.getMainLooper())
     private val statusTick = object : Runnable {
         override fun run() {
-            refreshLabSubtitle()
+            refreshSubtitle()
             statusHandler.postDelayed(this, 5000)
         }
     }
@@ -53,6 +52,7 @@ class MainActivity : AppCompatActivity() {
 
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
+        supportActionBar?.setDisplayShowTitleEnabled(true)
 
         webView = findViewById(R.id.webView)
         errorPanel = findViewById(R.id.errorPanel)
@@ -74,13 +74,12 @@ class MainActivity : AppCompatActivity() {
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        // Always fetch the latest /operator HTML (Pause/Stop, lab-link, remote Stop).
         settings.cacheMode = WebSettings.LOAD_NO_CACHE
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowContentAccess = true
         settings.allowFileAccess = false
         settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.7"
+        settings.userAgentString = settings.userAgentString + " MySIMUSTAndroid/" + Prefs.APP_VERSION
         applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {
@@ -209,7 +208,7 @@ class MainActivity : AppCompatActivity() {
         if (url != lastUrl) {
             loadGui()
         }
-        titleForMode()
+        supportActionBar?.title = getString(R.string.title_main)
         statusHandler.removeCallbacks(statusTick)
         statusHandler.post(statusTick)
     }
@@ -225,27 +224,25 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        val mode = Prefs.getMode(this)
-        menu.findItem(R.id.action_operator)?.isChecked = mode == Prefs.MODE_OPERATOR
-        menu.findItem(R.id.action_player)?.isChecked = mode == Prefs.MODE_PLAYER
-        return super.onPrepareOptionsMenu(menu)
-    }
-
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_reload -> {
                 loadGui()
                 true
             }
-            R.id.action_operator -> {
-                Prefs.setMode(this, Prefs.MODE_OPERATOR)
-                loadGui()
+            R.id.action_login -> {
+                Prefs.setStartPath(this, Prefs.PATH_LOGIN)
+                loadGui(Prefs.urlForPath(this, Prefs.PATH_LOGIN))
                 true
             }
-            R.id.action_player -> {
-                Prefs.setMode(this, Prefs.MODE_PLAYER)
-                loadGui()
+            R.id.action_dashboard -> {
+                Prefs.setStartPath(this, Prefs.PATH_DASHBOARD)
+                loadGui(Prefs.urlForPath(this, Prefs.PATH_DASHBOARD))
+                true
+            }
+            R.id.action_register -> {
+                Prefs.setStartPath(this, Prefs.PATH_REGISTER)
+                loadGui(Prefs.urlForPath(this, Prefs.PATH_REGISTER))
                 true
             }
             R.id.action_settings -> {
@@ -275,27 +272,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyTextZoom() {
         if (!::webView.isInitialized) return
-        val zoom = Prefs.getTextZoom(this)
-        webView.settings.textZoom = zoom
-        lastTextZoom = zoom
+        webView.settings.textZoom = Prefs.getTextZoom(this)
     }
 
-    private fun titleForMode() {
-        supportActionBar?.title = when (Prefs.getMode(this)) {
-            Prefs.MODE_PLAYER -> getString(R.string.title_player)
-            Prefs.MODE_LAB -> getString(R.string.title_lab)
-            else -> getString(R.string.title_operator)
-        }
-        if (Prefs.getMode(this) == Prefs.MODE_LAB) {
-            supportActionBar?.subtitle = getString(R.string.subtitle_lab_lan)
-        }
-    }
-
-    private fun refreshLabSubtitle() {
-        if (Prefs.getMode(this) == Prefs.MODE_LAB) {
-            runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_lab_lan) }
-            return
-        }
+    private fun refreshSubtitle() {
         if (!NetworkStatus.isOnline(this)) {
             runOnUiThread { supportActionBar?.subtitle = getString(R.string.subtitle_no_network) }
             return
@@ -303,27 +283,25 @@ class MainActivity : AppCompatActivity() {
         val transport = NetworkStatus.transportLabel(this)
         Thread {
             try {
-                // Prefer lightweight public /lab-link so an expired WebView login
-                // cannot make the native toolbar say Lab offline.
                 val host = Prefs.getPublicHost(this)
-                val online = readLabOnline(host + "/lab-link")
-                    ?: readLabOnline(host + "/app-config")
-                    ?: false
+                val ok = pingHost(host + "/login") || pingHost(host + "/")
                 runOnUiThread {
-                    supportActionBar?.subtitle = getString(
-                        if (online) R.string.subtitle_lab_online_net else R.string.subtitle_lab_offline_net,
-                        transport,
-                    )
+                    supportActionBar?.subtitle = if (ok) {
+                        getString(R.string.subtitle_online, transport)
+                    } else {
+                        getString(R.string.subtitle_host_unreachable, transport)
+                    }
                 }
             } catch (_: Exception) {
                 runOnUiThread {
-                    supportActionBar?.subtitle = getString(R.string.subtitle_host_unreachable, transport)
+                    supportActionBar?.subtitle =
+                        getString(R.string.subtitle_host_unreachable, transport)
                 }
             }
         }.start()
     }
 
-    private fun readLabOnline(url: String): Boolean? {
+    private fun pingHost(url: String): Boolean {
         return try {
             val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
             conn.connectTimeout = 4000
@@ -331,27 +309,19 @@ class MainActivity : AppCompatActivity() {
             conn.requestMethod = "GET"
             conn.setRequestProperty("Cache-Control", "no-cache")
             val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
             conn.disconnect()
-            if (code !in 200..299) return null
-            when {
-                text.contains("\"lab_online\": true") || text.contains("\"lab_online\":true") -> true
-                text.contains("\"lab_online\": false") || text.contains("\"lab_online\":false") -> false
-                else -> null
-            }
+            code in 200..399
         } catch (_: Exception) {
-            null
+            false
         }
     }
 
-    private fun loadGui() {
+    private fun loadGui(forcedUrl: String? = null) {
         errorPanel.visibility = View.GONE
-        val url = Prefs.getLaunchUrl(this)
+        val url = forcedUrl ?: Prefs.getLaunchUrl(this)
         lastUrl = url
-        titleForMode()
+        supportActionBar?.title = getString(R.string.title_main)
         applyTextZoom()
-        invalidateOptionsMenu()
         webView.clearCache(false)
         webView.loadUrl(url)
     }
