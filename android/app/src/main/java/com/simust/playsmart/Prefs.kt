@@ -139,7 +139,7 @@ object Prefs {
             .replace(Regex("""&v=[^&]*"""), "")
             .replace(Regex("""\?v=[^&]*&"""), "?")
             .replace(Regex("""\?v=[^&]*$"""), "")
-        out += if (out.contains("?")) "&v=2.6" else "?v=2.6"
+        out += if (out.contains("?")) "&v=2.7" else "?v=2.7"
         return out
     }
 }

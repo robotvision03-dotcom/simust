@@ -30,6 +30,14 @@ http://157.180.47.98/operator  (same index.html console)
 Sign in as coach / manager / admin. Realtime Play is queued on the
 VPS and run by the lab PC. Player mode opens /login.
 
+My SIMUST player app (android-mysimust) opens /login for reservations.
+Admin waiver uses an in-page password field (Android WebView cannot use
+window.prompt). Keep web + VPS + APKs in sync with:
+
+  .\deploy\update-all.ps1
+  # details: deploy/UPDATE_PIPELINE.txt
+  # VPS only:  sudo bash /opt/simust/deploy/update-vps.sh
+
 
 PULL  (lab <-- VPS)   GET /internal/export-accounts
 ------------------------------------------------------

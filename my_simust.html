@@ -3541,6 +3541,11 @@
                                         <option value="" data-i18n="paymentEmpty">Empty — admin waiver</option>
                                     </select>
                                 </div>
+                                <div class="res-field" id="res-admin-pass-wrap" style="display:none;">
+                                    <label for="res-admin-pass" data-i18n="adminPasswordLabel">Admin password</label>
+                                    <input type="password" id="res-admin-pass" autocomplete="current-password" placeholder="Administrator password">
+                                    <p class="res-pay-note" data-i18n="adminPasswordHint">Required on phones and tablets (Android cannot use browser password prompts).</p>
+                                </div>
                                 <button type="button" class="res-submit" id="res-pay-btn" data-i18n="payNow">Pay</button>
                                 <button type="button" class="res-pay-back" id="res-pay-cancel" data-i18n="reservationCancel">Cancel</button>
                             </div>
@@ -7017,6 +7022,28 @@
                 var pay = document.getElementById('res-pay-step');
                 if (fields) fields.style.display = on ? 'none' : '';
                 if (pay) pay.classList.toggle('show', !!on);
+                if (on) syncAdminWaiverField();
+                else {
+                    var pass = document.getElementById('res-admin-pass');
+                    if (pass) pass.value = '';
+                }
+            }
+
+            function syncAdminWaiverField() {
+                var methodEl = document.getElementById('res-pay-method');
+                var wrap = document.getElementById('res-admin-pass-wrap');
+                var payBtn = document.getElementById('res-pay-btn');
+                var isWaiver = !!(methodEl && !String(methodEl.value || ''));
+                if (wrap) wrap.style.display = isWaiver ? '' : 'none';
+                if (payBtn) {
+                    payBtn.textContent = isWaiver
+                        ? resT('confirmWaiver', 'Confirm admin waiver')
+                        : resT('payNow', 'Pay');
+                }
+                if (!isWaiver) {
+                    var pass = document.getElementById('res-admin-pass');
+                    if (pass) pass.value = '';
+                }
             }
 
             function bookingFeeEur(mins) {
@@ -7090,9 +7117,12 @@
                         end: localIso(dateStr, endHm)
                     };
                     if (!method) {
-                        var adminPass = window.prompt(resT('adminPasswordPrompt', 'Admin password is required to register this booking without payment.'));
+                        // In-page password — window.prompt is cancelled on Android WebView.
+                        var passEl = document.getElementById('res-admin-pass');
+                        var adminPass = passEl ? String(passEl.value || '').trim() : '';
                         if (!adminPass) {
-                            showResMessage('', resT('paymentRequired', 'Payment is required unless an administrator waives the fee.'));
+                            showResMessage('', resT('adminPasswordPrompt', 'Admin password is required to register this booking without payment.'));
+                            if (passEl) passEl.focus();
                             return;
                         }
                         payload.admin_password = adminPass;
@@ -7107,6 +7137,7 @@
                             showResMessage('', detail);
                             return;
                         }
+                        if (passEl) passEl.value = '';
                         showResMessage(resT('adminWaiverOk', 'Administrator confirmed the booking without payment.') + ' ' + dateStr + '  ' + startHm + '–' + endHm, '');
                         showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
                         setPaymentStep(false);
@@ -7202,6 +7233,9 @@
                 });
                 if (payBtn) payBtn.addEventListener('click', submitReservation);
                 if (payCancel) payCancel.addEventListener('click', function() { setPaymentStep(false); });
+                var methodEl = document.getElementById('res-pay-method');
+                if (methodEl) methodEl.addEventListener('change', syncAdminWaiverField);
+                syncAdminWaiverField();
                 prev.addEventListener('click', function() {
                     reservationWeekStart.setDate(reservationWeekStart.getDate() - 7);
                     reservationSelectedDate = ymdLocal(reservationWeekStart);

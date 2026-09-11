@@ -23,7 +23,7 @@ object Prefs {
     const val DEFAULT_TEXT_ZOOM = 110
     const val MIN_TEXT_ZOOM = 80
     const val MAX_TEXT_ZOOM = 180
-    const val APP_VERSION = "1.0"
+    const val APP_VERSION = "1.1"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)

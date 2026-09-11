@@ -1,0 +1,39 @@
+# Keep web + Android + VPS in sync
+# =================================
+#
+# Rule of thumb
+# -------------
+# - HTML/API change (my_simust.html, index.html, app.py) → update VPS (apps load live HTML).
+# - Native Android change (MainActivity, Prefs, layouts) → rebuild + reinstall APKs.
+# - Prefer running one pipeline so nothing is left behind.
+#
+# One command (lab PC)
+# --------------------
+#   cd C:\Users\siama\Documents\simust
+#   .\deploy\update-all.ps1
+#
+# Options:
+#   .\deploy\update-all.ps1 -Branch main
+#   .\deploy\update-all.ps1 -SkipAndroid
+#   .\deploy\update-all.ps1 -MySimustOnly
+#   .\deploy\update-all.ps1 -SkipVps
+#
+# VPS only (on server)
+# --------------------
+#   sudo bash /opt/simust/deploy/update-vps.sh
+#   # or: SIMUST_REPO_BRANCH=simust_development_version3_short_fast sudo -E bash deploy/update-vps.sh
+#
+# Android only
+# ------------
+#   cd android-mysimust && .\gradlew.bat assembleDebug && .\install-apk.bat
+#   cd android && .\gradlew.bat assembleDebug && .\install-apk.bat
+#
+# Apps
+# ----
+#   My SIMUST  android-mysimust/  → /login   (players, reservations, admin waiver)
+#   SIMUST     android/           → /operator (lab console)
+#
+# Admin waiver on phone
+# ---------------------
+# Uses an in-page Admin password field (not window.prompt). After VPS update,
+# reopen My SIMUST (or pull-to-refresh) so the WebView loads the new HTML.
