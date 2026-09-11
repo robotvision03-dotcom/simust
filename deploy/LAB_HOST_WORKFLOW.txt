@@ -59,4 +59,5 @@ Public site
 -----------
 simust.com  = marketing only
 My SIMUST button should open https://my.simust.com/login
-(or http://157.180.47.98/login until DNS is updated)
+(or http://157.180.47.98/login until the Cloudflare account holder
+points my.simust.com at 157.180.47.98 — see CLOUDFLARE_MY_RECORD.txt)

@@ -11,10 +11,10 @@ Do this on https://simust.com only:
    https://simust.com/my-simust/login
    must send the visitor to the live portal.
 
-   Use this URL (after DNS is updated):
+   Use this URL (after the Cloudflare account holder updates DNS):
    https://my.simust.com/login
 
-   Until my.simust.com points at the VPS, use this working URL:
+   Until then, use this working URL:
    http://157.180.47.98/login
 
 2. Preferred implementation: HTTP 302/308 redirect.
@@ -26,8 +26,10 @@ Do this on https://simust.com only:
 
 4. Do not change lab training software (index.html).
 
-DNS (owner of simust.com must do this, if not already done):
-   A record   my.simust.com   ->   157.180.47.98
+Do not change Cloudflare DNS. Managing the SIMUST website project
+does not include access to the Cloudflare account for simust.com.
+The A record for my is a separate manual step for whoever can
+sign in to that Cloudflare zone. See deploy/CLOUDFLARE_MY_RECORD.txt.
 
 After that, this path must work:
    https://simust.com/my-simust/login  -->  https://my.simust.com/login

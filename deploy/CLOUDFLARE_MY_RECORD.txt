@@ -1,0 +1,31 @@
+CLOUDFLARE ACCOUNT HOLDER — my.simust.com
+=========================================
+
+The SIMUST website project does not have access to the Cloudflare
+account that holds the authoritative DNS zone for simust.com.
+
+Whoever can sign in to that Cloudflare account must change the record
+manually. Do not ask the website developer to do this.
+
+Current public DNS (still wrong until this is done):
+  my.simust.com  A  188.166.104.119
+  (webreact.io / DigitalOcean; HTTP 502 Pingora)
+
+Required record:
+  Type: A
+  Name: my
+  IPv4: 157.180.47.98
+  Proxy: DNS only — grey cloud
+  TTL: Auto
+
+Steps
+-----
+1. Open Cloudflare → simust.com → DNS → Records.
+2. Search for my.
+3. Edit the existing A record to the values above.
+4. Remove any additional A, AAAA, or CNAME record named my.
+5. Send a screenshot showing the filtered my records.
+
+After DNS updates, https://my.simust.com/login should reach the
+Hetzner host at 157.180.47.98. Until then use:
+  http://157.180.47.98/login
