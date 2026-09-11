@@ -2,40 +2,35 @@
 
 Player phone/tablet app for the public My SIMUST portal (`/login`, `/dashboard`, `/register`).
 
-Separate from the lab operator app (`android/` → package `com.simust.playsmart`, name **SIMUST**).
-
 | App | Folder | Package | Default URL |
 |-----|--------|---------|-------------|
-| **SIMUST** (operator) | `android/` | `com.simust.playsmart` | `http://157.180.47.98/operator` |
-| **My SIMUST** (players) | `android-mysimust/` | `com.simust.mysimust` | `http://157.180.47.98/login` |
-
-## Features
-
-- Username / password login via the live portal WebView
-- Adaptive layouts for phones and tablets (`sw600dp`)
-- SIMUST logo as launcher icon and in-app branding
-- Text size, rotation, keep-screen-on settings
-- Works on mobile data or Wi‑Fi (cleartext HTTP allowed for the current public host)
+| **SIMUST** (operator) | `android/` | `com.simust.playsmart` | lab `/operator` |
+| **My SIMUST** (players) | `android-mysimust/` | `com.simust.mysimust` | `https://my.simust.com/login` |
 
 ## Version
 
-- Package: `com.simust.mysimust`
-- Version: **1.1** (versionCode 2)
+- Package: `com.simust.mysimust` (never change after Play publish)
+- Version: **1.2** (versionCode **3**)
 - Targets Android 16 (API 36), minSdk 24
-- Admin waiver reservations use an in-page password field (works in WebView)
-- JS alert/confirm/prompt dialogs are handled natively
+- Privacy: https://my.simust.com/privacy
 
-## Build / install / keep in sync with web + VPS
+## Google Play
+
+Follow **[PLAY_STORE.md](PLAY_STORE.md)**.
 
 ```powershell
-# Preferred: push branch, update VPS HTML/API, rebuild both APKs
-cd C:\Users\siama\Documents\simust
-.\deploy\update-all.ps1
-
-# Or My SIMUST APK only
 cd android-mysimust
+.\create-upload-keystore.ps1   # once — back up the .jks
+.\gradlew.bat bundleRelease    # → MySIMUST-1.2-release.aab
+```
+
+Upload the `.aab` at https://play.google.com/console
+
+## Debug install (lab / sideload)
+
+```powershell
 .\gradlew.bat assembleDebug
 .\install-apk.bat
 ```
 
-See `deploy/UPDATE_PIPELINE.txt`.
+Keep web + VPS + APKs in sync: `..\deploy\update-all.ps1` (see `deploy/UPDATE_PIPELINE.txt`).

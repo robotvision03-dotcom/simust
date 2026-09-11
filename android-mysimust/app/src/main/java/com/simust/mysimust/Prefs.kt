@@ -19,11 +19,11 @@ object Prefs {
     const val ORIENTATION_LANDSCAPE = "landscape"
     const val ORIENTATION_PORTRAIT = "portrait"
 
-    const val DEFAULT_PUBLIC_HOST = "http://157.180.47.98"
+    const val DEFAULT_PUBLIC_HOST = "https://my.simust.com"
     const val DEFAULT_TEXT_ZOOM = 110
     const val MIN_TEXT_ZOOM = 80
     const val MAX_TEXT_ZOOM = 180
-    const val APP_VERSION = "1.1"
+    const val APP_VERSION = "1.2"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)

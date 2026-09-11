@@ -15,7 +15,7 @@
     <string name="orientation_portrait">Portrait</string>
     <string name="reset_display">Reset display defaults</string>
     <string name="public_host_label">My SIMUST host</string>
-    <string name="public_host_hint">http://157.180.47.98</string>
+    <string name="public_host_hint">https://my.simust.com</string>
     <string name="save">Save and open</string>
     <string name="reload">Reload</string>
     <string name="settings">Settings</string>
@@ -26,7 +26,7 @@
     <string name="subtitle_online">Online · %1$s</string>
     <string name="subtitle_no_network">No internet · turn on SIM data or Wi‑Fi</string>
     <string name="subtitle_host_unreachable">Cannot reach host · %1$s</string>
-    <string name="help_text">Players sign in with username and password at the public My SIMUST portal. This app works on phones and tablets (portrait or landscape) using mobile data or Wi‑Fi. Default host: http://157.180.47.98/login — after login you reach the dashboard with progress, bookings, and results.</string>
+    <string name="help_text">Players sign in with username and password at the public My SIMUST portal. This app works on phones and tablets (portrait or landscape) using mobile data or Wi‑Fi. Default host: https://my.simust.com/login — after login you reach the dashboard with progress, bookings, and results. Privacy: https://my.simust.com/privacy</string>
     <string name="load_error">Could not load My SIMUST. Check Settings and that this device has internet.</string>
     <string name="load_error_offline">This device has no internet. Enable mobile data (SIM) or Wi‑Fi and tap Retry.</string>
     <string name="retry">Retry</string>

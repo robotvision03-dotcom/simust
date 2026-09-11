@@ -4114,6 +4114,17 @@ async def my_simust_host_pages():
     """Short paths for my.simust.com (GET only; POST /login and POST /register stay the API)."""
     return _my_simust_page()
 
+
+@app.get("/privacy", response_class=FileResponse)
+@app.get("/privacy-policy", response_class=FileResponse)
+@app.get("/privacy_policy.html", response_class=FileResponse)
+async def privacy_policy_page():
+    """Public privacy policy for Google Play / App Store listings."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "privacy_policy.html")
+    if not os.path.exists(path):
+        raise HTTPException(404, "Privacy policy not found")
+    return FileResponse(path)
+
 @app.get("/get-players")
 async def get_players(request: Request):
     """Return players visible to the caller. Public host: own record only for players."""
