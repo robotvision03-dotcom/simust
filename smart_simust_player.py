@@ -691,10 +691,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if subdirs:
                 subdirs.sort(key=lambda d: os.path.getctime(os.path.join(realtime_dir, d)), reverse=True)
                 newest = os.path.join(realtime_dir, subdirs[0])
-                for fname in ["recognition.json", "recognition_report.json"]:
-                    path = os.path.join(newest, fname)
-                    if os.path.exists(path):
-                        return path
+                # Prefer field folders; return a recognition.json path (session root has none)
+                for base in (
+                    os.path.join(newest, "field_A"),
+                    os.path.join(newest, "field_B"),
+                    newest,
+                ):
+                    for fname in ("recognition.json", "results.json"):
+                        path = os.path.join(base, fname)
+                        if os.path.exists(path):
+                            return path
+                return newest
         return None
 
     def _arm_timer(self, ms, callback):
@@ -742,7 +749,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         }
         try:
             if HAS_REQUESTS:
-                response = requests.post(backend_url, json=payload, timeout=30)
+                response = requests.post(backend_url, json=payload, timeout=90)
                 if response.status_code == 200:
                     data = response.json()
                     candidate = data.get("video_path") or ""
@@ -760,7 +767,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     data=json.dumps(payload).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=90) as resp:
                     data = json.loads(resp.read().decode("utf-8") or "{}")
                     candidate = data.get("video_path") or ""
                     if candidate and os.path.exists(candidate):
@@ -847,7 +854,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             response = requests.post(
                 backend_url,
                 json={"report_path": report_path, "display": False},
-                timeout=60,
+                timeout=120,
             )
             if response.status_code == 200:
                 data = response.json()

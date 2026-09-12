@@ -3526,6 +3526,13 @@
                                     <label for="res-duration" data-i18n="reservationDuration">Duration</label>
                                     <select id="res-duration"></select>
                                 </div>
+                                <div class="res-field">
+                                    <label for="res-field" data-i18n="reservationField">Field</label>
+                                    <select id="res-field">
+                                        <option value="A">Field A (screens 1–4, 12–14)</option>
+                                        <option value="B">Field B (screens 5–11)</option>
+                                    </select>
+                                </div>
                                 <div class="res-end-preview" id="res-end-preview"></div>
                                 <div class="res-end-preview" id="res-fee-preview"></div>
                                 <button type="button" class="res-submit" id="res-submit" data-i18n="reservationConfirm">Confirm reservation</button>
@@ -6771,6 +6778,15 @@
                 return dateStr + 'T' + hm + ':00';
             }
 
+            function selectedBookField() {
+                var fieldEl = document.getElementById('res-field');
+                return fieldEl && String(fieldEl.value || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+            }
+
+            function bookingField(b) {
+                return String((b && b.field) || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+            }
+
             function bookingCovers(booking, dateStr, hm) {
                 var start = parseLocalDateTime(booking.start);
                 var end = parseLocalDateTime(booking.end);
@@ -6779,13 +6795,15 @@
                 return slot >= start && slot < end;
             }
 
-            function overlapExists(dateStr, startHm, durationMin, ignoreId) {
+            function overlapExists(dateStr, startHm, durationMin, ignoreId, fieldId) {
                 var start = parseLocalDateTime(localIso(dateStr, startHm));
                 var end = parseLocalDateTime(localIso(dateStr, addMinutesHm(startHm, durationMin)));
                 if (!start || !end) return true;
+                var wantField = String(fieldId || selectedBookField()).toUpperCase() === 'B' ? 'B' : 'A';
                 for (var i = 0; i < reservationBookings.length; i++) {
                     var b = reservationBookings[i];
                     if (ignoreId && b.id === ignoreId) continue;
+                    if (bookingField(b) !== wantField) continue;
                     var bs = parseLocalDateTime(b.start);
                     var be = parseLocalDateTime(b.end);
                     if (!bs || !be) continue;
@@ -6834,7 +6852,7 @@
                     var endHm = addMinutesHm(startHm, mins);
                     var endParts = endHm.split(':');
                     var pastClose = Number(endParts[0]) > RES_CLOSE_HOUR || (Number(endParts[0]) === RES_CLOSE_HOUR && Number(endParts[1]) > 0);
-                    var blocked = !dateStr || pastClose || overlapExists(dateStr, startHm, mins);
+                    var blocked = !dateStr || pastClose || overlapExists(dateStr, startHm, mins, null, (document.getElementById('res-field') || {}).value || 'A');
                     var startDt = dateStr ? parseLocalDateTime(localIso(dateStr, startHm)) : null;
                     if (startDt && startDt < new Date()) blocked = true;
                     options[i].disabled = blocked;
@@ -6908,13 +6926,17 @@
                 var times = slotTimes();
                 var me = currentUser ? currentUser.username : '';
                 var now = new Date();
+                var wantField = selectedBookField();
                 grid.innerHTML = times.map(function(hm) {
                     var booking = null;
+                    var otherFieldBooking = null;
                     for (var i = 0; i < reservationBookings.length; i++) {
-                        if (bookingCovers(reservationBookings[i], reservationSelectedDate, hm)) {
+                        if (!bookingCovers(reservationBookings[i], reservationSelectedDate, hm)) continue;
+                        if (bookingField(reservationBookings[i]) === wantField) {
                             booking = reservationBookings[i];
                             break;
                         }
+                        otherFieldBooking = reservationBookings[i];
                     }
                     var slotStart = parseLocalDateTime(localIso(reservationSelectedDate, hm));
                     var isPast = slotStart && slotStart < now;
@@ -6928,12 +6950,15 @@
                         cls += mine ? ' mine' : ' booked';
                         if (isStart) {
                             var bEnd = parseLocalDateTime(booking.end);
-                            label = escapeHtml(booking.player_name || resT('reservationBooked', 'Booked'))
+                            label = 'F' + wantField + ' · ' + escapeHtml(booking.player_name || resT('reservationBooked', 'Booked'))
                                 + '  <span class="num-ltr">' + hmFromDate(bStart) + '–' + (bEnd ? hmFromDate(bEnd) : '') + '</span>';
                         }
                     } else {
                         cls += ' free';
                         if (isPast) cls += ' past';
+                        if (otherFieldBooking && !isPast) {
+                            label = 'F' + bookingField(otherFieldBooking) + ' taken · F' + wantField + ' free';
+                        }
                     }
                     return '<div class="res-slot-time"><span class="num-ltr">' + (hm.slice(-2) === '00' ? hm : '') + '</span></div>'
                         + '<div class="' + cls + '" data-hm="' + hm + '" data-id="' + (booking ? escapeHtml(booking.id) : '') + '">'
@@ -7104,8 +7129,10 @@
                 var mins = Number(durSel.value);
                 var endHm = addMinutesHm(startHm, mins);
                 var method = methodEl ? String(methodEl.value || '') : 'card';
-                if (overlapExists(dateStr, startHm, mins)) {
-                    showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation.'));
+                var fieldEl = document.getElementById('res-field');
+                var fieldId = fieldEl && String(fieldEl.value || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+                if (overlapExists(dateStr, startHm, mins, null, fieldId)) {
+                    showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation on this field.'));
                     setPaymentStep(false);
                     return;
                 }
@@ -7114,7 +7141,8 @@
                     var payload = {
                         player_id: currentUser.username,
                         start: localIso(dateStr, startHm),
-                        end: localIso(dateStr, endHm)
+                        end: localIso(dateStr, endHm),
+                        field: fieldId
                     };
                     if (!method) {
                         // In-page password — window.prompt is cancelled on Android WebView.
@@ -7212,6 +7240,13 @@
                 });
                 startSel.addEventListener('change', updateDurationAvailability);
                 durSel.addEventListener('change', updateDurationAvailability);
+                var fieldSel = document.getElementById('res-field');
+                if (fieldSel) {
+                    fieldSel.addEventListener('change', function() {
+                        renderReservationCalendar();
+                        updateDurationAvailability();
+                    });
+                }
                 submit.addEventListener('click', function() {
                     if (!currentUser) {
                         showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
@@ -7224,8 +7259,8 @@
                         showResMessage('', resT('reservationUnavailable', 'This start time has no free duration.'));
                         return;
                     }
-                    if (overlapExists(dateEl2.value, startSel2.value, Number(durSel2.value))) {
-                        showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation.'));
+                    if (overlapExists(dateEl2.value, startSel2.value, Number(durSel2.value), null, (document.getElementById('res-field') || {}).value || 'A')) {
+                        showResMessage('', resT('reservationConflict', 'That time overlaps an existing reservation on this field.'));
                         return;
                     }
                     showResMessage('', '');

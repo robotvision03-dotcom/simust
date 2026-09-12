@@ -79,6 +79,7 @@ def create_checkout_session(
     duration_minutes: int,
     success_url: str,
     cancel_url: str,
+    field: str = "A",
 ) -> Tuple[str, str, int]:
     if not stripe_configured():
         raise RuntimeError("Card payment is not configured on this host")
@@ -88,6 +89,9 @@ def create_checkout_session(
         raise RuntimeError("Stripe library is not installed") from exc
     stripe.api_key = STRIPE_SECRET_KEY
     amount = booking_fee_cents(duration_minutes)
+    field_id = str(field or "A").strip().upper()[:1] or "A"
+    if field_id not in ("A", "B"):
+        field_id = "A"
     session = stripe.checkout.Session.create(
         mode="payment",
         customer_email=player_email or None,
@@ -100,7 +104,7 @@ def create_checkout_session(
                 "unit_amount": amount,
                 "product_data": {
                     "name": "SIMUST training reservation",
-                    "description": f"{duration_minutes} minutes ({start_iso} – {end_iso})",
+                    "description": f"Field {field_id} · {duration_minutes} minutes ({start_iso} – {end_iso})",
                 },
             },
         }],
@@ -110,6 +114,7 @@ def create_checkout_session(
             "end": end_iso,
             "duration_minutes": str(duration_minutes),
             "amount_eur": str(booking_fee_eur(duration_minutes)),
+            "field": field_id,
         },
     )
     if not session.id or not session.url:
@@ -120,6 +125,7 @@ def create_checkout_session(
         "end": end_iso,
         "duration_minutes": duration_minutes,
         "amount_eur": booking_fee_eur(duration_minutes),
+        "field": field_id,
     })
     return session.id, session.url, booking_fee_eur(duration_minutes)
 
@@ -137,6 +143,9 @@ def retrieve_paid_session(session_id: str) -> Dict[str, Any]:
         raise PermissionError("Payment is not complete")
     meta = dict(session.get("metadata") or {})
     pending = peek_pending(session_id) or {}
+    field_id = str(meta.get("field") or pending.get("field") or "A").strip().upper()[:1] or "A"
+    if field_id not in ("A", "B"):
+        field_id = "A"
     return {
         "session_id": session_id,
         "player_id": meta.get("player_id") or pending.get("player_id") or "",
@@ -144,6 +153,7 @@ def retrieve_paid_session(session_id: str) -> Dict[str, Any]:
         "end": meta.get("end") or pending.get("end") or "",
         "duration_minutes": int(meta.get("duration_minutes") or pending.get("duration_minutes") or 0),
         "amount_eur": int(meta.get("amount_eur") or pending.get("amount_eur") or 0),
+        "field": field_id,
         "email": session.get("customer_details", {}).get("email") if isinstance(session.get("customer_details"), dict) else "",
     }
 

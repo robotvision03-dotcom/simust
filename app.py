@@ -313,6 +313,13 @@ def _public_reservation(item: dict) -> dict:
     start = _parse_iso_dt(item.get("start", ""), "start")
     end = _parse_iso_dt(item.get("end", ""), "end")
     duration = int((end - start).total_seconds() // 60)
+    field_id = "A"
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(item.get("field")) or "A"
+    except Exception:
+        raw = str(item.get("field") or "A").strip().upper()
+        field_id = "B" if raw.startswith("B") else "A"
     public = {
         "id": item.get("id"),
         "player_id": item.get("player_id", ""),
@@ -320,6 +327,8 @@ def _public_reservation(item: dict) -> dict:
         "start": start.isoformat(timespec="seconds"),
         "end": end.isoformat(timespec="seconds"),
         "duration_minutes": duration,
+        "field": field_id,
+        "field_label": f"Field {field_id}",
     }
     if item.get("payment_status"):
         public["payment_status"] = item.get("payment_status")
@@ -340,15 +349,30 @@ def _reservation_for_viewer(item: dict, viewer: Optional[dict]) -> dict:
     return public
 
 
-def _assert_slot_free(bookings: list, start: datetime, end: datetime) -> None:
+def _assert_slot_free(bookings: list, start: datetime, end: datetime, field: str = "A") -> None:
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(field) or "A"
+    except Exception:
+        field_id = "B" if str(field or "A").strip().upper().startswith("B") else "A"
     for item in bookings:
         try:
             existing_start = _parse_iso_dt(item.get("start", ""), "start")
             existing_end = _parse_iso_dt(item.get("end", ""), "end")
         except HTTPException:
             continue
+        try:
+            import simust_fields
+            existing_field = simust_fields.normalize_field(item.get("field")) or "A"
+        except Exception:
+            existing_field = "B" if str(item.get("field") or "A").strip().upper().startswith("B") else "A"
+        if existing_field != field_id:
+            continue
         if _intervals_overlap(start, end, existing_start, existing_end):
-            raise HTTPException(409, "That time overlaps an existing reservation")
+            raise HTTPException(
+                409,
+                f"That time overlaps an existing reservation on Field {field_id}",
+            )
 
 
 def _grant_session_unlocks_for_booking(
@@ -392,10 +416,16 @@ def _insert_reservation(
     amount_eur: int,
     source: str,
     payment_ref: str = "",
+    field: str = "A",
 ) -> dict:
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(field) or "A"
+    except Exception:
+        field_id = "B" if str(field or "A").strip().upper().startswith("B") else "A"
     with RESERVATION_LOCK:
         bookings = load_reservations()
-        _assert_slot_free(bookings, start, end)
+        _assert_slot_free(bookings, start, end, field_id)
         created = {
             "id": str(uuid.uuid4()),
             "player_id": username,
@@ -407,6 +437,7 @@ def _insert_reservation(
             "amount_eur": amount_eur,
             "source": source,
             "duration_minutes": int(duration),
+            "field": field_id,
         }
         if payment_ref:
             created["payment_ref"] = payment_ref
@@ -1698,6 +1729,33 @@ async def start_realtime_playback(req: Request):
         write_pause_setting(False)
         force_kill_smart_player()
         try:
+            players_payload = data.get("players") or []
+            if not players_payload and player_id:
+                players_payload = [{
+                    "player_id": player_id,
+                    "player_name": player_name,
+                    "player_surname": player_surname,
+                    "field": data.get("field") or "A",
+                }]
+            field_map = {"A": None, "B": None}
+            for entry in players_payload:
+                try:
+                    import simust_fields
+                    fid = simust_fields.normalize_field((entry or {}).get("field")) or "A"
+                except Exception:
+                    fid = "B" if str((entry or {}).get("field") or "A").upper().startswith("B") else "A"
+                field_map[fid] = {
+                    "player_id": (entry or {}).get("player_id") or "",
+                    "player_name": (entry or {}).get("player_name") or "",
+                    "player_surname": (entry or {}).get("player_surname") or "",
+                    "field": fid,
+                }
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"), "w", encoding="utf-8") as f:
+                json.dump({"fields": field_map, "players": players_payload}, f, indent=2)
+        except Exception as e:
+            logger.warning("Could not write players_fields.json: %s", e)
+        try:
             status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
             os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
             with open(status_file, 'w', encoding='utf-8') as f:
@@ -2010,95 +2068,112 @@ async def video_results(req: Request):
         logger.error(f"/video-results failed: {e}")
         raise HTTPException(500, f"Failed to load video results: {str(e)}")
 
+def _format_realtime_field_report(folder: str) -> Optional[dict]:
+    results_json_path = os.path.join(folder, "results.json")
+    if not os.path.exists(results_json_path):
+        return None
+    with open(results_json_path, "r", encoding="utf-8") as f:
+        results_data = json.load(f)
+    formatted_results = []
+    ae_values = []
+    for entry in results_data:
+        ae_val = entry.get("ae", 0.0)
+        formatted_results.append({
+            "id": entry.get("id", ""),
+            "action": entry.get("action", ""),
+            "screens": entry.get("screens", []),
+            "field": entry.get("field", ""),
+            "result": entry.get("result", "N/A"),
+            "winning_screen": entry.get("winning_screen", "N/A"),
+            "min_distance": entry.get("min_dist", "-"),
+            "time_of_min": entry.get("finishing_time", "-"),
+            "session_duration": entry.get("session_duration", "-"),
+            "movement": entry.get("movement", 0),
+            "direction": entry.get("direction", "NONE"),
+            "aep": entry.get("aep", "N/A"),
+            "proj_t": entry.get("proj_t", "-"),
+            "ae": ae_val,
+            "video_index": entry.get("video_index", None),
+        })
+        if ae_val is not None:
+            ae_values.append(ae_val)
+    correct = sum(1 for r in formatted_results if r["result"] == "Correct")
+    late = sum(1 for r in formatted_results if r["result"] == "Late")
+    wrong = sum(1 for r in formatted_results if r["result"] == "Wrong")
+    miss = sum(1 for r in formatted_results if r["result"] == "Miss")
+    total = len(formatted_results)
+    correct_times = []
+    for r in formatted_results:
+        if r["result"] == "Correct":
+            tm = r.get("time_of_min")
+            try:
+                if tm is not None and tm != "-" and tm != "N/A":
+                    val = float(tm)
+                    if val > 0:
+                        correct_times.append(val)
+            except Exception:
+                pass
+    avg_finishing_time = sum(correct_times) / len(correct_times) if correct_times else 0
+    total_distance = 0.0
+    if os.path.exists(os.path.join(folder, "recognition.json")):
+        total_distance = compute_total_distance_from_recognition(folder)
+    goals_by_screen = {}
+    for r in formatted_results:
+        if r["result"] == "Correct" and r["winning_screen"] and r["winning_screen"] != "N/A":
+            screen = r["winning_screen"]
+            goals_by_screen[screen] = goals_by_screen.get(screen, 0) + 1
+    avg_ae = sum(ae_values) / len(ae_values) if ae_values else 0
+    stats = {
+        "correct": correct,
+        "late": late,
+        "wrong": wrong,
+        "miss": miss,
+        "total": total,
+        "avg_finishing_time": avg_finishing_time,
+        "total_distance": total_distance,
+        "goals_by_screen": goals_by_screen,
+        "avg_ae": avg_ae,
+    }
+    return {
+        "actions": formatted_results,
+        "statistics": stats,
+        "total_actions": total,
+        "directory": folder,
+    }
+
+
 def realtime_results_snapshot() -> dict:
     if realtime_aborted:
         return {"status": "aborted", "message": "Test was stopped", "report": None, "directory": None}
     try:
         realtime_folder = get_newest_realtime_session_folder()
-        if realtime_folder:
-            results_json_path = os.path.join(realtime_folder, "results.json")
-            if os.path.exists(results_json_path):
-                with open(results_json_path, 'r', encoding='utf-8') as f:
-                    results_data = json.load(f)
+        if not realtime_folder:
+            return {"status": "no_data", "message": "No results available yet"}
 
-                formatted_results = []
-                ae_values = []
-                for entry in results_data:
-                    ae_val = entry.get('ae', 0.0)
-                    formatted_results.append({
-                        'id': entry.get('id', ''),
-                        'action': entry.get('action', ''),
-                        'screens': entry.get('screens', []),
-                        'result': entry.get('result', 'N/A'),
-                        'winning_screen': entry.get('winning_screen', 'N/A'),
-                        'min_distance': entry.get('min_dist', '-'),
-                        'time_of_min': entry.get('finishing_time', '-'),
-                        'session_duration': entry.get('session_duration', '-'),
-                        'movement': entry.get('movement', 0),
-                        'direction': entry.get('direction', 'NONE'),
-                        'aep': entry.get('aep', 'N/A'),
-                        'proj_t': entry.get('proj_t', '-'), 
-                        'ae': ae_val,
-                        'video_index': entry.get('video_index', None)
-                    })
-                    if ae_val is not None:
-                        ae_values.append(ae_val)
+        fields = {}
+        for fid in ("A", "B"):
+            sub = os.path.join(realtime_folder, f"field_{fid}")
+            rep = _format_realtime_field_report(sub)
+            if rep is not None:
+                fields[fid] = rep
 
-                correct = sum(1 for r in formatted_results if r['result'] == 'Correct')
-                late   = sum(1 for r in formatted_results if r['result'] == 'Late')
-                wrong  = sum(1 for r in formatted_results if r['result'] == 'Wrong')
-                miss   = sum(1 for r in formatted_results if r['result'] == 'Miss')
-                total  = len(formatted_results)
+        # Legacy single results.json at session root
+        root_rep = _format_realtime_field_report(realtime_folder)
+        if root_rep is not None and "A" not in fields:
+            fields["A"] = root_rep
 
-                correct_times = []
-                for r in formatted_results:
-                    if r['result'] == 'Correct':
-                        tm = r.get('time_of_min')
-                        try:
-                            if tm is not None and tm != '-' and tm != 'N/A':
-                                val = float(tm)
-                                if val > 0:
-                                    correct_times.append(val)
-                        except:
-                            pass
-                avg_finishing_time = sum(correct_times) / len(correct_times) if correct_times else 0
+        if not fields:
+            return {"status": "no_data", "message": "No results available yet"}
 
-                total_distance = 0.0
-                recognition_path = os.path.join(realtime_folder, "recognition.json")
-                if os.path.exists(recognition_path):
-                    total_distance = compute_total_distance_from_recognition(realtime_folder)
-
-                goals_by_screen = {}
-                for r in formatted_results:
-                    if r['result'] == 'Correct' and r['winning_screen'] and r['winning_screen'] != 'N/A':
-                        screen = r['winning_screen']
-                        goals_by_screen[screen] = goals_by_screen.get(screen, 0) + 1
-
-                avg_ae = sum(ae_values) / len(ae_values) if ae_values else 0
-
-                stats = {
-                    'correct': correct,
-                    'late': late,
-                    'wrong': wrong,
-                    'miss': miss,
-                    'total': total,
-                    'avg_finishing_time': avg_finishing_time,
-                    'total_distance': total_distance,
-                    'goals_by_screen': goals_by_screen,
-                    'avg_ae': avg_ae
-                }
-
-                return {
-                    "status": "success",
-                    "report": {
-                        "actions": formatted_results,
-                        "statistics": stats,
-                        "total_actions": total
-                    },
-                    "directory": realtime_folder,
-                    "timestamp": datetime.now().isoformat()
-                }
-        return {"status": "no_data", "message": "No results available yet"}
+        # Combined report defaults to Field A (back-compat for existing UI)
+        primary = fields.get("A") or fields.get("B")
+        return {
+            "status": "success",
+            "report": primary,
+            "fields": fields,
+            "directory": realtime_folder,
+            "timestamp": datetime.now().isoformat(),
+        }
     except Exception as e:
         logger.error(f"Failed to get realtime results: {e}")
         return {"status": "error", "message": str(e)}
@@ -2833,10 +2908,85 @@ def aggregate_final_section_metrics(all_results, session_folder=None):
     return _combine_section_metrics(section_metrics)
 
 
+
+def build_results_ring_panel(metrics, field="A"):
+    """Pack metric values + Field A/B slice map for combined dual-field overlays."""
+    try:
+        import simust_fields
+        fid = simust_fields.normalize_field(field) or "A"
+        slices = simust_fields.field_config(fid).get("results_slices") or {}
+    except Exception:
+        fid = "B" if str(field).upper().startswith("B") else "A"
+        slices = (
+            {"aet": 5, "accuracy": 6, "efficiency": 10, "displacement": 11}
+            if fid == "B"
+            else {"aet": 12, "accuracy": 13, "efficiency": 3, "displacement": 4}
+        )
+    total_distance = float(metrics.get("total_distance") or 0.0)
+    if metrics.get("distance_m_display") is not None:
+        try:
+            distance_shown = int(metrics.get("distance_m_display") or 0)
+        except (TypeError, ValueError):
+            distance_shown = distance_m_display(total_distance)
+    else:
+        distance_shown = distance_m_display(total_distance)
+    economy_percent = min(100.0, (total_distance / 77.0) * 100) if total_distance > 0 else 0.0
+    return {
+        "slice_aet": int(slices.get("aet") or 12),
+        "slice_acc": int(slices.get("accuracy") or 13),
+        "slice_ae": int(slices.get("efficiency") or 3),
+        "slice_disp": int(slices.get("displacement") or 4),
+        "aet_percent": float(metrics.get("aet_percent") or 0.0),
+        "aet_display": metrics.get("aet_display") or "-",
+        "avg_ae": float(metrics.get("avg_ae") or 0.0),
+        "ae_display": metrics.get("ae_display") or "-",
+        "aac": float(metrics.get("aac") or 0.0),
+        "economy_percent": economy_percent,
+        "distance_shown": distance_shown,
+    }
+
+
+def prepare_field_section_metrics(results_rows, fdir, video_index=None, is_final=False):
+    if is_final:
+        metrics = aggregate_final_section_metrics(results_rows, session_folder=fdir)
+    else:
+        metrics = summarize_results_section_metrics(results_rows)
+        if fdir and video_index is not None:
+            recomputed = compute_total_distance_from_recognition(fdir, video_index=video_index)
+            if recomputed > 0:
+                metrics["total_distance"] = recomputed
+        metrics["distance_m_display"] = distance_m_display(metrics.get("total_distance"))
+    return metrics
+
 # ---------- generate_results_video_from_results ----------
 def generate_results_video_from_results(results_list, output_path, duration_seconds=5, is_final=False,
-                                        slice_video_path=None, session_folder=None, video_index=None):
+                                        slice_video_path=None, session_folder=None, video_index=None,
+                                        field=None, extra_ring_panels=None):
     try:
+        field_id = "A"
+        try:
+            import simust_fields
+            if field is not None:
+                field_id = simust_fields.normalize_field(field) or "A"
+            elif results_list:
+                for row in results_list:
+                    inferred = simust_fields.normalize_field(row.get("field")) or simust_fields.field_for_screens(
+                        row.get("screens") or []
+                    )
+                    if inferred:
+                        field_id = inferred
+                        break
+            slices = simust_fields.field_config(field_id).get("results_slices") or {}
+        except Exception:
+            slices = {"aet": 12, "accuracy": 13, "efficiency": 3, "displacement": 4}
+            if field and str(field).upper().startswith("B"):
+                field_id = "B"
+                slices = {"aet": 5, "accuracy": 6, "efficiency": 10, "displacement": 11}
+        slice_aet = int(slices.get("aet") or 12)
+        slice_acc = int(slices.get("accuracy") or 13)
+        slice_ae = int(slices.get("efficiency") or 3)
+        slice_disp = int(slices.get("displacement") or 4)
+
         if is_final:
             metrics = aggregate_final_section_metrics(results_list, session_folder=session_folder)
             logger.info(
@@ -2892,7 +3042,12 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         if is_final:
             selected_video = get_slice_video_for_accuracy(avg_ae)
-            if selected_video:
+            # Field B: rings-only summary (no coach / integration clip)
+            skip_coach = (str(field_id or "").upper() == "B")
+            if skip_coach:
+                slice_video_path = None
+                logger.info("Field B final/per-video: skipping coach integration clip")
+            elif selected_video:
                 selected_path = os.path.join(ANIMATIONS_DIR, selected_video)
                 if os.path.exists(selected_path):
                     slice_video_path = selected_path
@@ -2902,9 +3057,30 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     slice_video_path = None
             else:
                 slice_video_path = None
+        else:
+            # Per-video: Field B stays rings-only; Field A may still use coach later if provided
+            if str(field_id or "").upper() == "B":
+                slice_video_path = None
 
         REFERENCE_DISTANCE_METERS = 77.0
         economy_percent = min(100.0, (total_distance / REFERENCE_DISTANCE_METERS) * 100) if total_distance > 0 else 0
+
+        ring_panels = [{
+            "slice_aet": slice_aet,
+            "slice_acc": slice_acc,
+            "slice_ae": slice_ae,
+            "slice_disp": slice_disp,
+            "aet_percent": aet_percent,
+            "aet_display": aet_display,
+            "avg_ae": avg_ae,
+            "ae_display": ae_display,
+            "aac": aac,
+            "economy_percent": economy_percent,
+            "distance_shown": distance_shown,
+        }]
+        for panel in (extra_ring_panels or []):
+            if isinstance(panel, dict) and panel.get("slice_aet") is not None:
+                ring_panels.append(panel)
 
         # ---- Probe coach/slice clip (metadata only; never decode every frame into RAM) ----
         width, height = 3712, 512
@@ -3164,22 +3340,32 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         def render_overlay_once(base_bgr):
             img = base_bgr
+            by_slice = {}
+            for panel in ring_panels:
+                by_slice[int(panel["slice_aet"])] = ("aet", panel)
+                by_slice[int(panel["slice_ae"])] = ("ae", panel)
+                by_slice[int(panel["slice_acc"])] = ("acc", panel)
+                by_slice[int(panel["slice_disp"])] = ("disp", panel)
             for i, num in enumerate(slice_numbers):
                 x_offset = i * tile_width
                 offset_x = content_offset.get(i, 0)
                 center_x = x_offset + tile_width // 2 + offset_x
                 rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
-                if num == 12:
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aet_percent, 100)
+                hit = by_slice.get(num)
+                if not hit:
+                    continue
+                kind, panel = hit
+                if kind == "aet":
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["aet_percent"] or 0), 100)
                     draw_label_rectangle(img, center_x, tile_width, rect_y, "Execution Time")
-                elif num == 3:
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, avg_ae, 100)
+                elif kind == "ae":
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["avg_ae"] or 0), 100)
                     draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
-                elif num == 13:
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, aac, 100)
+                elif kind == "acc":
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["aac"] or 0), 100)
                     draw_label_rectangle(img, center_x, tile_width, rect_y, "Accuracy")
-                elif num == 4:
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, economy_percent, 100)
+                elif kind == "disp":
+                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["economy_percent"] or 0), 100)
                     draw_label_rectangle(img, center_x, tile_width, rect_y, "Displacement")
 
             pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -3189,17 +3375,25 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 offset_x = content_offset.get(i, 0)
                 center_x = x_offset + tile_width // 2 + offset_x
                 rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
-                if num == 12:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [aet_display if aet_display != "-" else "-"])
+                hit = by_slice.get(num)
+                if not hit:
+                    continue
+                kind, panel = hit
+                if kind == "aet":
+                    ad = panel.get("aet_display") or "-"
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ad if ad != "-" else "-"])
                     draw_metric_label(draw, "Execution Time", center_x, rect_y)
-                elif num == 3:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ae_display if ae_display != "-" else "-"])
+                elif kind == "ae":
+                    ed = panel.get("ae_display") or "-"
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ed if ed != "-" else "-"])
                     draw_metric_label(draw, "Efficiency", center_x, rect_y)
-                elif num == 13:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac:.0f}%" if aac > 0 else "-"])
+                elif kind == "acc":
+                    aac_v = float(panel.get("aac") or 0)
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac_v:.0f}%" if aac_v > 0 else "-"])
                     draw_metric_label(draw, "Accuracy", center_x, rect_y)
-                elif num == 4:
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{distance_shown}m" if distance_shown > 0 else "-"])
+                elif kind == "disp":
+                    ds = int(panel.get("distance_shown") or 0)
+                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{ds}m" if ds > 0 else "-"])
                     draw_metric_label(draw, "Displacement", center_x, rect_y)
 
             footer = "SIMUST RESULTS – Analysis Complete"
@@ -3447,7 +3641,6 @@ async def create_video_results(req: Request):
             elif os.path.isfile(report_path):
                 directory = os.path.dirname(report_path)
 
-        # If directory not provided, fallback to newest realtime folder
         if not directory or not os.path.exists(directory):
             realtime_folder = get_newest_realtime_session_folder()
             if realtime_folder:
@@ -3456,74 +3649,104 @@ async def create_video_results(req: Request):
             else:
                 return {"status": "error", "message": "No session folder found"}
 
-        results_json_path = os.path.join(directory, "results.json")
-        if not os.path.exists(results_json_path):
-            logger.error(f"results.json not found in {directory}")
-            return {"status": "error", "message": "results.json not found"}
+        # Normalize to session root when pointed at field_A / field_B
+        session_root = directory
+        base = os.path.basename(session_root.rstrip("\\/"))
+        if base in ("field_A", "field_B"):
+            session_root = os.path.dirname(session_root)
 
-        with open(results_json_path, 'r', encoding='utf-8') as f:
-            all_results = json.load(f)
+        field_jobs = []
+        for fid in ("A", "B"):
+            fdir = os.path.join(session_root, f"field_{fid}")
+            fresults = os.path.join(fdir, "results.json")
+            if os.path.exists(fresults):
+                with open(fresults, "r", encoding="utf-8") as f:
+                    rows = json.load(f)
+                if rows:
+                    field_jobs.append((fid, fdir, rows, fresults))
 
-        # Fill missing per-video metres before rendering (mid-session videos).
-        recognition_path = os.path.join(directory, "recognition.json")
-        if os.path.exists(recognition_path):
-            try:
-                import simust_realtime as _rt
-                with open(recognition_path, "r", encoding="utf-8") as f:
-                    blocks = json.load(f)
-                by_video = _rt.compute_distances_by_video(blocks, all_results)
-                changed = False
-                for row in all_results:
-                    try:
-                        vid = int(row.get("video_index") or 1)
-                    except (TypeError, ValueError):
-                        vid = 1
-                    metres = float(by_video.get(vid, 0.0))
-                    if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
-                        row["total_distance"] = metres
-                        changed = True
-                if changed:
-                    with open(results_json_path, "w", encoding="utf-8") as f:
-                        json.dump(all_results, f, indent=2, ensure_ascii=False)
-            except Exception as exc:
-                logger.warning("Could not stamp per-video distances: %s", exc)
+        # Legacy single-folder session (pre dual-field)
+        if not field_jobs:
+            results_json_path = os.path.join(session_root, "results.json")
+            if not os.path.exists(results_json_path):
+                return {"status": "error", "message": "results.json not found"}
+            with open(results_json_path, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+            field_jobs.append(("A", session_root, rows, results_json_path))
 
-        # Filter by video_index (if any match)
-        video_results = [r for r in all_results if r.get('video_index') == video_index]
-        if not video_results:
-            logger.warning(f"No results for video_index {video_index}, using all results.")
-            video_results = all_results
+        # Stamp distances per field, collect per-video rows + ring panels
+        panels = {}
+        primary_rows = None
+        primary_fid = "A"
+        primary_dir = session_root
+        for fid, fdir, all_results, results_json_path in field_jobs:
+            recognition_path = os.path.join(fdir, "recognition.json")
+            if os.path.exists(recognition_path):
+                try:
+                    import simust_realtime as _rt
+                    with open(recognition_path, "r", encoding="utf-8") as f:
+                        blocks = json.load(f)
+                    by_video = _rt.compute_distances_by_video(blocks, all_results)
+                    changed = False
+                    for row in all_results:
+                        try:
+                            vid = int(row.get("video_index") or 1)
+                        except (TypeError, ValueError):
+                            vid = 1
+                        metres = float(by_video.get(vid, 0.0))
+                        if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
+                            row["total_distance"] = metres
+                            changed = True
+                    if changed:
+                        with open(results_json_path, "w", encoding="utf-8") as f:
+                            json.dump(all_results, f, indent=2, ensure_ascii=False)
+                except Exception as exc:
+                    logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
 
-        if not video_results:
+            video_results = [r for r in all_results if r.get("video_index") == video_index]
+            if not video_results:
+                logger.warning("No results for video_index %s on Field %s", video_index, fid)
+                continue
+
+            section = prepare_field_section_metrics(
+                video_results, fdir, video_index=video_index, is_final=False
+            )
+            save_section_metrics_entry(fdir, video_index, section)
+            panels[fid] = build_results_ring_panel(section, field=fid)
+            if primary_rows is None or fid == "A":
+                primary_rows = video_results
+                primary_fid = fid
+                primary_dir = fdir
+
+        if not panels or primary_rows is None:
             return {"status": "error", "message": "No results available"}
 
-        video_path = os.path.join(directory, f"results_video_{video_index}.mp4")
-        logger.info(f"Generating results video for video {video_index}: {video_path}")
+        # One combined per-video for both fields (A left rings + B right rings)
+        video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
+        extra = [panels[fid] for fid in ("A", "B") if fid in panels and fid != primary_fid]
+        if "A" in panels and "B" in panels:
+            primary_fid = "A"
+            primary_dir = os.path.join(session_root, "field_A")
+            primary_rows = [
+                r for r in next(j[2] for j in field_jobs if j[0] == "A")
+                if r.get("video_index") == video_index
+            ]
+            extra = [panels["B"]]
 
+        logger.info("Generating combined per-video results (A+B): %s", video_path)
         success = generate_results_video_from_results(
-            video_results,
+            primary_rows,
             video_path,
             duration_seconds=20,
             is_final=False,
             slice_video_path=None,
-            session_folder=directory,
+            session_folder=primary_dir,
             video_index=video_index,
+            field=primary_fid,
+            extra_ring_panels=extra,
         )
-
-        if not success:
-            return {"status": "error", "message": "Video generation failed"}
-
-        if not os.path.exists(video_path):
-            return {"status": "error", "message": "Video file not created"}
-
-        # Remember the exact rings shown on this video for the final board.
-        # Do not recompute again later — final only sums these saved values.
-        section = summarize_results_section_metrics(video_results)
-        recomputed = compute_total_distance_from_recognition(directory, video_index=video_index)
-        if recomputed > 0:
-            section["total_distance"] = recomputed
-        section["distance_m_display"] = distance_m_display(section.get("total_distance"))
-        save_section_metrics_entry(directory, video_index, section)
+        if not success or not os.path.exists(video_path):
+            return {"status": "error", "message": "Per-video generation failed"}
 
         if spawn_display:
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3534,12 +3757,15 @@ async def create_video_results(req: Request):
                 subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
             else:
                 logger.error("Player script not found")
-        return {"status": "success", "video_path": video_path}
+        return {
+            "status": "success",
+            "video_path": video_path,
+            "videos": [video_path],
+        }
 
     except Exception as e:
         logger.error(f"create-video-results error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
-        
 
 @app.post("/create-results-video")
 async def create_results_video(req: Request):
@@ -3548,11 +3774,23 @@ async def create_results_video(req: Request):
     try:
         data = await req.json()
         directory = data.get("directory")
+        report_path = data.get("report_path")
         spawn_display = should_spawn_screen2_display(data.get("display", True))
         if not spawn_display:
             kill_screen2_result_helpers()
 
-        # If no directory, try to find newest
+        # Player may send report_path (recognition.json under field_A / field_B)
+        if (not directory or not os.path.exists(directory)) and report_path:
+            if os.path.isdir(report_path):
+                directory = report_path
+            elif os.path.isfile(report_path):
+                directory = os.path.dirname(report_path)
+                base_name = os.path.basename(directory)
+                if base_name in ("field_A", "field_B"):
+                    parent = os.path.dirname(directory)
+                    if os.path.isdir(parent):
+                        directory = parent
+
         if not directory or not os.path.exists(directory):
             realtime_folder = get_newest_realtime_session_folder()
             if realtime_folder:
@@ -3561,18 +3799,59 @@ async def create_results_video(req: Request):
             else:
                 return {"status": "error", "message": "No session folder found"}
 
+        session_root = directory
+        base = os.path.basename(str(session_root).rstrip("\\/"))
+        if base in ("field_A", "field_B"):
+            session_root = os.path.dirname(session_root)
+            directory = session_root
         results_json_path = os.path.join(directory, "results.json")
+        field_id = str(data.get("field") or "").strip().upper()[:1]
+        if field_id not in ("A", "B"):
+            field_id = ""
+        if not os.path.exists(results_json_path):
+            for fid in (("A", "B") if not field_id else (field_id,)):
+                cand = os.path.join(directory, f"field_{fid}", "results.json")
+                if os.path.exists(cand):
+                    results_json_path = cand
+                    directory = os.path.join(directory, f"field_{fid}")
+                    field_id = fid
+                    break
         if not os.path.exists(results_json_path):
             return {"status": "error", "message": "results.json not found"}
 
-        with open(results_json_path, 'r', encoding='utf-8') as f:
+        with open(results_json_path, "r", encoding="utf-8") as f:
             all_results = json.load(f)
 
         if not all_results:
-            return {"status": "error", "message": "No results found"}
+            other = "B" if field_id == "A" else "A"
+            alt = os.path.join(session_root, f"field_{other}", "results.json")
+            if os.path.exists(alt):
+                with open(alt, "r", encoding="utf-8") as f:
+                    all_results = json.load(f)
+                directory = os.path.join(session_root, f"field_{other}")
+                field_id = other
+                results_json_path = alt
+            if not all_results:
+                return {"status": "error", "message": "No results found"}
 
-        video_path = os.path.join(directory, "final_results_video.mp4")
-        logger.info(f"Generating final summary video: {video_path}")
+        if not field_id and all_results:
+            try:
+                import simust_fields
+                field_id = simust_fields.normalize_field(all_results[0].get("field")) or "A"
+            except Exception:
+                field_id = "A"
+
+        field_dirs = []
+        for fid in ("A", "B"):
+            fdir = os.path.join(session_root, f"field_{fid}")
+            fresults = os.path.join(fdir, "results.json")
+            if os.path.exists(fresults):
+                with open(fresults, "r", encoding="utf-8") as f:
+                    rows = json.load(f)
+                if rows:
+                    field_dirs.append((fid, fdir, rows))
+        if not field_dirs:
+            field_dirs = [(field_id or "A", directory, all_results)]
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         player_script = os.path.join(script_dir, "play_results_video.py")
@@ -3595,14 +3874,49 @@ async def create_results_video(req: Request):
                     wait_proc = subprocess.Popen(wait_cmd, shell=False)
                 logger.info("Showing the same per-video waiting animation before the final results")
 
-            success = generate_results_video_from_results(
-                all_results,
+            generated = []
+            primary_video = None
+            panels = {}
+            primary_rows = None
+            primary_fid = "A"
+            primary_dir = session_root
+            for fid, fdir, rows in field_dirs:
+                metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
+                panels[fid] = build_results_ring_panel(metrics, field=fid)
+                if primary_rows is None or fid == "A":
+                    primary_rows = rows
+                    primary_fid = fid
+                    primary_dir = fdir
+
+            if not panels or primary_rows is None:
+                return {"status": "error", "message": "No results found"}
+
+            extra = []
+            if "A" in panels and "B" in panels:
+                primary_fid = "A"
+                primary_dir = os.path.join(session_root, "field_A")
+                primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "A")
+                extra = [panels["B"]]
+            elif "B" in panels and "A" not in panels:
+                primary_fid = "B"
+                primary_dir = os.path.join(session_root, "field_B")
+                primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "B")
+
+            video_path = os.path.join(session_root, "final_results_video.mp4")
+            logger.info("Generating combined final results video (A+B): %s", video_path)
+            ok = generate_results_video_from_results(
+                primary_rows,
                 video_path,
                 duration_seconds=0,
                 is_final=True,
                 slice_video_path=None,
-                session_folder=directory
+                session_folder=primary_dir,
+                field=primary_fid,
+                extra_ring_panels=extra,
             )
+            if ok and os.path.exists(video_path):
+                generated.append(video_path)
+                primary_video = video_path
 
             if spawn_display:
                 leftover = 5.0 - (time.time() - wait_started)
@@ -3612,12 +3926,12 @@ async def create_results_video(req: Request):
             if wait_proc:
                 kill_process_tree(wait_proc)
 
-        if not success:
+        if not primary_video:
             return {"status": "error", "message": "Video generation failed"}
 
-        if not os.path.exists(video_path):
-            return {"status": "error", "message": "Video file not created"}
+        # Combined final lives at session root (one video for both fields)
 
+        video_path = primary_video
         if spawn_display and os.path.exists(player_script):
             play_cmd = [sys.executable, player_script, video_path, "1"]
             if sys.platform == "win32":
@@ -3627,11 +3941,16 @@ async def create_results_video(req: Request):
                 )
             else:
                 subprocess.Popen(play_cmd, shell=False)
-        return {"status": "success", "video_path": video_path}
+        return {
+            "status": "success",
+            "video_path": video_path,
+            "videos": generated or [video_path],
+        }
 
     except Exception as e:
         logger.error(f"create-results-video error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
 
 # ============================================================
 # Player Report Management Endpoints (UPDATED with progress)
@@ -5087,8 +5406,13 @@ async def create_reservation_checkout(req: Request):
     user = users.get(username)
     if not user:
         raise HTTPException(404, "Player not found")
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(data.get("field")) or "A"
+    except Exception:
+        field_id = "B" if str(data.get("field") or "A").strip().upper().startswith("B") else "A"
     with RESERVATION_LOCK:
-        _assert_slot_free(load_reservations(), start, end)
+        _assert_slot_free(load_reservations(), start, end, field_id)
     if not simust_billing.stripe_configured():
         raise HTTPException(503, "Card payment is not configured. An administrator can confirm the booking without payment.")
     origin = str(req.headers.get("origin") or simust_billing.public_base_url()).rstrip("/")
@@ -5103,6 +5427,7 @@ async def create_reservation_checkout(req: Request):
             duration_minutes=duration,
             success_url=success,
             cancel_url=cancel,
+            field=field_id,
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
@@ -5112,6 +5437,7 @@ async def create_reservation_checkout(req: Request):
         "session_id": session_id,
         "amount_eur": amount,
         "duration_minutes": duration,
+        "field": field_id,
     }
 
 
@@ -5169,6 +5495,7 @@ async def confirm_reservation_payment(req: Request):
         amount_eur=paid.get("amount_eur") or simust_billing.booking_fee_eur(duration),
         source="public" if PUBLIC_MODE else "lab",
         payment_ref=session_id,
+        field=paid.get("field") or "A",
     )
     simust_billing.pop_pending(session_id)
     _notify_reservation(created, user)
@@ -5223,6 +5550,7 @@ async def stripe_webhook(request: Request):
         amount_eur=paid.get("amount_eur") or simust_billing.booking_fee_eur(duration),
         source="public",
         payment_ref=session_id,
+        field=paid.get("field") or "A",
     )
     simust_billing.pop_pending(session_id)
     _notify_reservation(created, user)
@@ -5294,6 +5622,7 @@ async def create_reservation(req: Request):
         amount_eur=amount_eur,
         source="public" if PUBLIC_MODE else "lab",
         payment_ref=payment_ref,
+        field=data.get("field") or "A",
     )
     if stripe_session:
         simust_billing.pop_pending(stripe_session)

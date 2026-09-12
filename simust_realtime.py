@@ -56,6 +56,9 @@ QR_COOLDOWN = 0.5
 # Brief decoder flicker otherwise splits one action into a ghost Wrong + a real one
 # (e.g. SF-60N 40 → 41 with duplicate consecutive screens).
 QR_DISAPPEAR_DEBOUNCE = 0.35
+# Dual-field: video QRs for A/B appear together but decoder can lag one ROI by ~1–2s.
+# Pair within this window so both fields share the same action id and session clock.
+QR_PAIR_WINDOW_SEC = 2.5
 SAVE_EVERY_N_ACTIONS = 1
 
 DEFAULT_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
@@ -86,28 +89,66 @@ DISPLAY_HEIGHT = 720
 SIM_FRAME_WIDTH = 1280
 SIM_FRAME_HEIGHT = 360
 
+try:
+    import simust_fields
+    from simust_fields import (
+        POLYGON_POINTS,
+        POLYGON_POINTS_A,
+        POLYGON_POINTS_B,
+        FIELD_A_SCREENS,
+        FIELD_B_SCREENS,
+        QR_ROI_A,
+        QR_ROI_B,
+        field_config,
+        field_for_screens,
+        normalize_field,
+        polygon_for_field,
+        qr_roi_for_field,
+        screens_for_field,
+        ALL_FIELDS,
+    )
+except Exception:
+    simust_fields = None
+    POLYGON_POINTS_A = [
+        (12, 297), (10, 254), (37, 192), (58, 171), (109, 142), (139, 132),
+        (204, 103), (444, 105), (503, 133), (532, 147), (582, 180), (609, 202),
+        (634, 261), (623, 303), (469, 342), (79, 321), (12, 297),
+    ]
+    POLYGON_POINTS_B = [
+        (654, 285), (652, 242), (675, 179), (695, 159), (748, 124), (776, 112),
+        (833, 87), (1090, 87), (1144, 113), (1172, 125), (1225, 159), (1246, 181),
+        (1269, 245), (1266, 286), (1105, 323), (717, 302), (654, 285),
+    ]
+    POLYGON_POINTS = POLYGON_POINTS_A
+    FIELD_A_SCREENS = {"1", "2", "3", "4", "12", "13", "14"}
+    FIELD_B_SCREENS = {"8", "9", "10", "11", "5", "6", "7"}
+    QR_ROI_A = (0, 0, 1920, 540)
+    QR_ROI_B = (1920, 0, 3840, 540)
+
+    def field_config(field_id):
+        return {"id": str(field_id or "A").upper()}
+
+    def field_for_screens(screens):
+        return "A"
+
+    def normalize_field(value):
+        return "A" if str(value or "A").upper().startswith("A") else "B"
+
+    def polygon_for_field(field_id):
+        return list(POLYGON_POINTS_A if normalize_field(field_id) != "B" else POLYGON_POINTS_B)
+
+    def qr_roi_for_field(field_id):
+        return QR_ROI_A if normalize_field(field_id) != "B" else QR_ROI_B
+
+    def screens_for_field(field_id):
+        return set(FIELD_A_SCREENS if normalize_field(field_id) != "B" else FIELD_B_SCREENS)
+
+    ALL_FIELDS = {"A": field_config("A"), "B": field_config("B")}
+
 # ============================================================================
-# POLYGON ROI – DEFINE YOUR 17 POINTS HERE (stitched frame coordinates)
+# POLYGON ROI – Field A (left) and Field B (right)
 # ============================================================================
-POLYGON_POINTS = [
-    (12, 297),
-    (10, 254),
-    (37, 192),
-    (58, 171),
-    (109, 142),
-    (139, 132),
-    (204, 103),
-    (444, 105),
-    (503, 133),
-    (532, 147),
-    (582, 180),
-    (609, 202),
-    (634, 261),
-    (623, 303),
-    (469, 342),
-    (79, 321),
-    (12, 297)
-]
+# POLYGON_POINTS kept as Field A alias for older call sites.
 
 # ============================================================================
 # UPDATED ANALYSIS CONSTANTS (from Code A)
@@ -132,7 +173,7 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
-GOAL_POST_SLACK = 0.10  # posts of screens 1 and 8 count as the goal mouth
+GOAL_POST_SLACK = 0.10  # posts of screens 1 / 7 / 8 count as the goal mouth
 GOAL_POST_RADIUS = 30.0  # GOAL mouth endpoints
 PASS_POST_RADIUS = 45.0  # PASS/TARGET graze near left/right keypoints
 PRESS_POST_RADIUS = 70.0  # PRESS player can finish slightly past the short screen segment
@@ -166,6 +207,7 @@ PRESS_SCREEN_THRESHOLDS = {
 GOAL_SCREEN_THRESHOLDS = {
     '8': 73,
     '1': 73,
+    '7': 73,  # Field B right-edge goal / keypoint area
 }
 
 # Goal lines for 1280x360
@@ -196,7 +238,10 @@ GOAL_SHOT_TRAVEL_S = 0.85
 GOAL_SEND_ORIGIN = {
     "8": (961.0, 82.0),
     "1": (311.0, 103.0),
+    "7": (1105.0, 200.0),  # approach Field B screen 7 (right vertical)
 }
+# Screens that count as full goal mouths (line + send origin + GOAL threshold band)
+GOAL_MOUTH_SCREENS = frozenset({"1", "7", "8"})
 # TARGET 6L/6R/9L/9R start from the same far-pitch point as GOAL screen 8.
 TARGET_FROM_SCREEN8_ORIGIN = frozenset({"6L", "6R", "9L", "9R"})
 GOAL_PROBE_ZONES = (
@@ -234,9 +279,34 @@ GOAL_AIM_OUT = (
 )
 
 
+def normalize_screen_id(screen):
+    """Canonical screen id: '07'/'7' → '7', '9L' stays '9L'."""
+    raw = str(screen or "").strip().upper()
+    if not raw:
+        return ""
+    suffix = ""
+    if raw.endswith("L") or raw.endswith("R"):
+        suffix = raw[-1]
+        raw = raw[:-1]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return str(screen).strip()
+    try:
+        digits = str(int(digits))
+    except ValueError:
+        pass
+    return digits + suffix
+
+
+def screen_base_id(screen):
+    return normalize_screen_id(screen).rstrip("LR")
+
+
 def goal_send_origin(screens):
-    """Where GOAL shots start. Live SF-30N is screen 8 → (961, 82)."""
-    ids = [str(s) for s in (screens or [])]
+    """Where GOAL shots start. Prefer explicit goal-mouth screens 1 / 7 / 8."""
+    ids = [screen_base_id(s) for s in (screens or [])]
+    if "7" in ids:
+        return GOAL_SEND_ORIGIN["7"]
     if "8" in ids:
         return GOAL_SEND_ORIGIN["8"]
     if "1" in ids:
@@ -469,12 +539,17 @@ class DetectionTracker:
         self.half_width = HALF_WIDTH
         self.filter_x = OneEuroFilter(min_cutoff=1.0, beta=0.5)
         self.filter_y = OneEuroFilter(min_cutoff=1.0, beta=0.5)
+        self.filters_by_field = {
+            "A": (OneEuroFilter(min_cutoff=1.0, beta=0.5), OneEuroFilter(min_cutoff=1.0, beta=0.5)),
+            "B": (OneEuroFilter(min_cutoff=1.0, beta=0.5), OneEuroFilter(min_cutoff=1.0, beta=0.5)),
+        }
         self.total_balls_detected = 0
         self.total_players_detected = 0
         self.frame_process_count = 0
         self.last_fps_time = time.time()
         self.current_fps = 0
-        self.polygon = POLYGON_POINTS
+        self.polygon = POLYGON_POINTS_A
+        self.polygons = {"A": POLYGON_POINTS_A, "B": POLYGON_POINTS_B}
 
         cuda_ok = torch.cuda.is_available()
         engine_ok = os.path.exists(DETECTION_ENGINE_PATH)
@@ -499,7 +574,7 @@ class DetectionTracker:
             self.pose_detector = PoseDetector(POSE_ENGINE_PATH)
 
     def detect_objects(self, frame):
-        """Fast detection - balls on both halves, players on left half only, filtered by polygon."""
+        """Balls on both halves; players on left (Field A) and right (Field B) polygons."""
         if self.detection_model is None:
             return [], []
 
@@ -525,7 +600,10 @@ class DetectionTracker:
                     x1 = max(0, min(x1, mid_x-1)); y1 = max(0, min(y1, orig_h-1))
                     x2 = max(x1+1, min(x2, mid_x)); y2 = max(y1+1, min(y2, orig_h))
                     center = [(x1+x2)//2, (y1+y2)//2]
-                    det = {'center': center, 'bbox': [x1, y1, x2, y2], 'confidence': round(confidence, 3)}
+                    det = {
+                        'center': center, 'bbox': [x1, y1, x2, y2],
+                        'confidence': round(confidence, 3), 'field': 'A',
+                    }
                     if class_id == 0:
                         balls.append(det)
                     elif class_id == 1:
@@ -537,36 +615,84 @@ class DetectionTracker:
                     continue
                 for box in result.boxes:
                     class_id = int(box.cls)
+                    confidence = float(box.conf)
+                    xyxy = box.xyxy[0].cpu().numpy()
+                    x1 = int(xyxy[0]) + mid_x
+                    y1 = int(xyxy[1])
+                    x2 = int(xyxy[2]) + mid_x
+                    y2 = int(xyxy[3])
+                    x1 = max(mid_x, min(x1, orig_w-1)); y1 = max(0, min(y1, orig_h-1))
+                    x2 = max(x1+1, min(x2, orig_w)); y2 = max(y1+1, min(y2, orig_h))
+                    center = [(x1+x2)//2, (y1+y2)//2]
+                    det = {
+                        'center': center, 'bbox': [x1, y1, x2, y2],
+                        'confidence': round(confidence, 3),
+                        'field': 'B',
+                    }
                     if class_id == 0:
-                        confidence = float(box.conf)
-                        xyxy = box.xyxy[0].cpu().numpy()
-                        x1 = int(xyxy[0]) + mid_x
-                        y1 = int(xyxy[1])
-                        x2 = int(xyxy[2]) + mid_x
-                        y2 = int(xyxy[3])
-                        x1 = max(mid_x, min(x1, orig_w-1)); y1 = max(0, min(y1, orig_h-1))
-                        x2 = max(x1+1, min(x2, orig_w)); y2 = max(y1+1, min(y2, orig_h))
-                        center = [(x1+x2)//2, (y1+y2)//2]
-                        det = {'center': center, 'bbox': [x1, y1, x2, y2], 'confidence': round(confidence, 3)}
                         balls.append(det)
-        except Exception as e:
+                    elif class_id == 1:
+                        players.append(det)
+        except Exception:
             pass
 
-        # ----- FILTER PLAYERS BY POLYGON -----
-        if self.polygon:
-            # Use bottom-center of the bounding box (feet) for the polygon check
-            players = [p for p in players if is_inside_polygon(((p['bbox'][0] + p['bbox'][2]) // 2, p['bbox'][3]), self.polygon)]
+        # Filter players into Field A / Field B play zones
+        poly_a = (self.polygons or {}).get("A") or self.polygon
+        poly_b = (self.polygons or {}).get("B")
+        filtered = []
+        for p in players:
+            feet = ((p['bbox'][0] + p['bbox'][2]) // 2, p['bbox'][3])
+            in_a = bool(poly_a) and is_inside_polygon(feet, poly_a)
+            in_b = bool(poly_b) and is_inside_polygon(feet, poly_b)
+            if in_a and not in_b:
+                p['field'] = 'A'
+                filtered.append(p)
+            elif in_b and not in_a:
+                p['field'] = 'B'
+                filtered.append(p)
+            elif in_a and in_b:
+                # Prefer the half the bbox center sits in
+                p['field'] = 'A' if p['center'][0] < mid_x else 'B'
+                filtered.append(p)
+            elif not poly_a and not poly_b:
+                filtered.append(p)
+        players = filtered
 
-        # Sort by bounding box area (largest = closest to camera)
         players.sort(key=lambda p: (p['bbox'][2]-p['bbox'][0]) * (p['bbox'][3]-p['bbox'][1]), reverse=True)
-        players = players[:self.max_players]
+        # Keep up to 2 players total (one per field preferred)
+        by_field = {"A": [], "B": []}
+        other = []
+        for p in players:
+            fid = p.get("field")
+            if fid in by_field and len(by_field[fid]) < 1:
+                by_field[fid].append(p)
+            else:
+                other.append(p)
+        players = by_field["A"] + by_field["B"]
+        for p in other:
+            if len(players) >= max(2, self.max_players):
+                break
+            players.append(p)
 
         self.total_balls_detected += len(balls)
         self.total_players_detected += len(players)
 
         return balls, players
 
-    def get_player_tracking_point(self, frame, players, current_timestamp, session_start_timestamp):
+    def get_player_tracking_point_for_field(self, frame, players, field_id, current_timestamp, session_start_timestamp):
+        field_players = [p for p in (players or []) if p.get("field") == field_id] or [
+            p for p in (players or [])
+            if (field_id == "A" and p["center"][0] < frame.shape[1] // 2)
+            or (field_id == "B" and p["center"][0] >= frame.shape[1] // 2)
+        ]
+        fx, fy = self.filters_by_field.get(field_id, (self.filter_x, self.filter_y))
+        return self.get_player_tracking_point(
+            frame, field_players, current_timestamp, session_start_timestamp,
+            filter_x=fx, filter_y=fy,
+        )
+
+    def get_player_tracking_point(self, frame, players, current_timestamp, session_start_timestamp,
+                                  filter_x=None, filter_y=None):
         """
         Returns a stable tracking point (x, y) for the main player.
         Uses pose hip keypoints if available, else returns (None, None).
@@ -593,10 +719,12 @@ class DetectionTracker:
             # No valid pose – return None (skip this frame for EOP)
             return None, None
 
-        # Apply 1‑Euro smoothing
+        # Apply 1‑Euro smoothing (per-field filters when dual-field tracking)
+        fx = filter_x if filter_x is not None else self.filter_x
+        fy = filter_y if filter_y is not None else self.filter_y
         rel_time = current_timestamp - session_start_timestamp
-        smooth_x = self.filter_x.filter(hip_point[0], rel_time)
-        smooth_y = self.filter_y.filter(hip_point[1], rel_time)
+        smooth_x = fx.filter(hip_point[0], rel_time)
+        smooth_y = fy.filter(hip_point[1], rel_time)
 
         return smooth_x, smooth_y
 
@@ -607,6 +735,7 @@ class DetectionTracker:
             self.current_fps = self.frame_process_count / elapsed
             self.frame_process_count = 0
             self.last_fps_time = current_time
+        self.frame_process_count += 1
         return self.current_fps
 
     def increment_frame_count(self):
@@ -725,12 +854,14 @@ def get_effective_distance(point, p0, p1):
     return eff_dist, proj_t
 
 def get_screen_info(screen, goal_lines):
-    screen_str = str(screen)
-    base_screen = screen_str.rstrip('LR')
+    screen_str = normalize_screen_id(screen)
+    base_screen = screen_base_id(screen)
     if screen_str in goal_lines:
         line = goal_lines[screen_str]
     elif base_screen in goal_lines:
         line = goal_lines[base_screen]
+    elif str(screen) in goal_lines:
+        line = goal_lines[str(screen)]
     else:
         return None, None
     return line['p0'], line['p1']
@@ -1303,7 +1434,7 @@ def arrival_depth_for(screen, action_type, session_duration=None):
 
 
 def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
-    """Goal mouth including posts. Cameras face screens 1 and 8."""
+    """Goal mouth including posts. Cameras face screens 1 / 7 / 8."""
     dist, proj_t, d_left, d_right = compute_projection(point, p0, p1)
     if dist <= depth and (-GOAL_POST_SLACK) <= proj_t <= (1.0 + GOAL_POST_SLACK):
         return True
@@ -1868,7 +1999,17 @@ class ArenaSimulator:
     GOAL_CYCLE = ("correct", "late", "wrong")
     GOAL_PROBE = False
 
-    def __init__(self):
+    def __init__(self, field_id="A"):
+        fid = normalize_field(field_id) or "A"
+        self.field_id = fid
+        if fid == "B":
+            self.PLAYER_HOME = (280.0 + 640.0, 268.0)
+            self.BALL_HOME = (302.0 + 640.0, 282.0)
+            self.wrong_xy_default = (420.0 + 640.0, 200.0)
+        else:
+            self.PLAYER_HOME = (280.0, 268.0)
+            self.BALL_HOME = (302.0, 282.0)
+            self.wrong_xy_default = (420.0, 200.0)
         self.action = None
         self.screens = []
         self.start_ts = 0.0
@@ -1884,7 +2025,7 @@ class ArenaSimulator:
         self.late_from_xy = self.BALL_HOME
         self.late_finish_xy = self.BALL_HOME
         self.late_finish_roll_xy = self.BALL_HOME
-        self.wrong_xy = (420.0, 200.0)
+        self.wrong_xy = self.wrong_xy_default
         self.goal_late_start_xy = self.BALL_HOME
         self.line_p0 = None
         self.line_p1 = None
@@ -1953,7 +2094,7 @@ class ArenaSimulator:
         self.last_ball_vel = (0.0, 0.0)
         self.last_blur = 0.0
         self.last_detected = True
-        seed = 1800 + (80 if "8" in self.screens else 10) + int(self.outcome_index)
+        seed = 1800 + (80 if any(screen_base_id(s) in GOAL_MOUTH_SCREENS for s in self.screens) else 10) + int(self.outcome_index)
         self._goal_rng = random.Random(seed)
         # Screen 1's mouth covers the left-camera baseline; home sits inside it.
         # Start from the pitch side so in-session "late" / "wrong" are not already arrivals.
@@ -2047,7 +2188,10 @@ class ArenaSimulator:
         return self.action in ("GOAL", "TARGET")
 
     def _line_target(self, screens):
-        for screen in screens:
+        # Prefer goal-mouth screens (1/7/8) so area 7 is not skipped for a side keypoint.
+        ordered = list(screens or [])
+        mouths = [s for s in ordered if screen_base_id(s) in GOAL_MOUTH_SCREENS]
+        for screen in mouths + [s for s in ordered if s not in mouths]:
             p0, p1 = get_screen_info(screen, GOAL_LINES)
             if p0 is None:
                 continue
@@ -2621,25 +2765,67 @@ def add_offset_to_time(time_str, offset_seconds):
         return time_str
 
 def detect_qr_in_roi(frame, roi):
+    """Decode QR inside ROI.
+
+    OpenCV often fails on tall Field-B crops (screen-7 QRs) while a shorter top
+    band or a mild upscale succeeds — try several crops before giving up.
+    """
     x1, y1, x2, y2 = roi
     h, w = frame.shape[:2]
-    x1 = max(0, min(x1, w-1))
-    y1 = max(0, min(y1, h-1))
-    x2 = max(x1+1, min(x2, w))
-    y2 = max(y1+1, min(y2, h))
+    x1 = max(0, min(x1, w - 1))
+    y1 = max(0, min(y1, h - 1))
+    x2 = max(x1 + 1, min(x2, w))
+    y2 = max(y1 + 1, min(y2, h))
     crop = frame[y1:y2, x1:x2]
     if crop.size == 0:
         return "", None
-    try:
-        detector = cv2.QRCodeDetector()
-        data, bbox, _ = detector.detectAndDecode(crop)
-        if bbox is not None and len(bbox) > 0:
-            bbox = bbox.astype(int)
-            bbox[:,:,0] += x1
-            bbox[:,:,1] += y1
-        return data.strip() if data else "", bbox
-    except Exception:
-        return "", None
+
+    ch, cw = crop.shape[:2]
+    candidates = [crop]
+    # Top band: screen QRs sit in the upper player chrome (fixes PASS/7 miss).
+    for top_h in (300, 256, max(160, ch // 2)):
+        if 40 < top_h < ch:
+            candidates.append(crop[0:top_h, :])
+    # Mild upscales help small / soft QRs on the right half.
+    for scale in (1.5, 2.0):
+        try:
+            candidates.append(cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR))
+            top = min(300, ch)
+            if top < ch:
+                candidates.append(
+                    cv2.resize(crop[0:top, :], None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+                )
+        except Exception:
+            pass
+
+    detector = cv2.QRCodeDetector()
+    for img in candidates:
+        try:
+            data, bbox, _ = detector.detectAndDecode(img)
+            if data and str(data).strip():
+                if bbox is not None and len(bbox) > 0:
+                    # Bbox is in candidate coords; only remap when 1:1 with crop
+                    if img.shape[0] == ch and img.shape[1] == cw:
+                        bbox = bbox.astype(int)
+                        bbox[:, :, 0] += x1
+                        bbox[:, :, 1] += y1
+                    else:
+                        bbox = None
+                return str(data).strip(), bbox
+            ok, datas, points, _ = detector.detectAndDecodeMulti(img)
+            if ok and datas:
+                for i, raw in enumerate(datas):
+                    if raw and str(raw).strip():
+                        bbox = None
+                        if points is not None and i < len(points):
+                            if img.shape[0] == ch and img.shape[1] == cw:
+                                bbox = np.array([points[i]], dtype=int)
+                                bbox[:, :, 0] += x1
+                                bbox[:, :, 1] += y1
+                        return str(raw).strip(), bbox
+        except Exception:
+            continue
+    return "", None
 
 def parse_qr_data(raw_data):
     action = ""
@@ -2696,32 +2882,27 @@ def parse_qr_data(raw_data):
     return action.upper(), screens, keypoints
 
 # ============================================================================
-# SIMUST REALTIME CAMERA (with pose-based tracking + polygon drawing)
+# PER-FIELD RUNTIME (Field A left / Field B right)
 # ============================================================================
 
-class SimustRealtimeCamera:
-    def __init__(self):
-        print("=" * 60)
-        print("SIMUST REALTIME PLAYER - with YOLOv8‑pose stable tracking")
-        print("=" * 60)
-        print("Ball detection: BOTH halves (Camera 1 + Camera 8)")
-        print("Player tracking: Pose-based hip point (cm-accurate)")
-        print("Goal lines drawn based on QR action")
-        print("REAL-TIME RESULTS ANALYSIS DISPLAYED")
-        print("=" * 60)
+class FieldRuntime:
+    """Independent QR session + recognition/results for one arena half."""
 
-        sim = read_simulation_setting()
-        self.simulation_enabled = bool(sim)
-        self.simulator = ArenaSimulator()
-        self.tracker = DetectionTracker(require_models=not self.simulation_enabled)
-        viz = read_visualization_setting()
-        self.visualization_enabled = bool(viz)
+    def __init__(self, field_id):
+        self.field_id = normalize_field(field_id) or "A"
+        cfg = field_config(self.field_id)
+        self.label = cfg.get("label", f"Field {self.field_id}")
+        self.qr_roi = tuple(cfg.get("qr_roi") or qr_roi_for_field(self.field_id))
+        self.polygon = list(cfg.get("polygon") or polygon_for_field(self.field_id))
+        self.allowed_screens = set(cfg.get("screens") or screens_for_field(self.field_id))
+        self.subdir_name = f"field_{self.field_id}"
+        self.recording_subdir = None
 
-        self.session_lock = threading.Lock()
         self.pending_start = None
         self.pending_start_time = 0
         self.pending_end = False
         self.pending_end_time = 0
+        self.pending_end_time_str = ""
 
         self.session_active = False
         self.between_sessions_active = False
@@ -2741,6 +2922,7 @@ class SimustRealtimeCamera:
         self.between_session_data = []
         self.qr_blocks = []
         self.current_qr_block = None
+        self.block_counter = 0
 
         self.qr_state = {
             "last_raw_data": None,
@@ -2749,10 +2931,117 @@ class SimustRealtimeCamera:
             "detection_count": 0,
             "missing_since": None,
         }
-
         self.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
+        self.all_player_positions = []
+        self.pending_analysis = None
+        self.analysis_timer = None
+        self._recent_between_gap = None
+        self._last_session_duration = None
+        self.analysis_started_at = 0
+        self._paused_analysis_remaining = None
+
+    def reset_for_recording(self, parent_dir):
+        self.recording_subdir = os.path.join(parent_dir, self.subdir_name)
+        ensure_directory(self.recording_subdir)
+        self.session_data = []
+        self.between_session_data = []
+        self.qr_blocks = []
+        self.block_counter = 0
+        self.session_active = False
+        self.between_sessions_active = False
+        self.pending_start = None
+        self.pending_end = False
+        self.current_qr_block = None
+        self.all_player_positions = []
+        self.pending_analysis = None
+        self.analysis_timer = None
+        self._recent_between_gap = None
+        self._last_session_duration = None
+        self.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
+        self.qr_state = {
+            "last_raw_data": None,
+            "last_detection_time": 0,
+            "cooldown": QR_COOLDOWN,
+            "detection_count": 0,
+            "missing_since": None,
+        }
+        self.start_between_sessions()
+
+    def start_between_sessions(self):
+        current_time = get_current_time_ms()
+        self.between_sessions_active = True
+        self.between_session_data = []
+        self.between_session_start_time = current_time
+        self.between_session_start_ts = time.time()
+        self.between_session_end_time = ""
+
+    def screens_belong(self, screens):
+        cleaned = []
+        for s in screens or []:
+            digits = "".join(ch for ch in str(s) if ch.isdigit())
+            if digits:
+                cleaned.append(digits)
+        if not cleaned:
+            return True
+        return any(s in self.allowed_screens for s in cleaned)
+
+
+# ============================================================================
+# SIMUST REALTIME CAMERA (with pose-based tracking + polygon drawing)
+# ============================================================================
+
+class SimustRealtimeCamera:
+    def __init__(self):
+        print("=" * 60)
+        print("SIMUST REALTIME PLAYER - Dual Field A / Field B")
+        print("=" * 60)
+        print("Ball detection: BOTH halves (Camera 1 + Camera 8)")
+        print("Player tracking: Pose-based hip point (Field A + Field B)")
+        print("QR: Field A ROI left | Field B ROI right (3840x1080 grab)")
+        print("REAL-TIME RESULTS ANALYSIS DISPLAYED (A left / B right)")
+        print("=" * 60)
+
+        sim = read_simulation_setting()
+        self.simulation_enabled = bool(sim)
+        self.simulator_a = ArenaSimulator(field_id="A")
+        self.simulator_b = ArenaSimulator(field_id="B")
+        self.simulator = self.simulator_a  # back-compat alias
+        self.simulators = {"A": self.simulator_a, "B": self.simulator_b}
+        self.tracker = DetectionTracker(require_models=not self.simulation_enabled)
+        viz = read_visualization_setting()
+        self.visualization_enabled = bool(viz)
+
+        self.session_lock = threading.Lock()
+        self.channels = {"A": FieldRuntime("A"), "B": FieldRuntime("B")}
+
+        # Back-compat aliases → Field A (legacy single-field call sites)
+        ch_a = self.channels["A"]
+        self.pending_start = None
+        self.pending_start_time = 0
+        self.pending_end = False
+        self.pending_end_time = 0
+        self.session_active = False
+        self.between_sessions_active = False
+        self.current_action = None
+        self.current_screens = []
+        self.current_keypoints = []
+        self.current_block_id = None
+        self.active_goal_lines = {}
+        self.session_start_timestamp = 0
+        self.session_frame_count = 0
+        self.session_fps_sum = 0
+        self.between_session_start_time = 0
+        self.between_session_start_ts = 0.0
+        self.between_session_end_time = ""
+        self.session_data = []
+        self.between_session_data = []
+        self.qr_blocks = []
+        self.current_qr_block = None
+        self.qr_state = ch_a.qr_state
+        self.stats = ch_a.stats
         self.block_counter = 0
         self.frame_counter = 0
+        self.shared_action_index = 0  # keeps Field A / Field B action numbers aligned
 
         self.video_index = 1
         self.last_video_index = 1
@@ -2780,14 +3069,14 @@ class SimustRealtimeCamera:
             self.frame_locks[cam] = threading.Lock()
             self.frame_queues[cam] = queue.Queue(maxsize=2)
 
-        self.screen_monitor = {"left": 1920, "top": 0, "width": 1920, "height": 1080}
-        self.qr_roi = (0, 0, 1920, 540)
+        # Dual-monitor player surface: Field A then Field B (lab desktop often starts at x=1920)
+        self.screen_monitor = {"left": 1920, "top": 0, "width": 3840, "height": 1080}
+        self.qr_roi = QR_ROI_A
+        self.qr_rois = {"A": QR_ROI_A, "B": QR_ROI_B}
         self.screen_capture_running = True
 
-        # Player position tracking (hip points) – smoothed, no fallback
-        self.all_player_positions = []  # (timestamp, x, y)
+        self.all_player_positions = []
 
-        # Delayed analysis support
         self.pending_analysis = None
         self.analysis_timer = None
         self._recent_between_gap = None
@@ -2809,7 +3098,7 @@ class SimustRealtimeCamera:
         print(f"Detection Confidence: {DETECTION_CONF}")
         print(f"Recordings: {DEFAULT_RECORDINGS_DIR}")
         print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
-        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'}")
+        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (Field A + Field B)")
         print("-" * 60)
 
     def signal_handler(self, signum, frame):
@@ -2824,29 +3113,20 @@ class SimustRealtimeCamera:
         self.recording_dir = os.path.join(DEFAULT_RECORDINGS_DIR, f"realtime_{timestamp}")
         ensure_directory(self.recording_dir)
 
-        self.session_data = []
-        self.between_session_data = []
-        self.qr_blocks = []
-        self.block_counter = 0
-        self.session_active = False
-        self.between_sessions_active = False
         self.frame_counter = 0
-        self.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
-        self.tracker.total_balls_detected = 0
-        self.tracker.total_players_detected = 0
-        self.pending_start = None
-        self.pending_end = False
-        self.current_qr_block = None
-        self.all_player_positions = []
         self.video_index = 1
         self.last_video_index = 1
-        self.pending_analysis = None
-        self.analysis_timer = None
-        self._recent_between_gap = None
-        self._last_session_duration = None
-
         self.recording_active = True
         self.video_started = False
+        self.tracker.total_balls_detected = 0
+        self.tracker.total_players_detected = 0
+
+        for ch in self.channels.values():
+            ch.reset_for_recording(self.recording_dir)
+
+        self.shared_action_index = 0
+        # Keep top-level aliases pointing at Field A for legacy helpers
+        self._sync_aliases_from_channel(self.channels["A"])
 
         if simust_homography is not None:
             store = simust_homography.load_store()
@@ -2856,76 +3136,106 @@ class SimustRealtimeCamera:
                 )
                 print(f"Homography {cam}: {rec['status']}")
 
-        self.start_between_sessions()
+        print(f"Recording: {self.recording_dir}")
+        print(f"  Field A → {self.channels['A'].recording_subdir}")
+        print(f"  Field B → {self.channels['B'].recording_subdir}")
+
+    def _sync_aliases_from_channel(self, ch):
+        self.session_active = ch.session_active
+        self.between_sessions_active = ch.between_sessions_active
+        self.current_action = ch.current_action
+        self.current_screens = ch.current_screens
+        self.current_keypoints = ch.current_keypoints
+        self.current_block_id = ch.current_block_id
+        self.active_goal_lines = ch.active_goal_lines
+        self.session_start_timestamp = ch.session_start_timestamp
+        self.session_data = ch.session_data
+        self.between_session_data = ch.between_session_data
+        self.qr_blocks = ch.qr_blocks
+        self.current_qr_block = ch.current_qr_block
+        self.qr_state = ch.qr_state
+        self.stats = ch.stats
+        self.all_player_positions = ch.all_player_positions
+        self.pending_analysis = ch.pending_analysis
+        self.analysis_timer = ch.analysis_timer
 
     def start_between_sessions(self):
-        current_time = get_current_time_ms()
-        self.between_sessions_active = True
-        self.between_session_data = []
-        self.between_session_start_time = current_time
-        self.between_session_start_ts = time.time()
-        self.between_session_end_time = ""
+        for ch in self.channels.values():
+            ch.start_between_sessions()
+        self._sync_aliases_from_channel(self.channels["A"])
 
-    def save_between_sessions_block(self):
-        if not self.between_session_data:
+    def save_between_sessions_block(self, ch=None):
+        if ch is None:
+            ch = self.channels["A"]
+        if not ch.between_session_data:
             return
 
-        end_time = self.between_session_end_time if self.between_session_end_time else get_current_time_ms()
+        end_time = ch.between_session_end_time if ch.between_session_end_time else get_current_time_ms()
 
         block = {
             "action": "BETWEEN_SESSIONS",
             "screens": [],
-            "start_time": self.between_session_start_time,
+            "field": ch.field_id,
+            "start_time": ch.between_session_start_time,
             "end_time": end_time,
-            "data": self.between_session_data
+            "data": ch.between_session_data
         }
-        self.qr_blocks.append(block)
+        ch.qr_blocks.append(block)
         try:
             start = datetime.strptime(block["start_time"], "%H:%M:%S.%f")
             end = datetime.strptime(end_time, "%H:%M:%S.%f")
-            self._recent_between_gap = max(0.0, (end - start).total_seconds())
+            ch._recent_between_gap = max(0.0, (end - start).total_seconds())
         except Exception:
             n = len(block.get("data") or [])
             if n:
-                self._recent_between_gap = n / 30.0
-        self.between_session_data = []
-        self.save_recognition_json()
-        print(f"  Between sessions: {len(block['data'])} frames ({block['start_time']} -> {block['end_time']})")
+                ch._recent_between_gap = n / 30.0
+        ch.between_session_data = []
+        self.save_recognition_json(ch)
+        print(f"  [{ch.label}] Between sessions: {len(block['data'])} frames ({block['start_time']} -> {block['end_time']})")
 
     def stop_recording(self):
         if not self.recording_active:
             return
 
-        # ---- Ensure any pending analysis is completed before saving ----
         with self.session_lock:
-            self._flush_pending_analysis_locked()
+            for ch in self.channels.values():
+                self._flush_pending_analysis_locked(ch)
 
-        if self.session_active:
-            self._execute_end(get_current_time_ms(), time.time())
+        now_str = get_current_time_ms()
+        now_ts = time.time()
+        for ch in self.channels.values():
+            if ch.session_active:
+                self._execute_end(now_str, now_ts, ch)
 
-        if self.between_sessions_active and self.between_session_data:
-            self.save_between_sessions_block()
-            self.between_sessions_active = False
+        for ch in self.channels.values():
+            if ch.between_sessions_active and ch.between_session_data:
+                self.save_between_sessions_block(ch)
+                ch.between_sessions_active = False
 
-        # --- Per-video hip distance into every result of that video ---
-        print("\n[DEBUG] Computing per-video hip distance from recognition.json...")
-        try:
-            self._write_per_video_distances()
-        except Exception as e:
-            print(f"[DEBUG] Error writing per-video distances: {e}")
+        print("\n[DEBUG] Computing per-video hip distance per field...")
+        for ch in self.channels.values():
+            try:
+                self._write_per_video_distances(ch)
+            except Exception as e:
+                print(f"[DEBUG] Error writing distances for {ch.label}: {e}")
 
         self.video_saver.stop()
-        self.save_recognition_json()
+        for ch in self.channels.values():
+            self.save_recognition_json(ch)
+        self._write_combined_results_index()
         self.recording_active = False
         self.video_started = False
         self.video_saver = VideoSaver()
 
-    def _write_per_video_distances(self):
+    def _write_per_video_distances(self, ch=None):
         """Stamp total_distance on each result from hips of that video only."""
+        if ch is None:
+            ch = self.channels["A"]
         if simust_homography is None:
             return
-        results_json_path = os.path.join(self.recording_dir, "results.json")
-        recognition_path = os.path.join(self.recording_dir, "recognition.json")
+        base = ch.recording_subdir or self.recording_dir
+        results_json_path = os.path.join(base, "results.json")
+        recognition_path = os.path.join(base, "recognition.json")
         if not os.path.exists(results_json_path) or not os.path.exists(recognition_path):
             return
         with open(results_json_path, "r", encoding="utf-8") as f:
@@ -2938,24 +3248,35 @@ class SimustRealtimeCamera:
         for row in all_results:
             vid = int(row.get("video_index") or 1)
             row["total_distance"] = float(by_video.get(vid, 0.0))
+            row["field"] = ch.field_id
         with open(results_json_path, "w", encoding="utf-8") as f:
             json.dump(all_results, f, indent=2, ensure_ascii=False)
-        self.stats["results"] = all_results
+        ch.stats["results"] = all_results
         for vid, metres in sorted(by_video.items()):
-            print(f"[DEBUG] Video {vid} hip distance: {metres:.2f} m")
+            print(f"[DEBUG] [{ch.label}] Video {vid} hip distance: {metres:.2f} m")
 
-    def save_recognition_json(self):
-        if not self.recording_dir:
+    def save_recognition_json(self, ch=None):
+        if ch is None:
+            # Save both fields
+            ok = True
+            for channel in self.channels.values():
+                if not self.save_recognition_json(channel):
+                    ok = False
+            return ok
+
+        base = ch.recording_subdir or self.recording_dir
+        if not base:
             return False
 
-        json_path = os.path.join(self.recording_dir, "recognition.json")
-        sorted_blocks = sorted(self.qr_blocks, key=lambda x: x.get("start_time", ""))
+        json_path = os.path.join(base, "recognition.json")
+        sorted_blocks = sorted(ch.qr_blocks, key=lambda x: x.get("start_time", ""))
         output_data = []
         for block in sorted_blocks:
             block_data = {
                 "id": block.get("id", ""),
                 "action": block.get("action", ""),
                 "screens": block.get("screens", []),
+                "field": block.get("field", ch.field_id),
                 "start_time": block.get("start_time", ""),
                 "end_time": block.get("end_time", ""),
                 "data": block.get("data", [])
@@ -2965,10 +3286,38 @@ class SimustRealtimeCamera:
         try:
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
+            # Keep root recognition.json current so smart player can find a report mid-session
+            if self.recording_dir and ch.recording_subdir:
+                try:
+                    self._write_combined_results_index()
+                except Exception:
+                    pass
             return True
         except Exception as e:
-            print(f"Error saving JSON: {e}")
+            print(f"Error saving JSON ({ch.label}): {e}")
             return False
+
+    def _write_combined_results_index(self):
+        """Root-level index + merged recognition/results for legacy player/report paths."""
+        if not self.recording_dir:
+            return
+        index = {
+            "fields": {
+                fid: {
+                    "subdir": ch.subdir_name,
+                    "results": list(ch.stats.get("results") or []),
+                    "sessions_completed": ch.stats.get("sessions_completed", 0),
+                }
+                for fid, ch in self.channels.items()
+            }
+        }
+        path = os.path.join(self.recording_dir, "fields_index.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error writing fields_index.json: {e}")
+        # recognition.json / results.json stay only under field_A and field_B
 
     def cleanup(self):
         if self.recording_active:
@@ -2977,78 +3326,319 @@ class SimustRealtimeCamera:
 
     def get_goal_lines(self, screens, action, keypoints):
         lines = {}
-        # PRESS may use QR keypoints instead of the software line.
-        # GOAL always uses the software bottom line so the mouth can be seen.
-        if action == "PRESS" and keypoints:
-            return lines
-        for screen in screens:
-            screen_str = str(screen)
+        action_u = (action or "").upper()
+        # Union screens + keypoints so area 7 still gets a mouth line when the
+        # QR lists it only under keypoints (common for PRESS / goal markers).
+        candidates = []
+        for src in (screens or [], keypoints or []):
+            for screen in src:
+                nid = normalize_screen_id(screen)
+                if nid and nid not in candidates:
+                    candidates.append(nid)
+        # PRESS may use QR keypoints instead of the software line — but still
+        # draw software lines for goal-mouth screens (1/7/8) so area 7 is visible.
+        use_keypoints_only = action_u == "PRESS" and keypoints
+        for screen_str in candidates:
+            base = screen_base_id(screen_str)
+            if use_keypoints_only and base not in GOAL_MOUTH_SCREENS and screen_str not in GOAL_MOUTH_SCREENS:
+                continue
             if screen_str in GOAL_LINES:
                 lines[screen_str] = GOAL_LINES[screen_str]
+            elif base in GOAL_LINES:
+                lines[base] = GOAL_LINES[base]
+        # GOAL / TARGET / PASS always need software lines for listed screens
+        if action_u in ("GOAL", "TARGET", "PASS"):
+            for screen_str in candidates:
+                base = screen_base_id(screen_str)
+                if base in GOAL_LINES and base not in lines and screen_str not in lines:
+                    lines[base] = GOAL_LINES[base]
+        # Always expose mouth geometry when any mouth id is present
+        for screen_str in candidates:
+            base = screen_base_id(screen_str)
+            if base in GOAL_MOUTH_SCREENS and base in GOAL_LINES:
+                lines[base] = GOAL_LINES[base]
         return lines
 
-    def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp):
-        offset_start_time_str = add_offset_to_time(detected_time_str, QR_OFFSET_SECONDS)
+    def _peer_channel(self, ch):
+        other = "B" if ch.field_id == "A" else "A"
+        return self.channels.get(other)
+
+    def _parse_block_num(self, block_id):
+        try:
+            return int(str(block_id or "").lstrip("Ss") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _field_completed_block(self, ch, block_id):
+        """True if this field already finished (or is playing) this action id."""
+        if not block_id:
+            return False
+        if ch.current_block_id == block_id and (ch.session_active or ch.pending_start):
+            return True
+        for block in ch.qr_blocks or []:
+            if block.get("id") == block_id:
+                return True
+        return False
+
+    def _sessions_paired(self, ch, peer):
+        """True when A/B are the same physical action (same id or started together)."""
+        if not ch or not peer:
+            return False
+        if not (ch.session_active and peer.session_active):
+            # Pending end / active peer still counts while ending
+            if not (ch.session_active or peer.session_active):
+                return False
+        if (
+            ch.current_block_id
+            and peer.current_block_id
+            and ch.current_block_id == peer.current_block_id
+        ):
+            return True
+        a_ts = getattr(ch, "session_start_timestamp", None)
+        b_ts = getattr(peer, "session_start_timestamp", None)
+        if a_ts and b_ts and abs(float(a_ts) - float(b_ts)) <= (QR_PAIR_WINDOW_SEC + 1.0):
+            return True
+        return False
+
+    def _peer_join_info(self, ch, current_timestamp):
+        """If peer already owns this action, return join clocks so we do not bump S{n}.
+
+        Join is only for a late ROI decode of the *same* action — never to re-enter a
+        block this field already finished (that caused Field A duplicate S1/S3/S5 and
+        Field B missing even sessions on SF-60N).
+        """
+        peer = self._peer_channel(ch)
+        if not peer:
+            return None
+        # New QR while we are still in a session means "next action", not join.
+        if ch.session_active or ch.pending_start:
+            return None
+        if peer.pending_end:
+            return None
+        window = QR_PAIR_WINDOW_SEC + QR_OFFSET_SECONDS + 0.5
+        if peer.pending_start:
+            block_id = peer.pending_start.get("block_id")
+            if self._field_completed_block(ch, block_id):
+                return None
+            det = float(peer.pending_start.get("detected_timestamp") or peer.pending_start_time or 0)
+            if current_timestamp - det <= window:
+                return {
+                    "block_id": block_id,
+                    "pending_start_time": float(peer.pending_start_time),
+                    "offset_start_time_str": peer.pending_start.get("offset_start_time_str"),
+                    "paired_session_start": float(peer.pending_start_time),
+                    "detected_timestamp": det,
+                }
+        if peer.session_active and peer.session_start_timestamp:
+            block_id = peer.current_block_id
+            if self._field_completed_block(ch, block_id):
+                return None
+            age = current_timestamp - float(peer.session_start_timestamp)
+            if age <= window:
+                return {
+                    "block_id": block_id,
+                    "pending_start_time": float(peer.session_start_timestamp),
+                    "offset_start_time_str": (peer.current_qr_block or {}).get("start_time"),
+                    "paired_session_start": float(peer.session_start_timestamp),
+                    "detected_timestamp": float(peer.session_start_timestamp) - QR_OFFSET_SECONDS,
+                }
+        return None
+
+    def _end_paired_sessions_now(self, current_time_str, current_timestamp, ch):
+        """End this field and the peer if they share the same action id."""
+        if not ch or not ch.session_active:
+            return
+        block_id = ch.current_block_id
+        peer = self._peer_channel(ch)
+        self._end_session_locked(current_time_str, current_timestamp, ch)
+        if (
+            peer
+            and peer.session_active
+            and block_id
+            and peer.current_block_id == block_id
+        ):
+            peer.pending_end = False
+            self._end_session_locked(current_time_str, current_timestamp, peer)
+
+    def _align_pending_start_to_peer(self, ch, peer):
+        """Make late Field share the earlier peer's start clock / block id."""
+        if not ch.pending_start or not peer:
+            return
+        peer_pending = peer.pending_start
+        if peer_pending:
+            t = min(float(ch.pending_start_time), float(peer.pending_start_time))
+            ch.pending_start_time = t
+            peer.pending_start_time = t
+            # Prefer the earlier detection's offset string
+            if float(peer_pending.get("detected_timestamp") or 0) <= float(
+                ch.pending_start.get("detected_timestamp") or 0
+            ):
+                ch.pending_start["offset_start_time_str"] = peer_pending.get(
+                    "offset_start_time_str", ch.pending_start.get("offset_start_time_str")
+                )
+                ch.pending_start["block_id"] = peer_pending.get("block_id", ch.pending_start.get("block_id"))
+                ch.current_block_id = ch.pending_start["block_id"]
+                ch.block_counter = self._parse_block_num(ch.pending_start["block_id"])
+            else:
+                peer_pending["offset_start_time_str"] = ch.pending_start.get(
+                    "offset_start_time_str", peer_pending.get("offset_start_time_str")
+                )
+                peer_pending["block_id"] = ch.pending_start.get("block_id", peer_pending.get("block_id"))
+                peer.block_counter = self._parse_block_num(peer_pending["block_id"])
+            return
+        if peer.session_active and peer.session_start_timestamp:
+            # Peer already running — join immediately on peer's clock
+            ch.pending_start_time = float(peer.session_start_timestamp)
+            ch.pending_start["paired_session_start"] = float(peer.session_start_timestamp)
+            ch.pending_start["offset_start_time_str"] = (
+                (peer.current_qr_block or {}).get("start_time")
+                or ch.pending_start.get("offset_start_time_str")
+            )
+            if peer.current_block_id:
+                ch.pending_start["block_id"] = peer.current_block_id
+                ch.block_counter = self._parse_block_num(peer.current_block_id)
+
+    def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp, ch,
+                               paired_session_start=None, paired_offset_str=None):
+        offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, QR_OFFSET_SECONDS)
         with self.session_lock:
-            self.pending_start = {
+            ch.pending_start = {
                 "action": action.upper(),
                 "screens": screens,
                 "keypoints": keypoints,
                 "block_id": block_id,
                 "goal_lines": self.get_goal_lines(screens, action, keypoints),
                 "offset_start_time_str": offset_start_time_str,
-                "detected_timestamp": detected_timestamp
+                "detected_timestamp": detected_timestamp,
+                "field": ch.field_id,
             }
-            self.pending_start_time = detected_timestamp + QR_OFFSET_SECONDS
+            if paired_session_start is not None:
+                ch.pending_start["paired_session_start"] = float(paired_session_start)
+                # Start as soon as check_pending runs (catch-up)
+                ch.pending_start_time = float(paired_session_start)
+            else:
+                ch.pending_start_time = detected_timestamp + QR_OFFSET_SECONDS
+            peer = self._peer_channel(ch)
+            if peer is not None:
+                self._align_pending_start_to_peer(ch, peer)
 
-    def schedule_session_end(self, current_time_str, current_timestamp):
-        if self.session_active:
+    def schedule_session_end(self, current_time_str, current_timestamp, ch):
+        if ch.session_active:
             offset_end_time_str = add_offset_to_time(current_time_str, QR_OFFSET_SECONDS)
             with self.session_lock:
-                self.pending_end = True
-                self.pending_end_time = current_timestamp + QR_OFFSET_SECONDS
-                self.pending_end_time_str = offset_end_time_str
+                ch.pending_end = True
+                ch.pending_end_time = current_timestamp + QR_OFFSET_SECONDS
+                ch.pending_end_time_str = offset_end_time_str
+                peer = self._peer_channel(ch)
+                if peer is None or not peer.session_active:
+                    return
+                # Keep A/B endings locked for the same physical action
+                paired = self._sessions_paired(ch, peer)
+                peer_qr_gone = peer.qr_state.get("missing_since") is not None
+                if paired or peer_qr_gone or peer.pending_end:
+                    if peer.pending_end:
+                        t = min(float(ch.pending_end_time), float(peer.pending_end_time))
+                        ch.pending_end_time = t
+                        peer.pending_end_time = t
+                    else:
+                        peer.pending_end = True
+                        peer.pending_end_time = ch.pending_end_time
+                        peer.pending_end_time_str = offset_end_time_str
+
+    def _sync_peer_pending_clocks_locked(self):
+        """Caller holds session_lock. Align pending start/end times across A/B."""
+        a, b = self.channels.get("A"), self.channels.get("B")
+        if not a or not b:
+            return
+        if a.pending_start and b.pending_start:
+            t = min(float(a.pending_start_time), float(b.pending_start_time))
+            a.pending_start_time = t
+            b.pending_start_time = t
+            # Same block id / start string from earlier detection
+            a_det = float(a.pending_start.get("detected_timestamp") or 0)
+            b_det = float(b.pending_start.get("detected_timestamp") or 0)
+            early, late = (a, b) if a_det <= b_det else (b, a)
+            late.pending_start["offset_start_time_str"] = early.pending_start.get(
+                "offset_start_time_str", late.pending_start.get("offset_start_time_str")
+            )
+            late.pending_start["block_id"] = early.pending_start.get(
+                "block_id", late.pending_start.get("block_id")
+            )
+            late.block_counter = self._parse_block_num(late.pending_start["block_id"])
+        if a.pending_end and b.pending_end:
+            t = min(float(a.pending_end_time), float(b.pending_end_time))
+            a.pending_end_time = t
+            b.pending_end_time = t
 
     def check_pending(self, current_timestamp, current_time_str):
         with self.session_lock:
-            if self.pending_end and current_timestamp >= self.pending_end_time:
-                self._end_session_locked(current_time_str, current_timestamp)
-                self.pending_end = False
-            if self.pending_start and current_timestamp >= self.pending_start_time:
-                self._execute_start(current_timestamp)
-                self.pending_start = None
+            self._sync_peer_pending_clocks_locked()
+            # End paired fields in one pass so A does not finish a beat before B
+            ending = []
+            for ch in self.channels.values():
+                if ch.pending_end and current_timestamp >= ch.pending_end_time:
+                    ending.append(ch)
+            if ending:
+                end_ids = {ch.field_id for ch in ending}
+                for ch in list(ending):
+                    peer = self._peer_channel(ch)
+                    if (
+                        peer
+                        and peer.session_active
+                        and peer.field_id not in end_ids
+                        and (peer.pending_end or self._sessions_paired(ch, peer))
+                    ):
+                        peer.pending_end = True
+                        peer.pending_end_time = min(
+                            float(getattr(peer, "pending_end_time", current_timestamp) or current_timestamp),
+                            float(ch.pending_end_time),
+                        )
+                        ending.append(peer)
+                        end_ids.add(peer.field_id)
+                for ch in ending:
+                    if ch.session_active:
+                        self._end_session_locked(current_time_str, current_timestamp, ch)
+                    ch.pending_end = False
+            for ch in self.channels.values():
+                if ch.pending_start and current_timestamp >= ch.pending_start_time:
+                    self._execute_start(current_timestamp, ch)
+                    ch.pending_start = None
 
-    def _blocks_for_late_analysis(self):
+    def _blocks_for_late_analysis(self, ch):
         """Rebuild block list at analysis time so post-QR (late) frames are included."""
-        combined = list(self.qr_blocks)
-        if self.between_session_data:
+        combined = list(ch.qr_blocks)
+        if ch.between_session_data:
             combined.append({
                 "id": "BETWEEN",
                 "action": "BETWEEN_SESSIONS",
                 "screens": [],
-                "start_time": self.between_session_start_time,
+                "field": ch.field_id,
+                "start_time": ch.between_session_start_time,
                 "end_time": get_current_time_ms(),
-                "data": list(self.between_session_data),
+                "data": list(ch.between_session_data),
             })
         return combined
 
-    def _perform_late_analysis(self):
+    def _perform_late_analysis(self, field_id="A"):
         """Delayed analysis (timer thread). Acquires session_lock."""
         with self.session_lock:
-            self._perform_late_analysis_locked()
+            ch = self.channels.get(field_id) or self.channels["A"]
+            self._perform_late_analysis_locked(ch)
 
-    def _perform_late_analysis_locked(self):
+    def _perform_late_analysis_locked(self, ch=None):
         """Compute one pending result. Caller must hold session_lock."""
-        if self.pending_analysis is None:
+        if ch is None:
+            ch = self.channels["A"]
+        if ch.pending_analysis is None:
             return
 
-        action_data = self.pending_analysis['action_data']
-        action_type = self.pending_analysis['action_type']
-        video_index = self.pending_analysis['video_index']
-        block_id = self.pending_analysis['block_id']
-        screens = self.pending_analysis['screens']
+        action_data = ch.pending_analysis['action_data']
+        action_type = ch.pending_analysis['action_type']
+        video_index = ch.pending_analysis['video_index']
+        block_id = ch.pending_analysis['block_id']
+        screens = ch.pending_analysis['screens']
 
-        combined_blocks = self._blocks_for_late_analysis()
+        combined_blocks = self._blocks_for_late_analysis(ch)
         action_index = 0
         for i, block in enumerate(combined_blocks):
             if block.get("id") == block_id:
@@ -3067,6 +3657,7 @@ class SimustRealtimeCamera:
             'id': block_id,
             'action': action_type,
             'screens': screens,
+            'field': ch.field_id,
             'result': analysis_result['Result'],
             'winning_screen': analysis_result['Winning Screen'],
             'min_dist': analysis_result['Min Distance (px)'],
@@ -3080,10 +3671,11 @@ class SimustRealtimeCamera:
             'ae': analysis_result.get('AE', 0.0)
         }
 
-        self.stats['results'].append(result_entry)
+        ch.stats['results'].append(result_entry)
+        session_folder = ch.recording_subdir or self.recording_dir
         try:
             payload = {
-                'session_folder': self.recording_dir,
+                'session_folder': session_folder,
                 'action_result': result_entry
             }
             requests.post('http://127.0.0.1:8000/save-results-to-json', json=payload, timeout=1)
@@ -3091,65 +3683,73 @@ class SimustRealtimeCamera:
             print(f"Failed to save result to results.json: {e}")
 
         print(
-            f"  RESULT {block_id} {action_type}: {result_entry['result']} "
+            f"  [{ch.label}] RESULT {block_id} {action_type}: {result_entry['result']} "
             f"(video {video_index}, dur={result_entry['session_duration']})"
         )
-        self.pending_analysis = None
-        self.analysis_timer = None
-        self._recent_between_gap = None
-        self._last_session_duration = None
+        ch.pending_analysis = None
+        ch.analysis_timer = None
+        ch._recent_between_gap = None
+        ch._last_session_duration = None
 
-    def _flush_pending_analysis_locked(self):
+    def _flush_pending_analysis_locked(self, ch=None):
         """Finish the previous shot before scheduling the next (required for T1.2)."""
-        if self.analysis_timer:
+        if ch is None:
+            for channel in self.channels.values():
+                self._flush_pending_analysis_locked(channel)
+            return
+        if ch.analysis_timer:
             try:
-                self.analysis_timer.cancel()
+                ch.analysis_timer.cancel()
             except Exception:
                 pass
-            self.analysis_timer = None
-        if self.pending_analysis is not None:
-            self._perform_late_analysis_locked()
+            ch.analysis_timer = None
+        if ch.pending_analysis is not None:
+            self._perform_late_analysis_locked(ch)
 
-    def _schedule_late_analysis_locked(self, delay=None):
+    def _schedule_late_analysis_locked(self, ch, delay=None):
         if delay is None:
             delay = dynamic_analysis_delay(
-                recent_gap_sec=getattr(self, "_recent_between_gap", None),
-                session_duration=getattr(self, "_last_session_duration", None),
+                recent_gap_sec=getattr(ch, "_recent_between_gap", None),
+                session_duration=getattr(ch, "_last_session_duration", None),
             )
         delay = float(delay)
-        self.analysis_started_at = time.time()
-        self.analysis_timer = threading.Timer(delay, self._perform_late_analysis)
-        self.analysis_timer.daemon = True
-        self.analysis_timer.start()
+        ch.analysis_started_at = time.time()
+        field_id = ch.field_id
+        ch.analysis_timer = threading.Timer(delay, lambda: self._perform_late_analysis(field_id))
+        ch.analysis_timer.daemon = True
+        ch.analysis_timer.start()
 
-    def _end_session_locked(self, current_time_str, current_timestamp):
+    def _end_session_locked(self, current_time_str, current_timestamp, ch=None):
         """End the active session. Must be called with self.session_lock held."""
-        if not self.session_active:
+        if ch is None:
+            ch = self.channels["A"]
+        if not ch.session_active:
             return
-        self.stats["sessions_completed"] += 1
-        action_key = self.current_action
-        self.stats["action_counts"][action_key] = self.stats["action_counts"].get(action_key, 0) + 1
-        self.session_active = False
+        ch.stats["sessions_completed"] += 1
+        action_key = ch.current_action
+        ch.stats["action_counts"][action_key] = ch.stats["action_counts"].get(action_key, 0) + 1
+        ch.session_active = False
         if self.simulation_enabled:
-            self.simulator.end_action()
+            sim = self.simulators.get(ch.field_id)
+            if sim is not None:
+                sim.end_action()
 
-        # Allow a later reappearance of the same QR content to start a new action.
-        if getattr(self, "qr_state", None) is not None:
-            self.qr_state["last_raw_data"] = None
-            self.qr_state["missing_since"] = None
+        if getattr(ch, "qr_state", None) is not None:
+            ch.qr_state["last_raw_data"] = None
+            ch.qr_state["missing_since"] = None
 
-        if self.current_qr_block:
-            if self.session_data:
-                self.current_qr_block["data"] = self.session_data
+        offset_end_time_str = add_offset_to_time(current_time_str, QR_OFFSET_SECONDS)
 
-            offset_end_time_str = add_offset_to_time(current_time_str, QR_OFFSET_SECONDS)
-            self.current_qr_block["end_time"] = offset_end_time_str
+        if ch.current_qr_block:
+            if ch.session_data:
+                ch.current_qr_block["data"] = ch.session_data
 
-            # ---- Append block immediately to qr_blocks ----
-            block_copy = self.current_qr_block.copy()
-            self.qr_blocks.append(block_copy)
+            ch.current_qr_block["end_time"] = offset_end_time_str
+            ch.current_qr_block["field"] = ch.field_id
 
-            # Store pending analysis data (using the block copy, but we'll keep the original for analysis)
+            block_copy = ch.current_qr_block.copy()
+            ch.qr_blocks.append(block_copy)
+
             video_index_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "current_video_index.txt")
             video_index = 1
             if os.path.exists(video_index_file):
@@ -3161,163 +3761,173 @@ class SimustRealtimeCamera:
             if video_index < 1:
                 video_index = 1
 
-            # CRITICAL (SF-30N T1.2): action end → next QR is often < LATE_ANALYSIS_DELAY.
-            # Cancelling the timer without flushing dropped all but the last 1–2 labels
-            # per video and made totals wrong.
-            self._flush_pending_analysis_locked()
+            self._flush_pending_analysis_locked(ch)
 
-            duration = current_timestamp - self.session_start_timestamp
-            self._last_session_duration = float(duration)
-            self.pending_analysis = {
-                'action_data': self.current_qr_block,
-                'screens': self.current_screens,
-                'action_type': self.current_action,
-                'block_id': self.current_block_id,
+            duration = current_timestamp - ch.session_start_timestamp
+            ch._last_session_duration = float(duration)
+            ch.pending_analysis = {
+                'action_data': ch.current_qr_block,
+                'screens': ch.current_screens,
+                'action_type': ch.current_action,
+                'block_id': ch.current_block_id,
                 'video_index': video_index,
             }
-            self._schedule_late_analysis_locked()
+            self._schedule_late_analysis_locked(ch)
 
-            # ---- Clear current_qr_block ----
-            self.current_qr_block = None
+            ch.current_qr_block = None
 
-            session_fps_avg = self.session_fps_sum / self.session_frame_count if self.session_frame_count > 0 else 0
+            session_fps_avg = ch.session_fps_sum / ch.session_frame_count if ch.session_frame_count > 0 else 0
 
             print(f"{'-'*50}")
-            print(f"SESSION END - Frames: {self.session_frame_count} | Duration: {duration:.2f}s | Avg FPS: {session_fps_avg:.1f}")
+            print(f"[{ch.label}] SESSION END - Frames: {ch.session_frame_count} | Duration: {duration:.2f}s | Avg FPS: {session_fps_avg:.1f}")
             print(f"End: {offset_end_time_str}")
             print(
                 f"Analysis scheduled "
-                f"(delay={dynamic_analysis_delay(self._recent_between_gap, self._last_session_duration):.2f}s, "
-                f"gap_hint={self._recent_between_gap})."
+                f"(delay={dynamic_analysis_delay(ch._recent_between_gap, ch._last_session_duration):.2f}s, "
+                f"gap_hint={ch._recent_between_gap})."
             )
             print(f"{'='*50}\n")
 
-            self.save_recognition_json()
+            self.save_recognition_json(ch)
 
-        self.active_goal_lines = {}
-        self.current_action = None
-        self.current_screens = []
-        self.current_keypoints = []
-        self.current_block_id = None
-        self.session_data = []
-        self.session_fps_sum = 0
-        self.session_frame_count = 0
+        ch.active_goal_lines = {}
+        ch.current_action = None
+        ch.current_screens = []
+        ch.current_keypoints = []
+        ch.current_block_id = None
+        ch.session_data = []
+        ch.session_fps_sum = 0
+        ch.session_frame_count = 0
 
-        self.between_sessions_active = True
-        self.between_session_data = []
-        self.between_session_start_time = offset_end_time_str
-        self.between_session_start_ts = current_timestamp
-        self.between_session_end_time = ""
+        ch.between_sessions_active = True
+        ch.between_session_data = []
+        ch.between_session_start_time = offset_end_time_str
+        ch.between_session_start_ts = current_timestamp
+        ch.between_session_end_time = ""
 
-    def _execute_end(self, current_time_str, current_timestamp):
+    def _execute_end(self, current_time_str, current_timestamp, ch=None):
         """Public method: acquires lock and calls _end_session_locked."""
         with self.session_lock:
-            self._end_session_locked(current_time_str, current_timestamp)
+            if ch is None:
+                for channel in self.channels.values():
+                    if channel.session_active:
+                        self._end_session_locked(current_time_str, current_timestamp, channel)
+            else:
+                self._end_session_locked(current_time_str, current_timestamp, ch)
 
-    def _execute_start(self, current_timestamp):
-        p = self.pending_start
+    def _execute_start(self, current_timestamp, ch):
+        p = ch.pending_start
+        if not p:
+            return
 
-        if self.between_sessions_active:
-            self.between_session_end_time = p["offset_start_time_str"]
-            self.save_between_sessions_block()
-            self.between_sessions_active = False
+        if ch.between_sessions_active:
+            ch.between_session_end_time = p["offset_start_time_str"]
+            self.save_between_sessions_block(ch)
+            ch.between_sessions_active = False
 
-        self.current_action = p["action"]
-        self.current_screens = p["screens"]
-        self.current_keypoints = p["keypoints"]
-        self.current_block_id = p["block_id"]
-        self.active_goal_lines = p["goal_lines"]
-        self.session_active = True
-        self.session_start_timestamp = current_timestamp
-        self.session_frame_count = 0
-        self.session_fps_sum = 0
-        self.session_data = []
+        ch.current_action = p["action"]
+        ch.current_screens = p["screens"]
+        ch.current_keypoints = p["keypoints"]
+        ch.current_block_id = p["block_id"]
+        ch.active_goal_lines = p["goal_lines"]
+        ch.session_active = True
+        ch.session_start_timestamp = current_timestamp
+        ch.session_frame_count = 0
+        ch.session_fps_sum = 0
+        ch.session_data = []
 
-        self.current_qr_block = {
-            "id": self.current_block_id,
-            "action": self.current_action,
-            "screens": self.current_screens,
-            "keypoints": self.current_keypoints,
+        ch.current_qr_block = {
+            "id": ch.current_block_id,
+            "action": ch.current_action,
+            "screens": ch.current_screens,
+            "keypoints": ch.current_keypoints,
+            "field": ch.field_id,
             "start_time": p["offset_start_time_str"],
             "end_time": "",
             "data": []
         }
 
         if self.simulation_enabled:
-            self.simulator.start_action(self.current_action, self.current_screens)
+            sim = self.simulators.get(ch.field_id)
+            if sim is not None:
+                sim.start_action(ch.current_action, ch.current_screens)
 
         print(f"\n{'='*50}")
-        print(f"SESSION {self.current_block_id} - {self.current_action}")
-        print(f"Screens: {self.current_screens}")
+        print(f"[{ch.label}] SESSION {ch.current_block_id} - {ch.current_action}")
+        print(f"Screens: {ch.current_screens}")
         print(f"Start: {p['offset_start_time_str']}")
         print(f"{'-'*50}")
 
     # ---- Drawing and UI methods ----
-    def draw_goal_lines(self, frame):
-        if not self.session_active or not self.active_goal_lines:
-            return frame
-
+    def draw_goal_lines(self, frame, ch=None):
+        channels = [ch] if ch is not None else list(self.channels.values())
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
-        for screen_name, line_data in self.active_goal_lines.items():
-            x1, y1 = line_data['p0']
-            x2, y2 = line_data['p1']
-            p0 = (int(x1 * sx), int(y1 * sy))
-            p1 = (int(x2 * sx), int(y2 * sy))
-            cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
-            cv2.circle(frame, p0, 5, (0, 0, 255), -1)
-            cv2.circle(frame, p1, 5, (0, 0, 255), -1)
-            cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        for channel in channels:
+            if not channel.session_active or not channel.active_goal_lines:
+                continue
+            for screen_name, line_data in channel.active_goal_lines.items():
+                x1, y1 = line_data['p0']
+                x2, y2 = line_data['p1']
+                p0 = (int(x1 * sx), int(y1 * sy))
+                p1 = (int(x2 * sx), int(y2 * sy))
+                cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
+                cv2.circle(frame, p0, 5, (0, 0, 255), -1)
+                cv2.circle(frame, p1, 5, (0, 0, 255), -1)
+                cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         return frame
 
     def draw_results_overlay(self, frame):
+        """Team A labels on left slice; Team B on right slice — orange bold."""
         h, w = frame.shape[:2]
-        panel_x = w - 360
-        panel_y = 10
-        panel_w = 350
-        results = self.stats['results'][-8:] if self.stats['results'] else []
-
-        # Transparent label panel: text only (no filled background) so it
-        # does not cover the pitch in realtime_recording.avi.
-        # Black text stays readable on the light green pitch.
-        label_color = (0, 0, 0)
-        cv2.putText(frame, "RESULTS", (panel_x + 10, panel_y + 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
-        cv2.line(frame, (panel_x + 10, panel_y + 30), (panel_x + panel_w - 10, panel_y + 30), label_color, 1)
-
-        y_offset = 50
-        for i, result in enumerate(results):
-            action_id = result.get('id', '')
-            action_type = result.get('action', '')
-            action_result = result.get('result', '')
-            winning = result.get('winning_screen', '')
-
-            text = f"{action_id} {action_type}: {action_result}"
-            if winning and winning != 'N/A':
-                text += f" -> {winning}"
-
-            cv2.putText(frame, text, (panel_x + 10, panel_y + y_offset + i * 28),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.42, label_color, 1)
-
+        mid = w // 2
+        # BGR orange, bold
+        label_color = (0, 165, 255)
+        thickness = 2
+        panels = [
+            ("A", 10),
+            ("B", mid + 10),
+        ]
+        for fid, left_x in panels:
+            ch = self.channels.get(fid)
+            if ch is None:
+                continue
+            results = ch.stats['results'][-8:] if ch.stats['results'] else []
+            cv2.putText(frame, f"RESULTS {ch.label}", (left_x + 10, 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.55, label_color, thickness)
+            cv2.line(frame, (left_x + 10, 30), (left_x + 330, 30), label_color, 2)
+            for i, result in enumerate(results):
+                action_id = result.get('id', '')
+                action_type = result.get('action', '')
+                action_result = result.get('result', '')
+                winning = result.get('winning_screen', '')
+                text = f"{action_id} {action_type}: {action_result}"
+                if winning and winning != 'N/A':
+                    text += f" -> {winning}"
+                cv2.putText(frame, text, (left_x + 10, 50 + i * 28),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.48, label_color, thickness)
         return frame
 
-    def draw_all_annotations(self, frame, balls, players, session_active):
+    def draw_all_annotations(self, frame, balls, players):
         h, w = frame.shape[:2]
         mid_x = w // 2
 
         frame = self.draw_goal_lines(frame)
 
-        if POLYGON_POINTS:
-            pts = np.array(POLYGON_POINTS, dtype=np.int32)
-            cv2.polylines(frame, [pts], True, COLOR_POLYGON, 2)
+        for fid, poly in (("A", POLYGON_POINTS_A), ("B", POLYGON_POINTS_B)):
+            if poly:
+                pts = np.array(poly, dtype=np.int32)
+                color = COLOR_POLYGON if fid == "A" else (0, 200, 255)
+                cv2.polylines(frame, [pts], True, color, 2)
 
-        if session_active:
-            cv2.putText(frame, "SESSION ACTIVE", (w//2 - 80, 30),
+        any_active = any(ch.session_active for ch in self.channels.values())
+        if any_active:
+            cv2.putText(frame, "SESSION ACTIVE", (w // 2 - 80, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         else:
-            cv2.putText(frame, "BETWEEN SESSIONS", (w//2 - 90, 30),
+            cv2.putText(frame, "BETWEEN SESSIONS", (w // 2 - 90, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 255, 100), 1)
 
         for i, ball in enumerate(balls):
@@ -3328,203 +3938,272 @@ class SimustRealtimeCamera:
         for player_idx, player in enumerate(players):
             cv2.rectangle(frame, (player['bbox'][0], player['bbox'][1]),
                          (player['bbox'][2], player['bbox'][3]), COLOR_PLAYER, 2)
-            cv2.putText(frame, f"P{player_idx+1}", (player['bbox'][0], player['bbox'][1] - 5),
+            tag = player.get("field") or ""
+            cv2.putText(frame, f"P{player_idx+1}{tag}", (player['bbox'][0], player['bbox'][1] - 5),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_PLAYER, 1)
 
         fps = self.tracker.current_fps
         fps_color = (0, 255, 0) if fps >= 20 else ((0, 255, 255) if fps >= 12 else (0, 0, 255))
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_color, 2)
 
-        if session_active:
+        for ch in self.channels.values():
+            if not ch.session_active:
+                continue
+            x0 = 15 if ch.field_id == "A" else mid_x + 15
             overlay = frame.copy()
-            cv2.rectangle(overlay, (10, 50), (350, 80), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (x0 - 5, 50), (x0 + 340, 80), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)
-            cv2.putText(frame, f"{self.current_block_id} - {self.current_action}", (15, 68),
+            cv2.putText(frame, f"{ch.label} {ch.current_block_id} - {ch.current_action}", (x0, 68),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
-        cv2.putText(frame, "CAM1", (w//4 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(frame, "CAM8", (w//4*3 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
+        cv2.putText(frame, "FIELD A", (w // 4 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, "FIELD B", (w // 4 * 3 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
         cv2.line(frame, (mid_x, 0), (mid_x, h), (255, 255, 255), 2)
-
         frame = self.draw_results_overlay(frame)
-
         return frame
 
     # ---- Frame processing (with hip-point tracking) ----
     def _detections_for_frame(self, frame, current_timestamp):
         if self.simulation_enabled:
             h, w = frame.shape[:2]
-            balls, players, hip = self.simulator.step(w, h)
-            frame = self.simulator.draw_on_frame(frame, balls, players)
-            return frame, balls, players, hip[0], hip[1]
+            balls, players = [], []
+            hips = {}
+            for fid, sim in self.simulators.items():
+                b, p, hip = sim.step(w, h)
+                for item in b:
+                    item = dict(item)
+                    item["field"] = fid
+                    balls.append(item)
+                for item in p:
+                    item = dict(item)
+                    item["field"] = fid
+                    players.append(item)
+                hips[fid] = hip
+                frame = sim.draw_on_frame(frame, b, p)
+            return frame, balls, players, hips
         balls, players = self.tracker.detect_objects(frame)
-        sx, sy = self.tracker.get_player_tracking_point(
-            frame, players, current_timestamp, self.session_start_timestamp
-        )
-        return frame, balls, players, sx, sy
+        hips = {}
+        for fid in ("A", "B"):
+            ch = self.channels[fid]
+            sx, sy = self.tracker.get_player_tracking_point_for_field(
+                frame, players, fid, current_timestamp, ch.session_start_timestamp or current_timestamp
+            )
+            hips[fid] = (sx, sy)
+        return frame, balls, players, hips
 
-    def process_frame_for_session(self, frame, current_timestamp):
-        self.tracker.increment_frame_count()
-
-        frame, balls, players, sx, sy = self._detections_for_frame(frame, current_timestamp)
-
-        # Store in all_player_positions ONLY if hip is valid (used for EOP)
+    def _append_frame_data(self, ch, balls, players, hip, current_timestamp, into_session):
+        sx, sy = hip if hip else (None, None)
         if sx is not None and sy is not None:
-            rel_time = current_timestamp - self.session_start_timestamp
-            self.all_player_positions.append((rel_time, sx, sy))
+            origin = ch.session_start_timestamp if into_session else (ch.between_session_start_ts or 0.0)
+            rel_time = current_timestamp - origin if origin else 0.0
+            ch.all_player_positions.append((rel_time, sx, sy))
 
-        # Build frame_data – 'hp' is None if pose fails
-        frame_data = {
-            't': round(current_timestamp - self.session_start_timestamp, 3),
-            'b': [[c[0], c[1]] for c in [ball['center'] for ball in balls]],
-            'p': [[c[0], c[1]] for c in [player['center'] for player in players]],
-            'hp': [sx, sy] if (sx is not None and sy is not None) else None
-        }
-        self.session_data.append(frame_data)
-        self.session_frame_count += 1
-        self.frame_counter += 1
+        if into_session:
+            origin = ch.session_start_timestamp
+        else:
+            origin = getattr(ch, "between_session_start_ts", 0.0) or 0.0
+        rel_time = current_timestamp - origin if origin else 0.0
+        mid_x = 640
+        field_players = [p for p in players if p.get("field") == ch.field_id]
+        tagged = [b for b in balls if b.get("field")]
+        if tagged:
+            field_balls = [b for b in balls if b.get("field") == ch.field_id]
+        else:
+            field_balls = [
+                b for b in balls
+                if (ch.field_id == "A" and b["center"][0] < mid_x)
+                or (ch.field_id == "B" and b["center"][0] >= mid_x)
+            ]
 
-        if self.current_qr_block is not None:
-            self.current_qr_block["data"].append(frame_data)
-
-        fps = self.tracker.update_fps()
-        self.session_fps_sum += fps
-
-        if self.session_frame_count % 10 == 0:
-            print(f"  Frame {self.session_frame_count:3d} | B:{len(balls)} P:{len(players)} | FPS: {fps:.1f}")
-
-        # ========= OVERLAY – ALWAYS DRAWN (regardless of visualization_enabled) =========
-        if sx is not None and sy is not None:
-            # Valid hip – cyan
-            cv2.circle(frame, (int(sx), int(sy)), 6, COLOR_HIP, -1)
-            cv2.putText(frame, "HIP", (int(sx)-15, int(sy)-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_HIP, 1)
-        elif players:
-            # Fallback overlay – red at bottom‑centre of largest player
-            main_player = max(players, key=lambda p: (p['bbox'][2]-p['bbox'][0]) * (p['bbox'][3]-p['bbox'][1]))
-            x1, y1, x2, y2 = main_player['bbox']
-            fallback_x = (x1 + x2) // 2
-            fallback_y = y2  # bottom edge
-            cv2.circle(frame, (fallback_x, fallback_y), 6, (0, 0, 255), -1)
-            cv2.putText(frame, "FALLBACK", (fallback_x-30, fallback_y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-        # (no player at all – nothing to draw)
-
-        frame = self.draw_all_annotations(frame, balls, players, True)
-        return frame
-
-    def process_frame_between_sessions(self, frame, current_timestamp):
-        self.tracker.increment_frame_count()
-
-        frame, balls, players, sx, sy = self._detections_for_frame(frame, current_timestamp)
-
-        # Store in all_player_positions ONLY if hip is valid (used for EOP)
-        if sx is not None and sy is not None:
-            # Use the last known session start as reference for timestamps
-            rel_time = current_timestamp - self.session_start_timestamp if self.session_start_timestamp != 0 else 0.0
-            self.all_player_positions.append((rel_time, sx, sy))
-
-        # ===== FIX: assign a real time offset for between‑session frames =====
-        # Time is relative to the between-session block start so late search
-        # (LATE_SEARCH_DURATION) can still accept finishes after the QR ends.
-        between_origin = getattr(self, "between_session_start_ts", 0.0) or 0.0
-        rel_time = current_timestamp - between_origin if between_origin else 0.0
         frame_data = {
             't': round(rel_time, 3),
-            'b': [[c[0], c[1]] for c in [ball['center'] for ball in balls]],
-            'p': [[c[0], c[1]] for c in [player['center'] for player in players]],
-            'hp': [sx, sy] if (sx is not None and sy is not None) else None
+            'b': [[c[0], c[1]] for c in [ball['center'] for ball in field_balls]],
+            'p': [[c[0], c[1]] for c in [player['center'] for player in field_players]],
+            'hp': [sx, sy] if (sx is not None and sy is not None) else None,
+            'field': ch.field_id,
         }
-        self.between_session_data.append(frame_data)
+        if into_session:
+            ch.session_data.append(frame_data)
+            ch.session_frame_count += 1
+            if ch.current_qr_block is not None:
+                ch.current_qr_block["data"].append(frame_data)
+        else:
+            ch.between_session_data.append(frame_data)
+        return sx, sy
+
+    def process_dual_fields_frame(self, frame, current_timestamp):
+        self.tracker.increment_frame_count()
+        frame, balls, players, hips = self._detections_for_frame(frame, current_timestamp)
+
+        for fid, ch in self.channels.items():
+            hip = hips.get(fid, (None, None))
+            into_session = bool(ch.session_active)
+            sx, sy = self._append_frame_data(ch, balls, players, hip, current_timestamp, into_session)
+            if sx is not None and sy is not None:
+                cv2.circle(frame, (int(sx), int(sy)), 6, COLOR_HIP, -1)
+                cv2.putText(frame, f"HIP {fid}", (int(sx) - 20, int(sy) - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_HIP, 1)
+            if into_session:
+                ch.session_fps_sum += self.tracker.current_fps
+
         self.frame_counter += 1
-
         self.tracker.update_fps()
-
-        # ========= OVERLAY – ALWAYS DRAWN (regardless of visualization_enabled) =========
-        if sx is not None and sy is not None:
-            # Valid hip – cyan
-            cv2.circle(frame, (int(sx), int(sy)), 6, COLOR_HIP, -1)
-            cv2.putText(frame, "HIP", (int(sx)-15, int(sy)-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_HIP, 1)
-        elif players:
-            # Fallback overlay – red at bottom‑centre of largest player
-            main_player = max(players, key=lambda p: (p['bbox'][2]-p['bbox'][0]) * (p['bbox'][3]-p['bbox'][1]))
-            x1, y1, x2, y2 = main_player['bbox']
-            fallback_x = (x1 + x2) // 2
-            fallback_y = y2  # bottom edge
-            cv2.circle(frame, (fallback_x, fallback_y), 6, (0, 0, 255), -1)
-            cv2.putText(frame, "FALLBACK", (fallback_x-30, fallback_y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-
-        frame = self.draw_all_annotations(frame, balls, players, False)
+        frame = self.draw_all_annotations(frame, balls, players)
         return frame
 
     def process_qr_detection(self, frame, current_time_str, current_timestamp):
-        raw_data, bbox = detect_qr_in_roi(frame, self.qr_roi)
-        action, screens, keypoints = parse_qr_data(raw_data) if raw_data else ("", [], [])
+        """Detect QR in Field A and Field B ROIs. ROI defines the field (keep A/B in sync)."""
+        # Pass 1: detect both ROIs on this frame
+        detected = {}
+        for fid, ch in self.channels.items():
+            roi = self.qr_rois.get(fid) or ch.qr_roi
+            raw_data, bbox = detect_qr_in_roi(frame, roi)
+            action, screens, keypoints = parse_qr_data(raw_data) if raw_data else ("", [], [])
+            # Trust the ROI: do not drop QR based on screen→field mapping (that lagged B behind A).
+            detected[fid] = {
+                "raw": raw_data,
+                "action": action,
+                "screens": screens,
+                "keypoints": keypoints,
+                "bbox": bbox,
+            }
 
-        if raw_data:
-            self.qr_state["missing_since"] = None
-            # Same QR returned during end-offset: treat as flicker, keep session.
-            if (
-                self.pending_end
-                and self.qr_state["last_raw_data"] is not None
-                and raw_data == self.qr_state["last_raw_data"]
-            ):
-                self.pending_end = False
-        elif self.current_qr_block or self.session_active or self.pending_start:
-            if self.qr_state["missing_since"] is None:
-                self.qr_state["missing_since"] = current_timestamp
-        else:
-            self.qr_state["missing_since"] = None
+        # Pass 2: flicker / missing handling
+        new_qr_fields = []
+        for fid, ch in self.channels.items():
+            raw_data = detected[fid]["raw"]
+            action = detected[fid]["action"]
+            screens = detected[fid]["screens"]
 
-        is_new_qr = (raw_data and raw_data != self.qr_state["last_raw_data"] and action and screens and
-                    (current_timestamp - self.qr_state["last_detection_time"] >= self.qr_state["cooldown"]))
+            if raw_data:
+                ch.qr_state["missing_since"] = None
+                if (
+                    ch.pending_end
+                    and ch.qr_state["last_raw_data"] is not None
+                    and raw_data == ch.qr_state["last_raw_data"]
+                ):
+                    ch.pending_end = False
+            elif ch.current_qr_block or ch.session_active or ch.pending_start:
+                if ch.qr_state["missing_since"] is None:
+                    ch.qr_state["missing_since"] = current_timestamp
+            else:
+                ch.qr_state["missing_since"] = None
 
-        if is_new_qr:
-            # --- FIX: force end of any active session or cancel pending starts ---
+            is_new_qr = (
+                raw_data and raw_data != ch.qr_state["last_raw_data"] and action and screens and
+                (current_timestamp - ch.qr_state["last_detection_time"] >= ch.qr_state["cooldown"])
+            )
+            if is_new_qr:
+                new_qr_fields.append(fid)
+
+        # Shared action index: late Field B must JOIN peer's S{n}, not bump to S{n+1}
+        # But never re-join a block this field already finished (SF-60N A duplicate / B skip).
+        join_by_field = {}
+        for fid in new_qr_fields:
+            ch = self.channels[fid]
+            peer = self._peer_channel(ch)
+            if peer is None:
+                continue
+            if peer.field_id in new_qr_fields and not peer.session_active and not peer.pending_start:
+                continue
+            info = self._peer_join_info(ch, current_timestamp)
+            if info and info.get("block_id"):
+                join_by_field[fid] = info
+
+        starters = [fid for fid in new_qr_fields if fid not in join_by_field]
+        shared_num = None
+        if starters:
+            self.shared_action_index = max(
+                int(getattr(self, "shared_action_index", 0) or 0) + 1,
+                max(ch.block_counter for ch in self.channels.values()) + 1,
+            )
+            shared_num = self.shared_action_index
+            for sim in self.simulators.values():
+                sim.outcome_index = max(int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1)
+
+        for fid in new_qr_fields:
+            ch = self.channels[fid]
+            info = detected[fid]
             with self.session_lock:
-                # If there is an active session, end it now
-                if self.session_active:
-                    self._end_session_locked(current_time_str, current_timestamp)
-                # Cancel any pending start (overwrite)
-                self.pending_start = None
-                # Cancel any pending end (since we are starting a new session)
-                self.pending_end = False
-            # --- END FIX ---
+                # New QR while active: end this field AND peer on the same action so
+                # the peer cannot invite a re-join of the just-finished block.
+                if ch.session_active:
+                    self._end_paired_sessions_now(current_time_str, current_timestamp, ch)
+                ch.pending_start = None
+                ch.pending_end = False
 
-            # Now schedule the new session
-            if self.current_qr_block:
-                self.qr_blocks.append(self.current_qr_block.copy())
-                self.current_qr_block = None
-            self.block_counter += 1
-            block_id = f"S{self.block_counter}"
+            if ch.current_qr_block:
+                ch.qr_blocks.append(ch.current_qr_block.copy())
+                ch.current_qr_block = None
 
-            self.qr_state["last_raw_data"] = raw_data
-            self.qr_state["last_detection_time"] = current_timestamp
-            self.qr_state["detection_count"] += 1
-            self.qr_state["missing_since"] = None
-            self.schedule_session_start(action, screens, keypoints, block_id, current_time_str, current_timestamp)
+            join = join_by_field.get(fid)
+            if join and self._field_completed_block(ch, join.get("block_id")):
+                join = None
 
+            if join:
+                block_id = join["block_id"]
+                ch.block_counter = self._parse_block_num(block_id)
+                paired_start = join.get("paired_session_start")
+                paired_offset = join.get("offset_start_time_str")
+            else:
+                if shared_num is None:
+                    self.shared_action_index = max(
+                        int(getattr(self, "shared_action_index", 0) or 0) + 1,
+                        max(c.block_counter for c in self.channels.values()) + 1,
+                    )
+                    shared_num = self.shared_action_index
+                    for sim in self.simulators.values():
+                        sim.outcome_index = max(
+                            int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1
+                        )
+                ch.block_counter = int(shared_num)
+                block_id = f"S{shared_num}"
+                paired_start = None
+                paired_offset = None
+                peer = self._peer_channel(ch)
+                # Peer still stuck on a previous action → end it so both can align
+                if peer and peer.session_active and peer.current_block_id != block_id:
+                    with self.session_lock:
+                        if peer.session_active:
+                            self._end_session_locked(current_time_str, current_timestamp, peer)
+                if peer and peer.pending_start and peer.pending_start.get("block_id") == block_id:
+                    paired_start = float(peer.pending_start_time)
+                    paired_offset = peer.pending_start.get("offset_start_time_str")
+
+            ch.qr_state["last_raw_data"] = info["raw"]
+            ch.qr_state["last_detection_time"] = current_timestamp
+            ch.qr_state["detection_count"] += 1
+            ch.qr_state["missing_since"] = None
+            self.schedule_session_start(
+                info["action"], info["screens"], info["keypoints"],
+                block_id, current_time_str, current_timestamp, ch,
+                paired_session_start=paired_start,
+                paired_offset_str=paired_offset,
+            )
+
+            bbox = info["bbox"]
             if bbox is not None and len(bbox) > 0 and self.visualization_enabled:
                 pts = bbox[0].astype(int)
                 cv2.polylines(frame, [pts], True, COLOR_QR, 2)
+                cv2.putText(frame, f"QR {fid} {block_id}", (pts[0][0], max(20, pts[0][1] - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_QR, 1)
 
-        elif (
-            not raw_data
-            and self.current_qr_block
-            and not self.pending_end
-            and self.qr_state["missing_since"] is not None
-            and (current_timestamp - self.qr_state["missing_since"]) >= QR_DISAPPEAR_DEBOUNCE
-        ):
-            # QR gone long enough – end session. Keep last_raw_data until the
-            # session actually ends so a brief return during the end-offset
-            # cancels pending_end instead of spawning a ghost new action.
-            self.schedule_session_end(current_time_str, current_timestamp)
-        elif self.session_active and (current_timestamp - self.session_start_timestamp) > MAX_SESSION_DURATION:
-            self._execute_end(current_time_str, current_timestamp)
-            self.pending_end = False
+        # Pass 3: end sessions / max duration (fields that did not just start)
+        for fid, ch in self.channels.items():
+            if fid in new_qr_fields:
+                continue
+            raw_data = detected[fid]["raw"]
+            if (
+                not raw_data
+                and ch.current_qr_block
+                and not ch.pending_end
+                and ch.qr_state["missing_since"] is not None
+                and (current_timestamp - ch.qr_state["missing_since"]) >= QR_DISAPPEAR_DEBOUNCE
+            ):
+                self.schedule_session_end(current_time_str, current_timestamp, ch)
+            elif ch.session_active and (current_timestamp - ch.session_start_timestamp) > MAX_SESSION_DURATION:
+                self._execute_end(current_time_str, current_timestamp, ch)
+                ch.pending_end = False
 
         return frame
 
@@ -3662,11 +4341,14 @@ class SimustRealtimeCamera:
                 return
             self.operator_paused = True
             self._pause_started_at = time.time()
-            if self.analysis_timer:
-                self.analysis_timer.cancel()
-                started = self.analysis_started_at or self._pause_started_at
-                self._paused_analysis_remaining = max(0.05, LATE_ANALYSIS_DELAY - (self._pause_started_at - started))
-                self.analysis_timer = None
+            for ch in self.channels.values():
+                if ch.analysis_timer:
+                    ch.analysis_timer.cancel()
+                    started = ch.analysis_started_at or self._pause_started_at
+                    ch._paused_analysis_remaining = max(
+                        0.05, LATE_ANALYSIS_DELAY - (self._pause_started_at - started)
+                    )
+                    ch.analysis_timer = None
             print("PAUSED — detection, analysis, and saving frozen")
 
     def _unfreeze_after_pause(self):
@@ -3674,41 +4356,45 @@ class SimustRealtimeCamera:
             if not self.operator_paused:
                 return
             dt = time.time() - (self._pause_started_at or time.time())
-            if self.pending_start:
-                self.pending_start_time += dt
-                offset = self.pending_start.get("offset_start_time_str")
-                if offset:
-                    self.pending_start["offset_start_time_str"] = add_offset_to_time(offset, dt)
-            if self.pending_end:
-                self.pending_end_time += dt
-                end_str = getattr(self, "pending_end_time_str", "")
-                if end_str:
-                    self.pending_end_time_str = add_offset_to_time(end_str, dt)
-            if self.session_active:
-                self.session_start_timestamp += dt
-            current_block = getattr(self, "current_qr_block", None)
-            if current_block and current_block.get("start_time"):
-                current_block["start_time"] = add_offset_to_time(current_block["start_time"], dt)
-            if self.between_sessions_active and self.between_session_start_ts:
-                self.between_session_start_ts += dt
-            between_start = getattr(self, "between_session_start_time", None)
-            if between_start:
-                self.between_session_start_time = add_offset_to_time(between_start, dt)
-            last_det = (getattr(self, "qr_state", None) or {}).get("last_detection_time")
-            if last_det:
-                self.qr_state["last_detection_time"] = last_det + dt
-            simulator = getattr(self, "simulator", None)
-            if simulator is not None:
+            for ch in self.channels.values():
+                if ch.pending_start:
+                    ch.pending_start_time += dt
+                    offset = ch.pending_start.get("offset_start_time_str")
+                    if offset:
+                        ch.pending_start["offset_start_time_str"] = add_offset_to_time(offset, dt)
+                if ch.pending_end:
+                    ch.pending_end_time += dt
+                    end_str = getattr(ch, "pending_end_time_str", "")
+                    if end_str:
+                        ch.pending_end_time_str = add_offset_to_time(end_str, dt)
+                if ch.session_active:
+                    ch.session_start_timestamp += dt
+                current_block = getattr(ch, "current_qr_block", None)
+                if current_block and current_block.get("start_time"):
+                    current_block["start_time"] = add_offset_to_time(current_block["start_time"], dt)
+                if ch.between_sessions_active and ch.between_session_start_ts:
+                    ch.between_session_start_ts += dt
+                between_start = getattr(ch, "between_session_start_time", None)
+                if between_start:
+                    ch.between_session_start_time = add_offset_to_time(between_start, dt)
+                last_det = (getattr(ch, "qr_state", None) or {}).get("last_detection_time")
+                if last_det:
+                    ch.qr_state["last_detection_time"] = last_det + dt
+                if ch._paused_analysis_remaining is not None:
+                    field_id = ch.field_id
+                    remaining = ch._paused_analysis_remaining
+                    ch.analysis_started_at = time.time()
+                    ch.analysis_timer = threading.Timer(
+                        remaining, lambda fid=field_id: self._perform_late_analysis(fid)
+                    )
+                    ch.analysis_timer.daemon = True
+                    ch.analysis_timer.start()
+                    ch._paused_analysis_remaining = None
+            for simulator in self.simulators.values():
                 if getattr(simulator, "start_ts", 0):
                     simulator.start_ts += dt
                 if getattr(simulator, "late_start_ts", 0):
                     simulator.late_start_ts += dt
-            if self._paused_analysis_remaining is not None:
-                self.analysis_started_at = time.time()
-                self.analysis_timer = threading.Timer(self._paused_analysis_remaining, self._perform_late_analysis)
-                self.analysis_timer.daemon = True
-                self.analysis_timer.start()
-                self._paused_analysis_remaining = None
             self.operator_paused = False
             self._pause_started_at = 0
             print("RESUMED — continuing from the pause point")
@@ -3718,11 +4404,14 @@ class SimustRealtimeCamera:
         if new_sim is None or new_sim == self.simulation_enabled:
             return
         self.simulation_enabled = new_sim
-        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'}")
-        if self.simulation_enabled and self.session_active:
-            self.simulator.start_action(self.current_action, self.current_screens)
-        if not self.simulation_enabled:
-            self.simulator.end_action()
+        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (Field A + Field B)")
+        if self.simulation_enabled:
+            for fid, ch in self.channels.items():
+                if ch.session_active:
+                    self.simulators[fid].start_action(ch.current_action, ch.current_screens)
+        else:
+            for sim in self.simulators.values():
+                sim.end_action()
 
     # ---- Main loop ----
     def run(self):
@@ -3746,14 +4435,11 @@ class SimustRealtimeCamera:
         print("\n" + "=" * 60)
         print("READY - Press Ctrl+C to stop")
         print("=" * 60)
-        print("Detection ALWAYS active (Balls on both cameras, Players on Camera 1)")
-        print("Arena simulation: artificial ball/player injected when enabled")
-        print("Player tracking: Pose-based hip point (cm-accurate) – NO fallback")
-        print("Video ALWAYS recording at 25 FPS")
-        print("Real-time results displayed on screen and saved to file")
-        print("Saving each result with video_index for per‑video results")
-        print("Economy of Play: total video distance computed using every 8th frame")
-        print("Distance converted to meters using ground-plane homography when calibrated")
+        print("Detection ALWAYS active (Balls both cameras, Players Field A + Field B)")
+        print("QR: dual ROI on 3840x1080 (Field A left / Field B right)")
+        print("Arena simulation: artificial ball/player injected on both fields when enabled")
+        print("Results overlay: Team A left panel / Team B right panel")
+        print("Saving field_A/ and field_B/ recognition + results separately")
         print("=" * 60 + "\n")
 
         try:
@@ -3783,8 +4469,8 @@ class SimustRealtimeCamera:
 
                 if left is None or right is None:
                     if self.simulation_enabled:
-                        left = self.simulator.blank_half()
-                        right = self.simulator.blank_half()
+                        left = self.simulator_a.blank_half()
+                        right = self.simulator_b.blank_half()
                     else:
                         time.sleep(0.01)
                         continue
@@ -3808,10 +4494,7 @@ class SimustRealtimeCamera:
                     self.video_saver.start(video_path, w, h, TARGET_FPS)
                     recording_started_for_video = True
 
-                if self.session_active:
-                    stitched = self.process_frame_for_session(stitched, current_timestamp)
-                else:
-                    stitched = self.process_frame_between_sessions(stitched, current_timestamp)
+                stitched = self.process_dual_fields_frame(stitched, current_timestamp)
 
                 if self.recording_active and self.video_saver.is_recording:
                     self.video_saver.write_frame(stitched)

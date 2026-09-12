@@ -2143,9 +2143,15 @@
             var reportDataState = useState(null);
             var reportData = reportDataState[0];
             var setReportData = reportDataState[1];
+            var reportDataBState = useState(null);
+            var reportDataB = reportDataBState[0];
+            var setReportDataB = reportDataBState[1];
             var analysisResultsState = useState([]);
             var analysisResults = analysisResultsState[0];
             var setAnalysisResults = analysisResultsState[1];
+            var analysisResultsBState = useState([]);
+            var analysisResultsB = analysisResultsBState[0];
+            var setAnalysisResultsB = analysisResultsBState[1];
             var allLevelsState = useState([]);
             var allLevels = allLevelsState[0];
             var setAllLevels = allLevelsState[1];
@@ -2203,9 +2209,21 @@
             var searchQueryState = useState("");
             var searchQuery = searchQueryState[0];
             var setSearchQuery = searchQueryState[1];
+            var searchQueryBState = useState("");
+            var searchQueryB = searchQueryBState[0];
+            var setSearchQueryB = searchQueryBState[1];
+            var selectedPlayerBIdState = useState(null);
+            var selectedPlayerBId = selectedPlayerBIdState[0];
+            var setSelectedPlayerBId = selectedPlayerBIdState[1];
+            var showSearchResultsBState = useState(false);
+            var showSearchResultsB = showSearchResultsBState[0];
+            var setShowSearchResultsB = showSearchResultsBState[1];
             var filteredPlayersState = useState([]);
             var filteredPlayers = filteredPlayersState[0];
             var setFilteredPlayers = filteredPlayersState[1];
+            var filteredPlayersBState = useState([]);
+            var filteredPlayersB = filteredPlayersBState[0];
+            var setFilteredPlayersB = filteredPlayersBState[1];
             var showSearchResultsState = useState(false);
             var showSearchResults = showSearchResultsState[0];
             var setShowSearchResults = showSearchResultsState[1];
@@ -2302,6 +2320,8 @@
                 resultsEpochRef.current += 1;
                 setReportData(null);
                 setAnalysisResults([]);
+                setReportDataB(null);
+                setAnalysisResultsB([]);
                 setCurrentDirectory(null);
                 setLastUpdateTime(null);
             };
@@ -2364,6 +2384,8 @@
                 }
                 setAnalysisResults([]);
                 setReportData(null);
+                setAnalysisResultsB([]);
+                setReportDataB(null);
                 setSelectedPlayerId(null);
                 selectedPlayerIdRef.current = null;
                 setSearchQuery("");
@@ -2570,7 +2592,48 @@
                 setFilteredPlayers([]);
                 updateProgressForPlayer(player, { preferDefaults: true });
                 loadPlayerSessionsFromBackend(player.id);
-                showToast("Selected: " + player.name + ' ' + player.surname, 'success');
+                showToast("Selected Field A: " + player.name + ' ' + player.surname, 'success');
+            };
+
+            var performSearchB = function(query) {
+                setSearchQueryB(query);
+                if (!query.trim()) {
+                    setFilteredPlayersB([]);
+                    setShowSearchResultsB(false);
+                    return;
+                }
+                var lower = query.toLowerCase().trim();
+                var applySuggestions = function(source) {
+                    var list = source || [];
+                    var filtered = list.filter(function(p) { return playerMatchesQuery(p, lower); });
+                    setFilteredPlayersB(filtered);
+                    setShowSearchResultsB(true);
+                };
+                if (players && players.length) {
+                    applySuggestions(players);
+                }
+                loadPlayers().then(function(list) {
+                    applySuggestions((list && list.length) ? list : players);
+                });
+            };
+
+            var selectPlayerBFromSearch = function(player) {
+                if (selectedPlayerId && player.id === selectedPlayerId) {
+                    showToast("Same player already selected for Field A — pick another for Field B", 'error');
+                    return;
+                }
+                setSelectedPlayerBId(player.id);
+                setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
+                setShowSearchResultsB(false);
+                setFilteredPlayersB([]);
+                showToast("Selected Field B: " + player.name + ' ' + player.surname, 'success');
+            };
+
+            var clearSelectionB = function() {
+                setSelectedPlayerBId(null);
+                setSearchQueryB("");
+                setFilteredPlayersB([]);
+                setShowSearchResultsB(false);
             };
 
             var clearSelection = function() {
@@ -2925,6 +2988,41 @@
                             goals_by_screen: stats.goals_by_screen,
                             directory: res.data.directory
                         }));
+                        var fields = res.data.fields || {};
+                        if (fields.B && fields.B.actions) {
+                            var reportB = fields.B;
+                            var actionsB = reportB.actions || [];
+                            var formattedB = actionsB.map(function(a, idx) {
+                                var sessionDur = (a.session_duration !== undefined && a.session_duration !==
+                                    null && a.session_duration !== 'N/A' && a.session_duration !== '-') ?
+                                    parseFloat(a.session_duration) : null;
+                                var ae = (a.ae !== undefined && a.ae !== null && a.ae !== 'N/A') ? parseFloat(a.ae) : null;
+                                var videoIndex = a.video_index || a.videoIndex || Math.floor(idx / 4) + 1;
+                                return {
+                                    id: a.id || a.block_id || '',
+                                    action: a.action || '',
+                                    screens: Array.isArray(a.screens) ? a.screens.join(', ') : a.screens || '',
+                                    result: a.result || 'N/A',
+                                    winning_screen: a.winning_screen || 'N/A',
+                                    session_duration: sessionDur,
+                                    movement: a.movement || 0,
+                                    direction: a.direction || 'NONE',
+                                    aep: a.aep || 'N/A',
+                                    ae: ae,
+                                    video_index: videoIndex,
+                                    field: 'B'
+                                };
+                            });
+                            setAnalysisResultsB(formattedB);
+                            setReportDataB(Object.assign({}, reportB, {
+                                actions: formattedB,
+                                statistics: reportB.statistics || {},
+                                total_actions: formattedB.length
+                            }));
+                        } else {
+                            setAnalysisResultsB([]);
+                            setReportDataB(null);
+                        }
                         setCurrentDirectory(res.data.directory);
                         setLastUpdateTime(new Date().toLocaleTimeString());
                         if (showLoading) setLoadingAnalysis(false);
@@ -3162,16 +3260,38 @@
                     player_surname: player.surname,
                     player_player_id: player.playerId,
                     visualization_enabled: visualizationEnabledRef.current,
-                    simulation_enabled: simulationEnabledRef.current
+                    simulation_enabled: simulationEnabledRef.current,
+                    field: "A",
+                    players: [
+                        {
+                            player_id: player.id,
+                            player_name: player.name,
+                            player_surname: player.surname,
+                            field: "A"
+                        }
+                    ]
                 };
+                var playerB = players.find(function(p) { return p.id === selectedPlayerBId; });
+                if (playerB) {
+                    payload.players.push({
+                        player_id: playerB.id,
+                        player_name: playerB.name,
+                        player_surname: playerB.surname,
+                        field: "B"
+                    });
+                    payload.player_b_id = playerB.id;
+                }
                 if (selectedSubdirectory) {
                     payload.subdirectory = selectedSubdirectory;
                 }
 
                 axios.post("/start-realtime-playback", payload).then(function() {
+                    var dualMsg = playerB
+                        ? ("Field A: " + player.name + " · Field B: " + playerB.name)
+                        : (player.name + ' ' + player.surname + " (Field A; Field B empty)");
                     showToast((window.SIMUST_PUBLIC
                         ? "Sent to the lab over the internet: "
-                        : "Realtime playback started for ") + player.name + ' ' + player.surname +
+                        : "Realtime playback started — ") + dualMsg +
                         (selectedSubdirectory ? ' [' + selectedSubdirectory + ']' : ''), 'success');
 
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
@@ -3730,13 +3850,28 @@
                         ) :
                         reportData && reportData.actions && reportData.actions.length ?
                         React.createElement(React.Fragment, null,
+                            reportDataB && reportDataB.actions && reportDataB.actions.length ?
+                            React.createElement('div', { className: "mb-2 text-sm text-gray-400" },
+                                "Team A / Field A and Team B / Field B shown separately when both played.") : null,
+                            React.createElement('h3', { className: "gold-accent font-bold mb-2" }, "Team A – Field A"),
                             React.createElement(SummaryMetrics, { stats: reportData.statistics || {},
                                 actions: analysisResults }),
                             React.createElement('div', { className: "mt-6" },
                                 React.createElement('h3', { className: "gold-accent font-bold mb-3 text-sm" },
-                                    "Training Details"),
+                                    "Training Details – Field A"),
                                 React.createElement(ResultsTable, { actions: analysisResults })
-                            )
+                            ),
+                            reportDataB && reportDataB.actions && reportDataB.actions.length ?
+                            React.createElement(React.Fragment, null,
+                                React.createElement('h3', { className: "gold-accent font-bold mb-2 mt-8" }, "Team B – Field B"),
+                                React.createElement(SummaryMetrics, { stats: reportDataB.statistics || {},
+                                    actions: analysisResultsB || [] }),
+                                React.createElement('div', { className: "mt-6" },
+                                    React.createElement('h3', { className: "gold-accent font-bold mb-3 text-sm" },
+                                        "Training Details – Field B"),
+                                    React.createElement(ResultsTable, { actions: analysisResultsB || [] })
+                                )
+                            ) : null
                         ) :
                         React.createElement('div', { className: "text-center p-10 panel" },
                             React.createElement('p', { className: "text-gray-400" },
@@ -3778,8 +3913,52 @@
                             selectedLevel: selectedLevel,
                             selectedSubdirectory: selectedSubdirectory,
                             onSubdirectoryChange: setSelectedSubdirectory,
-                            t: t
+                            t: t,
+                            fieldLabel: "Field A"
                         }),
+                        React.createElement('div', { className: "panel mt-3 mb-3 p-4" },
+                            React.createElement('h3', { className: "gold-accent font-bold mb-2 text-sm" },
+                                "Field B player (optional)"),
+                            React.createElement('p', { className: "text-xs text-gray-400 mb-2" },
+                                "Second search box — book Field B for the same time. Empty Field B still plays (Wrongs if absent)."),
+                            React.createElement('input', {
+                                type: "text",
+                                className: "w-full",
+                                placeholder: "Search Field B player...",
+                                value: searchQueryB,
+                                onChange: function(e) { performSearchB(e.target.value); },
+                                onFocus: function() { if (searchQueryB.trim()) setShowSearchResultsB(true); }
+                            }),
+                            showSearchResultsB && filteredPlayersB.length > 0 ?
+                            React.createElement('div', { className: "mt-2 max-h-40 overflow-y-auto" },
+                                filteredPlayersB.map(function(p) {
+                                    return React.createElement('div', {
+                                        key: "B-" + p.id,
+                                        className: "player-card",
+                                        onClick: function() { selectPlayerBFromSearch(p); }
+                                    },
+                                        React.createElement('div', null,
+                                            React.createElement('strong', null, (p.name || '') + ' ' + (p.surname || '')),
+                                            React.createElement('div', { className: "text-xs text-gray-400" },
+                                                "SIMUST ID: " + p.playerId)
+                                        )
+                                    );
+                                })
+                            ) : null,
+                            selectedPlayerBId ?
+                            React.createElement('div', { className: "mt-2 flex justify-between items-center" },
+                                React.createElement('span', { className: "text-sm" },
+                                    "Field B: " + (function() {
+                                        var pb = players.find(function(p) { return p.id === selectedPlayerBId; });
+                                        return pb ? ((pb.name || '') + ' ' + (pb.surname || '')) : selectedPlayerBId;
+                                    })()),
+                                React.createElement('button', {
+                                    type: "button",
+                                    className: "btn-danger",
+                                    onClick: clearSelectionB
+                                }, "Clear B")
+                            ) : null
+                        ),
                         getSelectedPlayer() ?
                         React.createElement(PlayerProfile, {
                             player: getSelectedPlayer(),
