@@ -40,7 +40,8 @@ def stripe_configured() -> bool:
 def public_base_url() -> str:
     if PUBLIC_BASE_URL:
         return PUBLIC_BASE_URL
-    return "http://157.180.47.98"
+    # Production portal hostname (never fall back to bare HTTP IP for Stripe URLs).
+    return "https://my.simust.com"
 
 
 def put_pending(session_id: str, payload: Dict[str, Any]) -> None:

@@ -21,7 +21,7 @@ import asyncio
 import math
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse
 from pydantic import BaseModel, ValidationError
 import sys
 import threading
@@ -50,9 +50,11 @@ from simust_security import (
     current_user,
     hash_password,
     is_lab_only_path,
+    is_public_hostname,
     issue_token,
     public_security_headers,
     require_player_id,
+    require_youth_guardian_consent,
     sanitize_profile_image,
     verify_password,
 )
@@ -1436,10 +1438,11 @@ app.router.lifespan_context = lifespan
 async def validation_exc(_: Request, exc: ValidationError):
     return JSONResponse(status_code=400, content={"detail": exc.errors()})
 
-@app.get("/", response_class=FileResponse)
+@app.get("/")
 async def root():
     if PUBLIC_MODE:
-        return _my_simust_page()
+        # Canonical public entry: secure login page on my.simust.com
+        return RedirectResponse(url="/login", status_code=302)
     return FileResponse("index.html")
 
 
@@ -5176,6 +5179,14 @@ async def register(req: Request):
         raise HTTPException(400, "Valid phone number is required")
     phone = f"{country_code} {phone_number}"
 
+    youth_meta = {}
+    if PUBLIC_MODE and role == "player":
+        youth_meta = require_youth_guardian_consent(
+            age,
+            data.get("guardian_consent"),
+            data.get("guardian_email", ""),
+        )
+
     users = load_users()
     if username in users or find_username(users, username):
         raise HTTPException(400, "Unable to create this account")
@@ -5201,6 +5212,11 @@ async def register(req: Request):
         "image": image,
         "progress": progress
     }
+    if youth_meta.get("youth"):
+        users[username]["youth"] = True
+        users[username]["guardian_consent"] = True
+        users[username]["guardian_email"] = youth_meta.get("guardian_email")
+        users[username]["guardian_consent_at"] = youth_meta.get("guardian_consent_at")
     save_users(users)
     ensure_player_workspace(username)
 

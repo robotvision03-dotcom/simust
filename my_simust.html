@@ -3188,6 +3188,14 @@
                             <span style="font-size:.7rem;color:#8fa0b6;" data-i18n="imageLoaded">Image loaded</span>
                         </div>
                     </div>
+                    <div id="guardian-consent-block" class="form-group" style="display:none;">
+                        <label for="reg-guardian-email">Guardian email (required under 16)</label>
+                        <input type="email" id="reg-guardian-email" placeholder="parent@email.com" dir="ltr" autocomplete="email">
+                        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-weight:500;">
+                            <input type="checkbox" id="reg-guardian-consent" style="margin-top:3px;">
+                            <span>I am the parent/guardian (or have their authority) and consent to creating this youth player account under SIMUST privacy rules.</span>
+                        </label>
+                    </div>
                     <div id="register-error" class="auth-error"></div>
                     <div id="register-success" class="auth-success"></div>
                     <button class="btn-primary" id="register-btn" data-i18n="registerBtn">Register</button>
@@ -4771,6 +4779,18 @@
             var regImage = document.getElementById('reg-image');
             var imagePreview = document.getElementById('image-preview');
             var previewImg = document.getElementById('preview-img');
+            var guardianBlock = document.getElementById('guardian-consent-block');
+
+            function updateGuardianConsentVisibility() {
+                if (!guardianBlock) return;
+                var ageYears = parseInt((regAge && regAge.value) || '', 10);
+                var role = (regRole && regRole.value) || 'player';
+                var show = role === 'player' && !isNaN(ageYears) && ageYears > 0 && ageYears < 16;
+                guardianBlock.style.display = show ? 'block' : 'none';
+            }
+            if (regAge) regAge.addEventListener('input', updateGuardianConsentVisibility);
+            if (regRole) regRole.addEventListener('change', updateGuardianConsentVisibility);
+            updateGuardianConsentVisibility();
 
             if (typeof simustFillCountrySelect === 'function') {
                 simustFillCountrySelect(regCountry, '+49');
@@ -5959,6 +5979,22 @@
                     registerError.textContent = t('passwordMin');
                     return;
                 }
+                var ageYears = parseInt(age, 10);
+                var needsGuardian = role === 'player' && !isNaN(ageYears) && ageYears > 0 && ageYears < 16;
+                var guardianEmailEl = document.getElementById('reg-guardian-email');
+                var guardianConsentEl = document.getElementById('reg-guardian-consent');
+                var guardianEmail = guardianEmailEl ? guardianEmailEl.value.trim() : '';
+                var guardianConsent = !!(guardianConsentEl && guardianConsentEl.checked);
+                if (needsGuardian) {
+                    if (!guardianConsent) {
+                        registerError.textContent = 'Guardian consent is required for players under 16.';
+                        return;
+                    }
+                    if (!guardianEmail || guardianEmail.indexOf('@') === -1) {
+                        registerError.textContent = 'A valid guardian email is required for players under 16.';
+                        return;
+                    }
+                }
                 registerError.textContent = '';
                 registerSuccess.textContent = t('registering');
                 try {
@@ -5969,7 +6005,9 @@
                             username: username, password: password, name: name, surname: surname,
                             email: email, country_code: countryCode, phone: phone,
                             age: age || '', gender: gender, club: club || '', team: team || '', role: role,
-                            image: image
+                            image: image,
+                            guardian_consent: needsGuardian ? guardianConsent : false,
+                            guardian_email: needsGuardian ? guardianEmail : ''
                         })
                     });
                     var data = await resp.json();
@@ -7201,7 +7239,7 @@
             async function cancelReservation(id) {
                 if (!currentUser || !id) return;
                 try {
-                    var resp = await fetch(API_BASE + '/reservations/' + encodeURIComponent(id) + '?username=' + encodeURIComponent(currentUser.username), {
+                    var resp = await fetch(API_BASE + '/reservations/' + encodeURIComponent(id), {
                         method: 'DELETE',
                         headers: apiHeaders()
                     });
@@ -7542,7 +7580,7 @@
                 setPortalUrl('login', true);
             }
 
-            console.log('SIMUST My Portal loaded with public login at ' + (PORTAL_ROOT || '') + '/login');
+            // Do not log usernames, tokens, or profile fields to the browser console.
         })();
     </script>
 
