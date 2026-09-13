@@ -684,6 +684,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.waiting_overlay.setGeometry(0, 0, self.videoframe.width(), self.videoframe.height())
         return super().eventFilter(obj, event)
 
+    def _active_fields(self):
+        path = "C:/Users/siama/Documents/simust_player/players_fields.json"
+        try:
+            import simust_fields
+            return sorted(simust_fields.load_active_fields(path))
+        except Exception:
+            return ["A", "B"]
+
     def _find_latest_report(self):
         realtime_dir = "C:/Users/siama/Documents/simust_realtime_recordings"
         if os.path.exists(realtime_dir):
@@ -691,12 +699,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if subdirs:
                 subdirs.sort(key=lambda d: os.path.getctime(os.path.join(realtime_dir, d)), reverse=True)
                 newest = os.path.join(realtime_dir, subdirs[0])
-                # Prefer field folders; return a recognition.json path (session root has none)
-                for base in (
-                    os.path.join(newest, "field_A"),
-                    os.path.join(newest, "field_B"),
-                    newest,
-                ):
+                active = self._active_fields()
+                # Prefer active field folders only
+                search_bases = []
+                for fid in active:
+                    search_bases.append(os.path.join(newest, f"field_{fid}"))
+                search_bases.append(newest)
+                for base in search_bases:
                     for fname in ("recognition.json", "results.json"):
                         path = os.path.join(base, fname)
                         if os.path.exists(path):
@@ -738,6 +747,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         backend_url = "http://127.0.0.1:8000/create-video-results"
         session_dir = os.path.dirname(report_path) if report_path else ""
+        # Normalize to session root when pointed at field_A / field_B
+        base = os.path.basename(session_dir.rstrip("\\/"))
+        if base in ("field_A", "field_B"):
+            session_dir = os.path.dirname(session_dir)
         payload = {
             "report_path": report_path,
             "directory": session_dir,
@@ -746,6 +759,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "video_index": video_num,
             "total_videos": self.total_videos,
             "display": False,
+            "fields": self._active_fields(),
         }
         try:
             if HAS_REQUESTS:
@@ -850,10 +864,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.final_summary_done.emit("")
             return
         backend_url = "http://127.0.0.1:8000/create-results-video"
+        session_dir = os.path.dirname(report_path) if report_path else ""
+        base = os.path.basename(session_dir.rstrip("\\/"))
+        if base in ("field_A", "field_B"):
+            session_dir = os.path.dirname(session_dir)
         try:
             response = requests.post(
                 backend_url,
-                json={"report_path": report_path, "display": False},
+                json={
+                    "report_path": report_path,
+                    "directory": session_dir,
+                    "display": False,
+                    "fields": self._active_fields(),
+                },
                 timeout=120,
             )
             if response.status_code == 200:

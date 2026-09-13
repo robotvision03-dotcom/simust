@@ -1691,19 +1691,30 @@ async def start_realtime_playback(req: Request):
         if level_id not in ALL_LEVELS:
             raise HTTPException(400, f"Invalid level: {level_id}")
 
-        # --- Paid session unlock gate ---
-        if player_id:
-            users = load_users()
-            if player_id not in users:
-                raise HTTPException(404, "Player not found")
+        # --- Paid session unlock gate (every selected field player) ---
+        players_payload = data.get("players") or []
+        players_to_check = []
+        seen_ids = set()
+        for entry in players_payload:
+            pid = str((entry or {}).get("player_id") or "").strip()
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                players_to_check.append(pid)
+        if not players_to_check and player_id:
+            players_to_check.append(str(player_id).strip())
+        if not players_to_check:
+            raise HTTPException(400, "No player selected for Field A or Field B")
 
-            progress = simust_progress.ensure_progress(users[player_id])
-            users[player_id]["progress"] = progress
-            save_users(users)
-
+        users = load_users()
+        for pid in players_to_check:
+            if pid not in users:
+                raise HTTPException(404, f"Player not found: {pid}")
+            progress = simust_progress.ensure_progress(users[pid])
+            users[pid]["progress"] = progress
             ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
             if not ok:
-                raise HTTPException(403, reason)
+                raise HTTPException(403, f"{pid}: {reason}")
+        save_users(users)
 
         level_path = get_level_path(level_id)
 
@@ -2145,6 +2156,31 @@ def _format_realtime_field_report(folder: str) -> Optional[dict]:
     }
 
 
+def _players_fields_path() -> str:
+    return os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+
+
+def _active_realtime_fields(explicit=None) -> set:
+    """Fields with a selected player for this session (A / B / both)."""
+    if explicit:
+        out = set()
+        for item in explicit:
+            try:
+                import simust_fields
+                fid = simust_fields.normalize_field(item)
+            except Exception:
+                fid = "B" if str(item).upper().startswith("B") else "A"
+            if fid:
+                out.add(fid)
+        if out:
+            return out
+    try:
+        import simust_fields
+        return set(simust_fields.load_active_fields(_players_fields_path()))
+    except Exception:
+        return {"A", "B"}
+
+
 def realtime_results_snapshot() -> dict:
     if realtime_aborted:
         return {"status": "aborted", "message": "Test was stopped", "report": None, "directory": None}
@@ -2153,8 +2189,11 @@ def realtime_results_snapshot() -> dict:
         if not realtime_folder:
             return {"status": "no_data", "message": "No results available yet"}
 
+        active = _active_realtime_fields()
         fields = {}
         for fid in ("A", "B"):
+            if fid not in active:
+                continue
             sub = os.path.join(realtime_folder, f"field_{fid}")
             rep = _format_realtime_field_report(sub)
             if rep is not None:
@@ -2162,18 +2201,24 @@ def realtime_results_snapshot() -> dict:
 
         # Legacy single results.json at session root
         root_rep = _format_realtime_field_report(realtime_folder)
-        if root_rep is not None and "A" not in fields:
+        if root_rep is not None and "A" not in fields and "A" in active:
             fields["A"] = root_rep
 
         if not fields:
             return {"status": "no_data", "message": "No results available yet"}
 
-        # Combined report defaults to Field A (back-compat for existing UI)
-        primary = fields.get("A") or fields.get("B")
+        # Prefer the active field (B-only sessions must not fall back to empty A)
+        if "A" in active and "A" in fields:
+            primary = fields["A"]
+        elif "B" in active and "B" in fields:
+            primary = fields["B"]
+        else:
+            primary = fields.get("A") or fields.get("B")
         return {
             "status": "success",
             "report": primary,
             "fields": fields,
+            "active_fields": sorted(active),
             "directory": realtime_folder,
             "timestamp": datetime.now().isoformat(),
         }
@@ -2519,6 +2564,79 @@ def get_slice_video_for_accuracy(accuracy: float) -> str:
             return "PRO_CI_50-60%_V01.mp4"
     else:
         return "PRO_CI_UPTO_50%_V01.mp4"
+
+
+# Arena results strip tile order (matches waiting / Screen 2 layout)
+RESULTS_SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+# PRO_CI coach clips are authored for Field A integration panels
+COACH_CLIP_SOURCE_SLICES = (14, 1, 2)
+
+
+def coach_integration_x_ranges(width: int = 3712, field_id: str = "A"):
+    """Pixel x-ranges for cropping/placing the coach animation on the 14-slice strip.
+
+    Source (authored): slices 14, 1, 2.
+    Field A destination: same (14, 1, 2).
+    Field B destination: slices 7..9 (integration 7 and 9, with 8 between for continuous video).
+    """
+    tile_w = max(1, int(width) // len(RESULTS_SLICE_ORDER))
+    try:
+        import simust_fields
+        fid = simust_fields.normalize_field(field_id) or "A"
+        integration = (simust_fields.field_config(fid).get("results_slices") or {}).get("integration")
+    except Exception:
+        fid = "B" if str(field_id or "").upper().startswith("B") else "A"
+        integration = (7, 9) if fid == "B" else (14, 1, 2)
+
+    def span_for_slices(slice_ids):
+        idxs = []
+        for sid in slice_ids:
+            try:
+                idxs.append(RESULTS_SLICE_ORDER.index(int(sid)))
+            except (ValueError, TypeError):
+                continue
+        if not idxs:
+            return 0, tile_w
+        i0, i1 = min(idxs), max(idxs) + 1
+        return i0 * tile_w, i1 * tile_w
+
+    src_x0, src_x1 = span_for_slices(COACH_CLIP_SOURCE_SLICES)
+    if fid == "B":
+        # Map onto Field B integration: screens 7 and 9 (span 7,8,9 = 3 tiles, same width as source)
+        dst_x0, dst_x1 = span_for_slices((7, 8, 9))
+    else:
+        dst_x0, dst_x1 = span_for_slices(integration or COACH_CLIP_SOURCE_SLICES)
+    return {
+        "field": fid,
+        "tile_w": tile_w,
+        "src_x0": int(src_x0),
+        "src_x1": int(src_x1),
+        "dst_x0": int(dst_x0),
+        "dst_x1": int(dst_x1),
+        "src_w": max(1, int(src_x1) - int(src_x0)),
+        "dst_w": max(1, int(dst_x1) - int(dst_x0)),
+    }
+
+
+def remap_coach_frame_to_field(frame, width: int, height: int, field_id: str):
+    """Place authored coach content onto the active field's integration slices."""
+    if frame is None or frame.size == 0:
+        return np.zeros((height, width, 3), dtype=np.uint8)
+    if frame.shape[1] != width or frame.shape[0] != height:
+        frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+    geom = coach_integration_x_ranges(width, field_id)
+    if geom["field"] != "B":
+        return frame
+    out = np.zeros((height, width, 3), dtype=np.uint8)
+    out[:] = (10, 12, 18)
+    sx0, sx1 = geom["src_x0"], geom["src_x1"]
+    dx0, dx1 = geom["dst_x0"], geom["dst_x1"]
+    crop = frame[:, sx0:sx1]
+    if crop.size == 0:
+        return out
+    placed = cv2.resize(crop, (geom["dst_w"], height), interpolation=cv2.INTER_AREA)
+    out[:, dx0:dx1] = placed
+    return out
 
 # ============================================================
 # VIDEO GENERATION FUNCTIONS
@@ -3045,25 +3163,26 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         if is_final:
             selected_video = get_slice_video_for_accuracy(avg_ae)
-            # Field B: rings-only summary (no coach / integration clip)
-            skip_coach = (str(field_id or "").upper() == "B")
-            if skip_coach:
-                slice_video_path = None
-                logger.info("Field B final/per-video: skipping coach integration clip")
-            elif selected_video:
+            # Final coach clip:
+            # - A-only or B-only → include coach animation based on AE (same as classic Field A)
+            # - Dual A+B → caller uses Field A as primary, so coach stays on A only
+            #   (Field B rings are passed via extra_ring_panels, no second coach clip)
+            if selected_video:
                 selected_path = os.path.join(ANIMATIONS_DIR, selected_video)
                 if os.path.exists(selected_path):
                     slice_video_path = selected_path
-                    logger.info(f"Using slice video for AE {avg_ae:.1f}%: {selected_video}")
+                    logger.info(
+                        "Final Field %s: using coach slice for AE %.1f%%: %s",
+                        field_id, avg_ae, selected_video,
+                    )
                 else:
                     logger.warning(f"Selected slice video {selected_video} not found, falling back to default.")
                     slice_video_path = None
             else:
                 slice_video_path = None
         else:
-            # Per-video: Field B stays rings-only; Field A may still use coach later if provided
-            if str(field_id or "").upper() == "B":
-                slice_video_path = None
+            # Per-video stays rings-only (no coach clip) for both fields
+            slice_video_path = None
 
         REFERENCE_DISTANCE_METERS = 77.0
         economy_percent = min(100.0, (total_distance / REFERENCE_DISTANCE_METERS) * 100) if total_distance > 0 else 0
@@ -3196,9 +3315,17 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         temp_avi = output_path.replace(".mp4", "_temp.avi")
 
-        slice_numbers = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        slice_numbers = list(RESULTS_SLICE_ORDER)
         num_tiles = len(slice_numbers)
         tile_width = width // num_tiles
+        coach_geom = coach_integration_x_ranges(width, field_id)
+        remap_coach_to_b = (str(field_id or "").upper() == "B")
+        if remap_coach_to_b:
+            logger.info(
+                "Field B coach integration: crop slices 14/1/2 (x=%s..%s) → slices 7/9 (x=%s..%s)",
+                coach_geom["src_x0"], coach_geom["src_x1"],
+                coach_geom["dst_x0"], coach_geom["dst_x1"],
+            )
 
         LABEL_VERTICAL_GAP = 20
         RING_TEXT_Y_OFFSET = -10
@@ -3418,6 +3545,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         def composite_frame(base):
             if base is None or base.size == 0:
                 return static_frame
+            if remap_coach_to_b:
+                base = remap_coach_frame_to_field(base, width, height, "B")
+            elif base.shape[1] != width or base.shape[0] != height:
+                base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
             if base.shape[1] != width or base.shape[0] != height:
                 base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
             out_img = base
@@ -3442,10 +3573,22 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             overlay_bgra[:, :, 3] = np.where(overlay_mask, 255, 0).astype(np.uint8)
             if not cv2.imwrite(overlay_png, overlay_bgra):
                 raise RuntimeError("Could not write overlay PNG")
-            vf = (
-                f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
-                f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
-            )
+            if remap_coach_to_b:
+                # PRO_CI clips show coach on Field A tiles 14/1/2 — move that band to B tiles 7/9.
+                sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
+                dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
+                vf = (
+                    f"color=c=0x0a0c12:s={width}x{height}[bg];"
+                    f"[0:v]scale={width}:{height}:flags=fast_bilinear,"
+                    f"crop={sw}:{height}:{sx0}:0,scale={dw}:{height}:flags=fast_bilinear[ci];"
+                    f"[bg][ci]overlay=x={dx0}:y=0[bg2];"
+                    f"[bg2][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                )
+            else:
+                vf = (
+                    f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
+                    f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                )
             if use_slice_video and is_final and slice_video_path and os.path.exists(slice_video_path):
                 cmd = [
                     ffmpeg_exe, "-y",
@@ -3468,13 +3611,26 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 ]
                 encoded = run_ffmpeg(cmd, timeout=180)
             elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+                if remap_coach_to_b:
+                    sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
+                    dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
+                    per_vf = (
+                        f"color=c=0x0a0c12:s={width}x{height}[bg];"
+                        f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear,"
+                        f"crop={sw}:{height}:{sx0}:0,scale={dw}:{height}:flags=fast_bilinear[ci];"
+                        f"[bg][ci]overlay=x={dx0}:y=0[bg2];"
+                        f"[bg2][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                    )
+                else:
+                    per_vf = (
+                        f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear[bg];"
+                        f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                    )
                 cmd = [
                     ffmpeg_exe, "-y",
                     "-i", slice_video_path,
                     "-i", overlay_png,
-                    "-filter_complex",
-                    f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear[bg];"
-                    f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]",
+                    "-filter_complex", per_vf,
                     "-map", "[v]", "-an",
                     "-t", str(video_duration),
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
@@ -3658,8 +3814,11 @@ async def create_video_results(req: Request):
         if base in ("field_A", "field_B"):
             session_root = os.path.dirname(session_root)
 
+        active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
         field_jobs = []
         for fid in ("A", "B"):
+            if fid not in active:
+                continue
             fdir = os.path.join(session_root, f"field_{fid}")
             fresults = os.path.join(fdir, "results.json")
             if os.path.exists(fresults):
@@ -3675,12 +3834,13 @@ async def create_video_results(req: Request):
                 return {"status": "error", "message": "results.json not found"}
             with open(results_json_path, "r", encoding="utf-8") as f:
                 rows = json.load(f)
-            field_jobs.append(("A", session_root, rows, results_json_path))
+            legacy_fid = "A" if "A" in active else ("B" if "B" in active else "A")
+            field_jobs.append((legacy_fid, session_root, rows, results_json_path))
 
         # Stamp distances per field, collect per-video rows + ring panels
         panels = {}
         primary_rows = None
-        primary_fid = "A"
+        primary_fid = "A" if "A" in active else "B"
         primary_dir = session_root
         for fid, fdir, all_results, results_json_path in field_jobs:
             recognition_path = os.path.join(fdir, "recognition.json")
@@ -3716,7 +3876,7 @@ async def create_video_results(req: Request):
             )
             save_section_metrics_entry(fdir, video_index, section)
             panels[fid] = build_results_ring_panel(section, field=fid)
-            if primary_rows is None or fid == "A":
+            if primary_rows is None or fid == primary_fid:
                 primary_rows = video_results
                 primary_fid = fid
                 primary_dir = fdir
@@ -3724,7 +3884,7 @@ async def create_video_results(req: Request):
         if not panels or primary_rows is None:
             return {"status": "error", "message": "No results available"}
 
-        # One combined per-video for both fields (A left rings + B right rings)
+        # One results video: only active fields' rings (A and/or B)
         video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
         extra = [panels[fid] for fid in ("A", "B") if fid in panels and fid != primary_fid]
         if "A" in panels and "B" in panels:
@@ -3735,8 +3895,20 @@ async def create_video_results(req: Request):
                 if r.get("video_index") == video_index
             ]
             extra = [panels["B"]]
+        elif "B" in panels and "A" not in panels:
+            primary_fid = "B"
+            primary_dir = os.path.join(session_root, "field_B")
+            primary_rows = [
+                r for r in next(j[2] for j in field_jobs if j[0] == "B")
+                if r.get("video_index") == video_index
+            ]
+            extra = []
 
-        logger.info("Generating combined per-video results (A+B): %s", video_path)
+        logger.info(
+            "Generating per-video results for fields %s: %s",
+            ",".join(sorted(panels.keys())),
+            video_path,
+        )
         success = generate_results_video_from_results(
             primary_rows,
             video_path,
@@ -3845,7 +4017,10 @@ async def create_results_video(req: Request):
                 field_id = "A"
 
         field_dirs = []
+        active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
         for fid in ("A", "B"):
+            if fid not in active:
+                continue
             fdir = os.path.join(session_root, f"field_{fid}")
             fresults = os.path.join(fdir, "results.json")
             if os.path.exists(fresults):
@@ -3854,7 +4029,9 @@ async def create_results_video(req: Request):
                 if rows:
                     field_dirs.append((fid, fdir, rows))
         if not field_dirs:
-            field_dirs = [(field_id or "A", directory, all_results)]
+            legacy_fid = field_id or ("A" if "A" in active else "B")
+            if legacy_fid in active:
+                field_dirs = [(legacy_fid, directory, all_results)]
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         player_script = os.path.join(script_dir, "play_results_video.py")
@@ -3881,12 +4058,12 @@ async def create_results_video(req: Request):
             primary_video = None
             panels = {}
             primary_rows = None
-            primary_fid = "A"
+            primary_fid = "A" if "A" in active else "B"
             primary_dir = session_root
             for fid, fdir, rows in field_dirs:
                 metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
                 panels[fid] = build_results_ring_panel(metrics, field=fid)
-                if primary_rows is None or fid == "A":
+                if primary_rows is None or fid == primary_fid:
                     primary_rows = rows
                     primary_fid = fid
                     primary_dir = fdir
@@ -3906,7 +4083,12 @@ async def create_results_video(req: Request):
                 primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "B")
 
             video_path = os.path.join(session_root, "final_results_video.mp4")
-            logger.info("Generating combined final results video (A+B): %s", video_path)
+            logger.info(
+                "Generating final results video for fields %s (coach clip on primary %s): %s",
+                ",".join(sorted(panels.keys())),
+                primary_fid,
+                video_path,
+            )
             ok = generate_results_video_from_results(
                 primary_rows,
                 video_path,

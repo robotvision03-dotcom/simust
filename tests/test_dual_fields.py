@@ -1,6 +1,7 @@
 """Dual-field regression: QR ROI geometry, booking overlap, dual simulator."""
 
 from datetime import datetime, timedelta
+import json
 
 import numpy as np
 
@@ -304,3 +305,87 @@ def test_sf60n_style_alternating_qr_keeps_ab_aligned():
         assert [b["id"] for b in cam.channels["A"].qr_blocks].count("S1") == 1
     finally:
         rt.detect_qr_in_roi = orig_detect
+
+def test_load_active_fields_from_players_json(tmp_path):
+    path = tmp_path / "players_fields.json"
+    path.write_text(
+        json.dumps({
+            "fields": {
+                "A": None,
+                "B": {"player_id": "p2", "player_name": "B", "field": "B"},
+            },
+            "players": [{"player_id": "p2", "field": "B"}],
+        }),
+        encoding="utf-8",
+    )
+    assert simust_fields.load_active_fields(str(path)) == {"B"}
+
+    path.write_text(
+        json.dumps({
+            "fields": {
+                "A": {"player_id": "p1", "field": "A"},
+                "B": None,
+            }
+        }),
+        encoding="utf-8",
+    )
+    assert simust_fields.load_active_fields(str(path)) == {"A"}
+
+    path.write_text(
+        json.dumps({
+            "fields": {
+                "A": {"player_id": "p1", "field": "A"},
+                "B": {"player_id": "p2", "field": "B"},
+            }
+        }),
+        encoding="utf-8",
+    )
+    assert simust_fields.load_active_fields(str(path)) == {"A", "B"}
+
+
+def test_inactive_field_skips_qr_start():
+    import threading
+    import numpy as np
+    import simust_realtime as rt
+
+    cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+    cam.session_lock = threading.Lock()
+    cam.channels = {"A": rt.FieldRuntime("A"), "B": rt.FieldRuntime("B")}
+    cam.simulators = {
+        "A": type("S", (), {"outcome_index": 0})(),
+        "B": type("S", (), {"outcome_index": 0})(),
+    }
+    cam.shared_action_index = 0
+    cam.visualization_enabled = False
+    cam.qr_rois = {"A": simust_fields.QR_ROI_A, "B": simust_fields.QR_ROI_B}
+    cam.active_fields = {"B"}
+    started = []
+
+    def schedule(action, screens, keypoints, block_id, time_str, ts, ch,
+                 paired_session_start=None, paired_offset_str=None):
+        started.append(ch.field_id)
+        ch.pending_start = {"block_id": block_id}
+        ch.current_block_id = block_id
+
+    cam.schedule_session_start = schedule
+    cam.schedule_session_end = lambda *a, **k: None
+    cam._end_paired_sessions_now = lambda *a, **k: None
+    cam._end_session_locked = lambda *a, **k: None
+
+    qrs = {
+        "A": json.dumps({"action": "PASS", "screens_index": ["12"]}),
+        "B": json.dumps({"action": "PASS", "screens_index": ["5"]}),
+    }
+    orig = rt.detect_qr_in_roi
+
+    def fake_detect(frame, roi):
+        return (qrs["B"] if roi[0] >= 1920 else qrs["A"]), None
+
+    rt.detect_qr_in_roi = fake_detect
+    try:
+        frame = np.zeros((1080, 3840, 3), dtype=np.uint8)
+        cam.process_qr_detection(frame, "00:00:00.000", 1000.0)
+        assert started == ["B"]
+        assert cam.channels["A"].pending_start is None
+    finally:
+        rt.detect_qr_in_roi = orig

@@ -6,6 +6,8 @@ Field B (right): screens 8,9,10,11,5,6,7 — QR ROI (1920,0,3840,540) as x1,y1,x
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 # Stitched / dual-monitor canvas
@@ -144,6 +146,7 @@ def field_config(field_id: str) -> Dict:
                 "accuracy": 6,
                 "efficiency": 10,
                 "displacement": 11,
+                # Coach PRO_CI clip is remapped from A(14,1,2) onto screens 7 and 9
                 "integration": (7, 9),
             },
         }
@@ -168,3 +171,39 @@ def field_config(field_id: str) -> Dict:
 
 
 ALL_FIELDS = {fid: field_config(fid) for fid in FIELD_IDS}
+
+
+def load_active_fields(players_fields_path: Optional[str] = None) -> Set[str]:
+    """Which arena halves have a booked/selected player for this realtime run.
+
+    Reads ``players_fields.json`` written by ``/start-realtime-playback``.
+    Returns ``{"A"}``, ``{"B"}``, or ``{"A","B"}``. If the file is missing or
+    empty, defaults to both fields (legacy dual behaviour).
+    """
+    path = players_fields_path
+    if not path:
+        return set(FIELD_IDS)
+    try:
+        if not os.path.isfile(path):
+            return set(FIELD_IDS)
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+    except Exception:
+        return set(FIELD_IDS)
+
+    active: Set[str] = set()
+    fields = payload.get("fields") if isinstance(payload, dict) else None
+    if isinstance(fields, dict):
+        for fid in FIELD_IDS:
+            entry = fields.get(fid)
+            if isinstance(entry, dict) and str(entry.get("player_id") or "").strip():
+                active.add(fid)
+    if not active:
+        for entry in (payload.get("players") or []) if isinstance(payload, dict) else []:
+            if not isinstance(entry, dict):
+                continue
+            fid = normalize_field(entry.get("field"))
+            pid = str(entry.get("player_id") or "").strip()
+            if fid and pid:
+                active.add(fid)
+    return active if active else set(FIELD_IDS)

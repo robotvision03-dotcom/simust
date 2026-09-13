@@ -101,6 +101,7 @@ try:
         QR_ROI_B,
         field_config,
         field_for_screens,
+        load_active_fields,
         normalize_field,
         polygon_for_field,
         qr_roi_for_field,
@@ -109,6 +110,8 @@ try:
     )
 except Exception:
     simust_fields = None
+    def load_active_fields(path=None):
+        return {"A", "B"}
     POLYGON_POINTS_A = [
         (12, 297), (10, 254), (37, 192), (58, 171), (109, 142), (139, 132),
         (204, 103), (444, 105), (503, 133), (532, 147), (582, 180), (609, 202),
@@ -573,70 +576,75 @@ class DetectionTracker:
         if os.path.exists(POSE_ENGINE_PATH):
             self.pose_detector = PoseDetector(POSE_ENGINE_PATH)
 
-    def detect_objects(self, frame):
-        """Balls on both halves; players on left (Field A) and right (Field B) polygons."""
+    def detect_objects(self, frame, active_fields=None):
+        """Balls/players only on active field halves (saves GPU when A-only or B-only)."""
         if self.detection_model is None:
             return [], []
 
+        active = set(active_fields) if active_fields else {"A", "B"}
+        if not active:
+            active = {"A", "B"}
+
         orig_h, orig_w = frame.shape[:2]
         mid_x = orig_w // 2
-
-        left_half = frame[:, :mid_x]
-        right_half = frame[:, mid_x:]
 
         balls = []
         players = []
 
         try:
-            results_left = self.detection_model(left_half, verbose=False, conf=self.detection_conf, iou=0.45)
-            for result in results_left:
-                if result.boxes is None:
-                    continue
-                for box in result.boxes:
-                    class_id = int(box.cls)
-                    confidence = float(box.conf)
-                    xyxy = box.xyxy[0].cpu().numpy()
-                    x1 = int(xyxy[0]); y1 = int(xyxy[1]); x2 = int(xyxy[2]); y2 = int(xyxy[3])
-                    x1 = max(0, min(x1, mid_x-1)); y1 = max(0, min(y1, orig_h-1))
-                    x2 = max(x1+1, min(x2, mid_x)); y2 = max(y1+1, min(y2, orig_h))
-                    center = [(x1+x2)//2, (y1+y2)//2]
-                    det = {
-                        'center': center, 'bbox': [x1, y1, x2, y2],
-                        'confidence': round(confidence, 3), 'field': 'A',
-                    }
-                    if class_id == 0:
-                        balls.append(det)
-                    elif class_id == 1:
-                        players.append(det)
+            if "A" in active:
+                left_half = frame[:, :mid_x]
+                results_left = self.detection_model(left_half, verbose=False, conf=self.detection_conf, iou=0.45)
+                for result in results_left:
+                    if result.boxes is None:
+                        continue
+                    for box in result.boxes:
+                        class_id = int(box.cls)
+                        confidence = float(box.conf)
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1 = int(xyxy[0]); y1 = int(xyxy[1]); x2 = int(xyxy[2]); y2 = int(xyxy[3])
+                        x1 = max(0, min(x1, mid_x-1)); y1 = max(0, min(y1, orig_h-1))
+                        x2 = max(x1+1, min(x2, mid_x)); y2 = max(y1+1, min(y2, orig_h))
+                        center = [(x1+x2)//2, (y1+y2)//2]
+                        det = {
+                            'center': center, 'bbox': [x1, y1, x2, y2],
+                            'confidence': round(confidence, 3), 'field': 'A',
+                        }
+                        if class_id == 0:
+                            balls.append(det)
+                        elif class_id == 1:
+                            players.append(det)
 
-            results_right = self.detection_model(right_half, verbose=False, conf=self.detection_conf, iou=0.45)
-            for result in results_right:
-                if result.boxes is None:
-                    continue
-                for box in result.boxes:
-                    class_id = int(box.cls)
-                    confidence = float(box.conf)
-                    xyxy = box.xyxy[0].cpu().numpy()
-                    x1 = int(xyxy[0]) + mid_x
-                    y1 = int(xyxy[1])
-                    x2 = int(xyxy[2]) + mid_x
-                    y2 = int(xyxy[3])
-                    x1 = max(mid_x, min(x1, orig_w-1)); y1 = max(0, min(y1, orig_h-1))
-                    x2 = max(x1+1, min(x2, orig_w)); y2 = max(y1+1, min(y2, orig_h))
-                    center = [(x1+x2)//2, (y1+y2)//2]
-                    det = {
-                        'center': center, 'bbox': [x1, y1, x2, y2],
-                        'confidence': round(confidence, 3),
-                        'field': 'B',
-                    }
-                    if class_id == 0:
-                        balls.append(det)
-                    elif class_id == 1:
-                        players.append(det)
+            if "B" in active:
+                right_half = frame[:, mid_x:]
+                results_right = self.detection_model(right_half, verbose=False, conf=self.detection_conf, iou=0.45)
+                for result in results_right:
+                    if result.boxes is None:
+                        continue
+                    for box in result.boxes:
+                        class_id = int(box.cls)
+                        confidence = float(box.conf)
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1 = int(xyxy[0]) + mid_x
+                        y1 = int(xyxy[1])
+                        x2 = int(xyxy[2]) + mid_x
+                        y2 = int(xyxy[3])
+                        x1 = max(mid_x, min(x1, orig_w-1)); y1 = max(0, min(y1, orig_h-1))
+                        x2 = max(x1+1, min(x2, orig_w)); y2 = max(y1+1, min(y2, orig_h))
+                        center = [(x1+x2)//2, (y1+y2)//2]
+                        det = {
+                            'center': center, 'bbox': [x1, y1, x2, y2],
+                            'confidence': round(confidence, 3),
+                            'field': 'B',
+                        }
+                        if class_id == 0:
+                            balls.append(det)
+                        elif class_id == 1:
+                            players.append(det)
         except Exception:
             pass
 
-        # Filter players into Field A / Field B play zones
+        # Filter players into Field A / Field B play zones (active only)
         poly_a = (self.polygons or {}).get("A") or self.polygon
         poly_b = (self.polygons or {}).get("B")
         filtered = []
@@ -656,23 +664,27 @@ class DetectionTracker:
                 filtered.append(p)
             elif not poly_a and not poly_b:
                 filtered.append(p)
-        players = filtered
+        players = [p for p in filtered if p.get("field") in active]
 
         players.sort(key=lambda p: (p['bbox'][2]-p['bbox'][0]) * (p['bbox'][3]-p['bbox'][1]), reverse=True)
-        # Keep up to 2 players total (one per field preferred)
+        # Keep up to 1 player per active field
         by_field = {"A": [], "B": []}
         other = []
         for p in players:
             fid = p.get("field")
-            if fid in by_field and len(by_field[fid]) < 1:
+            if fid in by_field and fid in active and len(by_field[fid]) < 1:
                 by_field[fid].append(p)
             else:
                 other.append(p)
         players = by_field["A"] + by_field["B"]
+        max_keep = max(len(active), self.max_players)
         for p in other:
-            if len(players) >= max(2, self.max_players):
+            if len(players) >= max_keep:
                 break
-            players.append(p)
+            if p.get("field") in active:
+                players.append(p)
+
+        balls = [b for b in balls if b.get("field") in active]
 
         self.total_balls_detected += len(balls)
         self.total_players_detected += len(players)
@@ -3013,6 +3025,8 @@ class SimustRealtimeCamera:
 
         self.session_lock = threading.Lock()
         self.channels = {"A": FieldRuntime("A"), "B": FieldRuntime("B")}
+        self.active_fields = set(("A", "B"))
+        self._refresh_active_fields()
 
         # Back-compat aliases → Field A (legacy single-field call sites)
         ch_a = self.channels["A"]
@@ -3108,6 +3122,42 @@ class SimustRealtimeCamera:
         self.cleanup()
         sys.exit(0)
 
+    def _players_fields_path(self):
+        return os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+
+    def _refresh_active_fields(self):
+        """Load which fields have a selected player (A only / B only / both)."""
+        try:
+            active = load_active_fields(self._players_fields_path())
+        except Exception:
+            active = set(("A", "B"))
+        if not active:
+            active = set(("A", "B"))
+        self.active_fields = set(active)
+        return self.active_fields
+
+    def _field_is_active(self, fid):
+        return (normalize_field(fid) or fid) in self.active_fields
+
+    def _mask_inactive_half(self, frame):
+        """Black out the unused half so saved/live video has no inactive-field content."""
+        if frame is None:
+            return frame
+        active = set(self.active_fields) if self.active_fields else {"A", "B"}
+        if active >= {"A", "B"}:
+            return frame
+        h, w = frame.shape[:2]
+        mid = w // 2
+        out = frame
+        if "A" not in active:
+            out = frame.copy()
+            out[:, :mid] = 0
+        if "B" not in active:
+            if out is frame:
+                out = frame.copy()
+            out[:, mid:] = 0
+        return out
+
     def start_new_recording(self):
         timestamp = get_timestamp()
         self.recording_dir = os.path.join(DEFAULT_RECORDINGS_DIR, f"realtime_{timestamp}")
@@ -3121,12 +3171,42 @@ class SimustRealtimeCamera:
         self.tracker.total_balls_detected = 0
         self.tracker.total_players_detected = 0
 
-        for ch in self.channels.values():
-            ch.reset_for_recording(self.recording_dir)
+        active = self._refresh_active_fields()
+        for fid, ch in self.channels.items():
+            if fid in active:
+                ch.reset_for_recording(self.recording_dir)
+            else:
+                # Keep channel idle: no QR sessions, no results.json, no field_* folder.
+                ch.recording_subdir = None
+                ch.session_data = []
+                ch.between_session_data = []
+                ch.qr_blocks = []
+                ch.block_counter = 0
+                ch.session_active = False
+                ch.between_sessions_active = False
+                ch.pending_start = None
+                ch.pending_end = False
+                ch.current_qr_block = None
+                ch.current_action = None
+                ch.current_screens = []
+                ch.current_keypoints = []
+                ch.current_block_id = None
+                ch.all_player_positions = []
+                ch.pending_analysis = None
+                ch.analysis_timer = None
+                ch.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
+                ch.qr_state = {
+                    "last_raw_data": None,
+                    "last_detection_time": 0,
+                    "cooldown": QR_COOLDOWN,
+                    "detection_count": 0,
+                    "missing_since": None,
+                }
 
         self.shared_action_index = 0
         # Keep top-level aliases pointing at Field A for legacy helpers
-        self._sync_aliases_from_channel(self.channels["A"])
+        primary = "A" if "A" in active else ("B" if "B" in active else "A")
+        self._sync_aliases_from_channel(self.channels[primary])
 
         if simust_homography is not None:
             store = simust_homography.load_store()
@@ -3137,8 +3217,13 @@ class SimustRealtimeCamera:
                 print(f"Homography {cam}: {rec['status']}")
 
         print(f"Recording: {self.recording_dir}")
-        print(f"  Field A → {self.channels['A'].recording_subdir}")
-        print(f"  Field B → {self.channels['B'].recording_subdir}")
+        print(f"  Active fields: {', '.join(sorted(active))}")
+        for fid in ("A", "B"):
+            ch = self.channels[fid]
+            if fid in active:
+                print(f"  Field {fid} → {ch.recording_subdir}")
+            else:
+                print(f"  Field {fid} → inactive (no player selected)")
 
     def _sync_aliases_from_channel(self, ch):
         self.session_active = ch.session_active
@@ -3160,13 +3245,19 @@ class SimustRealtimeCamera:
         self.analysis_timer = ch.analysis_timer
 
     def start_between_sessions(self):
-        for ch in self.channels.values():
+        for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                continue
             ch.start_between_sessions()
-        self._sync_aliases_from_channel(self.channels["A"])
+        primary = "A" if self._field_is_active("A") else "B"
+        self._sync_aliases_from_channel(self.channels[primary])
 
     def save_between_sessions_block(self, ch=None):
         if ch is None:
-            ch = self.channels["A"]
+            primary = "A" if self._field_is_active("A") else "B"
+            ch = self.channels[primary]
+        if not self._field_is_active(ch.field_id):
+            return
         if not ch.between_session_data:
             return
 
@@ -3257,14 +3348,21 @@ class SimustRealtimeCamera:
 
     def save_recognition_json(self, ch=None):
         if ch is None:
-            # Save both fields
+            # Save both active fields
             ok = True
             for channel in self.channels.values():
+                if not self._field_is_active(channel.field_id):
+                    continue
+                if not channel.recording_subdir:
+                    continue
                 if not self.save_recognition_json(channel):
                     ok = False
             return ok
 
-        base = ch.recording_subdir or self.recording_dir
+        if not self._field_is_active(ch.field_id) or not ch.recording_subdir:
+            return False
+
+        base = ch.recording_subdir
         if not base:
             return False
 
@@ -3361,6 +3459,8 @@ class SimustRealtimeCamera:
 
     def _peer_channel(self, ch):
         other = "B" if ch.field_id == "A" else "A"
+        if not self._field_is_active(other):
+            return None
         return self.channels.get(other)
 
     def _parse_block_num(self, block_id):
@@ -3576,6 +3676,8 @@ class SimustRealtimeCamera:
             # End paired fields in one pass so A does not finish a beat before B
             ending = []
             for ch in self.channels.values():
+                if not self._field_is_active(ch.field_id):
+                    continue
                 if ch.pending_end and current_timestamp >= ch.pending_end_time:
                     ending.append(ch)
             if ending:
@@ -3600,6 +3702,8 @@ class SimustRealtimeCamera:
                         self._end_session_locked(current_time_str, current_timestamp, ch)
                     ch.pending_end = False
             for ch in self.channels.values():
+                if not self._field_is_active(ch.field_id):
+                    continue
                 if ch.pending_start and current_timestamp >= ch.pending_start_time:
                     self._execute_start(current_timestamp, ch)
                     ch.pending_start = None
@@ -3630,6 +3734,10 @@ class SimustRealtimeCamera:
         if ch is None:
             ch = self.channels["A"]
         if ch.pending_analysis is None:
+            return
+        if not self._field_is_active(ch.field_id) or not ch.recording_subdir:
+            ch.pending_analysis = None
+            ch.analysis_timer = None
             return
 
         action_data = ch.pending_analysis['action_data']
@@ -3672,7 +3780,7 @@ class SimustRealtimeCamera:
         }
 
         ch.stats['results'].append(result_entry)
-        session_folder = ch.recording_subdir or self.recording_dir
+        session_folder = ch.recording_subdir
         try:
             payload = {
                 'session_folder': session_folder,
@@ -3860,7 +3968,9 @@ class SimustRealtimeCamera:
 
     # ---- Drawing and UI methods ----
     def draw_goal_lines(self, frame, ch=None):
-        channels = [ch] if ch is not None else list(self.channels.values())
+        channels = [ch] if ch is not None else [
+            c for fid, c in self.channels.items() if self._field_is_active(fid)
+        ]
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
@@ -3880,16 +3990,17 @@ class SimustRealtimeCamera:
         return frame
 
     def draw_results_overlay(self, frame):
-        """Team A labels on left slice; Team B on right slice — orange bold."""
+        """Results labels only for active fields."""
         h, w = frame.shape[:2]
         mid = w // 2
         # BGR orange, bold
         label_color = (0, 165, 255)
         thickness = 2
-        panels = [
-            ("A", 10),
-            ("B", mid + 10),
-        ]
+        panels = []
+        if self._field_is_active("A"):
+            panels.append(("A", 10))
+        if self._field_is_active("B"):
+            panels.append(("B", mid + 10))
         for fid, left_x in panels:
             ch = self.channels.get(fid)
             if ch is None:
@@ -3913,16 +4024,21 @@ class SimustRealtimeCamera:
     def draw_all_annotations(self, frame, balls, players):
         h, w = frame.shape[:2]
         mid_x = w // 2
+        active = set(self.active_fields) if self.active_fields else {"A", "B"}
 
         frame = self.draw_goal_lines(frame)
 
         for fid, poly in (("A", POLYGON_POINTS_A), ("B", POLYGON_POINTS_B)):
+            if fid not in active:
+                continue
             if poly:
                 pts = np.array(poly, dtype=np.int32)
                 color = COLOR_POLYGON if fid == "A" else (0, 200, 255)
                 cv2.polylines(frame, [pts], True, color, 2)
 
-        any_active = any(ch.session_active for ch in self.channels.values())
+        any_active = any(
+            ch.session_active for fid, ch in self.channels.items() if fid in active
+        )
         if any_active:
             cv2.putText(frame, "SESSION ACTIVE", (w // 2 - 80, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
@@ -3930,15 +4046,29 @@ class SimustRealtimeCamera:
             cv2.putText(frame, "BETWEEN SESSIONS", (w // 2 - 90, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 255, 100), 1)
 
+        # Only draw detections belonging to active fields
         for i, ball in enumerate(balls):
+            if ball.get("field") and ball.get("field") not in active:
+                continue
+            if not ball.get("field"):
+                cx = ball['center'][0]
+                if (cx < mid_x and "A" not in active) or (cx >= mid_x and "B" not in active):
+                    continue
             cx, cy = ball['center']
             cv2.circle(frame, (cx, cy), 8, COLOR_BALL, -1)
             cv2.putText(frame, f"B{i+1}", (cx-15, cy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_BALL, 2)
 
         for player_idx, player in enumerate(players):
+            fid = player.get("field")
+            if fid and fid not in active:
+                continue
+            if not fid:
+                cx = player['center'][0]
+                if (cx < mid_x and "A" not in active) or (cx >= mid_x and "B" not in active):
+                    continue
             cv2.rectangle(frame, (player['bbox'][0], player['bbox'][1]),
                          (player['bbox'][2], player['bbox'][3]), COLOR_PLAYER, 2)
-            tag = player.get("field") or ""
+            tag = fid or ""
             cv2.putText(frame, f"P{player_idx+1}{tag}", (player['bbox'][0], player['bbox'][1] - 5),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_PLAYER, 1)
 
@@ -3947,7 +4077,7 @@ class SimustRealtimeCamera:
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_color, 2)
 
         for ch in self.channels.values():
-            if not ch.session_active:
+            if not self._field_is_active(ch.field_id) or not ch.session_active:
                 continue
             x0 = 15 if ch.field_id == "A" else mid_x + 15
             overlay = frame.copy()
@@ -3956,19 +4086,26 @@ class SimustRealtimeCamera:
             cv2.putText(frame, f"{ch.label} {ch.current_block_id} - {ch.current_action}", (x0, 68),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
-        cv2.putText(frame, "FIELD A", (w // 4 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(frame, "FIELD B", (w // 4 * 3 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-        cv2.line(frame, (mid_x, 0), (mid_x, h), (255, 255, 255), 2)
+        if "A" in active:
+            cv2.putText(frame, "FIELD A", (w // 4 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        if "B" in active:
+            cv2.putText(frame, "FIELD B", (w // 4 * 3 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+        if "A" in active and "B" in active:
+            cv2.line(frame, (mid_x, 0), (mid_x, h), (255, 255, 255), 2)
         frame = self.draw_results_overlay(frame)
         return frame
 
     # ---- Frame processing (with hip-point tracking) ----
     def _detections_for_frame(self, frame, current_timestamp):
+        active = set(self.active_fields) if self.active_fields else {"A", "B"}
         if self.simulation_enabled:
             h, w = frame.shape[:2]
             balls, players = [], []
             hips = {}
             for fid, sim in self.simulators.items():
+                if fid not in active:
+                    hips[fid] = (None, None)
+                    continue
                 b, p, hip = sim.step(w, h)
                 for item in b:
                     item = dict(item)
@@ -3981,9 +4118,12 @@ class SimustRealtimeCamera:
                 hips[fid] = hip
                 frame = sim.draw_on_frame(frame, b, p)
             return frame, balls, players, hips
-        balls, players = self.tracker.detect_objects(frame)
+        balls, players = self.tracker.detect_objects(frame, active_fields=active)
         hips = {}
         for fid in ("A", "B"):
+            if fid not in active:
+                hips[fid] = (None, None)
+                continue
             ch = self.channels[fid]
             sx, sy = self.tracker.get_player_tracking_point_for_field(
                 frame, players, fid, current_timestamp, ch.session_start_timestamp or current_timestamp
@@ -4036,6 +4176,8 @@ class SimustRealtimeCamera:
         frame, balls, players, hips = self._detections_for_frame(frame, current_timestamp)
 
         for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                continue
             hip = hips.get(fid, (None, None))
             into_session = bool(ch.session_active)
             sx, sy = self._append_frame_data(ch, balls, players, hip, current_timestamp, into_session)
@@ -4052,10 +4194,19 @@ class SimustRealtimeCamera:
         return frame
 
     def process_qr_detection(self, frame, current_time_str, current_timestamp):
-        """Detect QR in Field A and Field B ROIs. ROI defines the field (keep A/B in sync)."""
-        # Pass 1: detect both ROIs on this frame
+        """Detect QR only for fields with a selected player."""
+        # Pass 1: detect ROIs for active fields only
         detected = {}
         for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                detected[fid] = {
+                    "raw": "",
+                    "action": "",
+                    "screens": [],
+                    "keypoints": [],
+                    "bbox": None,
+                }
+                continue
             roi = self.qr_rois.get(fid) or ch.qr_roi
             raw_data, bbox = detect_qr_in_roi(frame, roi)
             action, screens, keypoints = parse_qr_data(raw_data) if raw_data else ("", [], [])
@@ -4071,6 +4222,8 @@ class SimustRealtimeCamera:
         # Pass 2: flicker / missing handling
         new_qr_fields = []
         for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                continue
             raw_data = detected[fid]["raw"]
             action = detected[fid]["action"]
             screens = detected[fid]["screens"]
@@ -4115,11 +4268,15 @@ class SimustRealtimeCamera:
         if starters:
             self.shared_action_index = max(
                 int(getattr(self, "shared_action_index", 0) or 0) + 1,
-                max(ch.block_counter for ch in self.channels.values()) + 1,
+                max(
+                    (ch.block_counter for fid, ch in self.channels.items() if self._field_is_active(fid)),
+                    default=0,
+                ) + 1,
             )
             shared_num = self.shared_action_index
-            for sim in self.simulators.values():
-                sim.outcome_index = max(int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1)
+            for fid, sim in self.simulators.items():
+                if self._field_is_active(fid):
+                    sim.outcome_index = max(int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1)
 
         for fid in new_qr_fields:
             ch = self.channels[fid]
@@ -4149,13 +4306,17 @@ class SimustRealtimeCamera:
                 if shared_num is None:
                     self.shared_action_index = max(
                         int(getattr(self, "shared_action_index", 0) or 0) + 1,
-                        max(c.block_counter for c in self.channels.values()) + 1,
+                        max(
+                            (c.block_counter for f, c in self.channels.items() if self._field_is_active(f)),
+                            default=0,
+                        ) + 1,
                     )
                     shared_num = self.shared_action_index
-                    for sim in self.simulators.values():
-                        sim.outcome_index = max(
-                            int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1
-                        )
+                    for f, sim in self.simulators.items():
+                        if self._field_is_active(f):
+                            sim.outcome_index = max(
+                                int(getattr(sim, "outcome_index", 0) or 0), shared_num - 1
+                            )
                 ch.block_counter = int(shared_num)
                 block_id = f"S{shared_num}"
                 paired_start = None
@@ -4190,6 +4351,8 @@ class SimustRealtimeCamera:
 
         # Pass 3: end sessions / max duration (fields that did not just start)
         for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                continue
             if fid in new_qr_fields:
                 continue
             raw_data = detected[fid]["raw"]
@@ -4390,7 +4553,9 @@ class SimustRealtimeCamera:
                     ch.analysis_timer.daemon = True
                     ch.analysis_timer.start()
                     ch._paused_analysis_remaining = None
-            for simulator in self.simulators.values():
+            for simulator_fid, simulator in self.simulators.items():
+                if not self._field_is_active(simulator_fid):
+                    continue
                 if getattr(simulator, "start_ts", 0):
                     simulator.start_ts += dt
                 if getattr(simulator, "late_start_ts", 0):
@@ -4404,14 +4569,19 @@ class SimustRealtimeCamera:
         if new_sim is None or new_sim == self.simulation_enabled:
             return
         self.simulation_enabled = new_sim
-        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (Field A + Field B)")
+        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (active fields only)")
         if self.simulation_enabled:
             for fid, ch in self.channels.items():
+                if not self._field_is_active(fid):
+                    continue
                 if ch.session_active:
                     self.simulators[fid].start_action(ch.current_action, ch.current_screens)
         else:
-            for sim in self.simulators.values():
-                sim.end_action()
+            for fid, sim in self.simulators.items():
+                if self._field_is_active(fid):
+                    sim.end_action()
+                else:
+                    sim.end_action()
 
     # ---- Main loop ----
     def run(self):
@@ -4431,15 +4601,14 @@ class SimustRealtimeCamera:
         last_viz_check = 0
         recording_started_for_video = False
         last_stitched = None
+        active = sorted(self.active_fields) if self.active_fields else ["A", "B"]
 
         print("\n" + "=" * 60)
         print("READY - Press Ctrl+C to stop")
         print("=" * 60)
-        print("Detection ALWAYS active (Balls both cameras, Players Field A + Field B)")
-        print("QR: dual ROI on 3840x1080 (Field A left / Field B right)")
-        print("Arena simulation: artificial ball/player injected on both fields when enabled")
-        print("Results overlay: Team A left panel / Team B right panel")
-        print("Saving field_A/ and field_B/ recognition + results separately")
+        print(f"Active fields: {', '.join(active)}")
+        print("Detection / QR / labels / results: ACTIVE fields only")
+        print("Inactive field: no YOLO, no hip track, no QR sessions, no overlays")
         print("=" * 60 + "\n")
 
         try:
@@ -4469,8 +4638,13 @@ class SimustRealtimeCamera:
 
                 if left is None or right is None:
                     if self.simulation_enabled:
-                        left = self.simulator_a.blank_half()
-                        right = self.simulator_b.blank_half()
+                        left = self.simulator_a.blank_half() if self._field_is_active("A") else self.simulator_a.blank_half()
+                        right = self.simulator_b.blank_half() if self._field_is_active("B") else self.simulator_b.blank_half()
+                        # Inactive half: solid dark (no simulated action)
+                        if not self._field_is_active("A"):
+                            left = np.zeros_like(left)
+                        if not self._field_is_active("B"):
+                            right = np.zeros_like(right)
                     else:
                         time.sleep(0.01)
                         continue
@@ -4478,6 +4652,9 @@ class SimustRealtimeCamera:
                 stitched = self.stitch_frames(left, right)
                 if stitched is None:
                     continue
+
+                # Black out inactive half before any detection/labels (saved video + UI)
+                stitched = self._mask_inactive_half(stitched)
 
                 if stitched is not None and os.path.exists(CAPTURE_TRIGGER_FILE):
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

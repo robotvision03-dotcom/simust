@@ -990,6 +990,11 @@
             var sessionCredits = props.sessionCredits || 0;
             var eligibleLevels = props.eligibleLevels || [];
             var t = props.t || function(k) { return k; };
+            var fieldLabel = props.fieldLabel || '';
+            var hideAddPlayer = !!props.hideAddPlayer;
+            var selectorTitle = fieldLabel
+                ? ("SEARCH & SELECT PLAYER — " + fieldLabel)
+                : "SEARCH & SELECT PLAYER";
 
             // Always list levels so unpaid players still see Foundation locked after search.
             var visibleLevels = allLevels;
@@ -1013,10 +1018,11 @@
 
             return React.createElement('div', { className: "mb-6 p-4 panel" },
                 React.createElement('div', { className: "flex justify-between items-center mb-3 flex-wrap gap-2" },
-                    React.createElement('h3', { className: "gold-accent font-bold text-lg" }, "SEARCH & SELECT PLAYER"),
+                    React.createElement('h3', { className: "gold-accent font-bold text-lg" }, selectorTitle),
+                    !hideAddPlayer ?
                     React.createElement('button', { onClick: function() { onAddPlayer(null); },
                             className: "text-yellow-400 text-sm hover:text-yellow-300 transition" },
-                        showAddPlayer ? "✕ Cancel" : "+ New Player")
+                        showAddPlayer ? "✕ Cancel" : "+ New Player") : null
                 ),
                 React.createElement('div', { className: "flex gap-3 flex-wrap" },
                     React.createElement('input', {
@@ -2247,6 +2253,31 @@
             var currentLevel = currentLevelState[0];
             var setCurrentLevel = currentLevelState[1];
 
+            var unlockedLevelsBState = useState([]);
+            var unlockedLevelsB = unlockedLevelsBState[0];
+            var setUnlockedLevelsB = unlockedLevelsBState[1];
+            var unlockedPlaylistsBState = useState([]);
+            var unlockedPlaylistsB = unlockedPlaylistsBState[0];
+            var setUnlockedPlaylistsB = unlockedPlaylistsBState[1];
+            var sessionCreditsBState = useState(0);
+            var sessionCreditsB = sessionCreditsBState[0];
+            var setSessionCreditsB = sessionCreditsBState[1];
+            var eligibleLevelsBState = useState([]);
+            var eligibleLevelsB = eligibleLevelsBState[0];
+            var setEligibleLevelsB = eligibleLevelsBState[1];
+            var completedLevelsBState = useState([]);
+            var completedLevelsB = completedLevelsBState[0];
+            var setCompletedLevelsB = completedLevelsBState[1];
+            var currentLevelBState = useState("");
+            var currentLevelB = currentLevelBState[0];
+            var setCurrentLevelB = currentLevelBState[1];
+            var playerSessionsBState = useState([]);
+            var playerSessionsB = playerSessionsBState[0];
+            var setPlayerSessionsB = playerSessionsBState[1];
+            var loadingSessionsBState = useState(false);
+            var loadingSessionsB = loadingSessionsBState[0];
+            var setLoadingSessionsB = loadingSessionsBState[1];
+
             var editModalState = useState(false);
             var editModalOpen = editModalState[0];
             var setEditModalOpen = editModalState[1];
@@ -2388,10 +2419,19 @@
                 setReportDataB(null);
                 setSelectedPlayerId(null);
                 selectedPlayerIdRef.current = null;
+                setSelectedPlayerBId(null);
                 setSearchQuery("");
+                setSearchQueryB("");
                 setFilteredPlayers([]);
+                setFilteredPlayersB([]);
                 setShowSearchResults(false);
+                setShowSearchResultsB(false);
                 setPlayerSessions([]);
+                setPlayerSessionsB([]);
+                setUnlockedLevels([]);
+                setUnlockedLevelsB([]);
+                setUnlockedPlaylists([]);
+                setUnlockedPlaylistsB([]);
                 setError("");
                 showToast("Logged out", 'info');
             };
@@ -2491,6 +2531,58 @@
                 setPlayers(updated);
             };
 
+            var applySharedLevelDefaults = function(unlocked, playlists, current) {
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
+                if (defaultFoundation) {
+                    setSelectedLevel("L00-Foundation");
+                    setSelectedSubdirectory(playlists[playlists.length - 1] || "");
+                } else if (highest) {
+                    setSelectedLevel(highest);
+                    setSelectedSubdirectory("");
+                } else if (current && unlocked.indexOf(current) !== -1) {
+                    setSelectedLevel(current);
+                    setSelectedSubdirectory("");
+                } else if (unlocked.length > 0) {
+                    setSelectedLevel(unlocked[0]);
+                    setSelectedSubdirectory("");
+                } else {
+                    setSelectedLevel("L00-Foundation");
+                    setSelectedSubdirectory("");
+                }
+            };
+
+            var softPreserveSharedLevel = function(unlocked, playlists) {
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
+                setSelectedLevel(function(prev) {
+                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
+                    if (defaultFoundation) return "L00-Foundation";
+                    if (highest) return highest;
+                    if (unlocked.length > 0) return unlocked[0];
+                    return prev || "L00-Foundation";
+                });
+                setSelectedSubdirectory(function(prev) {
+                    if (prev && playlists.indexOf(prev) !== -1) return prev;
+                    return "";
+                });
+            };
+
+            var levelNeedsSubdirectory = function(levelId) {
+                if (!levelId) return false;
+                var isFoundation = levelId.toLowerCase().indexOf('foundation') !== -1 || levelId === 'L00-Foundation';
+                return !!(isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0);
+            };
+
+            var playerHasLevelUnlocked = function(unlockedLvls, unlockedPls, levelId, subdirectory) {
+                if (!levelId || (unlockedLvls || []).indexOf(levelId) === -1) return false;
+                if (levelNeedsSubdirectory(levelId)) {
+                    if (!subdirectory) return false;
+                    return (unlockedPls || []).indexOf(subdirectory) !== -1;
+                }
+                return true;
+            };
+
             var updateProgressForPlayer = function(player, options) {
                 if (!player) return;
                 options = options || {};
@@ -2511,42 +2603,40 @@
                 setSessionCredits(credits);
                 setEligibleLevels(eligible);
 
-                var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
-
                 if (preferDefaults) {
-                    if (defaultFoundation) {
-                        setSelectedLevel("L00-Foundation");
-                        setSelectedSubdirectory(playlists[playlists.length - 1] || "");
-                    } else if (highest) {
-                        setSelectedLevel(highest);
-                        setSelectedSubdirectory("");
-                    } else if (current && unlocked.indexOf(current) !== -1) {
-                        setSelectedLevel(current);
-                        setSelectedSubdirectory("");
-                    } else if (unlocked.length > 0) {
-                        setSelectedLevel(unlocked[0]);
-                        setSelectedSubdirectory("");
-                    } else {
-                        setSelectedLevel("L00-Foundation");
-                        setSelectedSubdirectory("");
-                    }
+                    applySharedLevelDefaults(unlocked, playlists, current);
                     return;
                 }
 
-                setSelectedLevel(function(prev) {
-                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
-                    if (defaultFoundation) return "L00-Foundation";
-                    if (highest) return highest;
-                    if (current && unlocked.indexOf(current) !== -1) return current;
-                    if (unlocked.length > 0) return unlocked[0];
-                    return prev || "L00-Foundation";
-                });
-                setSelectedSubdirectory(function(prev) {
-                    if (prev && playlists.indexOf(prev) !== -1) return prev;
-                    // Keep empty (user must pick) or clear if previous choice is no longer unlocked.
-                    return "";
-                });
+                softPreserveSharedLevel(unlocked, playlists);
+            };
+
+            var updateProgressForPlayerB = function(player, options) {
+                if (!player) return;
+                options = options || {};
+                var preferDefaults = !!options.preferDefaults;
+                var progress = player.progress || {};
+                var unlocked = progress.unlocked_levels || [];
+                var playlists = progress.unlocked_playlists || [];
+                var completed = progress.completed_levels || [];
+                var current = progress.current_level || "L00-Foundation";
+                var credits = progress.session_credits || 0;
+                var eligible = progress.eligible_levels || [];
+                setUnlockedLevelsB(unlocked);
+                setUnlockedPlaylistsB(playlists);
+                setCompletedLevelsB(completed);
+                setCurrentLevelB(current);
+                setSessionCreditsB(credits);
+                setEligibleLevelsB(eligible);
+
+                // Drive shared session level only when Field A is empty (B-only play).
+                if (!selectedPlayerIdRef.current) {
+                    if (preferDefaults) {
+                        applySharedLevelDefaults(unlocked, playlists, current);
+                    } else {
+                        softPreserveSharedLevel(unlocked, playlists);
+                    }
+                }
             };
 
             var playerMatchesQuery = function(p, lower) {
@@ -2582,6 +2672,10 @@
             };
 
             var selectPlayerFromSearch = function(player) {
+                if (selectedPlayerBId && player.id === selectedPlayerBId) {
+                    showToast("Same player already selected for Field B — pick another for Field A", 'error');
+                    return;
+                }
                 if (selectedPlayerIdRef.current === player.id) {
                     clearResultsDisplay();
                 }
@@ -2626,6 +2720,8 @@
                 setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                 setShowSearchResultsB(false);
                 setFilteredPlayersB([]);
+                updateProgressForPlayerB(player, { preferDefaults: true });
+                loadPlayerSessionsFromBackendB(player.id);
                 showToast("Selected Field B: " + player.name + ' ' + player.surname, 'success');
             };
 
@@ -2634,6 +2730,19 @@
                 setSearchQueryB("");
                 setFilteredPlayersB([]);
                 setShowSearchResultsB(false);
+                setPlayerSessionsB([]);
+                setUnlockedLevelsB([]);
+                setUnlockedPlaylistsB([]);
+                setSessionCreditsB(0);
+                setEligibleLevelsB([]);
+                setCompletedLevelsB([]);
+                setCurrentLevelB("");
+                if (!selectedPlayerIdRef.current) {
+                    setSelectedLevel("");
+                    setSelectedSubdirectory("");
+                    clearResultsDisplay();
+                }
+                showToast("Field B cleared", 'info');
             };
 
             var clearSelection = function() {
@@ -2649,10 +2758,17 @@
                 setEligibleLevels([]);
                 setCompletedLevels([]);
                 setCurrentLevel("");
-                setSelectedLevel("");
-                setSelectedSubdirectory("");
-                clearResultsDisplay();
-                showToast("Selection cleared", 'info');
+                if (selectedPlayerBId) {
+                    var pb = players.find(function(p) { return p.id === selectedPlayerBId; });
+                    if (pb) {
+                        updateProgressForPlayerB(pb, { preferDefaults: true });
+                    }
+                } else {
+                    setSelectedLevel("");
+                    setSelectedSubdirectory("");
+                    clearResultsDisplay();
+                }
+                showToast("Field A cleared", 'info');
             };
 
             var addPlayerHandler = function(save) {
@@ -2704,6 +2820,10 @@
                 return players.find(function(p) { return p.id === selectedPlayerId; });
             };
 
+            var getSelectedPlayerB = function() {
+                return players.find(function(p) { return p.id === selectedPlayerBId; });
+            };
+
             var openEditModal = function(player) {
                 setEditingPlayer(player);
                 setEditForm(Object.assign({}, player, { image: player.image || null }));
@@ -2733,6 +2853,10 @@
                     var updated = updatedPlayers.find(function(p) { return p.id === editingPlayer.id; });
                     if (updated) updateProgressForPlayer(updated);
                 }
+                if (selectedPlayerBId === editingPlayer.id) {
+                    var updatedB = updatedPlayers.find(function(p) { return p.id === editingPlayer.id; });
+                    if (updatedB) updateProgressForPlayerB(updatedB);
+                }
                 closeEditModal();
                 showToast("Player updated", 'success');
             };
@@ -2744,6 +2868,11 @@
                     setSelectedPlayerId(null);
                     setSearchQuery("");
                     setPlayerSessions([]);
+                    setUnlockedLevels([]);
+                    setUnlockedPlaylists([]);
+                }
+                if (selectedPlayerBId === playerId) {
+                    clearSelectionB();
                 }
                 showToast("Player deleted", 'info');
             };
@@ -2789,6 +2918,30 @@
                 }).finally(function() { setLoadingSessions(false); });
             };
 
+            var loadPlayerSessionsFromBackendB = function(playerId) {
+                setLoadingSessionsB(true);
+                return axios.get("/get-player-reports/" + playerId).then(function(res) {
+                    if (res.data && res.data.sessions) {
+                        setPlayerSessionsB(res.data.sessions);
+                        var updatedPlayers = players.map(function(p) {
+                            if (p.id === playerId) {
+                                return Object.assign({}, p, { sessions: res.data.sessions });
+                            }
+                            return p;
+                        });
+                        setPlayers(updatedPlayers);
+                        localStorage.setItem("simust_players", JSON.stringify(updatedPlayers));
+                        return res.data.sessions;
+                    }
+                    setPlayerSessionsB([]);
+                    return [];
+                }).catch(function(e) {
+                    console.error(e);
+                    setPlayerSessionsB([]);
+                    return [];
+                }).finally(function() { setLoadingSessionsB(false); });
+            };
+
             // ----- FETCH LEVELS -----
             var fetchLevels = function() {
                 axios.get("/get-levels").then(function(res) {
@@ -2799,40 +2952,42 @@
             };
 
             // ----- UNLOCK / LOCK LEVEL (FIXED: immediate UI update) -----
+            var applyLocalUnlock = function(playerId, levelId, refreshA, refreshB) {
+                var updatedPlayers = players.map(function(p) {
+                    if (p.id === playerId) {
+                        var progress = p.progress || { current_level: "L00-Foundation",
+                            unlocked_levels: ["L00-Foundation"], completed_levels: [] };
+                        if (progress.unlocked_levels.indexOf(levelId) === -1) {
+                            progress.unlocked_levels.push(levelId);
+                            var sorted = sortLevels(allLevels);
+                            var highest = null;
+                            for (var i = sorted.length - 1; i >= 0; i--) {
+                                if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
+                                    progress.completed_levels.indexOf(sorted[i].id) === -1) {
+                                    highest = sorted[i].id;
+                                    break;
+                                }
+                            }
+                            if (highest) progress.current_level = highest;
+                        }
+                        return Object.assign({}, p, { progress: progress });
+                    }
+                    return p;
+                });
+                setPlayers(updatedPlayers);
+                var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
+                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
+                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
+                loadPlayers();
+            };
+
             var handleUnlockLevel = function(levelId) {
-                if (!selectedPlayerId) { showToast("No player selected", 'error'); return; }
+                if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
                 if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
                         showToast("Level " + levelId + " unlocked!", 'success');
-                        // Immediate local update
-                        var updatedPlayers = players.map(function(p) {
-                            if (p.id === selectedPlayerId) {
-                                var progress = p.progress || { current_level: "L00-Foundation",
-                                    unlocked_levels: ["L00-Foundation"], completed_levels: [] };
-                                if (progress.unlocked_levels.indexOf(levelId) === -1) {
-                                    progress.unlocked_levels.push(levelId);
-                                    // Update current to highest unlocked not completed
-                                    var sorted = sortLevels(allLevels);
-                                    var highest = null;
-                                    for (var i = sorted.length - 1; i >= 0; i--) {
-                                        if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
-                                            progress.completed_levels.indexOf(sorted[i].id) === -1) {
-                                            highest = sorted[i].id;
-                                            break;
-                                        }
-                                    }
-                                    if (highest) progress.current_level = highest;
-                                }
-                                return Object.assign({}, p, { progress: progress });
-                            }
-                            return p;
-                        });
-                        setPlayers(updatedPlayers);
-                        var updatedPlayer = updatedPlayers.find(function(p) { return p.id === selectedPlayerId; });
-                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
-                        // Background sync
-                        loadPlayers();
+                        applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
                     }
@@ -2842,8 +2997,58 @@
                 });
             };
 
+            var handleUnlockLevelB = function(levelId) {
+                if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
+                if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
+                axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
+                    if (res.data.status === "success") {
+                        showToast("Level " + levelId + " unlocked for Field B!", 'success');
+                        applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
+                    } else {
+                        showToast(res.data.message || "Unlock failed", 'error');
+                    }
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                });
+            };
+
+            var applyLocalLock = function(playerId, levelId, refreshA, refreshB) {
+                var updatedPlayers = players.map(function(p) {
+                    if (p.id === playerId) {
+                        var progress = p.progress || { current_level: "L00-Foundation",
+                            unlocked_levels: ["L00-Foundation"], completed_levels: [] };
+                        progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
+                        progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
+                        if (progress.unlocked_levels.indexOf("L00-Foundation") === -1) {
+                            progress.unlocked_levels.unshift("L00-Foundation");
+                        }
+                        if (progress.current_level === levelId) {
+                            progress.current_level = "L00-Foundation";
+                            var sorted = sortLevels(allLevels);
+                            var highest = null;
+                            for (var i = sorted.length - 1; i >= 0; i--) {
+                                if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
+                                    progress.completed_levels.indexOf(sorted[i].id) === -1) {
+                                    highest = sorted[i].id;
+                                    break;
+                                }
+                            }
+                            if (highest) progress.current_level = highest;
+                        }
+                        return Object.assign({}, p, { progress: progress });
+                    }
+                    return p;
+                });
+                setPlayers(updatedPlayers);
+                var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
+                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
+                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
+                loadPlayers();
+            };
+
             var handleLockLevel = function(levelId) {
-                if (!selectedPlayerId) { showToast("No player selected", 'error'); return; }
+                if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
                 if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
                 if (levelId === "L00-Foundation") {
                     showToast("Foundation cannot be locked", 'error');
@@ -2852,38 +3057,27 @@
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
                         showToast("Level " + levelId + " locked!", 'info');
-                        // Immediate local update
-                        var updatedPlayers = players.map(function(p) {
-                            if (p.id === selectedPlayerId) {
-                                var progress = p.progress || { current_level: "L00-Foundation",
-                                    unlocked_levels: ["L00-Foundation"], completed_levels: [] };
-                                progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
-                                progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
-                                if (progress.unlocked_levels.indexOf("L00-Foundation") === -1) {
-                                    progress.unlocked_levels.unshift("L00-Foundation");
-                                }
-                                if (progress.current_level === levelId) {
-                                    progress.current_level = "L00-Foundation";
-                                    var sorted = sortLevels(allLevels);
-                                    var highest = null;
-                                    for (var i = sorted.length - 1; i >= 0; i--) {
-                                        if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
-                                            progress.completed_levels.indexOf(sorted[i].id) === -1) {
-                                            highest = sorted[i].id;
-                                            break;
-                                        }
-                                    }
-                                    if (highest) progress.current_level = highest;
-                                }
-                                return Object.assign({}, p, { progress: progress });
-                            }
-                            return p;
-                        });
-                        setPlayers(updatedPlayers);
-                        var updatedPlayer = updatedPlayers.find(function(p) { return p.id === selectedPlayerId; });
-                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
-                        // Background sync
-                        loadPlayers();
+                        applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
+                    } else {
+                        showToast(res.data.message || "Lock failed", 'error');
+                    }
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                });
+            };
+
+            var handleLockLevelB = function(levelId) {
+                if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
+                if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
+                if (levelId === "L00-Foundation") {
+                    showToast("Foundation cannot be locked", 'error');
+                    return;
+                }
+                axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
+                    if (res.data.status === "success") {
+                        showToast("Level " + levelId + " locked for Field B!", 'info');
+                        applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
                     }
@@ -2909,87 +3103,58 @@
                         if (showLoading) setLoadingAnalysis(false);
                         return false;
                     }
-                    if (res.data && res.data.status === "success" && res.data.report) {
-                        var report = res.data.report;
-                        var actions = report.actions || [];
-                        var statsFromBackend = report.statistics || {};
-
-                        var formatted = actions.map(function(a, idx) {
-                            var sessionDur = (a.session_duration !== undefined && a.session_duration !==
-                                null && a.session_duration !== 'N/A' && a.session_duration !== '-') ?
-                                parseFloat(a.session_duration) : null;
-                            var ae = (a.ae !== undefined && a.ae !== null && a.ae !== 'N/A') ? parseFloat(a
-                                .ae) : null;
-                            var videoIndex = a.video_index || a.videoIndex;
-                            if (videoIndex === undefined || videoIndex === null) {
-                                var fromId = getVideoIndexFromId(a.id);
-                                videoIndex = fromId || Math.floor(idx / 4) + 1;
-                            }
-                            return {
-                                id: a.id || a.block_id || '',
-                                action: a.action || '',
-                                screens: Array.isArray(a.screens) ? a.screens.join(', ') : a.screens ||
-                                    '',
-                                result: a.result || 'N/A',
-                                winning_screen: a.winning_screen || 'N/A',
-                                session_duration: sessionDur,
-                                movement: a.movement || 0,
-                                direction: a.direction || 'NONE',
-                                aep: a.aep || 'N/A',
-                                ae: ae,
-                                video_index: videoIndex,
-                                videoIndex: videoIndex
-                            };
-                        });
-
-                        var stats = {
-                            correct: statsFromBackend.correct || formatted.filter(function(a) { return a
-                                    .result === 'Correct'; }).length,
-                            late: statsFromBackend.late || formatted.filter(function(a) { return a.result ===
-                                    'Late'; }).length,
-                            wrong: statsFromBackend.wrong || formatted.filter(function(a) { return a.result ===
-                                    'Wrong'; }).length,
-                            miss: statsFromBackend.miss || formatted.filter(function(a) { return a.result ===
-                                    'Miss'; }).length,
-                            total: statsFromBackend.total || formatted.length,
-                            avg_finishing_time: statsFromBackend.avg_finishing_time || 0,
-                            total_distance: statsFromBackend.total_distance || 0,
-                            goals_by_screen: statsFromBackend.goals_by_screen || {},
-                            avg_ae: statsFromBackend.avg_ae || 0
-                        };
-
-                        if (stats.avg_finishing_time === 0) {
-                            var correctTimes = formatted.filter(function(a) {
-                                return a.result === 'Correct' && a.time_of_min !== null && a
-                                    .time_of_min > 0;
-                            }).map(function(a) { return a.time_of_min; });
-                            if (correctTimes.length > 0) {
-                                stats.avg_finishing_time = correctTimes.reduce(function(s, v) { return s +
-                                        v; }, 0) / correctTimes.length;
-                            }
-                        }
-
-                        if (Object.keys(stats.goals_by_screen).length === 0) {
-                            formatted.filter(function(a) {
-                                return a.result === 'Correct' && a.winning_screen && a
-                                    .winning_screen !== 'N/A';
-                            }).forEach(function(a) {
-                                var screen = a.winning_screen;
-                                stats.goals_by_screen[screen] = (stats.goals_by_screen[screen] || 0) +
-                                    1;
-                            });
-                        }
-
-                        setAnalysisResults(formatted);
-                        setReportData(Object.assign({}, report, {
-                            actions: formatted,
-                            statistics: stats,
-                            total_actions: formatted.length,
-                            goals_by_screen: stats.goals_by_screen,
-                            directory: res.data.directory
-                        }));
+                    if (res.data && res.data.status === "success" && (res.data.fields || res.data.report)) {
                         var fields = res.data.fields || {};
-                        if (fields.B && fields.B.actions) {
+                        // Back-compat: older payloads only had report
+                        if (!fields.A && !fields.B && res.data.report) {
+                            fields = { A: res.data.report };
+                        }
+                        var showA = !!selectedPlayerId && fields.A && fields.A.actions && fields.A.actions.length;
+                        var showB = !!selectedPlayerBId && fields.B && fields.B.actions && fields.B.actions.length;
+
+                        if (showA) {
+                            var reportA = fields.A;
+                            var actionsA = reportA.actions || [];
+                            var formattedA = actionsA.map(function(a, idx) {
+                                var sessionDur = (a.session_duration !== undefined && a.session_duration !==
+                                    null && a.session_duration !== 'N/A' && a.session_duration !== '-') ?
+                                    parseFloat(a.session_duration) : null;
+                                var ae = (a.ae !== undefined && a.ae !== null && a.ae !== 'N/A') ? parseFloat(a.ae) : null;
+                                var videoIndex = a.video_index || a.videoIndex;
+                                if (videoIndex === undefined || videoIndex === null) {
+                                    var fromIdA = getVideoIndexFromId(a.id);
+                                    videoIndex = fromIdA || Math.floor(idx / 4) + 1;
+                                }
+                                return {
+                                    id: a.id || a.block_id || '',
+                                    action: a.action || '',
+                                    screens: Array.isArray(a.screens) ? a.screens.join(', ') : a.screens || '',
+                                    result: a.result || 'N/A',
+                                    winning_screen: a.winning_screen || 'N/A',
+                                    session_duration: sessionDur,
+                                    movement: a.movement || 0,
+                                    direction: a.direction || 'NONE',
+                                    aep: a.aep || 'N/A',
+                                    ae: ae,
+                                    video_index: videoIndex,
+                                    videoIndex: videoIndex,
+                                    field: 'A'
+                                };
+                            });
+                            var statsA = reportA.statistics || {};
+                            setAnalysisResults(formattedA);
+                            setReportData(Object.assign({}, reportA, {
+                                actions: formattedA,
+                                statistics: statsA,
+                                total_actions: formattedA.length,
+                                directory: res.data.directory
+                            }));
+                        } else {
+                            setAnalysisResults([]);
+                            setReportData(null);
+                        }
+
+                        if (showB) {
                             var reportB = fields.B;
                             var actionsB = reportB.actions || [];
                             var formattedB = actionsB.map(function(a, idx) {
@@ -3017,7 +3182,8 @@
                             setReportDataB(Object.assign({}, reportB, {
                                 actions: formattedB,
                                 statistics: reportB.statistics || {},
-                                total_actions: formattedB.length
+                                total_actions: formattedB.length,
+                                directory: res.data.directory
                             }));
                         } else {
                             setAnalysisResultsB([]);
@@ -3103,7 +3269,7 @@
 
             // Score makes the next step eligible; booking 30 minutes opens it (server-side).
             var checkAndUnlockNextLevel = function(stats, currentLevelId, subdirectory) {
-                if (!selectedPlayerId) return;
+                if (!selectedPlayerId && !selectedPlayerBId) return;
                 if (!currentLevelId) return;
                 var total = stats.total || ((stats.correct || 0) + (stats.late || 0) + (stats.wrong || 0) + (stats.miss || 0));
                 if (total === 0) return;
@@ -3137,95 +3303,117 @@
 
             var handlePlaybackComplete = function() {
                 if (sessionAbortedRef.current) return Promise.resolve(null);
-                var player = getSelectedPlayer();
-                if (!player) { showToast("No player selected", 'error'); return Promise.resolve(null); }
-                if (!reportData || !reportData.actions || reportData.actions.length === 0) {
+                var playerA = getSelectedPlayer();
+                var playerB = getSelectedPlayerB();
+                if (!playerA && !playerB) {
+                    showToast("No player selected", 'error');
+                    return Promise.resolve(null);
+                }
+
+                var buildSessionData = function(report, results) {
+                    var goalsByScreen = {};
+                    (results || []).forEach(function(a) {
+                        if (a.result === 'Correct' && a.winning_screen && a.winning_screen !== 'N/A') {
+                            var s = a.winning_screen;
+                            goalsByScreen[s] = (goalsByScreen[s] || 0) + 1;
+                        }
+                    });
+                    var directory = (report && report.directory) || currentDirectory || '';
+                    return {
+                        level: selectedLevel || 'Unknown',
+                        subdirectory: selectedSubdirectory || '',
+                        total_duration_minutes: 0,
+                        video_count: 0,
+                        directory: directory,
+                        report_path: '',
+                        statistics: {
+                            correct: (report.statistics && report.statistics.correct) || 0,
+                            late: (report.statistics && report.statistics.late) || 0,
+                            wrong: (report.statistics && report.statistics.wrong) || 0,
+                            miss: (report.statistics && report.statistics.miss) || 0,
+                            avg_ae: (report.statistics && report.statistics.avg_ae) || 0
+                        },
+                        goals_by_screen: goalsByScreen,
+                        actions: (results || []).map(function(r) {
+                            return {
+                                block_id: r.id || '',
+                                action: r.action || '',
+                                screens: r.screens ? r.screens.split(', ') : [],
+                                finishing_type: r.result === 'Correct' ? 'CORRECT' : r.result === 'Late' ?
+                                    'LATE' : r.result === 'Wrong' ? 'WRONG' : r.result === 'Miss' ?
+                                    'MISS' : 'WRONG',
+                                goal_screen: r.winning_screen || 'N/A',
+                                action_time: r.session_duration !== null ? r.session_duration : null,
+                                aep: r.aep || '-',
+                                ae: r.ae || 0,
+                                video_index: r.video_index || 0
+                            };
+                        }),
+                        total_actions: (report && report.total_actions) || 0,
+                        avg_finishing_time: (report.statistics && report.statistics.avg_finishing_time) || 0,
+                        simulation: !!simulationEnabledRef.current
+                    };
+                };
+
+                var saves = [];
+                if (playerA && reportData && reportData.actions && reportData.actions.length > 0) {
+                    saves.push(saveSessionToPlayerFolder(
+                        playerA.id, playerA.name, playerA.surname, playerA.playerId,
+                        buildSessionData(reportData, analysisResults)
+                    ));
+                }
+                if (playerB && reportDataB && reportDataB.actions && reportDataB.actions.length > 0) {
+                    saves.push(saveSessionToPlayerFolder(
+                        playerB.id, playerB.name, playerB.surname, playerB.playerId,
+                        buildSessionData(reportDataB, analysisResultsB)
+                    ));
+                }
+                if (!saves.length) {
                     showToast("No actions recorded", 'info');
                     return Promise.resolve(null);
                 }
 
-                var goalsByScreen = {};
-                analysisResults.forEach(function(a) {
-                    if (a.result === 'Correct' && a.winning_screen && a.winning_screen !== 'N/A') {
-                        var s = a.winning_screen;
-                        goalsByScreen[s] = (goalsByScreen[s] || 0) + 1;
-                    }
-                });
-
-                var directory = reportData.directory || currentDirectory || '';
-
-                var sessionData = {
-                    level: selectedLevel || 'Unknown',
-                    subdirectory: selectedSubdirectory || '',
-                    total_duration_minutes: 0,
-                    video_count: 0,
-                    directory: directory,
-                    report_path: '',
-                    statistics: {
-                        correct: (reportData.statistics && reportData.statistics.correct) || 0,
-                        late: (reportData.statistics && reportData.statistics.late) || 0,
-                        wrong: (reportData.statistics && reportData.statistics.wrong) || 0,
-                        miss: (reportData.statistics && reportData.statistics.miss) || 0,
-                        avg_ae: (reportData.statistics && reportData.statistics.avg_ae) || 0
-                    },
-                    goals_by_screen: goalsByScreen,
-                    actions: analysisResults.map(function(r) {
-                        return {
-                            block_id: r.id || '',
-                            action: r.action || '',
-                            screens: r.screens ? r.screens.split(', ') : [],
-                            finishing_type: r.result === 'Correct' ? 'CORRECT' : r.result === 'Late' ?
-                                'LATE' : r.result === 'Wrong' ? 'WRONG' : r.result === 'Miss' ?
-                                'MISS' : 'WRONG',
-                            goal_screen: r.winning_screen || 'N/A',
-                            action_time: r.session_duration !== null ? r.session_duration : null,
-                            aep: r.aep || '-',
-                            ae: r.ae || 0,
-                            video_index: r.video_index || 0
-                        };
-                    }),
-                    total_actions: reportData.total_actions || 0,
-                    avg_finishing_time: (reportData.statistics && reportData.statistics
-                        .avg_finishing_time) || 0,
-                    simulation: !!simulationEnabledRef.current
-                };
-
-                return saveSessionToPlayerFolder(
-                    player.id, player.name, player.surname, player.playerId, sessionData
-                ).then(function() {
+                return Promise.all(saves).then(function() {
                     fetchRealtimeResults(false, true);
                     return loadPlayers().then(function() {
-                        var updatedPlayer = getSelectedPlayer();
-                        if (updatedPlayer) updateProgressForPlayer(updatedPlayer);
-                        // After saving and reloading, check for auto-unlock
-                        var stats = reportData.statistics || {};
-                        var currentLevelId = selectedLevel; // the level just played
-                        var subdir = selectedSubdirectory; // the subdirectory used
+                        var updatedA = getSelectedPlayer();
+                        if (updatedA) updateProgressForPlayer(updatedA);
+                        var updatedB = getSelectedPlayerB();
+                        if (updatedB) updateProgressForPlayerB(updatedB);
+                        var stats = (reportData && reportData.statistics) ||
+                            (reportDataB && reportDataB.statistics) || {};
+                        var currentLevelId = selectedLevel;
+                        var subdir = selectedSubdirectory;
                         checkAndUnlockNextLevel(stats, currentLevelId, subdir);
                     });
                 });
             };
 
             var startRealtimePlayback = function() {
-                var player = getSelectedPlayer();
-                if (!player) { setError("Please select a player first");
-                    setTimeout(function() { setError(""); }, 3000); return; }
-                if (!selectedLevel) { setError("Please select a training level");
-                    setTimeout(function() { setError(""); }, 3000); return; }
-                if (unlockedLevels.indexOf(selectedLevel) === -1) {
-                    setError("This level is locked. Book and pay a 30-minute session to unlock.");
+                var playerA = getSelectedPlayer();
+                var playerB = getSelectedPlayerB();
+                if (!playerA && !playerB) {
+                    setError("Please select a Field A and/or Field B player first");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-
-                // Check if subdirectory is required and selected
-                var hasSubdirs = false;
-                if (selectedLevel) {
-                    var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
-                    if (isFoundation && LEVEL_SUBDIRS['L00-Foundation']) {
-                        hasSubdirs = true;
-                    }
+                if (!selectedLevel) {
+                    setError("Please select a training level");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
                 }
+                if (playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
+                    setError("Field A: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
+                if (playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
+                    setError("Field B: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
+
+                var hasSubdirs = levelNeedsSubdirectory(selectedLevel);
                 if (window.SIMUST_PUBLIC && labOnline === false) {
                     setError("The training lab is offline. Realtime Play cannot start until the lab PC is connected.");
                     setTimeout(function() { setError(""); }, 4000);
@@ -3234,11 +3422,6 @@
                 if (hasSubdirs && !selectedSubdirectory) {
                     setError("Please select a subdirectory for this level.");
                     setTimeout(function() { setError(""); }, 3000);
-                    return;
-                }
-                if (hasSubdirs && unlockedPlaylists.indexOf(selectedSubdirectory) === -1) {
-                    setError(selectedSubdirectory + " is locked. Book 30 minutes to unlock the next Foundation session.");
-                    setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
 
@@ -3252,26 +3435,27 @@
                 setRealtimePaused(false);
                 clearResultsDisplay();
 
+                var primary = playerA || playerB;
                 var payload = {
                     level: selectedLevel,
                     speed: 1.0,
-                    player_id: player.id,
-                    player_name: player.name,
-                    player_surname: player.surname,
-                    player_player_id: player.playerId,
+                    player_id: primary.id,
+                    player_name: primary.name,
+                    player_surname: primary.surname,
+                    player_player_id: primary.playerId,
                     visualization_enabled: visualizationEnabledRef.current,
                     simulation_enabled: simulationEnabledRef.current,
-                    field: "A",
-                    players: [
-                        {
-                            player_id: player.id,
-                            player_name: player.name,
-                            player_surname: player.surname,
-                            field: "A"
-                        }
-                    ]
+                    field: playerA ? "A" : "B",
+                    players: []
                 };
-                var playerB = players.find(function(p) { return p.id === selectedPlayerBId; });
+                if (playerA) {
+                    payload.players.push({
+                        player_id: playerA.id,
+                        player_name: playerA.name,
+                        player_surname: playerA.surname,
+                        field: "A"
+                    });
+                }
                 if (playerB) {
                     payload.players.push({
                         player_id: playerB.id,
@@ -3286,9 +3470,14 @@
                 }
 
                 axios.post("/start-realtime-playback", payload).then(function() {
-                    var dualMsg = playerB
-                        ? ("Field A: " + player.name + " · Field B: " + playerB.name)
-                        : (player.name + ' ' + player.surname + " (Field A; Field B empty)");
+                    var dualMsg;
+                    if (playerA && playerB) {
+                        dualMsg = "Field A: " + playerA.name + " · Field B: " + playerB.name;
+                    } else if (playerA) {
+                        dualMsg = playerA.name + ' ' + playerA.surname + " (Field A only)";
+                    } else {
+                        dualMsg = playerB.name + ' ' + playerB.surname + " (Field B only)";
+                    }
                     showToast((window.SIMUST_PUBLIC
                         ? "Sent to the lab over the internet: "
                         : "Realtime playback started — ") + dualMsg +
@@ -3306,7 +3495,7 @@
                         hostSyncTick += 1;
                         if (hostSyncTick % 6 === 0) {
                             axios.post("/sync-live-to-host", {
-                                player_id: player.id,
+                                player_id: primary.id,
                                 level: selectedLevel,
                                 subdirectory: selectedSubdirectory || "",
                                 simulation: !!simulationEnabledRef.current
@@ -3542,6 +3731,8 @@
                 var directory = null;
                 if (reportData && reportData.directory) {
                     directory = reportData.directory;
+                } else if (reportDataB && reportDataB.directory) {
+                    directory = reportDataB.directory;
                 } else if (currentDirectory) {
                     directory = currentDirectory;
                 }
@@ -3550,9 +3741,15 @@
                         if (res.data && res.data.directory) directory = res.data.directory;
                     }).catch(function() {});
                 }
+                var activeFields = [];
+                if (selectedPlayerId) activeFields.push("A");
+                if (selectedPlayerBId) activeFields.push("B");
                 if (directory) {
-                    axios.post("/create-results-video", { directory: directory, video_index: 1 }).then(function(
-                    res) {
+                    axios.post("/create-results-video", {
+                        directory: directory,
+                        video_index: 1,
+                        fields: activeFields
+                    }).then(function(res) {
                         if (res.data && res.data.status === "success") {
                             showToast("Results video created and displayed on Screen 2", 'success');
                             if (realtimeRunning) {
@@ -3712,6 +3909,13 @@
                 }
             }, [selectedPlayerId, players, allLevels]);
 
+            useEffect(function() {
+                var playerB = getSelectedPlayerB();
+                if (playerB) {
+                    updateProgressForPlayerB(playerB);
+                }
+            }, [selectedPlayerBId, players, allLevels]);
+
             // Reset subdirectory when level changes
             useEffect(function() {
                 if (selectedLevel) {
@@ -3731,6 +3935,18 @@
             var setMenuOpen = menuState[1];
             var toggleMenu = function() { setMenuOpen(!menuOpen); };
             var closeMenu = function() { setMenuOpen(false); };
+
+            var realtimeEligible = (function() {
+                if (!selectedPlayerId && !selectedPlayerBId) return false;
+                if (!selectedLevel || realtimeRunning) return false;
+                if (selectedPlayerId && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
+                    return false;
+                }
+                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
+                    return false;
+                }
+                return true;
+            })();
 
             // =====================================================================
             // RENDER
@@ -3873,6 +4089,17 @@
                                 )
                             ) : null
                         ) :
+                        reportDataB && reportDataB.actions && reportDataB.actions.length ?
+                        React.createElement(React.Fragment, null,
+                            React.createElement('h3', { className: "gold-accent font-bold mb-2" }, "Team B – Field B"),
+                            React.createElement(SummaryMetrics, { stats: reportDataB.statistics || {},
+                                actions: analysisResultsB || [] }),
+                            React.createElement('div', { className: "mt-6" },
+                                React.createElement('h3', { className: "gold-accent font-bold mb-3 text-sm" },
+                                    "Training Details – Field B"),
+                                React.createElement(ResultsTable, { actions: analysisResultsB || [] })
+                            )
+                        ) :
                         React.createElement('div', { className: "text-center p-10 panel" },
                             React.createElement('p', { className: "text-gray-400" },
                                 "No results yet. Start a training session."
@@ -3916,54 +4143,58 @@
                             t: t,
                             fieldLabel: "Field A"
                         }),
-                        React.createElement('div', { className: "panel mt-3 mb-3 p-4" },
-                            React.createElement('h3', { className: "gold-accent font-bold mb-2 text-sm" },
-                                "Field B player (optional)"),
-                            React.createElement('p', { className: "text-xs text-gray-400 mb-2" },
-                                "Second search box — book Field B for the same time. Empty Field B still plays (Wrongs if absent)."),
-                            React.createElement('input', {
-                                type: "text",
-                                className: "w-full",
-                                placeholder: "Search Field B player...",
-                                value: searchQueryB,
-                                onChange: function(e) { performSearchB(e.target.value); },
-                                onFocus: function() { if (searchQueryB.trim()) setShowSearchResultsB(true); }
-                            }),
-                            showSearchResultsB && filteredPlayersB.length > 0 ?
-                            React.createElement('div', { className: "mt-2 max-h-40 overflow-y-auto" },
-                                filteredPlayersB.map(function(p) {
-                                    return React.createElement('div', {
-                                        key: "B-" + p.id,
-                                        className: "player-card",
-                                        onClick: function() { selectPlayerBFromSearch(p); }
-                                    },
-                                        React.createElement('div', null,
-                                            React.createElement('strong', null, (p.name || '') + ' ' + (p.surname || '')),
-                                            React.createElement('div', { className: "text-xs text-gray-400" },
-                                                "SIMUST ID: " + p.playerId)
-                                        )
-                                    );
-                                })
-                            ) : null,
-                            selectedPlayerBId ?
-                            React.createElement('div', { className: "mt-2 flex justify-between items-center" },
-                                React.createElement('span', { className: "text-sm" },
-                                    "Field B: " + (function() {
-                                        var pb = players.find(function(p) { return p.id === selectedPlayerBId; });
-                                        return pb ? ((pb.name || '') + ' ' + (pb.surname || '')) : selectedPlayerBId;
-                                    })()),
-                                React.createElement('button', {
-                                    type: "button",
-                                    className: "btn-danger",
-                                    onClick: clearSelectionB
-                                }, "Clear B")
-                            ) : null
-                        ),
+                        React.createElement(PlayerSelector, {
+                            players: players,
+                            selectedPlayerId: selectedPlayerBId,
+                            searchQuery: searchQueryB,
+                            showSearchResults: showSearchResultsB,
+                            filteredPlayers: filteredPlayersB,
+                            showAddPlayer: false,
+                            newPlayer: newPlayer,
+                            loadingSessions: loadingSessionsB,
+                            onSearch: performSearchB,
+                            onSelectPlayer: selectPlayerBFromSearch,
+                            onClearSelection: clearSelectionB,
+                            onAddPlayer: function() {},
+                            onNewPlayerChange: setNewPlayer,
+                            getSelectedPlayer: getSelectedPlayerB,
+                            allLevels: allLevels,
+                            unlockedLevels: unlockedLevelsB,
+                            unlockedPlaylists: unlockedPlaylistsB,
+                            sessionCredits: sessionCreditsB,
+                            eligibleLevels: eligibleLevelsB,
+                            completedLevels: completedLevelsB,
+                            currentLevel: currentLevelB,
+                            isAdmin: isAdmin,
+                            onUnlockLevel: handleUnlockLevelB,
+                            onLockLevel: handleLockLevelB,
+                            onLevelChange: function(level) {
+                                setSelectedLevel(level);
+                                setSelectedSubdirectory("");
+                            },
+                            selectedLevel: selectedLevel,
+                            selectedSubdirectory: selectedSubdirectory,
+                            onSubdirectoryChange: setSelectedSubdirectory,
+                            t: t,
+                            fieldLabel: "Field B",
+                            hideAddPlayer: true
+                        }),
+                        React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
+                            "Realtime Play works with Field A only, Field B only, or both. Shared level must be unlocked for every selected player."),
                         getSelectedPlayer() ?
                         React.createElement(PlayerProfile, {
                             player: getSelectedPlayer(),
                             sessionCount: playerSessions.length,
                             simustScore: getSelectedPlayer().simustScore || 0,
+                            isAdmin: isAdmin,
+                            onEdit: openEditModal
+                        }) :
+                        null,
+                        getSelectedPlayerB() ?
+                        React.createElement(PlayerProfile, {
+                            player: getSelectedPlayerB(),
+                            sessionCount: playerSessionsB.length,
+                            simustScore: getSelectedPlayerB().simustScore || 0,
                             isAdmin: isAdmin,
                             onEdit: openEditModal
                         }) :
@@ -4002,30 +4233,9 @@
                         React.createElement('div', { className: "transport-bar" },
                             React.createElement('button', {
                                 onClick: startRealtimePlayback,
-                                disabled: labBlocked || !selectedPlayerId || !selectedLevel || realtimeRunning ||
-                                    unlockedLevels.indexOf(selectedLevel) === -1 ||
-                                    (function() {
-                                        if (!selectedLevel) return false;
-                                        var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
-                                        if (isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0) {
-                                            if (!selectedSubdirectory) return true;
-                                            return unlockedPlaylists.indexOf(selectedSubdirectory) === -1;
-                                        }
-                                        return false;
-                                    })(),
+                                disabled: labBlocked || !realtimeEligible,
                                 className: "btn-primary btn-realtime px-6 py-2 font-bold" +
-                                    (!selectedPlayerId || !selectedLevel || realtimeRunning ||
-                                        unlockedLevels.indexOf(selectedLevel) === -1 ||
-                                        (function() {
-                                            if (!selectedLevel) return true;
-                                            var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
-                                            if (isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0) {
-                                                if (!selectedSubdirectory) return true;
-                                                return unlockedPlaylists.indexOf(selectedSubdirectory) === -1;
-                                            }
-                                            return false;
-                                        })() ?
-                                        ' opacity-50' : '')
+                                    (labBlocked || !realtimeEligible ? ' opacity-50' : '')
                             },
                                 realtimeRunning ? t("playing") : t("realtimePlay"),
                                 !realtimeRunning ? React.createElement('span', { className: "auto-badge" },
@@ -4046,8 +4256,10 @@
                             React.createElement('button', {
                                 onClick: displayResultsOnScreen2,
                                 className: "btn-primary btn-results px-6 py-2 font-bold",
-                                disabled: !reportData || !reportData.actions || reportData.actions
-                                    .length === 0
+                                disabled: !(
+                                    (selectedPlayerId && reportData && reportData.actions && reportData.actions.length) ||
+                                    (selectedPlayerBId && reportDataB && reportDataB.actions && reportDataB.actions.length)
+                                )
                             }, t("showResults"))
                         ),
                         savingSession ?
