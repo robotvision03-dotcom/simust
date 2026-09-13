@@ -4789,6 +4789,7 @@ async def get_players(request: Request):
                 "name": user_data.get("name", player_id),
                 "surname": user_data.get("surname", ""),
                 "playerId": player_id,
+                "role": "player",
                 "club": user_data.get("club", ""),
                 "team": user_data.get("team", ""),
                 "age": user_data.get("age", ""),
@@ -4809,6 +4810,11 @@ async def get_players(request: Request):
             if folder in seen:
                 continue
             if "copy" in folder.lower() or not simust_push.PLAYER_ID_RE.match(folder):
+                continue
+            # Never surface coach/manager/admin accounts as assignable players
+            staff_user = users.get(folder) or {}
+            staff_role = str(staff_user.get("role") or "").strip().lower()
+            if staff_role in ("coach", "manager", "admin"):
                 continue
             # Try to read name, surname, club, team, age from first session file
             index_file = os.path.join(player_dir, "index.json")
@@ -4855,6 +4861,7 @@ async def get_players(request: Request):
                 "name": player_name,
                 "surname": player_surname,
                 "playerId": player_player_id,
+                "role": "player",
                 "club": club,
                 "team": team,
                 "age": age,

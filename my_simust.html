@@ -1403,23 +1403,23 @@
         }
         .dist-entry {
             background: #ded6c3;
-            width: 35%;
+            width: 0%;
         }
         .dist-activated {
             background: #8da5bd;
-            width: 56%;
+            width: 0%;
         }
         .dist-high {
             background: #276ce5;
-            width: 88%;
+            width: 0%;
         }
         .dist-elite {
             background: #4b2e83;
-            width: 24%;
+            width: 0%;
         }
         .dist-world {
             background: #d6b34b;
-            width: 2%;
+            width: 0%;
         }
         .distribution-bars strong {
             color: #cdd8e6;
@@ -3391,13 +3391,13 @@
 
                 <div class="portal-welcome">
                     <div>
-                        <h1 id="player-greeting">Good Day<br><em id="player-name-display">Player</em></h1>
-                        <p id="player-summary-text">Your results show how your football behaviour is developing against your own starting point—not against other players.</p>
+                        <h1 id="player-greeting"><span data-i18n="goodDay">Good Day</span><br><em id="player-name-display">Player</em></h1>
+                        <p id="player-summary-text" data-i18n="playerSummaryDefault">Your results show how your football behaviour is developing against your own starting point—not against other players.</p>
                     </div>
                     <div class="portal-review">
-                        <small>NEXT REVIEW</small>
+                        <small data-i18n="nextReview">NEXT REVIEW</small>
                         <strong id="next-review-date">—</strong>
-                        <span id="next-review-desc">Check with your coach</span>
+                        <span id="next-review-desc" data-i18n="checkWithCoach">Check with your coach</span>
                     </div>
                 </div>
 
@@ -3409,28 +3409,28 @@
                 <!-- ====== RING CHARTS ====== -->
                 <div id="ring-charts-container" class="ring-metrics-container">
                     <div class="ring-metric">
-                        <div class="label">Average Execution Time</div>
+                        <div class="label" data-i18n="avgExecutionTime">Average Execution Time</div>
                         <div class="ring-chart-wrapper">
                             <canvas id="ring-aet" width="110" height="110" style="max-width:110px;max-height:110px;"></canvas>
                         </div>
                         <div class="value" id="ring-aet-value">–</div>
                     </div>
                     <div class="ring-metric">
-                        <div class="label">Action Efficiency</div>
+                        <div class="label" data-i18n="actionEfficiency">Action Efficiency</div>
                         <div class="ring-chart-wrapper">
                             <canvas id="ring-ae" width="110" height="110" style="max-width:110px;max-height:110px;"></canvas>
                         </div>
                         <div class="value" id="ring-ae-value">–</div>
                     </div>
                     <div class="ring-metric">
-                        <div class="label">Action Accuracy</div>
+                        <div class="label" data-i18n="actionAccuracy">Action Accuracy</div>
                         <div class="ring-chart-wrapper">
                             <canvas id="ring-aac" width="110" height="110" style="max-width:110px;max-height:110px;"></canvas>
                         </div>
                         <div class="value" id="ring-aac-value">–</div>
                     </div>
                     <div class="ring-metric">
-                        <div class="label">Body Displacement</div>
+                        <div class="label" data-i18n="bodyDisplacement">Body Displacement</div>
                         <div class="ring-chart-wrapper">
                             <canvas id="ring-bdp" width="110" height="110" style="max-width:110px;max-height:110px;"></canvas>
                         </div>
@@ -3442,10 +3442,10 @@
                 <div id="player-results-summary" class="section-container" style="margin-top:40px;">
                     <div class="portal-section-heading">
                         <div>
-                            <p class="portal-kicker">LATEST TRAINING DETAILS</p>
-                            <h2 id="latest-session-date">Most recent session</h2>
+                            <p class="portal-kicker" data-i18n="latestTrainingDetails">LATEST TRAINING DETAILS</p>
+                            <h2 id="latest-session-date" data-i18n="mostRecentSession">Most recent session</h2>
                         </div>
-                        <p id="latest-session-sub">Summary of your latest test session.</p>
+                        <p id="latest-session-sub" data-i18n="latestSessionSub">Summary of your latest test session.</p>
                     </div>
                     <div id="results-summary-grid" class="player-results-grid">
                         <!-- populated by JavaScript -->
@@ -3471,18 +3471,18 @@
                 <div id="player-trend-chart" class="section-container" style="margin-top:40px;">
                     <div class="portal-section-heading" style="margin-bottom:24px;">
                         <div>
-                            <p class="portal-kicker">PERFORMANCE TREND</p>
-                            <h2 style="font-size:2.2rem;">Development over time</h2>
+                            <p class="portal-kicker" data-i18n="performanceTrend">PERFORMANCE TREND</p>
+                            <h2 style="font-size:2.2rem;" data-i18n="developmentOverTime">Development over time</h2>
                         </div>
-                        <p>Each point represents a session. Use the buttons below to navigate.</p>
+                        <p data-i18n="trendNavHint">Each point represents a session. Use the buttons below to navigate.</p>
                     </div>
                     <div class="trend-single-chart">
                         <canvas id="trendChartCombined" style="max-height:280px;"></canvas>
                     </div>
                     <div class="trend-pagination">
-                        <button id="trend-prev-btn" disabled>← Previous</button>
+                        <button id="trend-prev-btn" disabled data-i18n="trendPrev">← Previous</button>
                         <span id="trend-page-info">Page 1 / 1</span>
-                        <button id="trend-next-btn" disabled>Next →</button>
+                        <button id="trend-next-btn" disabled data-i18n="trendNext">Next →</button>
                     </div>
                 </div>
 
@@ -3494,8 +3494,8 @@
                             <span id="sia-avatar-fallback" style="font-size:2rem; color:#a8c6ff;">🧑‍🏫</span>
                         </div>
                         <div style="flex:1;">
-                            <div class="advice-title">Coach Advice</div>
-                            <div id="coach-advice-text" class="advice-text">
+                            <div class="advice-title" data-i18n="coachAdvice">Coach Advice</div>
+                            <div id="coach-advice-text" class="advice-text" data-i18n="coachAdviceEmpty">
                                 Complete a session to receive personalised advice.
                             </div>
                         </div>
@@ -3553,8 +3553,8 @@
                                 <div class="res-field">
                                     <label for="res-field" data-i18n="reservationField">Field</label>
                                     <select id="res-field">
-                                        <option value="A">Field A</option>
-                                        <option value="B">Field B</option>
+                                        <option value="A" data-i18n="fieldAOption">Field A</option>
+                                        <option value="B" data-i18n="fieldBOption">Field B</option>
                                     </select>
                                 </div>
                                 <div class="res-end-preview" id="res-end-preview"></div>
@@ -4663,63 +4663,117 @@
                 return open + '<path fill="currentColor" d="M12 7h-1V5.2a3 3 0 0 0-6 0V7H4.5A1.5 1.5 0 0 0 3 8.5v5A1.5 1.5 0 0 0 4.5 15h7A1.5 1.5 0 0 0 13 13.5v-5A1.5 1.5 0 0 0 12 7zM6.5 5.2a1.5 1.5 0 0 1 3 0V7h-3z"/>' + close;
             }
 
+            function mainLevelFloorCount(mainId) {
+                var count = 0;
+                for (var i = 0; i < ALL_LEVELS.length; i++) {
+                    if (getMainLevelId(ALL_LEVELS[i]) === mainId) break;
+                    count++;
+                }
+                return count;
+            }
+
+            function developmentProgressUnits(progress) {
+                var completed = progress.completed_levels || [];
+                var done = {};
+                for (var i = 0; i < completed.length; i++) done[completed[i]] = true;
+                var completedCount = 0;
+                for (var j = 0; j < ALL_LEVELS.length; j++) {
+                    if (done[ALL_LEVELS[j]]) completedCount++;
+                }
+                var current = progress.current_level || "L00-Foundation";
+                var currentMain = getMainLevelId(current);
+                var floor = mainLevelFloorCount(currentMain);
+                var currentIdx = ALL_LEVELS.indexOf(current);
+                if (currentIdx < 0) {
+                    for (var k = 0; k < ALL_LEVELS.length; k++) {
+                        if (getMainLevelId(ALL_LEVELS[k]) === currentMain) {
+                            currentIdx = k;
+                            break;
+                        }
+                    }
+                }
+                // Floor for the shown main level; never below day-one of that level.
+                // e.g. Activated starts at 26/126 (~20.6%).
+                var atLeast = floor;
+                if (currentIdx >= 0) atLeast = Math.max(atLeast, currentIdx);
+                return Math.max(atLeast, completedCount);
+            }
+
             function renderProgressionBar(progress) {
                 var container = document.getElementById('progression-container');
                 if (!container) return;
+                var t = function(key, fb) {
+                    if (typeof simustT === 'function') {
+                        var v = simustT(key);
+                        return (v && v !== key) ? v : (fb || key);
+                    }
+                    return fb || key;
+                };
 
                 var completed = progress.completed_levels || [];
                 var current = progress.current_level || "L00-Foundation";
 
-                var total = ALL_LEVELS.length;
-                var pct = total > 0 ? (completed.length / total * 100) : 0;
+                var total = ALL_LEVELS.length || 126;
+                var units = developmentProgressUnits(progress);
+                var pct = total > 0 ? Math.min(100, (units / total) * 100) : 0;
                 var currentMain = getMainLevelId(current);
                 var currentIndex = getMainLevelIndex(current);
                 var colorSet = getLevelColor(current);
                 activeLevelFill = colorSet.light;
 
-                var mainName = "Entry";
-                var description = "Track your journey through the SIMUST levels.";
+                var mainName = t('levelEntry', 'Entry');
+                var description = t('levelTrackJourney', 'Track your journey through the SIMUST levels.');
                 var levelNumber = "";
                 if (currentMain === "L00-Foundation") {
-                    mainName = "Foundation";
-                    description = "Complete Foundation to begin your journey.";
+                    mainName = t('levelFoundation', 'Foundation');
+                    description = t('levelDescFoundation', 'Complete Foundation to begin your journey.');
                     levelNumber = "";
                 } else if (currentMain === "L01-Entry") {
-                    mainName = "Entry";
-                    description = "You are building fundamental skills in football behaviour.";
+                    mainName = t('levelEntry', 'Entry');
+                    description = t('levelDescEntry', 'You are building fundamental skills in football behaviour.');
                     levelNumber = "02";
                 } else if (currentMain === "L02-Activated") {
-                    mainName = "Activated";
-                    description = "You are developing consistent scan-to-action behaviour under football pressure.";
+                    mainName = t('levelActivated', 'Activated');
+                    description = t('levelDescActivated', 'You are developing consistent scan-to-action behaviour under football pressure.');
                     levelNumber = "03";
                 } else if (currentMain === "L03-HighPerformance") {
-                    mainName = "High Performance";
-                    description = "You are building more consistent scan-to-action behaviour under football pressure.";
+                    mainName = t('levelHighPerformance', 'High Performance');
+                    description = t('levelDescHighPerformance', 'You are building more consistent scan-to-action behaviour under football pressure.');
                     levelNumber = "04";
                 } else if (currentMain === "L04-Elite") {
-                    mainName = "Elite";
-                    description = "You are performing at a high level with reliable decision-making.";
+                    mainName = t('levelElite', 'Elite');
+                    description = t('levelDescElite', 'You are performing at a high level with reliable decision-making.');
                     levelNumber = "05";
                 } else if (currentMain === "L05-WorldClass") {
-                    mainName = "World Class";
-                    description = "You are demonstrating world-class behaviour consistency.";
+                    mainName = t('levelWorldClass', 'World Class');
+                    description = t('levelDescWorldClass', 'You are demonstrating world-class behaviour consistency.');
                     levelNumber = "06";
                 }
 
+                var scaleLabels = {
+                    "L00-Foundation": t('scaleFoundation', 'FOUNDATION'),
+                    "L01-Entry": t('scaleEntry', 'ENTRY'),
+                    "L02-Activated": t('scaleActivated', 'ACTIVATED'),
+                    "L03-HighPerformance": t('scaleHighPerformance', 'HIGH PERFORMANCE'),
+                    "L04-Elite": t('scaleElite', 'ELITE'),
+                    "L05-WorldClass": t('scaleWorldClass', 'WORLD-CLASS')
+                };
+
                 var ribbonColor = colorSet.ribbon || colorSet.light;
+                var levelLabel = levelNumber ? (t('levelPrefix', 'LEVEL') + ' ' + levelNumber) : '';
                 var html = `
                             <div class="portal-level-card" style="border-top-color: ${ribbonColor};">
                                 <div class="portal-level-copy">
-                                    <p class="portal-kicker" style="color: ${ribbonColor};">CURRENT DEVELOPMENT LEVEL</p>
+                                    <p class="portal-kicker" style="color: ${ribbonColor};">${t('currentDevelopmentLevel', 'CURRENT DEVELOPMENT LEVEL')}</p>
                                     <h2 id="level-main-name" style="color: ${ribbonColor};">${mainName}</h2>
                                     <p id="progress-summary-text">${description}</p>
                                 </div>
                                 <div class="portal-level-progress">
                                     <div class="level-progress-labels" style="color: ${ribbonColor};">
-                                        <span>${levelNumber ? `LEVEL ${levelNumber}` : ''}</span>
+                                        <span>${levelLabel}</span>
                                         <b class="num-ltr">${pct.toFixed(0)}%</b>
                                     </div>
-                                    <div class="level-progress-track" aria-label="${pct.toFixed(0)} percent progress within ${mainName} level">
+                                    <div class="level-progress-track" aria-label="${pct.toFixed(0)} percent">
                                         <span style="width: ${pct}%; background: linear-gradient(90deg, ${colorSet.light}, ${colorSet.dark});"></span>
                                     </div>
                                     <div class="level-progress-scale">
@@ -4732,9 +4786,10 @@
                                             var kind = isActive ? (isDone ? 'completed' : 'unlocked') : 'locked';
                                             var tag = isActive ? 'strong' : 'span';
                                             var color = isActive ? ribbonColor : '#52637a';
+                                            var label = scaleLabels[level.id] || level.label;
                                             return '<' + tag + ' style="color:' + color + ';">' +
                                                 levelStatusIconSvg(kind) +
-                                                '<span class="level-scale-name">' + level.label + '</span>' +
+                                                '<span class="level-scale-name">' + label + '</span>' +
                                                 '</' + tag + '>';
                                         }).join('')}
                                     </div>
@@ -5225,13 +5280,27 @@
             function filterPlayersByRole() {
                 if (!currentUser) return [];
                 var role = currentUser.role;
+                var isPlayerAccount = function(p) {
+                    var r = String((p && p.role) || 'player').trim().toLowerCase();
+                    return r === 'player';
+                };
                 if (role === 'player') {
-                    return allPlayers.filter(function(p) { return p.playerId === currentUser.username || p.id === currentUser
-                            .username; });
+                    return allPlayers.filter(function(p) {
+                        return p.playerId === currentUser.username || p.id === currentUser.username;
+                    });
                 } else if (role === 'coach') {
-                    return allPlayers.filter(function(p) { return p.team && p.team === currentUser.team; });
+                    // Only real players on the coach's team — never list coaches/managers
+                    return allPlayers.filter(function(p) {
+                        return isPlayerAccount(p)
+                            && p.team && p.team === currentUser.team
+                            && p.id !== currentUser.username;
+                    });
                 } else if (role === 'manager') {
-                    return allPlayers.filter(function(p) { return p.club && p.club === currentUser.club; });
+                    return allPlayers.filter(function(p) {
+                        return isPlayerAccount(p)
+                            && p.club && p.club === currentUser.club
+                            && p.id !== currentUser.username;
+                    });
                 }
                 return [];
             }
@@ -5304,7 +5373,7 @@
                 setSiaAvatar();
                 sidebarRoleName.textContent = displayName + ' ' + (player.surname || '');
                 document.getElementById('player-greeting').innerHTML =
-                    'Good Day<br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (player.surname || '')) + '</em>';
+                    '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (player.surname || '')) + '</em>';
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
@@ -5433,7 +5502,7 @@
                 var fullName = (firstName + ' ' + (player.surname || '')).trim();
                 playerNameDisplay.textContent = fullName;
                 document.getElementById('player-greeting').innerHTML =
-                    'Good Day<br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
+                    '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
                 var split = splitLiveSessions(sessions);
                 var liveSession = split.live.sort(function(a, b) {
                     var da = new Date(a.session && a.session.timestamp || a.timestamp || 0);
@@ -5442,9 +5511,12 @@
                 })[0] || null;
                 sessions = split.completed;
                 playerSummaryText.textContent = sessions.length > 0 ?
-                    'You have completed ' + sessions.length + ' sessions. Your development is tracked against your own baseline.' :
-                    (liveSession ? 'A live test is in progress. Results will lock in when the session is saved.' :
-                    'No sessions recorded yet. Start training to see your progress.');
+                    (typeof simustT === 'function'
+                        ? simustT('sessionsCompletedSummary').replace('{n}', String(sessions.length))
+                        : ('You have completed ' + sessions.length + ' sessions. Your development is tracked against your own baseline.')) :
+                    (liveSession
+                        ? (typeof simustT === 'function' ? simustT('liveTestInProgress') : 'A live test is in progress. Results will lock in when the session is saved.')
+                        : (typeof simustT === 'function' ? simustT('noSessionsYet') : 'No sessions recorded yet. Start training to see your progress.'));
 
                 var latestSession = null;
                 var previousSession = null;
@@ -6359,16 +6431,18 @@
                 coachTodayDesc.textContent = Math.min(21, totalPlayers * 7) + ' player places';
 
                 var totalCount = totalPlayers || 1;
-                document.getElementById('dist-entry-pct').textContent =
-                    ((levelCounts.Entry || 0) / totalCount * 100).toFixed(0) + '%';
-                document.getElementById('dist-activated-pct').textContent =
-                    ((levelCounts.Activated || 0) / totalCount * 100).toFixed(0) + '%';
-                document.getElementById('dist-high-pct').textContent =
-                    ((levelCounts['High Performance'] || 0) / totalCount * 100).toFixed(0) + '%';
-                document.getElementById('dist-elite-pct').textContent =
-                    ((levelCounts.Elite || 0) / totalCount * 100).toFixed(0) + '%';
-                document.getElementById('dist-world-pct').textContent =
-                    ((levelCounts['World-Class'] || 0) / totalCount * 100).toFixed(0) + '%';
+                function setDistBar(barClass, pctElId, count) {
+                    var pct = totalPlayers > 0 ? (count / totalPlayers * 100) : 0;
+                    var pctEl = document.getElementById(pctElId);
+                    if (pctEl) pctEl.textContent = pct.toFixed(0) + '%';
+                    var bar = document.querySelector('.' + barClass);
+                    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+                }
+                setDistBar('dist-entry', 'dist-entry-pct', levelCounts.Entry || 0);
+                setDistBar('dist-activated', 'dist-activated-pct', levelCounts.Activated || 0);
+                setDistBar('dist-high', 'dist-high-pct', levelCounts['High Performance'] || 0);
+                setDistBar('dist-elite', 'dist-elite-pct', levelCounts.Elite || 0);
+                setDistBar('dist-world', 'dist-world-pct', levelCounts['World-Class'] || 0);
             }
 
             // ----- Load manager data (unchanged) -----
@@ -6723,7 +6797,7 @@
                         if (currentView === 'player') {
                             var displayName = currentUser.name || 'Player';
                             document.getElementById('player-greeting').innerHTML =
-                                'Good Day<br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (currentUser.surname || '')) + '</em>';
+                                '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (currentUser.surname || '')) + '</em>';
                             if (age) {
                                 setCoachAvatar(age, gender);
                             }
@@ -7495,6 +7569,20 @@
             }
 
             // Do not log usernames, tokens, or profile fields to the browser console.
+
+            window.addEventListener('simust-lang-change', function() {
+                try {
+                    if (typeof simustApplyI18n === 'function') simustApplyI18n();
+                    if (currentUser && currentUser.progress) renderProgressionBar(currentUser.progress);
+                    else if (selectedPlayerId && authorisedPlayers && authorisedPlayers.length) {
+                        var sp = authorisedPlayers.find(function(p) { return p.id === selectedPlayerId; });
+                        if (sp && sp.progress) renderProgressionBar(sp.progress);
+                    }
+                    if (typeof loadReservationsAndRender === 'function') loadReservationsAndRender();
+                    if (currentUser && currentUser.role === 'coach' && typeof loadCoachData === 'function') loadCoachData();
+                    if (currentUser && currentUser.role === 'manager' && typeof loadManagerData === 'function') loadManagerData(true);
+                } catch (e) { /* ignore refresh errors on language switch */ }
+            });
         })();
     </script>
 
