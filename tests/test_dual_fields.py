@@ -44,7 +44,9 @@ def test_slot_free_on_other_field():
         "end": end.isoformat(timespec="seconds"),
         "field": "A",
     }]
+    # Player 2 can take Field B at the exact same time
     app_mod._assert_slot_free(bookings, start, end, "B")
+    # Same field still conflicts
     raised = False
     try:
         app_mod._assert_slot_free(bookings, start, end, "A")
@@ -52,6 +54,19 @@ def test_slot_free_on_other_field():
         raised = True
         assert getattr(exc, "status_code", None) == 409
     assert raised
+    # Legacy bookings without field count as Field A only
+    legacy = [{
+        "id": "2",
+        "player_id": "alice",
+        "start": start.isoformat(timespec="seconds"),
+        "end": end.isoformat(timespec="seconds"),
+    }]
+    app_mod._assert_slot_free(legacy, start, end, "B")
+    try:
+        app_mod._assert_slot_free(legacy, start, end, "A")
+        assert False, "legacy A booking must block Field A"
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
 
 
 def test_detect_qr_roi_b_reads_screen_7_pair():
@@ -389,3 +404,107 @@ def test_inactive_field_skips_qr_start():
         assert cam.channels["A"].pending_start is None
     finally:
         rt.detect_qr_in_roi = orig
+
+
+def test_booking_play_window_active_before_after():
+    """Realtime allowed only while start <= now < end on matching field."""
+    import app as app_mod
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 9, 13, 10, 15, 0)
+    bookings = [
+        {
+            "id": "past",
+            "player_id": "alice",
+            "start": (now - timedelta(hours=2)).isoformat(timespec="seconds"),
+            "end": (now - timedelta(hours=1)).isoformat(timespec="seconds"),
+            "payment_status": "paid",
+            "field": "A",
+        },
+        {
+            "id": "live-b",
+            "player_id": "bob",
+            "start": (now - timedelta(minutes=10)).isoformat(timespec="seconds"),
+            "end": (now + timedelta(minutes=20)).isoformat(timespec="seconds"),
+            "payment_status": "paid",
+            "field": "B",
+        },
+        {
+            "id": "future-a",
+            "player_id": "cara",
+            "start": (now + timedelta(hours=1)).isoformat(timespec="seconds"),
+            "end": (now + timedelta(hours=2)).isoformat(timespec="seconds"),
+            "payment_status": "lab",
+            "field": "A",
+        },
+    ]
+    prev = app_mod.load_reservations
+    app_mod.load_reservations = lambda: bookings
+    try:
+        item, state = app_mod.find_booking_play_window("bob", "B", now=now)
+        assert state == "active" and item["id"] == "live-b"
+
+        item, state = app_mod.find_booking_play_window("alice", "A", now=now)
+        assert state == "after" and item["id"] == "past"
+
+        item, state = app_mod.find_booking_play_window("cara", "A", now=now)
+        assert state == "before" and item["id"] == "future-a"
+
+        item, state = app_mod.find_booking_play_window("bob", "A", now=now)
+        assert state == "none"
+
+        try:
+            app_mod.require_active_booking_for_play("alice", "A", now=now)
+            assert False, "expected HTTPException"
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 403
+            assert "ended" in str(exc.detail).lower()
+
+        try:
+            app_mod.require_active_booking_for_play("cara", "A", now=now)
+            assert False, "expected HTTPException"
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 403
+            assert "starts" in str(exc.detail).lower()
+
+        live = app_mod.require_active_booking_for_play("bob", "B", now=now)
+        assert live["id"] == "live-b"
+    finally:
+        app_mod.load_reservations = prev
+
+
+def test_reservation_hides_other_player_names():
+    import app as app_mod
+
+    item = {
+        "id": "r1",
+        "player_id": "alice",
+        "player_name": "Alice Secret",
+        "start": "2026-09-13T10:00:00",
+        "end": "2026-09-13T11:00:00",
+        "field": "A",
+        "payment_status": "paid",
+    }
+    other = app_mod._reservation_for_viewer(item, {"username": "bob", "role": "player"})
+    assert other["player_name"] == "Booked"
+    assert other["player_id"] == ""
+    assert other.get("is_mine") is False
+
+    mine = app_mod._reservation_for_viewer(item, {"username": "alice", "role": "player"})
+    assert mine["player_name"] == "Alice Secret"
+    assert mine["player_id"] == "alice"
+    assert mine.get("is_mine") is True
+
+    staff = app_mod._reservation_for_viewer(item, {"username": "coach1", "role": "coach"})
+    assert staff["player_name"] == "Alice Secret"
+    assert staff["player_id"] == "alice"
+
+    anon = app_mod._anonymous_today_reservation(item)
+    assert anon["player_name"] == "Booked"
+    assert "player_id" not in anon
+
+
+if __name__ == "__main__":
+    test_booking_play_window_active_before_after()
+    test_reservation_hides_other_player_names()
+    print("booking window + privacy OK")

@@ -1617,7 +1617,23 @@
         }
         .res-time-grid {
             display: grid;
-            grid-template-columns: 64px 1fr;
+            grid-template-columns: 64px 1fr 1fr;
+        }
+        .res-grid-head {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            color: #8fa0b6;
+            font-size: .68rem;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            padding: 8px;
+            background: #050e1a;
+            border-bottom: 1px solid var(--line);
+        }
+        .res-grid-head.time {
+            justify-self: end;
         }
         .res-slot-time {
             color: #8fa0b6;
@@ -3493,7 +3509,7 @@
                             <p class="portal-kicker" data-i18n="reservationKicker">TRAINING PLACE</p>
                             <h2 data-i18n="reservationTitle">Reservation / Calendar</h2>
                         </div>
-                        <p data-i18n="reservationIntro">Shared calendar for the training place. Booked intervals are blocked for everyone else. Slots are 30 minutes to 3 hours, 07:00–22:00.</p>
+                        <p data-i18n="reservationIntro">Field A and Field B can be booked at the same time by different players. A booking only blocks that field. Slots are 30 minutes to 3 hours, 07:00–22:00.</p>
                     </div>
                     <div class="res-cal-layout">
                         <div class="res-cal-board">
@@ -3520,7 +3536,7 @@
                         </div>
                         <aside class="res-cal-book">
                             <h3 data-i18n="reservationBookTitle">Reserve a slot</h3>
-                            <p class="res-book-sub" data-i18n="reservationBookSub">Pick a free time on the grid or set date, start and duration. Overlapping times cannot be booked.</p>
+                            <p class="res-book-sub" data-i18n="reservationBookSub">Pick a free cell on Field A or Field B, or set date, start, duration and field. Only the same field blocks overlapping times.</p>
                             <div id="res-book-fields">
                                 <div class="res-field">
                                     <label for="res-date" data-i18n="reservationDate">Date</label>
@@ -3537,30 +3553,17 @@
                                 <div class="res-field">
                                     <label for="res-field" data-i18n="reservationField">Field</label>
                                     <select id="res-field">
-                                        <option value="A">Field A (screens 1–4, 12–14)</option>
-                                        <option value="B">Field B (screens 5–11)</option>
+                                        <option value="A">Field A</option>
+                                        <option value="B">Field B</option>
                                     </select>
                                 </div>
                                 <div class="res-end-preview" id="res-end-preview"></div>
-                                <div class="res-end-preview" id="res-fee-preview"></div>
                                 <button type="button" class="res-submit" id="res-submit" data-i18n="reservationConfirm">Confirm reservation</button>
                             </div>
                             <div class="res-pay-step" id="res-pay-step">
                                 <h4 data-i18n="payOnline">Online payment</h4>
-                                <p class="res-book-sub" data-i18n="paymentSub">Pay 20 EUR for each 30 minutes. The reservation is registered only after payment.</p>
+                                <p class="res-book-sub" data-i18n="paymentSub">Payment integration is coming soon.</p>
                                 <p class="res-end-preview" id="res-pay-amount"></p>
-                                <div class="res-field">
-                                    <label for="res-pay-method" data-i18n="paymentMethod">Payment method</label>
-                                    <select id="res-pay-method">
-                                        <option value="card" data-i18n="paymentCard">Card (Stripe)</option>
-                                        <option value="" data-i18n="paymentEmpty">Empty — admin waiver</option>
-                                    </select>
-                                </div>
-                                <div class="res-field" id="res-admin-pass-wrap" style="display:none;">
-                                    <label for="res-admin-pass" data-i18n="adminPasswordLabel">Admin password</label>
-                                    <input type="password" id="res-admin-pass" autocomplete="current-password" placeholder="Administrator password">
-                                    <p class="res-pay-note" data-i18n="adminPasswordHint">Required on phones and tablets (Android cannot use browser password prompts).</p>
-                                </div>
                                 <button type="button" class="res-submit" id="res-pay-btn" data-i18n="payNow">Pay</button>
                                 <button type="button" class="res-pay-back" id="res-pay-cancel" data-i18n="reservationCancel">Cancel</button>
                             </div>
@@ -6964,49 +6967,65 @@
                 var times = slotTimes();
                 var me = currentUser ? currentUser.username : '';
                 var now = new Date();
-                var wantField = selectedBookField();
-                grid.innerHTML = times.map(function(hm) {
+                var selectedField = selectedBookField();
+                var selectedHm = (document.getElementById('res-start') || {}).value || '';
+
+                function slotHtml(fid, hm) {
                     var booking = null;
-                    var otherFieldBooking = null;
                     for (var i = 0; i < reservationBookings.length; i++) {
+                        if (bookingField(reservationBookings[i]) !== fid) continue;
                         if (!bookingCovers(reservationBookings[i], reservationSelectedDate, hm)) continue;
-                        if (bookingField(reservationBookings[i]) === wantField) {
-                            booking = reservationBookings[i];
-                            break;
-                        }
-                        otherFieldBooking = reservationBookings[i];
+                        booking = reservationBookings[i];
+                        break;
                     }
                     var slotStart = parseLocalDateTime(localIso(reservationSelectedDate, hm));
                     var isPast = slotStart && slotStart < now;
-                    var isStart = false;
                     var label = '';
                     var cls = 'res-slot';
                     if (booking) {
                         var bStart = parseLocalDateTime(booking.start);
-                        isStart = bStart && ymdLocal(bStart) === reservationSelectedDate && hmFromDate(bStart) === hm;
-                        var mine = booking.player_id === me;
+                        var isStart = bStart && ymdLocal(bStart) === reservationSelectedDate && hmFromDate(bStart) === hm;
+                        var staffViewer = currentUser && (currentUser.role === 'coach' || currentUser.role === 'manager' || currentUser.role === 'admin');
+                        var mine = !!(booking.is_mine || (booking.player_id && booking.player_id === me));
                         cls += mine ? ' mine' : ' booked';
                         if (isStart) {
                             var bEnd = parseLocalDateTime(booking.end);
-                            label = 'F' + wantField + ' · ' + escapeHtml(booking.player_name || resT('reservationBooked', 'Booked'))
+                            var whoLabel = resT('reservationBooked', 'Booked');
+                            if (mine) {
+                                whoLabel = resT('reservationYours', 'Your reservation');
+                            } else if (staffViewer && booking.player_name && booking.player_name !== 'Booked') {
+                                whoLabel = booking.player_name;
+                            }
+                            label = escapeHtml(whoLabel)
                                 + '  <span class="num-ltr">' + hmFromDate(bStart) + '–' + (bEnd ? hmFromDate(bEnd) : '') + '</span>';
                         }
                     } else {
                         cls += ' free';
                         if (isPast) cls += ' past';
-                        if (otherFieldBooking && !isPast) {
-                            label = 'F' + bookingField(otherFieldBooking) + ' taken · F' + wantField + ' free';
-                        }
                     }
-                    return '<div class="res-slot-time"><span class="num-ltr">' + (hm.slice(-2) === '00' ? hm : '') + '</span></div>'
-                        + '<div class="' + cls + '" data-hm="' + hm + '" data-id="' + (booking ? escapeHtml(booking.id) : '') + '">'
+                    if (!booking && !isPast && selectedField === fid && selectedHm === hm) {
+                        cls += ' selected';
+                    }
+                    return '<div class="' + cls + '" data-hm="' + hm + '" data-field="' + fid + '" data-id="' + (booking ? escapeHtml(booking.id) : '') + '">'
                         + '<span class="res-slot-label">' + label + '</span></div>';
-                }).join('');
+                }
+
+                grid.innerHTML = '<div class="res-grid-head time"></div>'
+                    + '<div class="res-grid-head">Field A</div>'
+                    + '<div class="res-grid-head">Field B</div>'
+                    + times.map(function(hm) {
+                        return '<div class="res-slot-time"><span class="num-ltr">' + (hm.slice(-2) === '00' ? hm : '') + '</span></div>'
+                            + slotHtml('A', hm)
+                            + slotHtml('B', hm);
+                    }).join('');
                 grid.querySelectorAll('.res-slot.free:not(.past)').forEach(function(el) {
                     el.addEventListener('click', function() {
                         var hm = this.getAttribute('data-hm');
+                        var fid = this.getAttribute('data-field') || 'A';
                         var startSel = document.getElementById('res-start');
+                        var fieldSel = document.getElementById('res-field');
                         if (startSel) startSel.value = hm;
+                        if (fieldSel) fieldSel.value = fid;
                         if (dateEl) dateEl.value = reservationSelectedDate;
                         updateDurationAvailability();
                         grid.querySelectorAll('.res-slot.selected').forEach(function(s) { s.classList.remove('selected'); });
@@ -7027,7 +7046,7 @@
                     var end = parseLocalDateTime(b.end);
                     if (!end || end <= now) return false;
                     if (staff) return true;
-                    return b.player_id === me;
+                    return !!(b.is_mine || b.player_id === me);
                 }).sort(function(a, b) { return String(a.start).localeCompare(String(b.start)); });
                 if (!mine.length) {
                     box.innerHTML = '<div class="res-empty">' + escapeHtml(resT('reservationNoneYours', 'No upcoming reservations.')) + '</div>';
@@ -7037,9 +7056,14 @@
                     var s = parseLocalDateTime(b.start);
                     var e = parseLocalDateTime(b.end);
                     var when = s ? s.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : '';
-                    var who = staff && b.player_id !== me ? (' · ' + escapeHtml(b.player_name || '')) : '';
-                    var canCancel = staff || b.player_id === me;
+                    // Names only for staff viewing someone else's booking
+                    var who = '';
+                    if (staff && b.player_id && b.player_id !== me && b.player_name && b.player_name !== 'Booked') {
+                        who = ' · ' + escapeHtml(b.player_name);
+                    }
+                    var canCancel = staff || !!(b.is_mine || b.player_id === me);
                     return '<div class="res-mine-row"><span>' + escapeHtml(when)
+                        + ' · Field ' + bookingField(b)
                         + ' · <span class="num-ltr">' + (s ? hmFromDate(s) : '') + '–' + (e ? hmFromDate(e) : '') + '</span>' + who
                         + '</span>' + (canCancel ? '<button type="button" data-cancel-id="' + escapeHtml(b.id) + '">'
                         + escapeHtml(resT('reservationCancel', 'Cancel')) + '</button>' : '') + '</div>';
@@ -7085,70 +7109,14 @@
                 var pay = document.getElementById('res-pay-step');
                 if (fields) fields.style.display = on ? 'none' : '';
                 if (pay) pay.classList.toggle('show', !!on);
-                if (on) syncAdminWaiverField();
-                else {
-                    var pass = document.getElementById('res-admin-pass');
-                    if (pass) pass.value = '';
-                }
-            }
-
-            function syncAdminWaiverField() {
-                var methodEl = document.getElementById('res-pay-method');
-                var wrap = document.getElementById('res-admin-pass-wrap');
-                var payBtn = document.getElementById('res-pay-btn');
-                var isWaiver = !!(methodEl && !String(methodEl.value || ''));
-                if (wrap) wrap.style.display = isWaiver ? '' : 'none';
-                if (payBtn) {
-                    payBtn.textContent = isWaiver
-                        ? resT('confirmWaiver', 'Confirm admin waiver')
-                        : resT('payNow', 'Pay');
-                }
-                if (!isWaiver) {
-                    var pass = document.getElementById('res-admin-pass');
-                    if (pass) pass.value = '';
-                }
-            }
-
-            function bookingFeeEur(mins) {
-                return Math.max(1, Math.floor(Number(mins) / 30)) * 20;
             }
 
             function updateFeePreview() {
-                var durSel = document.getElementById('res-duration');
+                // Fee preview removed per request - payments coming soon
                 var preview = document.getElementById('res-fee-preview');
                 var payAmount = document.getElementById('res-pay-amount');
-                var mins = durSel ? Number(durSel.value) : 30;
-                var text = bookingFeeEur(mins) + ' EUR / ' + mins + ' min';
-                if (preview) preview.textContent = text;
-                if (payAmount) payAmount.textContent = text;
-            }
-
-            async function confirmPaidReservation(sessionId) {
-                var resp = await fetch(API_BASE + '/reservations/confirm-payment', {
-                    method: 'POST',
-                    headers: apiHeaders(),
-                    body: JSON.stringify({ session_id: sessionId })
-                });
-                var data = await resp.json().catch(function() { return {}; });
-                if (!resp.ok) {
-                    throw new Error(data.detail || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
-                }
-                showResMessage(resT('paymentApproved', 'Payment approved.') + ' ' + resT('reservationSuccess', 'Reservation confirmed.'), '');
-                showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
-                setPaymentStep(false);
-                await loadReservationsAndRender();
-            }
-
-            async function maybeFinishStripeReturn() {
-                try {
-                    var params = new URLSearchParams(location.search || '');
-                    var sessionId = params.get('session_id') || '';
-                    if (params.get('paid') !== '1' || !sessionId || !currentUser) return;
-                    await confirmPaidReservation(sessionId);
-                    history.replaceState({}, '', location.pathname);
-                } catch (e) {
-                    showResMessage('', e.message || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
-                }
+                if (preview) preview.textContent = '';
+                if (payAmount) payAmount.textContent = '';
             }
 
             async function submitReservation() {
@@ -7156,7 +7124,6 @@
                 var startSel = document.getElementById('res-start');
                 var durSel = document.getElementById('res-duration');
                 var payBtn = document.getElementById('res-pay-btn');
-                var methodEl = document.getElementById('res-pay-method');
                 if (!currentUser) {
                     showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
                     setPaymentStep(false);
@@ -7166,7 +7133,6 @@
                 var startHm = startSel.value;
                 var mins = Number(durSel.value);
                 var endHm = addMinutesHm(startHm, mins);
-                var method = methodEl ? String(methodEl.value || '') : 'card';
                 var fieldEl = document.getElementById('res-field');
                 var fieldId = fieldEl && String(fieldEl.value || 'A').toUpperCase() === 'B' ? 'B' : 'A';
                 if (overlapExists(dateStr, startHm, mins, null, fieldId)) {
@@ -7176,57 +7142,9 @@
                 }
                 if (payBtn) payBtn.disabled = true;
                 try {
-                    var payload = {
-                        player_id: currentUser.username,
-                        start: localIso(dateStr, startHm),
-                        end: localIso(dateStr, endHm),
-                        field: fieldId
-                    };
-                    if (!method) {
-                        // In-page password — window.prompt is cancelled on Android WebView.
-                        var passEl = document.getElementById('res-admin-pass');
-                        var adminPass = passEl ? String(passEl.value || '').trim() : '';
-                        if (!adminPass) {
-                            showResMessage('', resT('adminPasswordPrompt', 'Admin password is required to register this booking without payment.'));
-                            if (passEl) passEl.focus();
-                            return;
-                        }
-                        payload.admin_password = adminPass;
-                        var waive = await fetch(API_BASE + '/reservations', {
-                            method: 'POST',
-                            headers: apiHeaders(),
-                            body: JSON.stringify(payload)
-                        });
-                        var waiveData = await waive.json().catch(function() { return {}; });
-                        if (!waive.ok) {
-                            var detail = waiveData.detail || resT('reservationFailed', 'Reservation failed.');
-                            showResMessage('', detail);
-                            return;
-                        }
-                        if (passEl) passEl.value = '';
-                        showResMessage(resT('adminWaiverOk', 'Administrator confirmed the booking without payment.') + ' ' + dateStr + '  ' + startHm + '–' + endHm, '');
-                        showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
-                        setPaymentStep(false);
-                        await loadReservationsAndRender();
-                        return;
-                    }
-                    var resp = await fetch(API_BASE + '/reservations/checkout', {
-                        method: 'POST',
-                        headers: apiHeaders(),
-                        body: JSON.stringify(payload)
-                    });
-                    var data = await resp.json().catch(function() { return {}; });
-                    if (!resp.ok) {
-                        var err = data.detail || resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.');
-                        if (Array.isArray(err)) err = err.map(function(d) { return d.msg || d; }).join(' ');
-                        showResMessage('', err);
-                        return;
-                    }
-                    if (data.checkout_url) {
-                        window.location.href = data.checkout_url;
-                        return;
-                    }
-                    showResMessage('', resT('paymentFailedContact', 'Payment could not be completed. Please contact administration.'));
+                    // Online payment coming soon - notify user
+                    showResMessage('', 'Online payment is coming soon. Please contact the academy to confirm your reservation.');
+                    setPaymentStep(false);
                 } catch (e) {
                     showResMessage('', resT('networkError', 'Network error. Is the backend running?'));
                 } finally {
@@ -7306,9 +7224,6 @@
                 });
                 if (payBtn) payBtn.addEventListener('click', submitReservation);
                 if (payCancel) payCancel.addEventListener('click', function() { setPaymentStep(false); });
-                var methodEl = document.getElementById('res-pay-method');
-                if (methodEl) methodEl.addEventListener('change', syncAdminWaiverField);
-                syncAdminWaiverField();
                 prev.addEventListener('click', function() {
                     reservationWeekStart.setDate(reservationWeekStart.getDate() - 7);
                     reservationSelectedDate = ymdLocal(reservationWeekStart);
@@ -7394,7 +7309,6 @@
                 startAutoRefresh();
                 bindReservationUi();
                 loadReservationsAndRender();
-                maybeFinishStripeReturn();
             };
 
             var originalShowLogin = showLogin;

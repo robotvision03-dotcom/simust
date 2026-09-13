@@ -342,13 +342,42 @@ def _public_reservation(item: dict) -> dict:
 
 
 def _reservation_for_viewer(item: dict, viewer: Optional[dict]) -> dict:
+    """Hide other players' identities on shared calendars. Staff see full names."""
     public = _public_reservation(item)
     role = str((viewer or {}).get("role") or "").strip().lower()
     username = str((viewer or {}).get("username") or "")
-    if PUBLIC_MODE and role not in RESERVATION_STAFF_ROLES and public.get("player_id") != username:
-        public["player_id"] = ""
-        public["player_name"] = "Booked"
+    if role in RESERVATION_STAFF_ROLES:
+        return public
+    owner = str(public.get("player_id") or "").strip()
+    if owner and owner == username:
+        public["is_mine"] = True
+        return public
+    # Other players (or anonymous): show occupied slot only — never name or id
+    public["player_id"] = ""
+    public["player_name"] = "Booked"
+    public["is_mine"] = False
     return public
+
+
+def _anonymous_today_reservation(item: dict) -> dict:
+    """Today's board never includes player identity (lab screen / shared UI)."""
+    start = _parse_iso_dt(item.get("start", ""), "start")
+    end = _parse_iso_dt(item.get("end", ""), "end")
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(item.get("field")) or "A"
+    except Exception:
+        raw = str(item.get("field") or "A").strip().upper()
+        field_id = "B" if raw.startswith("B") else "A"
+    return {
+        "id": item.get("id"),
+        "player_name": "Booked",
+        "start": start.strftime("%H:%M"),
+        "end": end.strftime("%H:%M"),
+        "start_iso": start.isoformat(timespec="seconds"),
+        "end_iso": end.isoformat(timespec="seconds"),
+        "field": field_id,
+    }
 
 
 def _assert_slot_free(bookings: list, start: datetime, end: datetime, field: str = "A") -> None:
@@ -572,6 +601,103 @@ def _validate_reservation_window(start: datetime, end: datetime) -> int:
     if not _on_half_hour_grid(start) or not _on_half_hour_grid(end):
         raise HTTPException(400, "Start and end must align to the 30-minute grid")
     return duration
+
+
+ACTIVE_BOOKING_PLAY_STATUSES = {"paid", "admin_waived", "lab"}
+
+
+def _reservation_field_id(item_or_field) -> str:
+    raw = item_or_field
+    if isinstance(item_or_field, dict):
+        raw = item_or_field.get("field")
+    try:
+        import simust_fields
+        return simust_fields.normalize_field(raw) or "A"
+    except Exception:
+        text = str(raw or "A").strip().upper()
+        return "B" if text.startswith("B") else "A"
+
+
+def find_booking_play_window(player_id: str, field: str = "A", now: Optional[datetime] = None):
+    """Return (booking|None, state) where state is active|before|after|none.
+
+    Realtime Play is allowed only while start <= now < end for a paid/lab/waived
+    reservation on that Field A/B.
+    """
+    now = (now or datetime.now()).replace(microsecond=0)
+    pid = str(player_id or "").strip()
+    field_id = _reservation_field_id(field)
+    if not pid:
+        return None, "none"
+
+    upcoming = None
+    past = None
+    for item in load_reservations():
+        if str(item.get("player_id") or "").strip() != pid:
+            continue
+        if _reservation_field_id(item) != field_id:
+            continue
+        status = str(item.get("payment_status") or "").strip().lower()
+        if status not in ACTIVE_BOOKING_PLAY_STATUSES:
+            continue
+        try:
+            start = _parse_iso_dt(item.get("start", ""), "start")
+            end = _parse_iso_dt(item.get("end", ""), "end")
+        except Exception:
+            continue
+        if start <= now < end:
+            return item, "active"
+        if now < start:
+            if upcoming is None:
+                upcoming = item
+            else:
+                try:
+                    if start < _parse_iso_dt(upcoming.get("start", ""), "start"):
+                        upcoming = item
+                except Exception:
+                    pass
+        elif now >= end:
+            if past is None:
+                past = item
+            else:
+                try:
+                    if end > _parse_iso_dt(past.get("end", ""), "end"):
+                        past = item
+                except Exception:
+                    pass
+
+    if upcoming is not None:
+        return upcoming, "before"
+    if past is not None:
+        return past, "after"
+    return None, "none"
+
+
+def require_active_booking_for_play(player_id: str, field: str = "A", now: Optional[datetime] = None) -> dict:
+    """Raise 403 unless the player has a live scheduled booking on this field."""
+    field_id = _reservation_field_id(field)
+    booking, state = find_booking_play_window(player_id, field_id, now=now)
+    if state == "active" and booking:
+        return booking
+    if state == "before" and booking:
+        start = booking.get("start") or ""
+        raise HTTPException(
+            403,
+            f"{player_id} Field {field_id}: booking starts at {start}. "
+            "Realtime Play is only allowed during the scheduled time.",
+        )
+    if state == "after" and booking:
+        end = booking.get("end") or ""
+        raise HTTPException(
+            403,
+            f"{player_id} Field {field_id}: booking ended at {end}. "
+            "Realtime Play is not allowed after the scheduled time.",
+        )
+    raise HTTPException(
+        403,
+        f"{player_id} Field {field_id}: no paid/scheduled booking is active right now. "
+        "Book a slot and start only during that window.",
+    )
         
 # ============================================================
 # PROGRESSION SYSTEM (UPDATED for Foundation thresholds)
@@ -1693,20 +1819,31 @@ async def start_realtime_playback(req: Request):
 
         # --- Paid session unlock gate (every selected field player) ---
         players_payload = data.get("players") or []
-        players_to_check = []
-        seen_ids = set()
+        if not players_payload and player_id:
+            players_payload = [{
+                "player_id": player_id,
+                "player_name": player_name,
+                "player_surname": player_surname,
+                "field": data.get("field") or "A",
+            }]
+
+        play_slots = []
+        seen_slots = set()
         for entry in players_payload:
             pid = str((entry or {}).get("player_id") or "").strip()
-            if pid and pid not in seen_ids:
-                seen_ids.add(pid)
-                players_to_check.append(pid)
-        if not players_to_check and player_id:
-            players_to_check.append(str(player_id).strip())
-        if not players_to_check:
+            if not pid:
+                continue
+            fid = _reservation_field_id(entry)
+            key = (pid, fid)
+            if key in seen_slots:
+                continue
+            seen_slots.add(key)
+            play_slots.append((pid, fid, entry))
+        if not play_slots:
             raise HTTPException(400, "No player selected for Field A or Field B")
 
         users = load_users()
-        for pid in players_to_check:
+        for pid, fid, _entry in play_slots:
             if pid not in users:
                 raise HTTPException(404, f"Player not found: {pid}")
             progress = simust_progress.ensure_progress(users[pid])
@@ -1714,6 +1851,8 @@ async def start_realtime_playback(req: Request):
             ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
             if not ok:
                 raise HTTPException(403, f"{pid}: {reason}")
+            # Scheduled booking window: only during start <= now < end on this field
+            require_active_booking_for_play(pid, fid)
         save_users(users)
 
         level_path = get_level_path(level_id)
@@ -1743,7 +1882,6 @@ async def start_realtime_playback(req: Request):
         write_pause_setting(False)
         force_kill_smart_player()
         try:
-            players_payload = data.get("players") or []
             if not players_payload and player_id:
                 players_payload = [{
                     "player_id": player_id,
@@ -1753,11 +1891,7 @@ async def start_realtime_playback(req: Request):
                 }]
             field_map = {"A": None, "B": None}
             for entry in players_payload:
-                try:
-                    import simust_fields
-                    fid = simust_fields.normalize_field((entry or {}).get("field")) or "A"
-                except Exception:
-                    fid = "B" if str((entry or {}).get("field") or "A").upper().startswith("B") else "A"
+                fid = _reservation_field_id(entry)
                 field_map[fid] = {
                     "player_id": (entry or {}).get("player_id") or "",
                     "player_name": (entry or {}).get("player_name") or "",
@@ -5509,7 +5643,7 @@ async def update_profile(req: Request):
 
 @app.get("/reservations/today")
 async def reservations_today():
-    """Public compact list of today's bookings (names + times only)."""
+    """Today's occupied slots only — never includes player names or ids."""
     today = datetime.now().date()
     day_start = datetime.combine(today, datetime.min.time())
     day_end = day_start + timedelta(days=1)
@@ -5524,14 +5658,7 @@ async def reservations_today():
             continue
         if not _intervals_overlap(start, end, day_start, day_end):
             continue
-        items.append({
-            "id": item.get("id"),
-            "player_name": "Booked" if PUBLIC_MODE else (item.get("player_name") or "Booked"),
-            "start": start.strftime("%H:%M"),
-            "end": end.strftime("%H:%M"),
-            "start_iso": start.isoformat(timespec="seconds"),
-            "end_iso": end.isoformat(timespec="seconds"),
-        })
+        items.append(_anonymous_today_reservation(item))
     items.sort(key=lambda row: row.get("start_iso", ""))
     return {
         "date": today.isoformat(),
