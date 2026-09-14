@@ -1108,8 +1108,7 @@
             deleteNeedPassword: "Voer het adminwachtwoord in om deze speler te verwijderen.",
             deleteWrongPassword: "Onjuist wachtwoord. De speler is niet verwijderd.",
             deletePasswordPlaceholder: "Adminwachtwoord",
-            confirmDelete: "Verwijderen bevestigen"
-        }
+            confirmDelete: "Verwijderen bevestigen",
             goodDay: "Goedendag",
             playerSummaryDefault: "Ihre Ergebnisse zeigen, wie sich Ihr Fußballverhalten gegenüber Ihrem eigenen Ausgangspunkt entwickelt – nicht im Vergleich zu anderen Spielern.",
             nextReview: "VOLGENDE REVIEW",
@@ -1153,8 +1152,8 @@
             scaleActivated: "ACTIVATED",
             scaleHighPerformance: "HIGH PERFORMANCE",
             scaleElite: "ELITE",
-            scaleWorldClass: "WORLD-CLASS",
-
+            scaleWorldClass: "WORLD-CLASS"
+        }
     };
 
     function getLang() {
