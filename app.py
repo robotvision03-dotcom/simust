@@ -1132,11 +1132,8 @@ def kill_screen2_result_helpers() -> None:
 
 
 def should_spawn_screen2_display(display_flag) -> bool:
-    if display_flag is False or str(display_flag).lower() in ("0", "false", "no"):
-        return False
-    if smart_player_is_running():
-        return False
-    return True
+    # Screen-2 results display removed from product flow.
+    return False
 
 
 def force_kill_smart_player():
@@ -5968,12 +5965,15 @@ async def create_reservation(req: Request):
 async def delete_reservation(id: str, request: Request):
     users = load_users()
     username = request.query_params.get("username", "").strip()
+    body = {}
     try:
         body = await request.json()
         if isinstance(body, dict):
             username = username or (body.get("username") or body.get("player_id") or "").strip()
+        else:
+            body = {}
     except Exception:
-        pass
+        body = {}
     if PUBLIC_MODE:
         viewer = current_user(request, users, required=True)
         username = viewer["username"]
@@ -6000,6 +6000,11 @@ async def delete_reservation(id: str, request: Request):
         owner = found.get("player_id", "")
         if owner != username and not staff:
             raise HTTPException(403, "You can only cancel your own reservation")
+        # Staff cancelling another player's booking requires the admin password
+        if owner != username and staff:
+            admin_password = str(body.get("admin_password") or body.get("adminPassword") or "")
+            if not _verify_admin_password(users, admin_password):
+                raise HTTPException(401, "Admin password is not correct")
         save_reservations(remaining)
 
     if not PUBLIC_MODE:

@@ -322,7 +322,7 @@
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/static/i18n.js?v=20260914d"></script>
+    <script src="/static/i18n.js?v=20260915a"></script>
 
     <script>
         // Replace all optional chaining (?.) with safe checks to avoid syntax errors
@@ -3746,45 +3746,7 @@
             };
 
             var displayResultsOnScreen2 = function() {
-                showToast("Searching for results…", 'info');
-                var directory = null;
-                if (reportData && reportData.directory) {
-                    directory = reportData.directory;
-                } else if (reportDataB && reportDataB.directory) {
-                    directory = reportDataB.directory;
-                } else if (currentDirectory) {
-                    directory = currentDirectory;
-                }
-                if (!directory) {
-                    axios.get("/results").then(function(res) {
-                        if (res.data && res.data.directory) directory = res.data.directory;
-                    }).catch(function() {});
-                }
-                var activeFields = [];
-                if (selectedPlayerId) activeFields.push("A");
-                if (selectedPlayerBId) activeFields.push("B");
-                if (directory) {
-                    axios.post("/create-results-video", {
-                        directory: directory,
-                        video_index: 1,
-                        fields: activeFields
-                    }).then(function(res) {
-                        if (res.data && res.data.status === "success") {
-                            showToast("Results video created and displayed on Screen 2", 'success');
-                            if (realtimeRunning) {
-                                showToast("Auto-stopping playback after video generation", 'info');
-                                stopPlayback({ abort: false });
-                            }
-                        } else {
-                            showToast("Could not display results on Screen 2", 'error');
-                        }
-                    }).catch(function(e) {
-                        console.error(e);
-                        showToast("Failed to display results on Screen 2", 'error');
-                    });
-                } else {
-                    showToast("No results available", 'error');
-                }
+                // Intentionally removed: operator no longer pushes results to Screen 2.
             };
 
             var forceRefreshReport = function() {
@@ -4271,15 +4233,7 @@
                                 disabled: !realtimeRunning,
                                 className: "btn-primary btn-danger px-6 py-2 font-bold" +
                                     (!realtimeRunning ? " opacity-50" : "")
-                            }, t("stop")),
-                            React.createElement('button', {
-                                onClick: displayResultsOnScreen2,
-                                className: "btn-primary btn-results px-6 py-2 font-bold",
-                                disabled: !(
-                                    (selectedPlayerId && reportData && reportData.actions && reportData.actions.length) ||
-                                    (selectedPlayerBId && reportDataB && reportDataB.actions && reportDataB.actions.length)
-                                )
-                            }, t("showResults"))
+                            }, t("stop"))
                         ),
                         savingSession ?
                         React.createElement('div', { className: "mb-4 p-2 bg-blue-600/20 rounded-xl text-center" },
