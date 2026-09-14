@@ -324,12 +324,16 @@
             align-items: center;
             height: 90px;
             display: grid;
+            position: relative;
+            z-index: 50;
         }
         .portal-header-actions {
             display: flex;
             align-items: center;
             gap: 12px;
             margin-inline-end: 24px;
+            position: relative;
+            z-index: 60;
         }
         .lang-dropdown {
             position: relative;
@@ -3335,7 +3339,7 @@
                         <li><button type="button" data-lang="nl" data-i18n="langNl">Dutch</button></li>
                     </ul>
                 </div>
-                <button class="logout-btn" id="logout-btn">Logout</button>
+                <button class="logout-btn" id="logout-btn" data-i18n="logout">Logout</button>
                 <div class="portal-profile" id="profile-badge" title="Click to edit profile">
                     <span id="profile-label">PLAYER</span>
                     <div id="profile-avatar" style="width:38px;height:38px;border-radius:50%;overflow:hidden;border:2px solid var(--gold);display:flex;align-items:center;justify-content:center;background:#1a2d4a;color:#a8c6ff;font-weight:700;font-size:.75rem;">
@@ -3349,27 +3353,27 @@
         <aside class="portal-sidebar" id="portal-sidebar">
             <nav aria-label="Dashboard navigation" id="sidebar-nav">
                 <!-- Player links -->
-                <a class="active" data-view="player" data-section="overview"><small>01</small>Overview</a>
-                <a data-view="player" data-section="development"><small>02</small>Development</a>
-                <a data-view="player" data-section="sessions"><small>03</small>Sessions</a>
-                <a data-view="player" data-section="report"><small>04</small>Report</a>
+                <a class="active" data-view="player" data-section="overview"><small>01</small><span data-i18n="navOverview">Overview</span></a>
+                <a data-view="player" data-section="development"><small>02</small><span data-i18n="navDevelopment">Development</span></a>
+                <a data-view="player" data-section="sessions"><small>03</small><span data-i18n="navSessions">Sessions</span></a>
+                <a data-view="player" data-section="report"><small>04</small><span data-i18n="navReport">Report</span></a>
                 <a data-view="player" data-section="reservation"><small>05</small><span data-i18n="reservationNav">Calendar</span></a>
                 <!-- Coach links -->
-                <a data-view="coach" data-section="overview" class="hidden"><small>05</small>Coach overview</a>
-                <a data-view="coach" data-section="players" class="hidden"><small>06</small>Players</a>
-                <a data-view="coach" data-section="team" class="hidden"><small>07</small>Team development</a>
-                <a data-view="coach" data-section="schedule" class="hidden"><small>08</small>Schedule</a>
+                <a data-view="coach" data-section="overview" class="hidden"><small>05</small><span data-i18n="navCoachOverview">Coach overview</span></a>
+                <a data-view="coach" data-section="players" class="hidden"><small>06</small><span data-i18n="navPlayers">Players</span></a>
+                <a data-view="coach" data-section="team" class="hidden"><small>07</small><span data-i18n="navTeamDevelopment">Team development</span></a>
+                <a data-view="coach" data-section="schedule" class="hidden"><small>08</small><span data-i18n="navSchedule">Schedule</span></a>
                 <!-- Manager links -->
-                <a data-view="manager" data-section="overview" class="hidden"><small>09</small>Manager overview</a>
-                <a data-view="manager" data-section="teams" class="hidden"><small>10</small>Teams</a>
-                <a data-view="manager" data-section="activity" class="hidden"><small>11</small>Activity</a>
-                <a data-view="manager" data-section="access" class="hidden"><small>12</small>Access</a>
+                <a data-view="manager" data-section="overview" class="hidden"><small>09</small><span data-i18n="navManagerOverview">Manager overview</span></a>
+                <a data-view="manager" data-section="teams" class="hidden"><small>10</small><span data-i18n="navTeams">Teams</span></a>
+                <a data-view="manager" data-section="activity" class="hidden"><small>11</small><span data-i18n="navActivity">Activity</span></a>
+                <a data-view="manager" data-section="access" class="hidden"><small>12</small><span data-i18n="navAccess">Access</span></a>
             </nav>
             <div class="portal-sidebar-note">
                 <small id="sidebar-role-label">VIEWING AS</small>
                 <strong id="sidebar-role-name">Player</strong>
                 <span id="sidebar-role-desc">Only this player's development is shown.</span>
-                <a class="back-link" id="sidebar-back-link">← Return to access page</a>
+                <a class="back-link" id="sidebar-back-link" data-i18n="returnToAccess">← Return to access page</a>
             </div>
         </aside>
 
@@ -3378,10 +3382,10 @@
 
             <!-- DASHBOARD VIEW SWITCHER -->
             <div class="dashboard-view-switcher" id="view-switcher">
-                <button class="active" data-view="player">👤 Player</button>
-                <button data-view="coach">🧑‍🏫 Coach</button>
-                <button data-view="manager">🏛️ Academy Manager</button>
-                <button style="margin-inline-start:auto;" id="content-back-btn" class="back-to-login">← Back to access</button>
+                <button class="active" data-view="player"><span data-i18n="viewAsPlayer">Player</span></button>
+                <button data-view="coach"><span data-i18n="viewAsCoach">Coach</span></button>
+                <button data-view="manager"><span data-i18n="viewAsManager">Academy Manager</span></button>
+                <button style="margin-inline-start:auto;" id="content-back-btn" class="back-to-login" data-i18n="backToAccess">← Back to access</button>
             </div>
 
             <!-- ============================================================
@@ -3459,12 +3463,13 @@
                         <span id="coach-fallback" style="display:flex; font-size:2.8rem; color:#a8c6ff;">🧑‍🏫</span>
                     </div>
                     <div class="coach-message">
-                        <div class="coach-label">TECHNICAL COACH</div>
+                        <div class="coach-label" data-i18n="technicalCoach">TECHNICAL COACH</div>
                         <div class="coach-advice-text" id="tech-coach-advice">
-                            <span class="coming-soon">⚡ Coming soon</span> — your coach will share personalised technical insights here.
+                            <span class="coming-soon">⚡ <span data-i18n="comingSoonBadge">Coming soon</span></span>
+                            <span data-i18n="technicalCoachEmpty"> — your coach will share personalised technical insights here.</span>
                         </div>
                     </div>
-                    <div class="coach-badge">⚡ LIVE</div>
+                    <div class="coach-badge">⚡ <span data-i18n="technicalCoachLive">LIVE</span></div>
                 </div>
 
                 <!-- ====== PERFORMANCE TREND ====== -->
@@ -3495,7 +3500,7 @@
                         </div>
                         <div style="flex:1;">
                             <div class="advice-title" data-i18n="coachAdvice">Coach Advice</div>
-                            <div id="coach-advice-text" class="advice-text" data-i18n="coachAdviceEmpty">
+                            <div id="coach-advice-text" class="advice-text">
                                 Complete a session to receive personalised advice.
                             </div>
                         </div>
@@ -3561,10 +3566,22 @@
                                 <button type="button" class="res-submit" id="res-submit" data-i18n="reservationConfirm">Confirm reservation</button>
                             </div>
                             <div class="res-pay-step" id="res-pay-step">
-                                <h4 data-i18n="payOnline">Online payment</h4>
-                                <p class="res-book-sub" data-i18n="paymentSub">Payment integration is coming soon.</p>
+                                <h4 data-i18n="confirmBookingTitle">Confirm booking</h4>
+                                <p class="res-book-sub" data-i18n="paymentSub">Card payment is coming soon. An administrator can confirm this booking with the admin password.</p>
                                 <p class="res-end-preview" id="res-pay-amount"></p>
-                                <button type="button" class="res-submit" id="res-pay-btn" data-i18n="payNow">Pay</button>
+                                <div class="res-field">
+                                    <label for="res-pay-method" data-i18n="paymentMethod">Payment method</label>
+                                    <select id="res-pay-method">
+                                        <option value="" data-i18n="paymentEmpty" selected>Admin waiver</option>
+                                        <option value="card" data-i18n="paymentCard">Card (coming soon)</option>
+                                    </select>
+                                </div>
+                                <div class="res-field" id="res-admin-pass-wrap">
+                                    <label for="res-admin-pass" data-i18n="adminPasswordLabel">Admin password</label>
+                                    <input type="password" id="res-admin-pass" autocomplete="current-password" data-i18n-placeholder="adminPasswordPlaceholder" placeholder="Administrator password">
+                                    <p class="res-pay-note" data-i18n="adminPasswordHint">Required on phones and tablets (browser password prompts are blocked).</p>
+                                </div>
+                                <button type="button" class="res-submit" id="res-pay-btn" data-i18n="confirmWaiver">Confirm admin waiver</button>
                                 <button type="button" class="res-pay-back" id="res-pay-cancel" data-i18n="reservationCancel">Cancel</button>
                             </div>
                             <div class="res-confirm" id="res-confirm"></div>
@@ -3585,12 +3602,12 @@
             <div class="dashboard-panel" id="panel-coach">
                 <div class="portal-welcome coach-welcome">
                     <div>
-                        <p class="portal-kicker">ACADEMY · ASSIGNED TEAMS</p>
-                        <h1>Good morning,<br><em>Coach.</em></h1>
-                        <p>Connect your players' results directly to the next training decision.</p>
+                        <p class="portal-kicker" data-i18n="coachWelcomeKicker">ACADEMY · ASSIGNED TEAMS</p>
+                        <h1><span data-i18n="goodMorningCoach">Good morning,</span><br><em data-i18n="coachEm">Coach.</em></h1>
+                        <p data-i18n="coachWelcomeSub">Connect your players' results directly to the next training decision.</p>
                     </div>
                     <div class="portal-review">
-                        <small>TODAY</small>
+                        <small data-i18n="todayLabel">TODAY</small>
                         <strong id="coach-today-sessions">0</strong>
                         <span id="coach-today-desc">0 player places</span>
                     </div>
@@ -3598,53 +3615,53 @@
 
                 <div class="coach-summary" id="coach-summary">
                     <article>
-                        <small>PLAYERS</small>
+                        <small data-i18n="playersLabel">PLAYERS</small>
                         <strong id="coach-player-count">0</strong>
-                        <span>Across assigned teams</span>
+                        <span data-i18n="acrossAssignedTeams">Across assigned teams</span>
                     </article>
                     <article>
-                        <small>TEAMS</small>
+                        <small data-i18n="teamsLabel">TEAMS</small>
                         <strong id="coach-team-count">0</strong>
-                        <span>Assigned squads</span>
+                        <span data-i18n="assignedSquads">Assigned squads</span>
                     </article>
                     <article>
-                        <small>AVG. AE</small>
+                        <small data-i18n="avgAeLabel">AVG. AE</small>
                         <strong id="coach-avg-ae">0%</strong>
-                        <span>Action Efficiency</span>
+                        <span data-i18n="actionEfficiency">Action Efficiency</span>
                     </article>
                     <article>
-                        <small>ACC.</small>
+                        <small data-i18n="accLabel">ACC.</small>
                         <strong id="coach-acc">0%</strong>
-                        <span>Action Accuracy</span>
+                        <span data-i18n="actionAccuracy">Action Accuracy</span>
                     </article>
                     <article>
-                        <small>SESSIONS</small>
+                        <small data-i18n="sessionsLabel">SESSIONS</small>
                         <strong id="coach-total-sessions">0</strong>
-                        <span>This month</span>
+                        <span data-i18n="thisMonth">This month</span>
                     </article>
                 </div>
 
                 <div class="coach-team-grid">
                     <article class="coach-level-distribution">
-                        <p class="portal-kicker">TEAM DEVELOPMENT</p>
-                        <h2>Level distribution</h2>
+                        <p class="portal-kicker" data-i18n="teamDevelopment">TEAM DEVELOPMENT</p>
+                        <h2 data-i18n="levelDistribution">Level distribution</h2>
                         <div class="distribution-bars">
-                            <div><span>ENTRY</span><i><b class="dist-entry"></b></i><strong id="dist-entry-pct">0%</strong></div>
-                            <div><span>ACTIVATED</span><i><b class="dist-activated"></b></i><strong id="dist-activated-pct">0%</strong></div>
-                            <div><span>HIGH PERF.</span><i><b class="dist-high"></b></i><strong id="dist-high-pct">0%</strong></div>
-                            <div><span>ELITE</span><i><b class="dist-elite"></b></i><strong id="dist-elite-pct">0%</strong></div>
-                            <div><span>WORLD‑CLASS</span><i><b class="dist-world"></b></i><strong id="dist-world-pct">0%</strong></div>
+                            <div><span data-i18n="levelEntry">ENTRY</span><i><b class="dist-entry"></b></i><strong id="dist-entry-pct">0%</strong></div>
+                            <div><span data-i18n="levelActivated">ACTIVATED</span><i><b class="dist-activated"></b></i><strong id="dist-activated-pct">0%</strong></div>
+                            <div><span data-i18n="levelHighPerformance">HIGH PERF.</span><i><b class="dist-high"></b></i><strong id="dist-high-pct">0%</strong></div>
+                            <div><span data-i18n="levelElite">ELITE</span><i><b class="dist-elite"></b></i><strong id="dist-elite-pct">0%</strong></div>
+                            <div><span data-i18n="levelWorldClass">WORLD‑CLASS</span><i><b class="dist-world"></b></i><strong id="dist-world-pct">0%</strong></div>
                         </div>
-                        <small>Based on latest Action Efficiency scores across all players.</small>
+                        <small data-i18n="levelDistBasedOn">Based on latest Action Efficiency scores across all players.</small>
                     </article>
                     <article class="coach-team-focus">
-                        <p class="portal-kicker">NEXT FOCUS</p>
-                        <h2>Prioritise scanning.</h2>
-                        <p>Create one more look over the shoulder before receiving. This is the single highest‑impact behaviour for this squad.</p>
+                        <p class="portal-kicker" data-i18n="nextFocus">NEXT FOCUS</p>
+                        <h2 data-i18n="prioritiseScanning">Prioritise scanning.</h2>
+                        <p data-i18n="focusScanBody">Create one more look over the shoulder before receiving. This is the single highest‑impact behaviour for this squad.</p>
                         <div>
-                            <span><b>FOCUS</b>Scan before receiving</span>
-                            <span><b>TARGET</b>85% of actions</span>
-                            <span><b>DEADLINE</b>4 weeks</span>
+                            <span><b data-i18n="focusLabel">FOCUS</b><span data-i18n="scanBeforeReceiving">Scan before receiving</span></span>
+                            <span><b data-i18n="targetLabel">TARGET</b><span data-i18n="percentOfActions">85% of actions</span></span>
+                            <span><b data-i18n="deadlineLabel">DEADLINE</b><span data-i18n="weeks4">4 weeks</span></span>
                         </div>
                     </article>
                 </div>
@@ -3652,19 +3669,19 @@
                 <div class="coach-priorities" id="coach-players-section">
                     <div class="portal-section-heading" style="margin-top:80px;">
                         <div>
-                            <p class="portal-kicker">ASSIGNED PLAYERS</p>
-                            <h2>Who needs attention?</h2>
+                            <p class="portal-kicker" data-i18n="assignedPlayers">ASSIGNED PLAYERS</p>
+                            <h2 data-i18n="whoNeedsAttention">Who needs attention?</h2>
                         </div>
-                        <p>Priorities are based on recent development trends, not a single score.</p>
+                        <p data-i18n="prioritiesBasedOnTrends">Priorities are based on recent development trends, not a single score.</p>
                     </div>
                     <div class="coach-player-table" id="coach-player-table">
                         <div class="coach-player-row coach-player-head">
-                            <span dir="ltr">PLAYER</span>
-                            <span dir="ltr">Current Player Level</span>
-                            <span dir="ltr">LATEST AE</span>
-                            <span dir="ltr">TREND</span>
-                            <span dir="ltr">PRIORITY</span>
-                            <span dir="ltr">RESERVATION</span>
+                            <span dir="ltr" data-i18n="colPlayer">PLAYER</span>
+                            <span dir="ltr" data-i18n="colCurrentLevel">Current Player Level</span>
+                            <span dir="ltr" data-i18n="colLatestAe">LATEST AE</span>
+                            <span dir="ltr" data-i18n="colTrend">TREND</span>
+                            <span dir="ltr" data-i18n="colPriority">PRIORITY</span>
+                            <span dir="ltr" data-i18n="reservationCol">RESERVATION</span>
                         </div>
                     </div>
                 </div>
@@ -3672,10 +3689,10 @@
                 <div class="coach-schedule" id="coach-schedule-section">
                     <div class="portal-section-heading" style="margin-top:80px;">
                         <div>
-                            <p class="portal-kicker">SCHEDULE</p>
-                            <h2>Next sessions</h2>
+                            <p class="portal-kicker" data-i18n="scheduleKicker">SCHEDULE</p>
+                            <h2 data-i18n="nextSessions">Next sessions</h2>
                         </div>
-                        <p>Training and retest dates for your assigned teams.</p>
+                        <p data-i18n="scheduleSub">Training and retest dates for your assigned teams.</p>
                     </div>
                     <div class="coach-schedule-list" id="coach-schedule-list">
                         <!-- empty -->
@@ -3683,9 +3700,9 @@
                 </div>
 
                 <section class="portal-parent-note coach-principle">
-                    <p class="portal-kicker">COACH PRINCIPLE</p>
-                    <blockquote>Results should inform training—not define the player.</blockquote>
-                    <p>Use SIMUST data to see behaviour changes, then connect them to the context, the player and the training environment.</p>
+                    <p class="portal-kicker" data-i18n="coachPrinciple">COACH PRINCIPLE</p>
+                    <blockquote data-i18n="coachPrincipleQuote">Results should inform training—not define the player.</blockquote>
+                    <p data-i18n="coachPrincipleBody">Use SIMUST data to see behaviour changes, then connect them to the context, the player and the training environment.</p>
                 </section>
             </div>
 
@@ -3696,11 +3713,11 @@
 
                 <div class="portal-welcome coach-welcome">
                     <div>
-                        <p class="portal-kicker">SIMUST ACADEMY · AUTHORISED OVERVIEW</p>
-                        <h1>Your academy.<br><em>One clear view.</em></h1>
+                        <p class="portal-kicker" data-i18n="managerWelcomeKicker">SIMUST ACADEMY · AUTHORISED OVERVIEW</p>
+                        <h1><span data-i18n="managerWelcomeTitle">Your academy.</span><br><em data-i18n="managerWelcomeEm">One clear view.</em></h1>
                     </div>
                     <div class="portal-review">
-                        <small>THIS WEEK</small>
+                        <small data-i18n="thisWeek">THIS WEEK</small>
                         <strong id="manager-week-sessions">12</strong>
                         <span id="manager-week-desc">Across 8 squads</span>
                     </div>
@@ -3708,62 +3725,62 @@
 
                 <div class="coach-summary" id="manager-summary">
                     <article>
-                        <small>TOTAL PLAYERS</small>
+                        <small data-i18n="totalPlayers">TOTAL PLAYERS</small>
                         <strong id="manager-total-players">0</strong>
-                        <span>Across all squads</span>
+                        <span data-i18n="acrossAllSquads">Across all squads</span>
                     </article>
                     <article>
-                        <small>WEEKLY ACTIVE</small>
+                        <small data-i18n="weeklyActive">WEEKLY ACTIVE</small>
                         <strong id="manager-weekly-active">0%</strong>
-                        <span>With at least 1 session</span>
+                        <span data-i18n="withAtLeastOneSession">With at least 1 session</span>
                     </article>
                     <article>
-                        <small>TESTING COVERAGE</small>
+                        <small data-i18n="testingCoverage">TESTING COVERAGE</small>
                         <strong id="manager-test-coverage">0%</strong>
-                        <span>Players with baseline</span>
+                        <span data-i18n="playersWithBaseline">Players with baseline</span>
                     </article>
                 </div>
 
                 <div class="manager-access" id="manager-teams-section">
                     <div class="portal-section-heading">
                         <div>
-                            <p class="portal-kicker">TEAMS</p>
-                            <h2>Academy squads</h2>
+                            <p class="portal-kicker" data-i18n="teamsKicker">TEAMS</p>
+                            <h2 data-i18n="academySquads">Academy squads</h2>
                         </div>
-                        <p>Click a team to view its development trends.</p>
+                        <p data-i18n="clickTeamTrends">Click a team to view its development trends.</p>
                     </div>
                     <div class="manager-team-table" id="manager-team-table">
                         <div class="manager-team-row manager-team-head">
-                            <span dir="ltr">TEAM</span>
-                            <span dir="ltr">PLAYERS</span>
-                            <span dir="ltr">SESSIONS</span>
-                            <span dir="ltr">AVG. AE</span>
-                            <span dir="ltr">COVERAGE</span>
-                            <span dir="ltr">STATUS</span>
+                            <span dir="ltr" data-i18n="colTeam">TEAM</span>
+                            <span dir="ltr" data-i18n="playersLabel">PLAYERS</span>
+                            <span dir="ltr" data-i18n="sessionsLabel">SESSIONS</span>
+                            <span dir="ltr" data-i18n="avgAeLabel">AVG. AE</span>
+                            <span dir="ltr" data-i18n="colCoverage">COVERAGE</span>
+                            <span dir="ltr" data-i18n="colStatus">STATUS</span>
                         </div>
                     </div>
                     <div class="access-role-line">
-                        <span>ROLE‑BASED ACCESS</span>
-                        <span>PLAYER · PARENT · COACH</span>
-                        <span>ACADEMY MANAGER</span>
+                        <span data-i18n="roleBasedAccessLine">ROLE‑BASED ACCESS</span>
+                        <span data-i18n="roleTrio">PLAYER · PARENT · COACH</span>
+                        <span data-i18n="academyManagerRole">ACADEMY MANAGER</span>
                     </div>
                 </div>
 
                 <div id="team-trends-container" class="team-trends-container">
                     <div class="team-trend-placeholder" id="team-trend-placeholder">
-                        <strong>Select a team</strong> from the table above to view its development trends (AE &amp; ACC over time).
+                        <strong data-i18n="selectATeam">Select a team</strong><span data-i18n="selectTeamHint"> from the table above to view its development trends (AE &amp; ACC over time).</span>
                     </div>
                     <div class="team-trend-item" id="team-trend-item">
                         <h3 id="team-trend-title">Team Name</h3>
-                        <span class="subtitle" id="team-trend-subtitle">Average Action Efficiency (AE) &amp; Accuracy (ACC) per session day</span>
+                        <span class="subtitle" id="team-trend-subtitle" data-i18n="teamTrendSubtitle">Average Action Efficiency (AE) &amp; Accuracy (ACC) per session day</span>
                         <canvas id="team-trend-canvas"></canvas>
                     </div>
                 </div>
 
                 <section class="portal-parent-note" style="color:#071324;background:#f1f3f6;margin-top:60px;">
-                    <p class="portal-kicker" style="color:#416da9;">MANAGER INSIGHT</p>
-                    <blockquote>Academy oversight should protect individual development data.</blockquote>
-                    <p>My SIMUST gives managers the visibility they need to support coaches and players—without exposing personal records.</p>
+                    <p class="portal-kicker" style="color:#416da9;" data-i18n="managerInsight">MANAGER INSIGHT</p>
+                    <blockquote data-i18n="managerInsightQuote">Academy oversight should protect individual development data.</blockquote>
+                    <p data-i18n="managerInsightBody">My SIMUST gives managers the visibility they need to support coaches and players—without exposing personal records.</p>
                 </section>
             </div>
 
@@ -3782,7 +3799,8 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js">
     </script>
 
-    <script src="/static/i18n.js?v=20260914a"></script>
+    <script src="/static/i18n.js?v=20260914d"></script>
+    <script src="/static/coach_advice_i18n.js?v=20260914d"></script>
     <script>
         (function() {
             'use strict';
@@ -4386,6 +4404,23 @@
                 return "Keep working hard!";
             }
 
+            function translateAdviceText(text) {
+                if (!text) return text;
+                if (typeof window.simustTranslateAdvice === 'function') {
+                    return window.simustTranslateAdvice(text);
+                }
+                return text;
+            }
+
+            function applyStoredAdviceTranslations() {
+                if (window._lastTechAdviceEn && techCoachAdvice) {
+                    techCoachAdvice.textContent = translateAdviceText(window._lastTechAdviceEn);
+                }
+                if (window._lastSiaAdviceEn && coachAdviceText) {
+                    coachAdviceText.textContent = translateAdviceText(window._lastSiaAdviceEn);
+                }
+            }
+
             // Helper: get Sia quote for AE
             function getSiaQuote(ae) {
                 var ranges = coachData.sia.ranges;
@@ -4856,6 +4891,8 @@
             if (typeof simustBindLangSwitcher === 'function') {
                 simustBindLangSwitcher(document.getElementById('login-shell'));
                 simustBindLangSwitcher(document.getElementById('dashboard-shell'));
+            } else {
+                console.error('SIMUST i18n failed to load — language switcher will not work. Hard-refresh or clear cache for /static/i18n.js');
             }
 
             // Profile modal
@@ -5127,6 +5164,15 @@
                 return ['player'];
             }
 
+            function tt(key, fallback) {
+                return (typeof simustT === 'function') ? simustT(key, fallback) : (fallback || key);
+            }
+
+            function techCoachEmptyHtml() {
+                return '<span class="coming-soon">⚡ ' + tt('comingSoonBadge', 'Coming soon') + '</span> ' +
+                    tt('technicalCoachEmpty', '— your coach will share personalised technical insights here.');
+            }
+
             function setView(view) {
                 var available = getAvailableViews();
                 if (!available.includes(view)) {
@@ -5146,7 +5192,7 @@
                         btn.classList.add('disabled');
                         btn.style.display = 'none';
                     }
-                    // Hide the "👤 Player" view-as-player switch on the coach dashboard
+                    // Hide the "Player" view-as-player switch on the coach dashboard
                     if (view === 'coach' && btnView === 'player') {
                         btn.style.display = 'none';
                     }
@@ -5170,34 +5216,37 @@
 
                 var user = currentUser;
                 if (user) {
+                    var club = user.club || tt('noClub', 'No club');
+                    var academy = user.club || tt('academyDefault', 'Academy');
+                    var fullName = ((user.name || '') + ' ' + (user.surname || '')).trim();
                     if (view === 'player') {
-                        var displayName = user.name || 'Player';
-                        profileLabel.textContent = 'PLAYER ' + user.username;
+                        var displayName = user.name || tt('viewAsPlayer', 'Player');
+                        profileLabel.textContent = tt('playerRoleTag', 'PLAYER') + ' ' + user.username;
                         setProfileAvatar(user);
                         if (user.age) {
                             setCoachAvatar(user.age, user.gender);
                         }
-                        sidebarRoleLabel.textContent = 'VIEWING AS';
+                        sidebarRoleLabel.textContent = tt('viewingAs', 'VIEWING AS');
                         sidebarRoleName.textContent = displayName + ' ' + (user.surname || '');
-                        sidebarRoleDesc.textContent = 'Player · ' + (user.club || 'No club');
-                        dashboardRoleLabel.textContent = 'PLAYER DASHBOARD';
-                        dashboardSubLabel.textContent = 'Connected to ' + user.username + "'s data";
+                        sidebarRoleDesc.textContent = tt('playerClubLine', 'Player · {club}').replace('{club}', club);
+                        dashboardRoleLabel.textContent = tt('playerDashboard', 'PLAYER DASHBOARD');
+                        dashboardSubLabel.textContent = tt('connectedToUserData', "Connected to {user}'s data").replace('{user}', user.username);
                     } else if (view === 'coach') {
-                        profileLabel.textContent = 'COACH ' + user.username;
+                        profileLabel.textContent = tt('coachRoleTag', 'COACH') + ' ' + user.username;
                         setProfileAvatar(user);
-                        sidebarRoleLabel.textContent = 'VIEWING AS';
-                        sidebarRoleName.textContent = 'Coach ' + (user.name || '') + ' ' + (user.surname || '');
-                        sidebarRoleDesc.textContent = 'Assigned teams · ' + (user.club || 'Academy');
-                        dashboardRoleLabel.textContent = 'COACH DASHBOARD';
-                        dashboardSubLabel.textContent = 'Assigned teams and players';
+                        sidebarRoleLabel.textContent = tt('viewingAs', 'VIEWING AS');
+                        sidebarRoleName.textContent = tt('coachSidebarName', 'Coach {name}').replace('{name}', fullName);
+                        sidebarRoleDesc.textContent = tt('assignedTeamsClub', 'Assigned teams · {club}').replace('{club}', academy);
+                        dashboardRoleLabel.textContent = tt('coachDashboard', 'COACH DASHBOARD');
+                        dashboardSubLabel.textContent = tt('assignedTeamsPlayers', 'Assigned teams and players');
                     } else if (view === 'manager') {
-                        profileLabel.textContent = 'MANAGER ' + user.username;
+                        profileLabel.textContent = tt('managerRoleTag', 'MANAGER') + ' ' + user.username;
                         setProfileAvatar(user);
-                        sidebarRoleLabel.textContent = 'VIEWING AS';
-                        sidebarRoleName.textContent = 'Manager ' + (user.name || '') + ' ' + (user.surname || '');
-                        sidebarRoleDesc.textContent = 'Academy oversight · ' + (user.club || 'Academy');
-                        dashboardRoleLabel.textContent = 'MANAGER DASHBOARD';
-                        dashboardSubLabel.textContent = 'Academy overview';
+                        sidebarRoleLabel.textContent = tt('viewingAs', 'VIEWING AS');
+                        sidebarRoleName.textContent = tt('managerSidebarName', 'Manager {name}').replace('{name}', fullName);
+                        sidebarRoleDesc.textContent = tt('academyOversightClub', 'Academy oversight · {club}').replace('{club}', academy);
+                        dashboardRoleLabel.textContent = tt('managerDashboard', 'MANAGER DASHBOARD');
+                        dashboardSubLabel.textContent = tt('academyOverview', 'Academy overview');
                     }
                 }
             }
@@ -5362,8 +5411,8 @@
                 } else {
                     setView('player');
                 }
-                var displayName = player.name || 'Player';
-                profileLabel.textContent = 'PLAYER ' + player.playerId;
+                var displayName = player.name || tt('viewAsPlayer', 'Player');
+                profileLabel.textContent = tt('playerRoleTag', 'PLAYER') + ' ' + player.playerId;
                 setSafeAvatar(profileAvatar, player.image, displayName);
                 if (player.age) {
                     setCoachAvatar(player.age, player.gender);
@@ -5373,7 +5422,8 @@
                 setSiaAvatar();
                 sidebarRoleName.textContent = displayName + ' ' + (player.surname || '');
                 document.getElementById('player-greeting').innerHTML =
-                    '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (player.surname || '')) + '</em>';
+                    '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (player.surname || '')) + '</em>';
+                if (typeof simustApplyI18n === 'function') simustApplyI18n();
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
@@ -5502,7 +5552,7 @@
                 var fullName = (firstName + ' ' + (player.surname || '')).trim();
                 playerNameDisplay.textContent = fullName;
                 document.getElementById('player-greeting').innerHTML =
-                    '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
+                    '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
                 var split = splitLiveSessions(sessions);
                 var liveSession = split.live.sort(function(a, b) {
                     var da = new Date(a.session && a.session.timestamp || a.timestamp || 0);
@@ -5606,15 +5656,15 @@
                     var items = [];
 
                     items.push({
-                        label: 'Action Efficiency',
+                        label: tt('actionEfficiency', 'Action Efficiency'),
                         value: avgAe > 0 ? avgAe.toFixed(1) + '%' : '–',
                         arrow: getArrow(avgAe, prev ? prev.avgAe : null, true),
-                        sub: 'from ' + total + ' actions',
+                        sub: tt('fromNActions', 'from {n} actions').replace('{n}', String(total)),
                         highlight: 'highlight-big'
                     });
 
                     items.push({
-                        label: 'Action Accuracy',
+                        label: tt('actionAccuracy', 'Action Accuracy'),
                         value: aac > 0 ? aac.toFixed(0) + '%' : '–',
                         arrow: getArrow(aac, prev ? prev.aac : null, true),
                         sub: '(C+L)/Total',
@@ -5622,15 +5672,15 @@
                     });
 
                     items.push({
-                        label: 'Avg Execution Time',
+                        label: tt('avgExecutionTime', 'Avg Execution Time'),
                         value: avgFinishingTime > 0 ? avgFinishingTime.toFixed(2) + 's' : '–',
                         arrow: getArrow(avgFinishingTime, prev ? prev.avgFinishingTime : null, false),
-                        sub: 'from ' + correct + ' correct',
+                        sub: tt('fromNCorrect', 'from {n} correct').replace('{n}', String(correct)),
                         highlight: ''
                     });
 
                     items.push({
-                        label: 'Body Displacement',
+                        label: tt('bodyDisplacement', 'Body Displacement'),
                         value: totalDistance > 0 ? totalDistance.toFixed(1) + ' m' : '–',
                         arrow: getArrow(totalDistance, prev ? prev.totalDistance : null, false),
                         sub: total + ' actions',
@@ -5766,11 +5816,13 @@
                         coachAdviceObj = coachInfo.advice;
                     }
                     var techAdvice = getCoachAdviceForRange(avgAe, coachAdviceObj.ranges);
-                    techCoachAdvice.innerHTML = techAdvice;
+                    window._lastTechAdviceEn = techAdvice;
+                    techCoachAdvice.textContent = translateAdviceText(techAdvice);
 
                     // ----- BOTTOM COACH ADVICE (Sia quotes) -----
                     var siaQuote = getSiaQuote(avgAe);
-                    coachAdviceText.textContent = siaQuote;
+                    window._lastSiaAdviceEn = siaQuote;
+                    coachAdviceText.textContent = translateAdviceText(siaQuote);
 
                 } else {
                     ringAetValue.textContent = '–';
@@ -5784,9 +5836,10 @@
                             ctx.clearRect(0, 0, canvas.width, canvas.height);
                         }
                     });
-                    techCoachAdvice.innerHTML =
-                        '<span class="coming-soon">⚡ Coming soon</span> — your coach will share personalised technical insights here.';
-                    coachAdviceText.textContent = 'Complete a session to receive personalised advice.';
+                    window._lastTechAdviceEn = '';
+                    window._lastSiaAdviceEn = '';
+                    techCoachAdvice.innerHTML = techCoachEmptyHtml();
+                    coachAdviceText.textContent = tt('coachAdviceEmpty', 'Complete a session to receive personalised advice.');
                 }
 
                 renderTrendCharts();
@@ -6249,7 +6302,13 @@
                 var levelCounts = { 'Entry': 0, 'Activated': 0, 'High Performance': 0, 'Elite': 0, 'World-Class': 0 };
 
                 var tableHtml =
-                    '<div class="coach-player-row coach-player-head"><span dir="ltr">PLAYER</span><span dir="ltr">Current Player Level</span><span dir="ltr">LATEST AE</span><span dir="ltr">TREND</span><span dir="ltr">PRIORITY</span><span dir="ltr">RESERVATION</span></div>';
+                    '<div class="coach-player-row coach-player-head">' +
+                    '<span dir="ltr">' + tt('colPlayer', 'PLAYER') + '</span>' +
+                    '<span dir="ltr">' + tt('colCurrentLevel', 'Current Player Level') + '</span>' +
+                    '<span dir="ltr">' + tt('colLatestAe', 'LATEST AE') + '</span>' +
+                    '<span dir="ltr">' + tt('colTrend', 'TREND') + '</span>' +
+                    '<span dir="ltr">' + tt('colPriority', 'PRIORITY') + '</span>' +
+                    '<span dir="ltr">' + tt('reservationCol', 'RESERVATION') + '</span></div>';
                 var displayPlayers = players.slice();
                 var rowData = [];
 
@@ -6428,7 +6487,7 @@
                 coachAcc.textContent = accCount > 0 ? (totalAcc / accCount).toFixed(0) + '%' : '0%';
                 coachTotalSessions.textContent = totalSess;
                 coachTodaySessions.textContent = Math.min(3, Math.ceil(totalSess / 3) || 0);
-                coachTodayDesc.textContent = Math.min(21, totalPlayers * 7) + ' player places';
+                coachTodayDesc.textContent = tt('playerPlaces', '{n} player places').replace('{n}', String(Math.min(21, totalPlayers * 7)));
 
                 var totalCount = totalPlayers || 1;
                 function setDistBar(barClass, pctElId, count) {
@@ -6492,9 +6551,20 @@
                 var coveragePct = totalPlayers > 0 ? (playersWithSessions / totalPlayers * 100) : 0;
                 managerTestCoverage.textContent = coveragePct.toFixed(0) + '%';
 
-                var teamHtml =
-                    '<div class="manager-team-row manager-team-head"><span dir="ltr">TEAM</span><span dir="ltr">PLAYERS</span><span dir="ltr">SESSIONS</span><span dir="ltr">AVG. AE</span><span dir="ltr">COVERAGE</span><span dir="ltr">STATUS</span></div>';
                 var teamNames = Object.keys(teamMap).sort();
+                if (managerWeekSessions) managerWeekSessions.textContent = String(totalSessionsAll);
+                if (managerWeekDesc) {
+                    managerWeekDesc.textContent = tt('acrossSquads', 'Across {n} squads').replace('{n}', String(teamNames.length));
+                }
+
+                var teamHtml =
+                    '<div class="manager-team-row manager-team-head">' +
+                    '<span dir="ltr">' + tt('colTeam', 'TEAM') + '</span>' +
+                    '<span dir="ltr">' + tt('playersLabel', 'PLAYERS') + '</span>' +
+                    '<span dir="ltr">' + tt('sessionsLabel', 'SESSIONS') + '</span>' +
+                    '<span dir="ltr">' + tt('avgAeLabel', 'AVG. AE') + '</span>' +
+                    '<span dir="ltr">' + tt('colCoverage', 'COVERAGE') + '</span>' +
+                    '<span dir="ltr">' + tt('colStatus', 'STATUS') + '</span></div>';
 
                 managerTeamData = {};
 
@@ -6797,7 +6867,7 @@
                         if (currentView === 'player') {
                             var displayName = currentUser.name || 'Player';
                             document.getElementById('player-greeting').innerHTML =
-                                '<span data-i18n="goodDay">' + escapeHtml((typeof simustT === 'function' ? simustT('goodDay') : 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (currentUser.surname || '')) + '</em>';
+                                '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(displayName + ' ' + (currentUser.surname || '')) + '</em>';
                             if (age) {
                                 setCoachAvatar(age, gender);
                             }
@@ -7183,14 +7253,50 @@
                 var pay = document.getElementById('res-pay-step');
                 if (fields) fields.style.display = on ? 'none' : '';
                 if (pay) pay.classList.toggle('show', !!on);
+                if (on) syncAdminWaiverField();
+                else {
+                    var pass = document.getElementById('res-admin-pass');
+                    if (pass) pass.value = '';
+                }
+            }
+
+            function syncAdminWaiverField() {
+                var methodEl = document.getElementById('res-pay-method');
+                var wrap = document.getElementById('res-admin-pass-wrap');
+                var payBtn = document.getElementById('res-pay-btn');
+                var isWaiver = !!(methodEl && !String(methodEl.value || ''));
+                if (wrap) wrap.style.display = isWaiver ? '' : 'none';
+                if (payBtn) {
+                    payBtn.textContent = isWaiver
+                        ? resT('confirmWaiver', 'Confirm admin waiver')
+                        : resT('payNow', 'Pay');
+                }
+                if (!isWaiver) {
+                    var pass = document.getElementById('res-admin-pass');
+                    if (pass) pass.value = '';
+                }
+            }
+
+            function bookingSlotLabel(dateStr, startHm, endHm, fieldId) {
+                return dateStr + '  ' + startHm + '–' + endHm + ' · Field ' + fieldId;
             }
 
             function updateFeePreview() {
-                // Fee preview removed per request - payments coming soon
                 var preview = document.getElementById('res-fee-preview');
                 var payAmount = document.getElementById('res-pay-amount');
+                var dateEl = document.getElementById('res-date');
+                var startSel = document.getElementById('res-start');
+                var durSel = document.getElementById('res-duration');
+                var fieldEl = document.getElementById('res-field');
+                if (!dateEl || !startSel || !durSel) return;
+                var dateStr = dateEl.value || '';
+                var startHm = startSel.value || '';
+                var mins = Number(durSel.value) || 0;
+                var endHm = addMinutesHm(startHm, mins);
+                var fieldId = fieldEl && String(fieldEl.value || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+                var text = bookingSlotLabel(dateStr, startHm, endHm, fieldId);
                 if (preview) preview.textContent = '';
-                if (payAmount) payAmount.textContent = '';
+                if (payAmount) payAmount.textContent = text;
             }
 
             async function submitReservation() {
@@ -7198,6 +7304,7 @@
                 var startSel = document.getElementById('res-start');
                 var durSel = document.getElementById('res-duration');
                 var payBtn = document.getElementById('res-pay-btn');
+                var methodEl = document.getElementById('res-pay-method');
                 if (!currentUser) {
                     showResMessage('', resT('reservationNeedLogin', 'Sign in to reserve a slot.'));
                     setPaymentStep(false);
@@ -7207,6 +7314,7 @@
                 var startHm = startSel.value;
                 var mins = Number(durSel.value);
                 var endHm = addMinutesHm(startHm, mins);
+                var method = methodEl ? String(methodEl.value || '') : '';
                 var fieldEl = document.getElementById('res-field');
                 var fieldId = fieldEl && String(fieldEl.value || 'A').toUpperCase() === 'B' ? 'B' : 'A';
                 if (overlapExists(dateStr, startHm, mins, null, fieldId)) {
@@ -7216,9 +7324,62 @@
                 }
                 if (payBtn) payBtn.disabled = true;
                 try {
-                    // Online payment coming soon - notify user
-                    showResMessage('', 'Online payment is coming soon. Please contact the academy to confirm your reservation.');
-                    setPaymentStep(false);
+                    var payload = {
+                        player_id: currentUser.username,
+                        start: localIso(dateStr, startHm),
+                        end: localIso(dateStr, endHm),
+                        field: fieldId
+                    };
+                    if (!method) {
+                        // Admin waiver — in-page password (window.prompt fails on Android WebView)
+                        var passEl = document.getElementById('res-admin-pass');
+                        var adminPass = passEl ? String(passEl.value || '').trim() : '';
+                        if (!adminPass) {
+                            showResMessage('', resT('adminPasswordPrompt', 'Admin password is required to register this booking without payment.'));
+                            if (passEl) passEl.focus();
+                            return;
+                        }
+                        payload.admin_password = adminPass;
+                        var waive = await fetch(API_BASE + '/reservations', {
+                            method: 'POST',
+                            headers: apiHeaders(),
+                            body: JSON.stringify(payload)
+                        });
+                        var waiveData = await waive.json().catch(function() { return {}; });
+                        if (!waive.ok) {
+                            var detail = waiveData.detail || resT('reservationFailed', 'Reservation failed.');
+                            if (Array.isArray(detail)) detail = detail.map(function(d) { return d.msg || d; }).join(' ');
+                            showResMessage('', detail);
+                            return;
+                        }
+                        if (passEl) passEl.value = '';
+                        showResMessage(
+                            resT('adminWaiverOk', 'Administrator confirmed the booking without payment.') + ' ' + bookingSlotLabel(dateStr, startHm, endHm, fieldId),
+                            ''
+                        );
+                        showToast(resT('reservationSuccess', 'Reservation confirmed.'), 'ok');
+                        setPaymentStep(false);
+                        await loadReservationsAndRender();
+                        return;
+                    }
+                    // Card path: try Stripe checkout when configured; otherwise explain coming soon
+                    var resp = await fetch(API_BASE + '/reservations/checkout', {
+                        method: 'POST',
+                        headers: apiHeaders(),
+                        body: JSON.stringify(payload)
+                    });
+                    var data = await resp.json().catch(function() { return {}; });
+                    if (!resp.ok) {
+                        var err = data.detail || resT('paymentComingSoon', 'Card payment is coming soon. Use Admin waiver to confirm this booking.');
+                        if (Array.isArray(err)) err = err.map(function(d) { return d.msg || d; }).join(' ');
+                        showResMessage('', err);
+                        return;
+                    }
+                    if (data.checkout_url) {
+                        window.location.href = data.checkout_url;
+                        return;
+                    }
+                    showResMessage('', resT('paymentComingSoon', 'Card payment is coming soon. Use Admin waiver to confirm this booking.'));
                 } catch (e) {
                     showResMessage('', resT('networkError', 'Network error. Is the backend running?'));
                 } finally {
@@ -7298,6 +7459,9 @@
                 });
                 if (payBtn) payBtn.addEventListener('click', submitReservation);
                 if (payCancel) payCancel.addEventListener('click', function() { setPaymentStep(false); });
+                var methodEl = document.getElementById('res-pay-method');
+                if (methodEl) methodEl.addEventListener('change', syncAdminWaiverField);
+                syncAdminWaiverField();
                 prev.addEventListener('click', function() {
                     reservationWeekStart.setDate(reservationWeekStart.getDate() - 7);
                     reservationSelectedDate = ymdLocal(reservationWeekStart);
@@ -7572,7 +7736,7 @@
 
             window.addEventListener('simust-lang-change', function() {
                 try {
-                    if (typeof simustApplyI18n === 'function') simustApplyI18n();
+                    if (isDashboardVisible && currentView) setView(currentView);
                     if (currentUser && currentUser.progress) renderProgressionBar(currentUser.progress);
                     else if (selectedPlayerId && authorisedPlayers && authorisedPlayers.length) {
                         var sp = authorisedPlayers.find(function(p) { return p.id === selectedPlayerId; });
@@ -7581,6 +7745,26 @@
                     if (typeof loadReservationsAndRender === 'function') loadReservationsAndRender();
                     if (currentUser && currentUser.role === 'coach' && typeof loadCoachData === 'function') loadCoachData();
                     if (currentUser && currentUser.role === 'manager' && typeof loadManagerData === 'function') loadManagerData(true);
+                    if (selectedPlayerId && authorisedPlayers && sessionsData) {
+                        var pl = authorisedPlayers.find(function(p) { return p.id === selectedPlayerId; });
+                        if (pl && typeof renderEnhancedPlayerDashboard === 'function') {
+                            renderEnhancedPlayerDashboard(pl, sessionsData);
+                        }
+                    } else if (window._lastTechAdviceEn || window._lastSiaAdviceEn) {
+                        applyStoredAdviceTranslations();
+                    } else if (techCoachAdvice && (!sessionsData || !sessionsData.length)) {
+                        techCoachAdvice.innerHTML = techCoachEmptyHtml();
+                        if (coachAdviceText) {
+                            coachAdviceText.textContent = tt('coachAdviceEmpty', 'Complete a session to receive personalised advice.');
+                        }
+                    }
+                    var greet = document.getElementById('player-greeting');
+                    if (greet) {
+                        var nameEl = document.getElementById('player-name-display');
+                        var nameHtml = nameEl ? nameEl.outerHTML : '';
+                        greet.innerHTML = '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br>' + nameHtml;
+                    }
+                    if (typeof simustApplyI18n === 'function') simustApplyI18n();
                 } catch (e) { /* ignore refresh errors on language switch */ }
             });
         })();
