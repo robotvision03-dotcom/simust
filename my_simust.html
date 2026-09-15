@@ -6472,6 +6472,7 @@
                 });
                 if (coachTeamCount) coachTeamCount.textContent = Object.keys(teamNames).length;
 
+                // One reservations call only — never N× get-player-reports (that freezes phones).
                 var upcomingByPlayer = {};
                 try {
                     var from = ymdLocal(new Date());
@@ -6518,99 +6519,32 @@
 
                 for (var i = 0; i < displayPlayers.length; i++) {
                     var p = displayPlayers[i];
-                    var latestAe = 0;
-                    var level = '—';
+                    var latestAe = Number(p.avgAe || 0);
+                    var avgAcc = Number(p.avgAcc || 0);
+                    var sessCount = Number(p.sessionCount || (p.sessions && p.sessions.length) || 0);
+                    totalSess += sessCount;
+                    var level = progressLevelLabel(p.progress) || '—';
                     var trend = '—';
-                    var priority = '—';
-                    var sessions = [];
-
-                    try {
-                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id, { headers: apiHeaders() });
-                        if (resp.ok) {
-                            var data = await resp.json();
-                            sessions = (data.sessions || []).filter(function(s) { return !isLiveSession(s); });
-                            totalSess += sessions.length;
-
-                            sessions.sort(function(a, b) {
-                                var da = new Date(a.session && a.session.timestamp || a.timestamp || 0);
-                                var db = new Date(b.session && b.session.timestamp || b.timestamp || 0);
-                                return db - da;
-                            });
-
-                            if (sessions.length > 0) {
-                                var latest = sessions[0];
-                                latestAe = latest.statistics && latest.statistics.avg_ae || 0;
-                                level = progressLevelLabel(p.progress);
-
-                                var avgPrev = null;
-                                if (sessions.length >= 2) {
-                                    var prevSessions = sessions.slice(1, Math.min(3, sessions.length));
-                                    var sum = 0,
-                                        cnt = 0;
-                                    for (var j = 0; j < prevSessions.length; j++) {
-                                        var ae = prevSessions[j].statistics && prevSessions[j].statistics
-                                            .avg_ae;
-                                        if (ae !== undefined && ae !== null) { sum += ae;
-                                            cnt++; }
-                                    }
-                                    if (cnt > 0) avgPrev = sum / cnt;
-                                }
-                                if (avgPrev !== null && latestAe !== null) {
-                                    if (latestAe > avgPrev + 2) trend = '↑ Improving';
-                                    else if (latestAe < avgPrev - 2) trend = '↓ Declining';
-                                    else trend = '→ Stable';
-                                } else if (sessions.length === 1) {
-                                    trend = '—';
-                                } else {
-                                    trend = '—';
-                                }
-
-                                if (latestAe < 40) priority = 'High';
-                                else if (latestAe < 60) priority = 'Medium';
-                                else priority = 'Low';
-                                if (trend.includes('Declining') && latestAe < 60) priority = 'High';
-                            } else {
-                                level = progressLevelLabel(p.progress);
-                                priority = 'New';
-                                trend = '—';
-                            }
-                        } else {
-                            level = progressLevelLabel(p.progress);
-                            priority = 'New';
-                        }
-                    } catch (e) {
-                        level = progressLevelLabel(p.progress);
-                        priority = 'New';
+                    var priority = 'New';
+                    if (sessCount > 0 || latestAe > 0) {
+                        if (latestAe < 40) priority = 'High';
+                        else if (latestAe < 60) priority = 'Medium';
+                        else priority = 'Low';
                     }
-
                     if (level !== '—') {
                         levelCounts[level] = (levelCounts[level] || 0) + 1;
                     } else {
                         levelCounts['Entry'] = (levelCounts['Entry'] || 0) + 1;
                     }
-
-                    if (sessions.length > 0) {
-                        var aeSum = 0,
-                            aeCount = 0;
-                        sessions.forEach(function(s) {
-                            var ae = s.statistics && s.statistics.avg_ae;
-                            if (ae !== undefined && ae !== null) { aeSum += ae;
-                                aeCount++; }
-                            var stats = s.statistics || {};
-                            var totalD = (stats.correct || 0) + (stats.late || 0) + (stats.wrong || 0) + (stats
-                                .miss || 0);
-                            if (totalD > 0) {
-                                totalAcc += ((stats.correct || 0) + (stats.late || 0)) / totalD * 100;
-                                accCount++;
-                            }
-                        });
-                        if (aeCount > 0) {
-                            totalAe += aeSum / aeCount;
-                            count++;
-                        }
+                    if (latestAe > 0) {
+                        totalAe += latestAe;
+                        count++;
                     }
-
-                    var aeDisplay = (sessions.length > 0 && latestAe > 0) ? latestAe.toFixed(0) + '%' : '—';
+                    if (avgAcc > 0) {
+                        totalAcc += avgAcc;
+                        accCount++;
+                    }
+                    var aeDisplay = latestAe > 0 ? latestAe.toFixed(0) + '%' : '—';
                     var slots = (upcomingByPlayer[p.id] || []).concat(upcomingByPlayer[p.playerId] || []);
                     var seenIds = {};
                     var uniqueSlots = [];
@@ -6693,9 +6627,8 @@
                 coachTodaySessions.textContent = Math.min(3, Math.ceil(totalSess / 3) || 0);
                 coachTodayDesc.textContent = tt('playerPlaces', '{n} player places').replace('{n}', String(Math.min(21, totalPlayers * 7)));
 
-                var totalCount = totalPlayers || 1;
-                function setDistBar(barClass, pctElId, count) {
-                    var pct = totalPlayers > 0 ? (count / totalPlayers * 100) : 0;
+                function setDistBar(barClass, pctElId, countVal) {
+                    var pct = totalPlayers > 0 ? (countVal / totalPlayers * 100) : 0;
                     var pctEl = document.getElementById(pctElId);
                     if (pctEl) pctEl.textContent = pct.toFixed(0) + '%';
                     var bar = document.querySelector('.' + barClass);
@@ -6721,31 +6654,22 @@
 
                 for (var i = 0; i < players.length; i++) {
                     var p = players[i];
-                    var sessions = [];
-                    try {
-                        var resp = await fetch(API_BASE + '/get-player-reports/' + p.id, { headers: apiHeaders() });
-                        if (resp.ok) {
-                            var data = await resp.json();
-                            sessions = data.sessions || [];
-                        }
-                    } catch (e) { /* ignore */ }
-
+                    var sessCount = Number(p.sessionCount || (p.sessions && p.sessions.length) || 0);
                     var teamName = p.team || 'Unassigned';
                     if (!teamMap[teamName]) {
-                        teamMap[teamName] = { players: [], sessions: [] };
+                        teamMap[teamName] = { players: [], sessionCount: 0, aeSum: 0, aeCount: 0, withSessions: 0 };
                     }
                     teamMap[teamName].players.push(p);
-
-                    if (sessions.length > 0) {
+                    teamMap[teamName].sessionCount += sessCount;
+                    totalSessionsAll += sessCount;
+                    if (sessCount > 0) {
                         playersWithSessions++;
-                        totalSessionsAll += sessions.length;
-                        sessions.forEach(function(s) {
-                            teamMap[teamName].sessions.push({
-                                ...s,
-                                playerId: p.id,
-                                playerName: p.name
-                            });
-                        });
+                        teamMap[teamName].withSessions += 1;
+                    }
+                    var ae = Number(p.avgAe || 0);
+                    if (ae > 0) {
+                        teamMap[teamName].aeSum += ae;
+                        teamMap[teamName].aeCount += 1;
                     }
                 }
 
@@ -6776,30 +6700,16 @@
                     var teamName = teamNames[j];
                     var team = teamMap[teamName];
                     var pCount = team.players.length;
-                    var sessions = team.sessions;
-                    var sessCount = sessions.length;
-
-                    var aeSum = 0,
-                        aeCount = 0;
-                    sessions.forEach(function(s) {
-                        var ae = s.statistics && s.statistics.avg_ae;
-                        if (ae !== undefined && ae !== null) { aeSum += ae;
-                            aeCount++; }
-                    });
-                    var avgAe = aeCount > 0 ? aeSum / aeCount : 0;
-
-                    var playersWithSessInTeam = new Set();
-                    sessions.forEach(function(s) {
-                        if (s.playerId) playersWithSessInTeam.add(s.playerId);
-                    });
-                    var teamCoverage = pCount > 0 ? (playersWithSessInTeam.size / pCount * 100) : 0;
+                    var sessCount2 = team.sessionCount;
+                    var avgAe = team.aeCount > 0 ? team.aeSum / team.aeCount : 0;
+                    var teamCoverage = pCount > 0 ? (team.withSessions / pCount * 100) : 0;
                     var status = teamCoverage > 70 ? 'Active' : 'Review';
 
                     teamHtml +=
                         '<div class="manager-team-row" data-team="' + teamName + '">' +
                         '<strong>' + teamName + '</strong>' +
                         '<span>' + pCount + '</span>' +
-                        '<b>' + sessCount + '</b>' +
+                        '<b>' + sessCount2 + '</b>' +
                         '<b>' + (avgAe > 0 ? avgAe.toFixed(0) + '%' : '—') + '</b>' +
                         '<i style="border-color:' + (teamCoverage > 70 ? '#2ecc71' : '#f39c12') + '40;color:' + (
                             teamCoverage > 70 ? '#2ecc71' : '#f39c12') + ';">' + teamCoverage.toFixed(0) + '%</i>' +
@@ -6807,7 +6717,8 @@
                             status === 'Active' ? '#2ecc71' : '#f39c12') + ';">' + status + '</i>' +
                         '</div>';
 
-                    managerTeamData[teamName] = sessions;
+                    // Trends load on team click only (see click handler) — keep empty here.
+                    managerTeamData[teamName] = [];
                 }
 
                 if (teamNames.length === 0) {
@@ -6847,9 +6758,28 @@
                 // keepTrend: leave the existing chart in place (do not destroy/recreate).
             }
 
-            // ----- Show trend for a specific team (does not refresh on auto-refresh) -----
-            function showTeamTrend(teamName) {
+            // ----- Show trend for a specific team (loads reports on click only) -----
+            async function showTeamTrend(teamName) {
                 var sessions = managerTeamData[teamName];
+                if (!sessions || sessions.length === 0) {
+                    showToast(tt('loadingTeamTrend', 'Loading team trend…'), 'info');
+                    var teamPlayers = authorisedPlayers.filter(function(p) {
+                        return (p.team || 'Unassigned') === teamName;
+                    });
+                    sessions = [];
+                    for (var ti = 0; ti < teamPlayers.length; ti++) {
+                        var tp = teamPlayers[ti];
+                        try {
+                            var tr = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(tp.id), { headers: apiHeaders() });
+                            if (!tr.ok) continue;
+                            var td = await tr.json();
+                            (td.sessions || []).forEach(function(s) {
+                                sessions.push(Object.assign({}, s, { playerId: tp.id, playerName: tp.name }));
+                            });
+                        } catch (e) { /* ignore one player */ }
+                    }
+                    managerTeamData[teamName] = sessions;
+                }
                 if (!sessions || sessions.length === 0) {
                     showToast('No session data for this team.', 'info');
                     return;
@@ -7990,8 +7920,15 @@
             showDashboard = function(view) {
                 originalShowDashboard(view);
                 startAutoRefresh();
-                bindReservationUi();
-                loadReservationsAndRender();
+                // Defer calendar bind/render so coach/player dashboards paint first.
+                setTimeout(function() {
+                    try {
+                        bindReservationUi();
+                        loadReservationsAndRender();
+                    } catch (e) {
+                        console.warn('Reservation UI deferred load failed:', e);
+                    }
+                }, 0);
             };
 
             var originalShowLogin = showLogin;

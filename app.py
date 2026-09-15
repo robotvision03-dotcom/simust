@@ -4413,7 +4413,7 @@ async def save_session_to_player(req: Request):
         raise HTTPException(500, f"Failed to save session: {str(e)}")
 
 def compute_player_ae_acc(player_id):
-    """AE and ACC averages across all saved sessions for a player (same defs as the UI)."""
+    """Fast AE/ACC from index.json only — do not open every session file (that freezes login)."""
     player_dir = os.path.join(PLAYER_REPORTS_DIR, str(player_id))
     index_file = os.path.join(player_dir, "index.json")
     if not os.path.exists(index_file):
@@ -4432,51 +4432,24 @@ def compute_player_ae_acc(player_id):
     ae_weight = 0
 
     for entry in index or []:
-        report_name = entry.get("file") or ""
-        report_file = os.path.join(player_dir, report_name)
-        if os.path.exists(report_file):
-            try:
-                with open(report_file, 'r', encoding='utf-8') as f:
-                    session_data = json.load(f)
-            except Exception:
-                session_data = None
-        else:
-            session_data = None
-
-        if session_data:
-            stats = session_data.get("statistics") or {}
-            actions = session_data.get("actions") or []
-            correct = stats.get("correct", 0) or 0
-            late = stats.get("late", 0) or 0
-            wrong = stats.get("wrong", 0) or 0
-            miss = stats.get("miss", 0) or 0
-            total = stats.get("total") or session_data.get("total_actions") or (
-                correct + late + wrong + miss) or len(actions)
-            avg_ae = stats.get("avg_ae") or 0
-            if not avg_ae and actions:
-                ae_vals = []
-                for a in actions:
-                    v = a.get("ae")
-                    if v is not None and v != 'N/A':
-                        try:
-                            ae_vals.append(float(v))
-                        except (TypeError, ValueError):
-                            pass
-                avg_ae = sum(ae_vals) / len(ae_vals) if ae_vals else 0
-        else:
-            correct = entry.get("correct", 0) or 0
-            late = entry.get("late", 0) or 0
-            wrong = entry.get("wrong", 0) or 0
-            miss = 0
-            total = entry.get("total_actions", 0) or (correct + late + wrong)
-            avg_ae = 0
-
+        if not isinstance(entry, dict):
+            continue
+        correct = int(entry.get("correct", 0) or 0)
+        late = int(entry.get("late", 0) or 0)
+        wrong = int(entry.get("wrong", 0) or 0)
+        miss = int(entry.get("miss", 0) or 0)
+        total = int(entry.get("total_actions", 0) or (correct + late + wrong + miss) or 0)
         total_correct += correct
         total_late += late
         total_wrong += wrong
         total_miss += miss
+        avg_ae = entry.get("avg_ae") or entry.get("ae") or 0
+        try:
+            avg_ae = float(avg_ae or 0)
+        except (TypeError, ValueError):
+            avg_ae = 0.0
         if avg_ae and total:
-            ae_weighted += float(avg_ae) * total
+            ae_weighted += avg_ae * total
             ae_weight += total
 
     pooled = total_correct + total_late + total_wrong + total_miss
@@ -4775,18 +4748,27 @@ async def get_players(request: Request):
     seen = set()
 
     # 1. Load from users.json (role = "player")
+    users_dirty = False
     for username, user_data in users.items():
         if str(user_data.get("role") or "player").strip().lower() == "player":
             player_id = username
             # Ensure progress exists
             if "progress" not in user_data:
                 user_data["progress"] = simust_progress.default_progress()
-                # Save the updated user data
                 users[username] = user_data
-                save_users(users)
+                users_dirty = True
 
             progress = simust_progress.ensure_progress(user_data)
             avg_ae, avg_acc = compute_player_ae_acc(player_id)
+            session_count = 0
+            try:
+                index_file = os.path.join(PLAYER_REPORTS_DIR, player_id, "index.json")
+                if os.path.exists(index_file):
+                    with open(index_file, "r", encoding="utf-8") as f:
+                        idx = json.load(f)
+                    session_count = len(idx) if isinstance(idx, list) else 0
+            except Exception:
+                session_count = 0
             players.append({
                 "id": player_id,
                 "name": user_data.get("name", player_id),
@@ -4800,9 +4782,12 @@ async def get_players(request: Request):
                 "progress": progress,
                 "avgAe": avg_ae,
                 "avgAcc": avg_acc,
+                "sessionCount": session_count,
                 "sessions": []   # will be loaded separately
             })
             seen.add(player_id)
+    if users_dirty:
+        save_users(users)
 
     # 2. Load from reports directory (existing folders) – fallback for players not in users
     if os.path.exists(PLAYER_REPORTS_DIR):
@@ -4859,6 +4844,13 @@ async def get_players(request: Request):
                 except:
                     pass
             avg_ae, avg_acc = compute_player_ae_acc(folder)
+            session_count = 0
+            try:
+                with open(index_file, "r", encoding="utf-8") as f:
+                    idx = json.load(f)
+                session_count = len(idx) if isinstance(idx, list) else 0
+            except Exception:
+                session_count = 0
             players.append({
                 "id": folder,
                 "name": player_name,
@@ -4872,6 +4864,7 @@ async def get_players(request: Request):
                 "progress": progress,
                 "avgAe": avg_ae,
                 "avgAcc": avg_acc,
+                "sessionCount": session_count,
                 "sessions": []
             })
 
