@@ -4378,6 +4378,8 @@ async def save_session_to_player(req: Request):
             "correct": statistics.get("correct", 0),
             "late": statistics.get("late", 0),
             "wrong": statistics.get("wrong", 0),
+            "miss": statistics.get("miss", 0),
+            "avg_ae": round(float(statistics.get("avg_ae") or 0), 2),
             "file": f"{session_id}.json"
         })
         index.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
@@ -4412,17 +4414,30 @@ async def save_session_to_player(req: Request):
         logger.error(f"Failed to save session to player: {e}")
         raise HTTPException(500, f"Failed to save session: {str(e)}")
 
+def _read_session_avg_ae(report_path: str) -> float:
+    """Pull statistics.avg_ae from a session file without other processing."""
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        stats = data.get("statistics") or {}
+        return float(stats.get("avg_ae") or 0.0)
+    except Exception:
+        return 0.0
+
+
 def compute_player_ae_acc(player_id):
-    """Fast AE/ACC from index.json only — do not open every session file (that freezes login)."""
+    """AE/ACC for roster cards. Prefer index.json; backfill avg_ae from session files once."""
     player_dir = os.path.join(PLAYER_REPORTS_DIR, str(player_id))
     index_file = os.path.join(player_dir, "index.json")
     if not os.path.exists(index_file):
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     try:
         with open(index_file, 'r', encoding='utf-8') as f:
             index = json.load(f)
     except Exception:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
+    if not isinstance(index, list):
+        return 0.0, 0.0, 0.0
 
     total_correct = 0
     total_late = 0
@@ -4430,9 +4445,14 @@ def compute_player_ae_acc(player_id):
     total_miss = 0
     ae_weighted = 0.0
     ae_weight = 0
+    latest_ae = 0.0
+    latest_ts = ""
+    dirty = False
 
-    for entry in index or []:
+    for entry in index:
         if not isinstance(entry, dict):
+            continue
+        if entry.get("live"):
             continue
         correct = int(entry.get("correct", 0) or 0)
         late = int(entry.get("late", 0) or 0)
@@ -4443,19 +4463,44 @@ def compute_player_ae_acc(player_id):
         total_late += late
         total_wrong += wrong
         total_miss += miss
-        avg_ae = entry.get("avg_ae") or entry.get("ae") or 0
+
+        avg_ae = entry.get("avg_ae")
         try:
             avg_ae = float(avg_ae or 0)
         except (TypeError, ValueError):
             avg_ae = 0.0
+        if not avg_ae:
+            report_name = entry.get("file") or ""
+            report_path = os.path.join(player_dir, report_name) if report_name else ""
+            if report_path and os.path.isfile(report_path):
+                avg_ae = _read_session_avg_ae(report_path)
+                if avg_ae:
+                    entry["avg_ae"] = round(avg_ae, 2)
+                    dirty = True
+
         if avg_ae and total:
             ae_weighted += avg_ae * total
             ae_weight += total
+        elif avg_ae:
+            ae_weighted += avg_ae
+            ae_weight += 1
+
+        ts = str(entry.get("timestamp") or "")
+        if avg_ae and (not latest_ts or ts > latest_ts):
+            latest_ts = ts
+            latest_ae = avg_ae
+
+    if dirty:
+        try:
+            with open(index_file, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
 
     pooled = total_correct + total_late + total_wrong + total_miss
     avg_acc = ((total_correct + total_late) / pooled * 100) if pooled > 0 else 0.0
     avg_ae = (ae_weighted / ae_weight) if ae_weight > 0 else 0.0
-    return round(avg_ae, 1), round(avg_acc, 1)
+    return round(avg_ae, 1), round(avg_acc, 1), round(latest_ae, 1)
 
 
 def _public_sessions(raw_sessions):
@@ -4759,14 +4804,17 @@ async def get_players(request: Request):
                 users_dirty = True
 
             progress = simust_progress.ensure_progress(user_data)
-            avg_ae, avg_acc = compute_player_ae_acc(player_id)
+            avg_ae, avg_acc, latest_ae = compute_player_ae_acc(player_id)
             session_count = 0
             try:
                 index_file = os.path.join(PLAYER_REPORTS_DIR, player_id, "index.json")
                 if os.path.exists(index_file):
                     with open(index_file, "r", encoding="utf-8") as f:
                         idx = json.load(f)
-                    session_count = len(idx) if isinstance(idx, list) else 0
+                    session_count = len([
+                        row for row in (idx if isinstance(idx, list) else [])
+                        if isinstance(row, dict) and not row.get("live")
+                    ])
             except Exception:
                 session_count = 0
             players.append({
@@ -4782,6 +4830,7 @@ async def get_players(request: Request):
                 "progress": progress,
                 "avgAe": avg_ae,
                 "avgAcc": avg_acc,
+                "latestAe": latest_ae,
                 "sessionCount": session_count,
                 "sessions": []   # will be loaded separately
             })
@@ -4843,12 +4892,15 @@ async def get_players(request: Request):
                         progress = json.load(f)
                 except:
                     pass
-            avg_ae, avg_acc = compute_player_ae_acc(folder)
+            avg_ae, avg_acc, latest_ae = compute_player_ae_acc(folder)
             session_count = 0
             try:
                 with open(index_file, "r", encoding="utf-8") as f:
                     idx = json.load(f)
-                session_count = len(idx) if isinstance(idx, list) else 0
+                session_count = len([
+                    row for row in (idx if isinstance(idx, list) else [])
+                    if isinstance(row, dict) and not row.get("live")
+                ])
             except Exception:
                 session_count = 0
             players.append({
@@ -4864,6 +4916,7 @@ async def get_players(request: Request):
                 "progress": progress,
                 "avgAe": avg_ae,
                 "avgAcc": avg_acc,
+                "latestAe": latest_ae,
                 "sessionCount": session_count,
                 "sessions": []
             })
@@ -5038,6 +5091,18 @@ async def ingest_player_data(request: Request):
                 "subdirectory": session_meta.get("subdirectory", ""),
             }
         index_entry["file"] = f"{session_id}.json"
+        stats = session_report.get("statistics") or {}
+        if "avg_ae" not in index_entry and stats:
+            try:
+                index_entry["avg_ae"] = round(float(stats.get("avg_ae") or 0), 2)
+            except (TypeError, ValueError):
+                index_entry["avg_ae"] = 0
+        for key in ("correct", "late", "wrong", "miss", "total_actions"):
+            if key not in index_entry:
+                if key == "total_actions":
+                    index_entry[key] = session_report.get("total_actions") or stats.get("total") or 0
+                else:
+                    index_entry[key] = stats.get(key, 0)
         if live:
             index_entry["live"] = True
         if session_meta.get("subdirectory"):

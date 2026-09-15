@@ -6519,7 +6519,7 @@
 
                 for (var i = 0; i < displayPlayers.length; i++) {
                     var p = displayPlayers[i];
-                    var latestAe = Number(p.avgAe || 0);
+                    var latestAe = Number(p.latestAe != null ? p.latestAe : (p.avgAe || 0));
                     var avgAcc = Number(p.avgAcc || 0);
                     var sessCount = Number(p.sessionCount || (p.sessions && p.sessions.length) || 0);
                     totalSess += sessCount;
@@ -6527,7 +6527,8 @@
                     var trend = '—';
                     var priority = 'New';
                     if (sessCount > 0 || latestAe > 0) {
-                        if (latestAe < 40) priority = 'High';
+                        if (latestAe <= 0) priority = 'Medium';
+                        else if (latestAe < 40) priority = 'High';
                         else if (latestAe < 60) priority = 'Medium';
                         else priority = 'Low';
                     }
@@ -6536,15 +6537,16 @@
                     } else {
                         levelCounts['Entry'] = (levelCounts['Entry'] || 0) + 1;
                     }
-                    if (latestAe > 0) {
-                        totalAe += latestAe;
+                    var rosterAe = Number(p.avgAe || latestAe || 0);
+                    if (rosterAe > 0) {
+                        totalAe += rosterAe;
                         count++;
                     }
                     if (avgAcc > 0) {
                         totalAcc += avgAcc;
                         accCount++;
                     }
-                    var aeDisplay = latestAe > 0 ? latestAe.toFixed(0) + '%' : '—';
+                    var aeDisplay = latestAe > 0 ? latestAe.toFixed(0) + '%' : (rosterAe > 0 ? rosterAe.toFixed(0) + '%' : '—');
                     var slots = (upcomingByPlayer[p.id] || []).concat(upcomingByPlayer[p.playerId] || []);
                     var seenIds = {};
                     var uniqueSlots = [];

@@ -599,6 +599,8 @@ def push_live_session(player_id: str, session_report: Dict[str, Any], user: Opti
         "correct": (live.get("statistics") or {}).get("correct", 0),
         "late": (live.get("statistics") or {}).get("late", 0),
         "wrong": (live.get("statistics") or {}).get("wrong", 0),
+        "miss": (live.get("statistics") or {}).get("miss", 0),
+        "avg_ae": round(float((live.get("statistics") or {}).get("avg_ae") or 0), 2),
         "file": f"{session['id']}.json",
     }
     push_session(player_id, live, user, index_entry)
