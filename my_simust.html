@@ -3916,12 +3916,12 @@
     Chart.js CDN
     ============================================================ -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/static/i18n.js?v=20260915b"></script>
+    <script src="/static/i18n.js?v=20260915c"></script>
     <script>
       // Async-load large advice map so login/dashboard open without blocking on ~500KB JS.
       (function () {
         var s = document.createElement('script');
-        s.src = '/static/coach_advice_i18n.js?v=20260915b';
+        s.src = '/static/coach_advice_i18n.js?v=20260915c';
         s.async = true;
         document.head.appendChild(s);
       })();
@@ -8185,8 +8185,11 @@
                         var nameEl = document.getElementById('player-name-display');
                         var nameHtml = nameEl ? nameEl.outerHTML : '';
                         greet.innerHTML = '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br>' + nameHtml;
+                        var good = greet.querySelector('[data-i18n="goodDay"]');
+                        if (good) good.textContent = tt('goodDay', 'Good Day');
                     }
-                    if (typeof simustApplyI18n === 'function') simustApplyI18n();
+                    // Do NOT call simustApplyI18n here — applyI18n used to dispatch this
+                    // same event and that caused an infinite freeze after login.
                 } catch (e) { /* ignore refresh errors on language switch */ }
             });
         })();

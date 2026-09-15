@@ -1942,6 +1942,13 @@
         if (SUPPORTED.indexOf(lang) === -1) lang = "en";
         try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
         applyI18n(lang);
+        // Notify pages once after a real language change — never from applyI18n itself
+        // (selectPlayer/login call applyI18n and must not re-enter).
+        if (typeof global.dispatchEvent === "function") {
+            try {
+                global.dispatchEvent(new CustomEvent("simust-lang-change", { detail: lang }));
+            } catch (e) {}
+        }
         return lang;
     }
 
@@ -2059,7 +2066,11 @@
         }
     }
 
+    var applyingI18n = false;
     function applyI18n(lang) {
+        if (applyingI18n) return;
+        applyingI18n = true;
+        try {
         var code = lang || getLang();
         applyDocumentDir(code);
         var nodes = document.querySelectorAll("[data-i18n]");
@@ -2084,10 +2095,8 @@
             titles[n].setAttribute("aria-label", t("language", code));
         }
         applyBidi(document);
-        if (typeof global.dispatchEvent === "function") {
-            try {
-                global.dispatchEvent(new CustomEvent("simust-lang-change", { detail: code }));
-            } catch (e) {}
+        } finally {
+            applyingI18n = false;
         }
     }
 
