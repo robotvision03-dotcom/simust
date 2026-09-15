@@ -4724,7 +4724,13 @@ async def open_directory(req: Request):
 # NEW: Create PDF Report Endpoint
 # ============================================================
 def _my_simust_page():
-    return FileResponse("my_simust.html")
+    return FileResponse(
+        "my_simust.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 @app.get("/my_simust.html", response_class=FileResponse)
 async def my_simust():
@@ -5305,8 +5311,11 @@ def _run_queued_operator_command(command: dict) -> None:
 
 
 def _remote_operator_loop() -> None:
+    backoff = 1.0
+    last_warn = ""
+    last_warn_at = 0.0
     while True:
-        time.sleep(1)
+        time.sleep(backoff)
         try:
             done = []
             for command in simust_push.pull_remote_commands():
@@ -5321,6 +5330,7 @@ def _remote_operator_loop() -> None:
             if done:
                 simust_push.ack_remote_commands(done)
             _publish_lab_status()
+            backoff = 1.0
         except Exception as exc:
             detail = str(exc)
             try:
@@ -5328,8 +5338,17 @@ def _remote_operator_loop() -> None:
                     detail = f"{exc}: {exc.read().decode('utf-8', errors='replace')[:200]}"
             except Exception:
                 pass
-            logger.warning("Remote operator loop: %s", detail)
-    
+            now = time.time()
+            # Avoid flooding the lab log while the public host returns 502 during restart/deploy.
+            if detail != last_warn or (now - last_warn_at) > 60:
+                logger.warning("Remote operator loop: %s", detail)
+                last_warn = detail
+                last_warn_at = now
+            if "502" in detail or "Bad Gateway" in detail or "503" in detail:
+                backoff = min(30.0, max(5.0, backoff * 2.0))
+            else:
+                backoff = min(15.0, max(2.0, backoff + 1.0))
+
 @app.post("/create-pdf-report")
 async def create_pdf_report(req: Request):
     try:

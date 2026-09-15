@@ -177,6 +177,55 @@
         .today-schedule-row .field-tag { display: inline-block; margin-inline-start: 6px; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em; background: rgba(214, 179, 75, 0.15); color: var(--gold); border: 1px solid rgba(214, 179, 75, 0.35); vertical-align: middle; }
         .today-schedule-row .when { color: var(--gold); font-size: 12px; font-weight: 800; white-space: nowrap; }
         .today-schedule-empty { color: #8fa0b6; font-size: 13px; font-style: italic; padding: 12px 0; }
+        .op-res-wrap { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
+        .op-res-panel { background: var(--navy-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+        .op-res-panel h2 { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
+        .op-res-panel .sub { color: #8fa0b6; font-size: 13px; margin-bottom: 14px; line-height: 1.45; }
+        .op-res-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+        .op-res-toolbar button, .op-res-form button, .op-res-list button {
+            background: #07111f; border: 1px solid var(--line); color: #dce7f5; border-radius: 6px;
+            padding: 8px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+        }
+        .op-res-toolbar button.primary, .op-res-form button.primary {
+            background: linear-gradient(105deg, var(--gold), #d6b34b); color: #07111f; border: none;
+        }
+        .op-res-week { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+        .op-res-week button { min-width: 64px; }
+        .op-res-week button.active { border-color: var(--gold); color: var(--gold); }
+        .op-res-grid-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--line); border-radius: 8px; }
+        .op-res-grid { display: grid; grid-template-columns: 56px 1fr 1fr; min-width: 420px; }
+        .op-res-grid .head, .op-res-grid .time {
+            position: sticky; top: 0; background: #050e1a; z-index: 1; font-size: 11px; font-weight: 800;
+            color: var(--gold); padding: 8px; border-bottom: 1px solid var(--line); text-align: center;
+        }
+        .op-res-grid .time { position: static; color: #8fa0b6; font-weight: 700; border-right: 1px solid var(--line); }
+        .op-res-slot {
+            min-height: 28px; border-bottom: 1px solid #132033; border-right: 1px solid #132033;
+            font-size: 10px; padding: 4px 6px; cursor: pointer; color: #9fb2c9;
+        }
+        .op-res-slot.free:hover { background: rgba(39,108,229,0.18); }
+        .op-res-slot.booked { background: rgba(214,179,75,0.18); color: #f5f8fb; cursor: pointer; }
+        .op-res-slot.past { opacity: 0.35; cursor: default; }
+        .op-res-slot.selected { outline: 1px solid var(--gold); }
+        .op-res-form .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .op-res-form label { display: block; font-size: 11px; color: #8fa0b6; font-weight: 700; margin-bottom: 4px; }
+        .op-res-form input, .op-res-form select {
+            width: 100%; background: #07111f; border: 1px solid var(--line); border-radius: 6px;
+            color: #fff; padding: 10px 12px; margin-bottom: 10px; font-size: 14px;
+        }
+        .op-res-plist { max-height: 140px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
+        .op-res-plist button { display: block; width: 100%; text-align: left; border: none; border-bottom: 1px solid #132033; border-radius: 0; }
+        .op-res-plist button.active { background: rgba(214,179,75,0.15); color: var(--gold); }
+        .op-res-msg { min-height: 18px; font-size: 13px; margin-top: 8px; }
+        .op-res-msg.err { color: var(--red); }
+        .op-res-msg.ok { color: #2ecc71; }
+        .op-res-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
+        .op-res-list .row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px; background: #07111f; border: 1px solid var(--line); border-radius: 8px; }
+        .op-res-list .who { font-size: 13px; font-weight: 700; }
+        .op-res-list .meta { font-size: 11px; color: #8fa0b6; }
+        @media (max-width: 980px) {
+            .op-res-wrap { grid-template-columns: 1fr; }
+        }
         .login-input { background: #07111f; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; color: #fff; outline: none; width: 100%; transition: border-color 0.2s; font-size: 15px; margin-bottom: 16px; }
         .login-input:focus { border-color: var(--gold); }
         .login-input::placeholder { color: #647185; }
@@ -746,11 +795,26 @@
             var setItems = itemsState[1];
 
             useEffect(function() {
-                axios.get("/reservations/today").then(function(res) {
+                var cancelled = false;
+                var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                var timer = setTimeout(function() {
+                    try { if (controller) controller.abort(); } catch (e) {}
+                    if (!cancelled) setItems([]);
+                }, 8000);
+                axios.get("/reservations/today", controller ? { signal: controller.signal } : undefined).then(function(res) {
+                    if (cancelled) return;
+                    clearTimeout(timer);
                     setItems((res.data && res.data.reservations) || []);
                 }).catch(function() {
+                    if (cancelled) return;
+                    clearTimeout(timer);
                     setItems([]);
                 });
+                return function() {
+                    cancelled = true;
+                    clearTimeout(timer);
+                    try { if (controller) controller.abort(); } catch (e) {}
+                };
             }, []);
 
             var body;
@@ -782,6 +846,360 @@
                 React.createElement('h2', null, t("todaySchedule")),
                 React.createElement('p', { className: "sub" }, t("todayScheduleSub")),
                 body
+            );
+        };
+
+        var OperatorReservationManager = function(props) {
+            var t = props.t || function(k, fb) { return fb || k; };
+            var players = props.players || [];
+            var showToast = props.showToast || function() {};
+            var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+            var ymd = function(d) {
+                return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+            };
+            var startOfWeek = function(d) {
+                var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                var day = (x.getDay() + 6) % 7;
+                x.setDate(x.getDate() - day);
+                return x;
+            };
+            var parseLocal = function(iso) {
+                if (!iso) return null;
+                var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+                if (!m) return null;
+                return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
+            };
+            var times = [];
+            for (var h = 7; h < 22; h++) {
+                times.push(pad(h) + ':00');
+                times.push(pad(h) + ':30');
+            }
+            var durations = [30, 60, 90, 120, 150, 180];
+
+            var weekState = useState(startOfWeek(new Date()));
+            var weekStart = weekState[0];
+            var setWeekStart = weekState[1];
+            var dateState = useState(ymd(new Date()));
+            var selectedDate = dateState[0];
+            var setSelectedDate = dateState[1];
+            var bookingsState = useState([]);
+            var bookings = bookingsState[0];
+            var setBookings = bookingsState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var msgState = useState('');
+            var msg = msgState[0];
+            var setMsg = msgState[1];
+            var msgOkState = useState(false);
+            var msgOk = msgOkState[0];
+            var setMsgOk = msgOkState[1];
+            var searchState = useState('');
+            var search = searchState[0];
+            var setSearch = searchState[1];
+            var playerIdState = useState('');
+            var playerId = playerIdState[0];
+            var setPlayerId = playerIdState[1];
+            var startState = useState('07:00');
+            var startHm = startState[0];
+            var setStartHm = startState[1];
+            var durState = useState(60);
+            var duration = durState[0];
+            var setDuration = durState[1];
+            var fieldState = useState('A');
+            var field = fieldState[0];
+            var setField = fieldState[1];
+            var adminPassState = useState('');
+            var adminPass = adminPassState[0];
+            var setAdminPass = adminPassState[1];
+            var cancelIdState = useState('');
+            var cancelId = cancelIdState[0];
+            var setCancelId = cancelIdState[1];
+
+            var loadBookings = function() {
+                var from = ymd(weekStart);
+                var end = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7);
+                var to = ymd(end);
+                axios.get('/reservations', { params: { from: from, to: to } }).then(function(res) {
+                    setBookings((res.data && res.data.reservations) || []);
+                }).catch(function() {
+                    setBookings([]);
+                });
+            };
+
+            useEffect(function() { loadBookings(); }, [weekStart]);
+
+            var weekDays = [];
+            for (var i = 0; i < 7; i++) {
+                var d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i);
+                weekDays.push({ date: ymd(d), label: d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) });
+            }
+
+            var bookingAt = function(dateStr, hm, fieldId) {
+                var slotStart = parseLocal(dateStr + 'T' + hm + ':00');
+                if (!slotStart) return null;
+                var slotEnd = new Date(slotStart.getTime() + 30 * 60000);
+                for (var bi = 0; bi < bookings.length; bi++) {
+                    var b = bookings[bi];
+                    var bf = String(b.field || 'A').toUpperCase().indexOf('B') === 0 ? 'B' : 'A';
+                    if (bf !== fieldId) continue;
+                    var bs = parseLocal(b.start);
+                    var be = parseLocal(b.end);
+                    if (!bs || !be) continue;
+                    if (bs < slotEnd && be > slotStart) return b;
+                }
+                return null;
+            };
+
+            var isPast = function(dateStr, hm) {
+                var dt = parseLocal(dateStr + 'T' + hm + ':00');
+                return !!(dt && dt.getTime() < Date.now());
+            };
+
+            var filteredPlayers = players.filter(function(p) {
+                var q = search.trim().toLowerCase();
+                if (!q) return true;
+                var blob = ((p.name || '') + ' ' + (p.surname || '') + ' ' + (p.id || p.playerId || '')).toLowerCase();
+                return blob.indexOf(q) !== -1;
+            }).slice(0, 40);
+
+            var setMessage = function(text, ok) {
+                setMsg(text || '');
+                setMsgOk(!!ok);
+            };
+
+            var onSlotClick = function(hm, fieldId, booking) {
+                if (isPast(selectedDate, hm) && !booking) return;
+                setField(fieldId);
+                setStartHm(hm);
+                if (booking && booking.id) {
+                    setCancelId(booking.id);
+                    setMessage(t('staffResCancelHint', 'Selected booking ready to cancel. Enter admin password and tap Cancel booking.'), false);
+                } else {
+                    setCancelId('');
+                    setMessage('', false);
+                }
+            };
+
+            var addBooking = function() {
+                if (!playerId) {
+                    setMessage(t('staffResNeedPlayer', 'Select a player first.'), false);
+                    return;
+                }
+                if (window.SIMUST_PUBLIC && !adminPass) {
+                    setMessage(t('adminPasswordRequired', 'Admin password is required.'), false);
+                    return;
+                }
+                var startIso = selectedDate + 'T' + startHm + ':00';
+                var startDt = parseLocal(startIso);
+                if (!startDt) return;
+                var endDt = new Date(startDt.getTime() + Number(duration) * 60000);
+                var endIso = ymd(endDt) + 'T' + pad(endDt.getHours()) + ':' + pad(endDt.getMinutes()) + ':00';
+                setBusy(true);
+                setMessage('', false);
+                var body = {
+                    player_id: playerId,
+                    start: startIso,
+                    end: endIso,
+                    field: field
+                };
+                if (adminPass) body.admin_password = adminPass;
+                axios.post('/reservations', body).then(function() {
+                    setBusy(false);
+                    setAdminPass('');
+                    setCancelId('');
+                    setMessage(t('reservationCreated', 'Reservation added.'), true);
+                    showToast(t('reservationCreated', 'Reservation added.'), 'success');
+                    loadBookings();
+                }).catch(function(err) {
+                    setBusy(false);
+                    var detail = err && err.response && err.response.data && err.response.data.detail;
+                    if (Array.isArray(detail)) detail = detail.map(function(d) { return d.msg || d; }).join(' ');
+                    setMessage(detail || t('networkError', 'Could not add reservation.'), false);
+                });
+            };
+
+            var cancelBooking = function() {
+                if (!cancelId) {
+                    setMessage(t('staffResPickCancel', 'Tap a booked slot (or pick from the list) to cancel.'), false);
+                    return;
+                }
+                if (!adminPass) {
+                    setMessage(t('adminPasswordRequired', 'Admin password is required.'), false);
+                    return;
+                }
+                setBusy(true);
+                axios.delete('/reservations/' + encodeURIComponent(cancelId), {
+                    data: { admin_password: adminPass }
+                }).then(function() {
+                    setBusy(false);
+                    setAdminPass('');
+                    setCancelId('');
+                    setMessage(t('reservationCancelled', 'Reservation cancelled.'), true);
+                    showToast(t('reservationCancelled', 'Reservation cancelled.'), 'success');
+                    loadBookings();
+                }).catch(function(err) {
+                    setBusy(false);
+                    var detail = err && err.response && err.response.data && err.response.data.detail;
+                    if (Array.isArray(detail)) detail = detail.map(function(d) { return d.msg || d; }).join(' ');
+                    setMessage(detail || t('networkError', 'Could not cancel reservation.'), false);
+                });
+            };
+
+            var upcoming = bookings.filter(function(b) {
+                var end = parseLocal(b.end);
+                return end && end.getTime() > Date.now();
+            }).sort(function(a, b) {
+                return String(a.start).localeCompare(String(b.start));
+            });
+
+            var slotEl = function(fieldId, hm) {
+                var booking = bookingAt(selectedDate, hm, fieldId);
+                var past = isPast(selectedDate, hm);
+                var cls = 'op-res-slot' + (booking ? ' booked' : ' free') + (past && !booking ? ' past' : '')
+                    + ((booking && booking.id === cancelId) || (!booking && startHm === hm && field === fieldId) ? ' selected' : '');
+                var label = booking
+                    ? ((booking.player_name || booking.player_id || 'Booked') + ' · F' + fieldId)
+                    : '';
+                return React.createElement('div', {
+                    key: fieldId + hm,
+                    className: cls,
+                    onClick: function() { onSlotClick(hm, fieldId, booking); },
+                    title: label || (hm + ' Field ' + fieldId)
+                }, label);
+            };
+
+            return React.createElement('div', { className: 'op-res-wrap' },
+                React.createElement('div', { className: 'op-res-panel' },
+                    React.createElement('h2', null, t('staffResManageTitle', 'Reservation management')),
+                    React.createElement('p', { className: 'sub' }, t('staffResManageSub', 'Tap a free cell to prepare an add. Tap a booked cell to cancel. Confirm with the admin password.')),
+                    React.createElement('div', { className: 'op-res-toolbar' },
+                        React.createElement('button', { type: 'button', onClick: function() {
+                            var n = new Date(weekStart); n.setDate(n.getDate() - 7); setWeekStart(startOfWeek(n));
+                        } }, '← ' + t('reservationPrev', 'Week')),
+                        React.createElement('button', { type: 'button', className: 'primary', onClick: function() {
+                            var now = new Date(); setWeekStart(startOfWeek(now)); setSelectedDate(ymd(now));
+                        } }, t('reservationToday', 'Today')),
+                        React.createElement('button', { type: 'button', onClick: function() {
+                            var n = new Date(weekStart); n.setDate(n.getDate() + 7); setWeekStart(startOfWeek(n));
+                        } }, t('reservationNext', 'Week') + ' →'),
+                        React.createElement('button', { type: 'button', onClick: loadBookings }, t('refresh', 'Refresh'))
+                    ),
+                    React.createElement('div', { className: 'op-res-week' },
+                        weekDays.map(function(day) {
+                            return React.createElement('button', {
+                                key: day.date,
+                                type: 'button',
+                                className: selectedDate === day.date ? 'active' : '',
+                                onClick: function() { setSelectedDate(day.date); setCancelId(''); }
+                            }, day.label);
+                        })
+                    ),
+                    React.createElement('div', { className: 'op-res-grid-wrap' },
+                        React.createElement('div', { className: 'op-res-grid' },
+                            React.createElement('div', { className: 'head' }, ''),
+                            React.createElement('div', { className: 'head' }, 'Field A'),
+                            React.createElement('div', { className: 'head' }, 'Field B'),
+                            times.map(function(hm) {
+                                return React.createElement(React.Fragment, { key: hm },
+                                    React.createElement('div', { className: 'time' }, hm.slice(-2) === '00' ? hm : ''),
+                                    slotEl('A', hm),
+                                    slotEl('B', hm)
+                                );
+                            })
+                        )
+                    )
+                ),
+                React.createElement('div', { className: 'op-res-panel' },
+                    React.createElement('h2', null, t('staffResAddTitle', 'Add / cancel')),
+                    React.createElement('div', { className: 'op-res-form' },
+                        React.createElement('label', null, t('staffResSearchLabel', 'Player name or ID')),
+                        React.createElement('input', {
+                            type: 'text',
+                            value: search,
+                            placeholder: t('staffResSearchPlaceholder', 'Type to search…'),
+                            onChange: function(e) { setSearch(e.target.value); }
+                        }),
+                        React.createElement('div', { className: 'op-res-plist' },
+                            filteredPlayers.length ? filteredPlayers.map(function(p) {
+                                var id = p.id || p.playerId;
+                                var label = ((p.name || '') + ' ' + (p.surname || '')).trim() || id;
+                                return React.createElement('button', {
+                                    key: id,
+                                    type: 'button',
+                                    className: playerId === id ? 'active' : '',
+                                    onClick: function() { setPlayerId(id); }
+                                }, label + ' · ' + id);
+                            }) : React.createElement('div', { className: 'today-schedule-empty', style: { padding: '10px' } },
+                                t('noPlayersFound', 'No players found'))
+                        ),
+                        React.createElement('div', { className: 'form-row' },
+                            React.createElement('div', null,
+                                React.createElement('label', null, t('reservationDate', 'Date')),
+                                React.createElement('input', { type: 'date', value: selectedDate, onChange: function(e) {
+                                    setSelectedDate(e.target.value);
+                                    var d = parseLocal(e.target.value + 'T12:00:00');
+                                    if (d) setWeekStart(startOfWeek(d));
+                                } })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', null, t('reservationStart', 'Start')),
+                                React.createElement('select', { value: startHm, onChange: function(e) { setStartHm(e.target.value); } },
+                                    times.map(function(hm) { return React.createElement('option', { key: hm, value: hm }, hm); })
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'form-row' },
+                            React.createElement('div', null,
+                                React.createElement('label', null, t('reservationDuration', 'Duration')),
+                                React.createElement('select', { value: String(duration), onChange: function(e) { setDuration(Number(e.target.value)); } },
+                                    durations.map(function(m) { return React.createElement('option', { key: m, value: String(m) }, m + ' min'); })
+                                )
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', null, t('reservationField', 'Field')),
+                                React.createElement('select', { value: field, onChange: function(e) { setField(e.target.value); } },
+                                    React.createElement('option', { value: 'A' }, 'Field A'),
+                                    React.createElement('option', { value: 'B' }, 'Field B')
+                                )
+                            )
+                        ),
+                        React.createElement('label', null, t('adminPasswordLabel', 'Admin password')),
+                        React.createElement('input', {
+                            type: 'password',
+                            value: adminPass,
+                            autoComplete: 'current-password',
+                            placeholder: '••••••••',
+                            onChange: function(e) { setAdminPass(e.target.value); }
+                        }),
+                        React.createElement('div', { className: 'op-res-toolbar' },
+                            React.createElement('button', { type: 'button', className: 'primary', disabled: busy, onClick: addBooking },
+                                t('staffResConfirmAdd', 'Add reservation')),
+                            React.createElement('button', { type: 'button', disabled: busy || !cancelId, onClick: cancelBooking },
+                                t('staffResConfirmCancel', 'Cancel booking'))
+                        ),
+                        React.createElement('div', { className: 'op-res-msg ' + (msg ? (msgOk ? 'ok' : 'err') : '') }, msg)
+                    ),
+                    React.createElement('h2', { style: { marginTop: 18 } }, t('staffResAllBookings', 'All upcoming bookings')),
+                    React.createElement('div', { className: 'op-res-list' },
+                        upcoming.length ? upcoming.map(function(b) {
+                            var fid = String(b.field || 'A').toUpperCase().indexOf('B') === 0 ? 'B' : 'A';
+                            return React.createElement('div', { className: 'row', key: b.id },
+                                React.createElement('div', null,
+                                    React.createElement('div', { className: 'who' }, (b.player_name || b.player_id || '') + ' · F' + fid),
+                                    React.createElement('div', { className: 'meta' }, (b.start || '') + ' → ' + (b.end || ''))
+                                ),
+                                React.createElement('button', {
+                                    type: 'button',
+                                    onClick: function() {
+                                        setCancelId(b.id);
+                                        setMessage(t('staffResCancelHint', 'Selected booking ready to cancel. Enter admin password and tap Cancel booking.'), false);
+                                    }
+                                }, t('select', 'Select'))
+                            );
+                        }) : React.createElement('div', { className: 'today-schedule-empty' }, t('noReservationsUpcoming', 'No upcoming bookings'))
+                    )
+                )
             );
         };
 
@@ -3964,6 +4382,9 @@
                                 React.createElement('button', { onClick: function() { setActiveTab(
                                         'main');
                                         closeMenu(); } }, t('smartControl')),
+                                isOperatorStaff ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('reservations');
+                                        closeMenu(); } }, t('navReservations') || 'Reservations') : null,
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('results');
                                         closeMenu(); } }, t('results')) : null,
@@ -3997,6 +4418,12 @@
                         onClick: function() { setActiveTab('main'); },
                         className: "tab-button" + (activeTab === 'main' ? ' active' : '')
                     }, t("smartControl")),
+                    isOperatorStaff ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('reservations'); },
+                        className: "tab-button" + (activeTab === 'reservations' ? ' active' : '')
+                    }, t("navReservations") || "Reservations") :
+                    null,
                     isAdmin ?
                     React.createElement('button', {
                         onClick: function() { setActiveTab('results'); },
@@ -4019,6 +4446,12 @@
 
                 // CONTENT
                 React.createElement('div', { className: "simust-body" },
+                    activeTab === 'reservations' && isOperatorStaff ?
+                    React.createElement(OperatorReservationManager, {
+                        t: t,
+                        players: players,
+                        showToast: showToast
+                    }) :
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
                         players: players,

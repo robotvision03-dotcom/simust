@@ -2208,10 +2208,64 @@
             border-color: var(--gold);
             color: #fff;
         }
+        .dashboard-view-switcher button.primary {
+            border-color: var(--gold);
+            color: var(--gold);
+        }
         .dashboard-view-switcher button.disabled {
             opacity: 0.3;
             cursor: not-allowed;
             pointer-events: none;
+        }
+        .mobile-portal-nav {
+            display: none;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 10px 16px;
+            background: #050e1a;
+            border-bottom: 1px solid var(--line);
+            position: sticky;
+            top: 0;
+            z-index: 40;
+        }
+        .mobile-portal-nav button {
+            background: #0b192d;
+            border: 1px solid var(--line);
+            color: #dce7f5;
+            font-size: .72rem;
+            font-weight: 700;
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .mobile-portal-nav button.primary {
+            border-color: var(--gold);
+            color: var(--gold);
+        }
+        .staff-res-cta {
+            display: none;
+            margin: 18px 0 8px;
+        }
+        .staff-res-cta.show {
+            display: block;
+        }
+        .staff-res-cta button {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(214, 179, 75, 0.14);
+            border: 1px solid var(--gold);
+            color: #f5f8fb;
+            font-weight: 700;
+            font-size: .9rem;
+            padding: 14px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        html.staff-res-focus #panel-player > *:not(#player-reservation) {
+            display: none !important;
+        }
+        html.staff-res-focus #player-reservation {
+            margin-top: 8px !important;
         }
         .back-to-login {
             display: inline-flex;
@@ -2550,9 +2604,12 @@
             .portal-sidebar {
                 display: none !important;
             }
+            .mobile-portal-nav {
+                display: flex;
+            }
             .portal-content {
                 grid-area: 2/1;
-                padding-top: 55px;
+                padding-top: 12px;
             }
             .coach-summary {
                 grid-template-columns: 1fr 1fr;
@@ -3431,10 +3488,16 @@
         <section class="portal-content">
 
             <!-- DASHBOARD VIEW SWITCHER -->
+            <div class="mobile-portal-nav" id="mobile-portal-nav">
+                <button type="button" id="mobile-nav-home" data-i18n="navOverview">Overview</button>
+                <button type="button" id="mobile-nav-reservation" class="primary" data-i18n="reservationNav">Calendar</button>
+                <button type="button" id="mobile-nav-staff-res" class="primary" style="display:none;" data-i18n="navReservations">Reservations</button>
+            </div>
             <div class="dashboard-view-switcher" id="view-switcher">
                 <button class="active" data-view="player"><span data-i18n="viewAsPlayer">Player</span></button>
                 <button data-view="coach"><span data-i18n="viewAsCoach">Coach</span></button>
                 <button data-view="manager"><span data-i18n="viewAsManager">Academy Manager</span></button>
+                <button type="button" id="switcher-reservations-btn" class="primary" style="display:none;" data-i18n="navReservations">Reservations</button>
                 <button style="margin-inline-start:auto;" id="content-back-btn" class="back-to-login" data-i18n="backToAccess">← Back to access</button>
             </div>
 
@@ -3655,6 +3718,9 @@
                         <p class="portal-kicker" data-i18n="coachWelcomeKicker">ACADEMY · ASSIGNED TEAMS</p>
                         <h1><span data-i18n="goodMorningCoach">Good morning,</span><br><em data-i18n="coachEm">Coach.</em></h1>
                         <p data-i18n="coachWelcomeSub">Connect your players' results directly to the next training decision.</p>
+                        <div class="staff-res-cta show">
+                            <button type="button" class="open-staff-reservations" data-i18n="staffResManageTitle">Reservation management</button>
+                        </div>
                     </div>
                     <div class="portal-review">
                         <small data-i18n="todayLabel">TODAY</small>
@@ -3765,6 +3831,9 @@
                     <div>
                         <p class="portal-kicker" data-i18n="managerWelcomeKicker">SIMUST ACADEMY · AUTHORISED OVERVIEW</p>
                         <h1><span data-i18n="managerWelcomeTitle">Your academy.</span><br><em data-i18n="managerWelcomeEm">One clear view.</em></h1>
+                        <div class="staff-res-cta show">
+                            <button type="button" class="open-staff-reservations" data-i18n="staffResManageTitle">Reservation management</button>
+                        </div>
                     </div>
                     <div class="portal-review">
                         <small data-i18n="thisWeek">THIS WEEK</small>
@@ -3846,11 +3915,17 @@
     <!-- ============================================================
     Chart.js CDN
     ============================================================ -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/static/i18n.js?v=20260915b"></script>
+    <script>
+      // Async-load large advice map so login/dashboard open without blocking on ~500KB JS.
+      (function () {
+        var s = document.createElement('script');
+        s.src = '/static/coach_advice_i18n.js?v=20260915b';
+        s.async = true;
+        document.head.appendChild(s);
+      })();
     </script>
-
-    <script src="/static/i18n.js?v=20260915a"></script>
-    <script src="/static/coach_advice_i18n.js?v=20260915a"></script>
     <script>
         (function() {
             'use strict';
@@ -5237,12 +5312,26 @@
                 }
             }
 
+            function syncStaffResNavControls() {
+                var staff = isStaffResManager();
+                var mobileStaff = document.getElementById('mobile-nav-staff-res');
+                var switcherBtn = document.getElementById('switcher-reservations-btn');
+                if (mobileStaff) mobileStaff.style.display = staff ? '' : 'none';
+                if (switcherBtn) switcherBtn.style.display = staff ? 'inline-block' : 'none';
+                document.querySelectorAll('.staff-res-cta').forEach(function(el) {
+                    el.classList.toggle('show', staff);
+                });
+            }
+
             function openReservationPanel() {
-                panels.player.classList.add('active');
-                panels.coach.classList.remove('active');
-                panels.manager.classList.remove('active');
-                currentView = 'player';
+                setView('player');
+                if (isStaffResManager()) {
+                    document.documentElement.classList.add('staff-res-focus');
+                } else {
+                    document.documentElement.classList.remove('staff-res-focus');
+                }
                 syncStaffReservationCopy();
+                syncStaffResNavControls();
                 bindReservationUi();
                 loadReservationsAndRender();
                 if (isStaffResManager() && (!authorisedPlayers || !authorisedPlayers.length)) {
@@ -5251,7 +5340,11 @@
                     }).catch(function() {});
                 }
                 var cal = document.getElementById('player-reservation');
-                if (cal) cal.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (cal) {
+                    setTimeout(function() {
+                        cal.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 50);
+                }
             }
 
             function tt(key, fallback) {
@@ -5269,6 +5362,9 @@
                     view = available[0];
                 }
                 currentView = view;
+                if (view !== 'player') {
+                    document.documentElement.classList.remove('staff-res-focus');
+                }
                 panels.player.classList.toggle('active', view === 'player');
                 panels.coach.classList.toggle('active', view === 'coach');
                 panels.manager.classList.toggle('active', view === 'manager');
@@ -5303,6 +5399,7 @@
                     link.classList.toggle('active', link.dataset.view === view && link.dataset.section ===
                         'overview' && link.style.display !== 'none');
                 });
+                syncStaffResNavControls();
 
                 var user = currentUser;
                 if (user) {
@@ -7838,14 +7935,17 @@
             function startAutoRefresh() {
                 if (refreshInterval) clearInterval(refreshInterval);
                 refreshInterval = setInterval(async function() {
-                    if (!isDashboardVisible || !currentUser) return;
+                    if (!isDashboardVisible || !currentUser || window.__simustRefreshBusy) return;
+                    window.__simustRefreshBusy = true;
                     try {
                         if (currentUser.role === 'player' && selectedPlayerId) {
                             var reportResp = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(selectedPlayerId), { headers: apiHeaders() });
                             if (reportResp.ok) {
                                 var reportData = await reportResp.json();
                                 var incoming = reportData.sessions || [];
-                                var incomingSig = incoming.length + ':' + JSON.stringify(incoming[0] && incoming[0].statistics ? incoming[0].statistics : incoming[0] || {});
+                                var first = incoming[0] || {};
+                                var meta = first.session || {};
+                                var incomingSig = incoming.length + ':' + String(meta.id || '') + ':' + String(meta.timestamp || '');
                                 if (incomingSig !== window._simustSessionSig) {
                                     window._simustSessionSig = incomingSig;
                                     var self = authorisedPlayers[0];
@@ -7854,27 +7954,29 @@
                             }
                             return;
                         }
+                        // Staff: light player-list refresh only. Never re-run loadCoachData/loadManagerData
+                        // on a short timer — that redraws charts and freezes phones/tablets.
                         var resp = await fetch(API_BASE + '/get-players', { headers: apiHeaders() });
                         if (resp.ok) {
                             var data = await resp.json();
                             allPlayers = data.players || [];
+                            authorisedPlayers = filterPlayersByRole();
                             if (selectedPlayerId) {
-                                var updatedPlayer = allPlayers.find(function(p) { return p.id ===
-                                    selectedPlayerId; });
+                                var updatedPlayer = allPlayers.find(function(p) { return p.id === selectedPlayerId; });
                                 if (updatedPlayer && updatedPlayer.progress) {
                                     renderProgressionBar(updatedPlayer.progress);
                                 }
                             }
-                            authorisedPlayers = filterPlayersByRole();
-                            if (currentView === 'coach') {
-                                loadCoachData();
+                            if (currentView === 'coach' && coachPlayerCount) {
+                                coachPlayerCount.textContent = String(authorisedPlayers.length || 0);
                             }
-                            // Manager team trends load once on click; do not poll/redraw them.
                         }
                     } catch (e) {
                         console.warn('Auto-refresh failed:', e);
+                    } finally {
+                        window.__simustRefreshBusy = false;
                     }
-                }, 3000);
+                }, 15000);
             }
 
             function stopAutoRefresh() {
@@ -7982,6 +8084,35 @@
                 });
             });
 
+            function goHomeOverview() {
+                document.documentElement.classList.remove('staff-res-focus');
+                var available = getAvailableViews();
+                var preferred = (userRole === 'manager') ? 'manager' : (userRole === 'coach' || userRole === 'admin') ? 'coach' : 'player';
+                if (!available.includes(preferred)) preferred = available[0] || 'player';
+                setView(preferred);
+                if (preferred === 'coach' && currentUser && (currentUser.role === 'coach' || currentUser.role === 'admin')) {
+                    loadCoachData();
+                } else if (preferred === 'manager' && currentUser && (currentUser.role === 'manager' || currentUser.role === 'admin')) {
+                    loadManagerData(false);
+                }
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+
+            var mobileNavHome = document.getElementById('mobile-nav-home');
+            var mobileNavReservation = document.getElementById('mobile-nav-reservation');
+            var mobileNavStaffRes = document.getElementById('mobile-nav-staff-res');
+            var switcherResBtn = document.getElementById('switcher-reservations-btn');
+            if (mobileNavHome) mobileNavHome.addEventListener('click', goHomeOverview);
+            if (mobileNavReservation) mobileNavReservation.addEventListener('click', openReservationPanel);
+            if (mobileNavStaffRes) mobileNavStaffRes.addEventListener('click', openReservationPanel);
+            if (switcherResBtn) switcherResBtn.addEventListener('click', openReservationPanel);
+            document.querySelectorAll('.open-staff-reservations').forEach(function(btn) {
+                btn.addEventListener('click', openReservationPanel);
+            });
+            if (/\bapp=android\b/i.test(location.search) || /MySIMUSTAndroid/i.test(navigator.userAgent || '')) {
+                document.documentElement.classList.add('simust-android');
+            }
+
             closeSearchBtn.addEventListener('click', closeSearchModal);
             searchModal.addEventListener('click', function(e) {
                 if (e.target === this) closeSearchModal();
@@ -8033,20 +8164,28 @@
                         progress: user.progress || {}
                     };
                     authorisedPlayers = [selfPlayer];
-                    selectPlayer(selfPlayer);
+                    showDashboard('player');
+                    selectPlayer(selfPlayer).catch(function(err) {
+                        console.warn('Session restore player load failed:', err);
+                    });
                     return;
+                }
+                if (user.role === 'coach' || user.role === 'admin') {
+                    showDashboard('coach');
+                } else if (user.role === 'manager') {
+                    showDashboard('manager');
+                } else {
+                    showDashboard('player');
                 }
                 fetchPlayers().then(function() {
                     authorisedPlayers = filterPlayersByRole();
                     if (user.role === 'coach' || user.role === 'admin') {
-                        showDashboard('coach');
                         loadCoachData();
                     } else if (user.role === 'manager') {
-                        showDashboard('manager');
                         loadManagerData(false);
-                    } else {
-                        showDashboard('player');
                     }
+                }).catch(function(err) {
+                    console.warn('Session restore staff load failed:', err);
                 });
             }
 
@@ -8069,7 +8208,13 @@
                 registerForm.style.display = 'none';
                 loginForm.style.display = 'block';
                 document.title = 'Sign in · My SIMUST';
-                setPortalUrl('login', true);
+                // Keep /dashboard in the address bar when opened directly without a session,
+                // so a refresh after login can restore; only force /login for plain home.
+                if (openingPage === 'login' || openingPage === 'home') {
+                    setPortalUrl('login', true);
+                } else if (openingPage === 'dashboard') {
+                    setPortalUrl('dashboard', true);
+                }
             }
 
             // Do not log usernames, tokens, or profile fields to the browser console.
