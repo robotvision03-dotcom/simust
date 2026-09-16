@@ -1840,16 +1840,26 @@ async def start_realtime_playback(req: Request):
             raise HTTPException(400, "No player selected for Field A or Field B")
 
         users = load_users()
+        admin_password = str(
+            data.get("admin_password") or data.get("adminPassword") or ""
+        ).strip()
+        admin_test_override = False
+        if admin_password:
+            if not _verify_admin_password(users, admin_password):
+                raise HTTPException(401, "Admin password is not correct")
+            admin_test_override = True
+
         for pid, fid, _entry in play_slots:
             if pid not in users:
                 raise HTTPException(404, f"Player not found: {pid}")
             progress = simust_progress.ensure_progress(users[pid])
             users[pid]["progress"] = progress
-            ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
-            if not ok:
-                raise HTTPException(403, f"{pid}: {reason}")
-            # Scheduled booking window: only during start <= now < end on this field
-            require_active_booking_for_play(pid, fid)
+            if not admin_test_override:
+                ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
+                if not ok:
+                    raise HTTPException(403, f"{pid}: {reason}")
+                # Scheduled booking window: only during start <= now < end on this field
+                require_active_booking_for_play(pid, fid)
         save_users(users)
 
         level_path = get_level_path(level_id)

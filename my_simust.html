@@ -787,6 +787,23 @@
             padding: 72px clamp(28px, 5vw, 82px) 36px;
         }
 
+        /* Keep section headings clear of the fixed 88px topbar when scrolling from the sidebar */
+        .portal-section-anchor,
+        #player-trend-chart,
+        #player-results-summary,
+        #technical-coach,
+        #coach-advice-section,
+        #player-reservation,
+        #coach-summary,
+        #coach-players-section,
+        #coach-schedule-section,
+        #manager-summary,
+        #manager-teams-section,
+        #team-trends-container,
+        #section-manager-access {
+            scroll-margin-top: 104px;
+        }
+
         /* ---- shared container for consistent alignment ---- */
         .section-container {
             max-width: 1400px;
@@ -3506,7 +3523,7 @@
             ============================================================ -->
             <div class="dashboard-panel active" id="panel-player">
 
-                <div class="portal-welcome">
+                <div class="portal-welcome portal-section-anchor" id="section-player-overview">
                     <div>
                         <h1 id="player-greeting"><span data-i18n="goodDay">Good Day</span><br><em id="player-name-display">Player</em></h1>
                         <p id="player-summary-text" data-i18n="playerSummaryDefault">Your results show how your football behaviour is developing against your own starting point—not against other players.</p>
@@ -3555,38 +3572,8 @@
                     </div>
                 </div>
 
-                <!-- ====== LATEST TRAINING DETAILS ====== -->
-                <div id="player-results-summary" class="section-container" style="margin-top:40px;">
-                    <div class="portal-section-heading">
-                        <div>
-                            <p class="portal-kicker" data-i18n="latestTrainingDetails">LATEST TRAINING DETAILS</p>
-                            <h2 id="latest-session-date" data-i18n="mostRecentSession">Most recent session</h2>
-                        </div>
-                        <p id="latest-session-sub" data-i18n="latestSessionSub">Summary of your latest test session.</p>
-                    </div>
-                    <div id="results-summary-grid" class="player-results-grid">
-                        <!-- populated by JavaScript -->
-                    </div>
-                </div>
-
-                <!-- ====== TECHNICAL COACH SECTION ====== -->
-                <div class="technical-coach-section section-container" id="technical-coach">
-                    <div class="coach-avatar" id="coach-avatar-container" style="width:100px; height:100px; flex:0 0 100px;">
-                        <img src="" alt="Coach" id="coach-img" style="display:none;">
-                        <span id="coach-fallback" style="display:flex; font-size:2.8rem; color:#a8c6ff;">🧑‍🏫</span>
-                    </div>
-                    <div class="coach-message">
-                        <div class="coach-label" data-i18n="technicalCoach">TECHNICAL COACH</div>
-                        <div class="coach-advice-text" id="tech-coach-advice">
-                            <span class="coming-soon">⚡ <span data-i18n="comingSoonBadge">Coming soon</span></span>
-                            <span data-i18n="technicalCoachEmpty"> — your coach will share personalised technical insights here.</span>
-                        </div>
-                    </div>
-                    <div class="coach-badge">⚡ <span data-i18n="technicalCoachLive">LIVE</span></div>
-                </div>
-
-                <!-- ====== PERFORMANCE TREND ====== -->
-                <div id="player-trend-chart" class="section-container" style="margin-top:40px;">
+                <!-- ====== PERFORMANCE TREND (Development) ====== -->
+                <div id="player-trend-chart" class="section-container portal-section-anchor" style="margin-top:40px;">
                     <div class="portal-section-heading" style="margin-bottom:24px;">
                         <div>
                             <p class="portal-kicker" data-i18n="performanceTrend">PERFORMANCE TREND</p>
@@ -3602,6 +3589,36 @@
                         <span id="trend-page-info">Page 1 / 1</span>
                         <button id="trend-next-btn" disabled data-i18n="trendNext">Next →</button>
                     </div>
+                </div>
+
+                <!-- ====== LATEST TRAINING DETAILS (Sessions) ====== -->
+                <div id="player-results-summary" class="section-container portal-section-anchor" style="margin-top:40px;">
+                    <div class="portal-section-heading">
+                        <div>
+                            <p class="portal-kicker" data-i18n="latestTrainingDetails">LATEST TRAINING DETAILS</p>
+                            <h2 id="latest-session-date" data-i18n="mostRecentSession">Most recent session</h2>
+                        </div>
+                        <p id="latest-session-sub" data-i18n="latestSessionSub">Summary of your latest test session.</p>
+                    </div>
+                    <div id="results-summary-grid" class="player-results-grid">
+                        <!-- populated by JavaScript -->
+                    </div>
+                </div>
+
+                <!-- ====== TECHNICAL COACH SECTION (Report) ====== -->
+                <div class="technical-coach-section section-container portal-section-anchor" id="technical-coach">
+                    <div class="coach-avatar" id="coach-avatar-container" style="width:100px; height:100px; flex:0 0 100px;">
+                        <img src="" alt="Coach" id="coach-img" style="display:none;">
+                        <span id="coach-fallback" style="display:flex; font-size:2.8rem; color:#a8c6ff;">🧑‍🏫</span>
+                    </div>
+                    <div class="coach-message">
+                        <div class="coach-label" data-i18n="technicalCoach">TECHNICAL COACH</div>
+                        <div class="coach-advice-text" id="tech-coach-advice">
+                            <span class="coming-soon">⚡ <span data-i18n="comingSoonBadge">Coming soon</span></span>
+                            <span data-i18n="technicalCoachEmpty"> — your coach will share personalised technical insights here.</span>
+                        </div>
+                    </div>
+                    <div class="coach-badge">⚡ <span data-i18n="technicalCoachLive">LIVE</span></div>
                 </div>
 
                 <!-- ====== COACH ADVICE (Sia quotes with Siamak avatar) ====== -->
@@ -3621,7 +3638,7 @@
                 </div>
 
                 <!-- ========== TRAINING PLACE CALENDAR ========== -->
-                <div id="player-reservation" class="section-container res-cal" style="margin-top:40px;">
+                <div id="player-reservation" class="section-container res-cal portal-section-anchor" style="margin-top:40px;">
                     <div class="portal-section-heading">
                         <div>
                             <p class="portal-kicker" data-i18n="reservationKicker">TRAINING PLACE</p>
@@ -3713,7 +3730,7 @@
             COACH DASHBOARD (unchanged)
             ============================================================ -->
             <div class="dashboard-panel" id="panel-coach">
-                <div class="portal-welcome coach-welcome">
+                <div class="portal-welcome coach-welcome portal-section-anchor" id="section-coach-overview">
                     <div>
                         <p class="portal-kicker" data-i18n="coachWelcomeKicker">ACADEMY · ASSIGNED TEAMS</p>
                         <h1><span data-i18n="goodMorningCoach">Good morning,</span><br><em data-i18n="coachEm">Coach.</em></h1>
@@ -3757,7 +3774,27 @@
                     </article>
                 </div>
 
-                <div class="coach-team-grid">
+                <div class="coach-priorities portal-section-anchor" id="coach-players-section">
+                    <div class="portal-section-heading" style="margin-top:80px;">
+                        <div>
+                            <p class="portal-kicker" data-i18n="assignedPlayers">ASSIGNED PLAYERS</p>
+                            <h2 data-i18n="whoNeedsAttention">Who needs attention?</h2>
+                        </div>
+                        <p data-i18n="prioritiesBasedOnTrends">Priorities are based on recent development trends, not a single score.</p>
+                    </div>
+                    <div class="coach-player-table" id="coach-player-table">
+                        <div class="coach-player-row coach-player-head">
+                            <span dir="ltr" data-i18n="colPlayer">PLAYER</span>
+                            <span dir="ltr" data-i18n="colCurrentLevel">Current Player Level</span>
+                            <span dir="ltr" data-i18n="colLatestAe">LATEST AE</span>
+                            <span dir="ltr" data-i18n="colTrend">TREND</span>
+                            <span dir="ltr" data-i18n="colPriority">PRIORITY</span>
+                            <span dir="ltr" data-i18n="reservationCol">RESERVATION</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="coach-team-grid portal-section-anchor" id="section-coach-team">
                     <article class="coach-level-distribution">
                         <p class="portal-kicker" data-i18n="teamDevelopment">TEAM DEVELOPMENT</p>
                         <h2 data-i18n="levelDistribution">Level distribution</h2>
@@ -3782,27 +3819,7 @@
                     </article>
                 </div>
 
-                <div class="coach-priorities" id="coach-players-section">
-                    <div class="portal-section-heading" style="margin-top:80px;">
-                        <div>
-                            <p class="portal-kicker" data-i18n="assignedPlayers">ASSIGNED PLAYERS</p>
-                            <h2 data-i18n="whoNeedsAttention">Who needs attention?</h2>
-                        </div>
-                        <p data-i18n="prioritiesBasedOnTrends">Priorities are based on recent development trends, not a single score.</p>
-                    </div>
-                    <div class="coach-player-table" id="coach-player-table">
-                        <div class="coach-player-row coach-player-head">
-                            <span dir="ltr" data-i18n="colPlayer">PLAYER</span>
-                            <span dir="ltr" data-i18n="colCurrentLevel">Current Player Level</span>
-                            <span dir="ltr" data-i18n="colLatestAe">LATEST AE</span>
-                            <span dir="ltr" data-i18n="colTrend">TREND</span>
-                            <span dir="ltr" data-i18n="colPriority">PRIORITY</span>
-                            <span dir="ltr" data-i18n="reservationCol">RESERVATION</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="coach-schedule" id="coach-schedule-section">
+                <div class="coach-schedule portal-section-anchor" id="coach-schedule-section">
                     <div class="portal-section-heading" style="margin-top:80px;">
                         <div>
                             <p class="portal-kicker" data-i18n="scheduleKicker">SCHEDULE</p>
@@ -3827,7 +3844,7 @@
             ============================================================ -->
             <div class="dashboard-panel" id="panel-manager">
 
-                <div class="portal-welcome coach-welcome">
+                <div class="portal-welcome coach-welcome portal-section-anchor" id="section-manager-overview">
                     <div>
                         <p class="portal-kicker" data-i18n="managerWelcomeKicker">SIMUST ACADEMY · AUTHORISED OVERVIEW</p>
                         <h1><span data-i18n="managerWelcomeTitle">Your academy.</span><br><em data-i18n="managerWelcomeEm">One clear view.</em></h1>
@@ -3860,7 +3877,7 @@
                     </article>
                 </div>
 
-                <div class="manager-access" id="manager-teams-section">
+                <div class="manager-access portal-section-anchor" id="manager-teams-section">
                     <div class="portal-section-heading">
                         <div>
                             <p class="portal-kicker" data-i18n="teamsKicker">TEAMS</p>
@@ -3878,14 +3895,14 @@
                             <span dir="ltr" data-i18n="colStatus">STATUS</span>
                         </div>
                     </div>
-                    <div class="access-role-line">
+                    <div class="access-role-line portal-section-anchor" id="section-manager-access">
                         <span data-i18n="roleBasedAccessLine">ROLE‑BASED ACCESS</span>
                         <span data-i18n="roleTrio">PLAYER · PARENT · COACH</span>
                         <span data-i18n="academyManagerRole">ACADEMY MANAGER</span>
                     </div>
                 </div>
 
-                <div id="team-trends-container" class="team-trends-container">
+                <div id="team-trends-container" class="team-trends-container portal-section-anchor">
                     <div class="team-trend-placeholder" id="team-trend-placeholder">
                         <strong data-i18n="selectATeam">Select a team</strong><span data-i18n="selectTeamHint"> from the table above to view its development trends (AE &amp; ACC over time).</span>
                     </div>
@@ -5339,12 +5356,42 @@
                         authorisedPlayers = filterPlayersByRole();
                     }).catch(function() {});
                 }
-                var cal = document.getElementById('player-reservation');
-                if (cal) {
-                    setTimeout(function() {
-                        cal.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }, 50);
+                scrollPortalSection('player', 'reservation');
+            }
+
+            var PORTAL_SECTION_TARGETS = {
+                player: {
+                    overview: 'section-player-overview',
+                    development: 'player-trend-chart',
+                    sessions: 'player-results-summary',
+                    report: 'technical-coach',
+                    reservation: 'player-reservation'
+                },
+                coach: {
+                    overview: 'section-coach-overview',
+                    players: 'coach-players-section',
+                    team: 'section-coach-team',
+                    schedule: 'coach-schedule-section',
+                    reservation: 'player-reservation'
+                },
+                manager: {
+                    overview: 'section-manager-overview',
+                    teams: 'manager-teams-section',
+                    activity: 'team-trends-container',
+                    access: 'section-manager-access',
+                    reservation: 'player-reservation'
                 }
+            };
+
+            function scrollPortalSection(view, section) {
+                var map = PORTAL_SECTION_TARGETS[view] || {};
+                var targetId = map[section];
+                if (!targetId) return;
+                var el = document.getElementById(targetId);
+                if (!el) return;
+                setTimeout(function() {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 80);
             }
 
             function tt(key, fallback) {
@@ -8011,6 +8058,7 @@
                         }
                         setView(view);
                         sidebarLinks.forEach(function(l) { l.classList.toggle('active', l === this); }.bind(this));
+                        scrollPortalSection(view, section);
                     } else {
                         setView(view);
                         if (view === 'coach' && currentUser && (currentUser.role === 'coach' || currentUser.role === 'admin')) {
@@ -8019,6 +8067,7 @@
                             loadManagerData(false);
                         }
                         sidebarLinks.forEach(function(l) { l.classList.toggle('active', l === this); }.bind(this));
+                        scrollPortalSection(view, section);
                     }
                 });
             });

@@ -2607,6 +2607,12 @@
             var realtimePausedState = useState(false);
             var realtimePaused = realtimePausedState[0];
             var setRealtimePaused = realtimePausedState[1];
+            var adminTestPlayState = useState(false);
+            var adminTestPlay = adminTestPlayState[0];
+            var setAdminTestPlay = adminTestPlayState[1];
+            var adminTestPassState = useState('');
+            var adminTestPass = adminTestPassState[0];
+            var setAdminTestPass = adminTestPassState[1];
             var activeTabState = useState("main");
             var activeTab = activeTabState[0];
             var setActiveTab = activeTabState[1];
@@ -3825,6 +3831,7 @@
             var startRealtimePlayback = function() {
                 var playerA = getSelectedPlayer();
                 var playerB = getSelectedPlayerB();
+                var useAdminTest = !!adminTestPlay;
                 if (!playerA && !playerB) {
                     setError("Please select a Field A and/or Field B player first");
                     setTimeout(function() { setError(""); }, 3000);
@@ -3835,12 +3842,17 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                if (playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
+                if (useAdminTest && !String(adminTestPass || '').trim()) {
+                    setError(t('adminTestPassRequired', 'Enter the admin password to start a test play.'));
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
+                if (!useAdminTest && playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
                     setError("Field A: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
+                if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
                     setError("Field B: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
@@ -3901,6 +3913,10 @@
                 if (selectedSubdirectory) {
                     payload.subdirectory = selectedSubdirectory;
                 }
+                if (useAdminTest) {
+                    payload.admin_password = String(adminTestPass || '').trim();
+                    payload.admin_test = true;
+                }
 
                 axios.post("/start-realtime-playback", payload).then(function() {
                     var dualMsg;
@@ -3913,7 +3929,7 @@
                     }
                     showToast((window.SIMUST_PUBLIC
                         ? "Sent to the lab over the internet: "
-                        : "Realtime playback started — ") + dualMsg +
+                        : (useAdminTest ? "Admin test play started — " : "Realtime playback started — ")) + dualMsg +
                         (selectedSubdirectory ? ' [' + selectedSubdirectory + ']' : ''), 'success');
 
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
@@ -4338,6 +4354,7 @@
             var realtimeEligible = (function() {
                 if (!selectedPlayerId && !selectedPlayerBId) return false;
                 if (!selectedLevel || realtimeRunning) return false;
+                if (adminTestPlay) return true;
                 if (selectedPlayerId && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
                     return false;
                 }
@@ -4668,6 +4685,55 @@
                                     (!realtimeRunning ? " opacity-50" : "")
                             }, t("stop"))
                         ),
+                        isOperatorStaff ?
+                        React.createElement('div', {
+                            className: "mb-4 p-3 rounded-xl",
+                            style: { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }
+                        },
+                            React.createElement('label', {
+                                className: "flex items-center gap-2 text-sm text-gray-200 cursor-pointer",
+                                style: { marginBottom: adminTestPlay ? 8 : 0 }
+                            },
+                                React.createElement('input', {
+                                    type: 'checkbox',
+                                    checked: adminTestPlay,
+                                    disabled: realtimeRunning,
+                                    onChange: function(e) {
+                                        setAdminTestPlay(e.target.checked);
+                                        if (!e.target.checked) setAdminTestPass('');
+                                    }
+                                }),
+                                React.createElement('span', null, t('adminTestPlay', 'Admin test start (no reservation / outside schedule)'))
+                            ),
+                            adminTestPlay ?
+                            React.createElement('div', null,
+                                React.createElement('p', { className: 'text-xs text-gray-400 mb-2' },
+                                    t('adminTestPlayHint', 'Uses the admin password. Starts Realtime Play even with no booking or outside the scheduled time.')),
+                                React.createElement('label', { className: 'text-xs text-gray-300 block mb-1' },
+                                    t('adminPasswordLabel', 'Admin password')),
+                                React.createElement('input', {
+                                    type: 'password',
+                                    value: adminTestPass,
+                                    disabled: realtimeRunning,
+                                    autoComplete: 'current-password',
+                                    placeholder: '••••••••',
+                                    className: 'w-full max-w-xs',
+                                    style: {
+                                        background: 'rgba(0,0,0,0.35)',
+                                        border: '1px solid rgba(255,255,255,0.15)',
+                                        borderRadius: 8,
+                                        padding: '8px 10px',
+                                        color: '#fff'
+                                    },
+                                    onChange: function(e) { setAdminTestPass(e.target.value); },
+                                    onKeyDown: function(e) {
+                                        if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
+                                            startRealtimePlayback();
+                                        }
+                                    }
+                                })
+                            ) : null
+                        ) : null,
                         savingSession ?
                         React.createElement('div', { className: "mb-4 p-2 bg-blue-600/20 rounded-xl text-center" },
                             React.createElement('p', { className: "text-blue-300 text-sm" },
