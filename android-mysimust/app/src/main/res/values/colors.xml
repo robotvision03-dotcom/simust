@@ -4,5 +4,5 @@
     <color name="gold">#D6B34B</color>
     <color name="ink">#F5F8FB</color>
     <color name="muted">#A9B4C5</color>
-    <color name="launcher_bg">#06101F</color>
+    <color name="launcher_bg">#000000</color>
 </resources>

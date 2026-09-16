@@ -18,6 +18,11 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, Request
 
 PUBLIC_MODE = os.environ.get("SIMUST_PUBLIC_MODE", "").strip().lower() in ("1", "true", "yes")
+PUBLIC_HOSTNAMES = {
+    part.strip().lower()
+    for part in (os.environ.get("SIMUST_PUBLIC_HOSTNAMES") or "my.simust.com").split(",")
+    if part.strip()
+}
 _SESSION_SECRET_RAW = os.environ.get("SIMUST_SESSION_SECRET", "").strip()
 if PUBLIC_MODE and (not _SESSION_SECRET_RAW or _SESSION_SECRET_RAW == "change-me"):
     raise RuntimeError("SIMUST_SESSION_SECRET must be set to a strong value on the public host")
@@ -26,6 +31,7 @@ SESSION_HOURS = int(os.environ.get("SIMUST_SESSION_HOURS", "12"))
 PBKDF2_ROUNDS = 260000
 PLAYER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9._-]{1,64}$")
 PUBLIC_REGISTER_ROLES = {"player", "coach", "manager"}
+YOUTH_MAX_AGE = 15  # under 16 requires guardian consent on the public host
 TRUSTED_PROXY_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # Login / register: 8 tries per IP per 10 minutes
@@ -79,6 +85,47 @@ def cors_origins() -> list:
     if PUBLIC_MODE:
         return ["https://simust.com", "https://www.simust.com", "https://my.simust.com"]
     return ["*"]
+
+
+def is_public_hostname(host: str) -> bool:
+    """True when the request Host matches the production portal hostname(s)."""
+    value = (host or "").split(":")[0].strip().lower()
+    return value in PUBLIC_HOSTNAMES
+
+
+def parse_age_years(age_value) -> Optional[int]:
+    text = str(age_value or "").strip()
+    if not text:
+        return None
+    try:
+        years = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    if years < 1 or years > 120:
+        return None
+    return years
+
+
+def require_youth_guardian_consent(age_value, guardian_consent, guardian_email: str) -> Dict[str, Any]:
+    """Players under 16 on the public host must provide guardian consent + email."""
+    years = parse_age_years(age_value)
+    if years is None:
+        raise HTTPException(400, "A valid age is required")
+    if years > YOUTH_MAX_AGE:
+        return {"youth": False, "age_years": years}
+    consent_ok = str(guardian_consent).strip().lower() in ("1", "true", "yes", "on")
+    email = (guardian_email or "").strip().lower()
+    if not consent_ok:
+        raise HTTPException(400, "Guardian consent is required for players under 16")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(400, "A valid guardian email is required for players under 16")
+    return {
+        "youth": True,
+        "age_years": years,
+        "guardian_consent": True,
+        "guardian_email": email[:200],
+        "guardian_consent_at": int(time.time()),
+    }
 
 
 def client_ip(request: Request) -> str:

@@ -39,4 +39,4 @@ fi
 echo "==> Restarting simust"
 systemctl restart simust
 systemctl --no-pager --full status simust | head -n 20
-echo "==> Done. Portal: http://157.180.47.98/login"
+echo "==> Done. Portal: https://my.simust.com/login"

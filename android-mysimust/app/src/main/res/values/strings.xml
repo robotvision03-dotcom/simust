@@ -26,7 +26,7 @@
     <string name="subtitle_online">Online · %1$s</string>
     <string name="subtitle_no_network">No internet · turn on SIM data or Wi‑Fi</string>
     <string name="subtitle_host_unreachable">Cannot reach host · %1$s</string>
-    <string name="help_text">Players sign in with username and password at the public My SIMUST portal. This app works on phones and tablets (portrait or landscape) using mobile data or Wi‑Fi. Default host: https://my.simust.com/login — after login you reach the dashboard with progress, bookings, and results. Privacy: https://my.simust.com/privacy</string>
+    <string name="help_text">Default host: https://my.simust.com. Emulator + local server: http://10.0.2.2:8000 (debug build allows cleartext). After login, coaches/managers use Reservations / Calendar on the top bar to manage bookings. Privacy: https://my.simust.com/privacy</string>
     <string name="load_error">Could not load My SIMUST. Check Settings and that this device has internet.</string>
     <string name="load_error_offline">This device has no internet. Enable mobile data (SIM) or Wi‑Fi and tap Retry.</string>
     <string name="retry">Retry</string>

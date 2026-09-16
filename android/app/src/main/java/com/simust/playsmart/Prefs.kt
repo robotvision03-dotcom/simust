@@ -20,7 +20,7 @@ object Prefs {
     const val ORIENTATION_LANDSCAPE = "landscape"
     const val ORIENTATION_PORTRAIT = "portrait"
 
-    const val DEFAULT_PUBLIC_HOST = "http://157.180.47.98"
+    const val DEFAULT_PUBLIC_HOST = "https://my.simust.com"
     const val DEFAULT_LAB_HOST = "http://10.0.2.2:8000"
     const val DEFAULT_TEXT_ZOOM = 110
     const val MIN_TEXT_ZOOM = 80
@@ -49,7 +49,13 @@ object Prefs {
 
     fun getPublicHost(context: Context): String {
         val raw = prefs(context).getString(KEY_PUBLIC_HOST, DEFAULT_PUBLIC_HOST) ?: DEFAULT_PUBLIC_HOST
-        return normalize(raw)
+        val normalized = normalize(raw)
+        // Migrate old cleartext IP default to the HTTPS portal host.
+        if (normalized == "http://157.180.47.98" || normalized == "https://157.180.47.98") {
+            setPublicHost(context, DEFAULT_PUBLIC_HOST)
+            return DEFAULT_PUBLIC_HOST
+        }
+        return normalized
     }
 
     fun setPublicHost(context: Context, url: String) {
@@ -139,7 +145,7 @@ object Prefs {
             .replace(Regex("""&v=[^&]*"""), "")
             .replace(Regex("""\?v=[^&]*&"""), "?")
             .replace(Regex("""\?v=[^&]*$"""), "")
-        out += if (out.contains("?")) "&v=2.7" else "?v=2.7"
+        out += if (out.contains("?")) "&v=2.9" else "?v=2.9"
         return out
     }
 }

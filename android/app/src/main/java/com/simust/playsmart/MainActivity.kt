@@ -80,7 +80,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.allowFileAccess = false
         settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.7"
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.9"
         applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {
