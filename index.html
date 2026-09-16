@@ -371,7 +371,7 @@
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/static/i18n.js?v=20260915c"></script>
+    <script src="/static/i18n.js?v=20260916a"></script>
 
     <script>
         // Replace all optional chaining (?.) with safe checks to avoid syntax errors
@@ -4612,6 +4612,57 @@
                         }),
                         React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
                             "Realtime Play works with Field A only, Field B only, or both. Shared level must be unlocked for every selected player."),
+                        (selectedPlayerId || selectedPlayerBId) ?
+                        React.createElement('div', {
+                            className: "mb-4 p-3 rounded-xl",
+                            style: { background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.35)' }
+                        },
+                            React.createElement('label', {
+                                className: "flex items-center gap-2 text-sm text-gray-100 cursor-pointer",
+                                style: { marginBottom: adminTestPlay ? 8 : 0 }
+                            },
+                                React.createElement('input', {
+                                    type: 'checkbox',
+                                    checked: adminTestPlay,
+                                    disabled: realtimeRunning,
+                                    onChange: function(e) {
+                                        setAdminTestPlay(e.target.checked);
+                                        if (!e.target.checked) setAdminTestPass('');
+                                    }
+                                }),
+                                React.createElement('span', { className: 'font-semibold' },
+                                    t('adminTestPlay', 'Play without reservation (admin password)'))
+                            ),
+                            adminTestPlay ?
+                            React.createElement('div', null,
+                                React.createElement('p', { className: 'text-xs text-gray-300 mb-2' },
+                                    t('adminTestPlayHint', 'After selecting Field A and/or Field B players, enter the admin password to start Realtime Play with no booking / outside schedule.')),
+                                React.createElement('label', { className: 'text-xs text-gray-300 block mb-1' },
+                                    t('adminPasswordLabel', 'Admin password')),
+                                React.createElement('input', {
+                                    type: 'password',
+                                    value: adminTestPass,
+                                    disabled: realtimeRunning,
+                                    autoComplete: 'current-password',
+                                    placeholder: '••••••••',
+                                    className: 'w-full max-w-md',
+                                    style: {
+                                        background: 'rgba(0,0,0,0.45)',
+                                        border: '1px solid rgba(212,175,55,0.45)',
+                                        borderRadius: 8,
+                                        padding: '10px 12px',
+                                        color: '#fff',
+                                        fontSize: '16px'
+                                    },
+                                    onChange: function(e) { setAdminTestPass(e.target.value); },
+                                    onKeyDown: function(e) {
+                                        if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
+                                            startRealtimePlayback();
+                                        }
+                                    }
+                                })
+                            ) : null
+                        ) : null,
                         getSelectedPlayer() ?
                         React.createElement(PlayerProfile, {
                             player: getSelectedPlayer(),
@@ -4685,55 +4736,6 @@
                                     (!realtimeRunning ? " opacity-50" : "")
                             }, t("stop"))
                         ),
-                        isOperatorStaff ?
-                        React.createElement('div', {
-                            className: "mb-4 p-3 rounded-xl",
-                            style: { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }
-                        },
-                            React.createElement('label', {
-                                className: "flex items-center gap-2 text-sm text-gray-200 cursor-pointer",
-                                style: { marginBottom: adminTestPlay ? 8 : 0 }
-                            },
-                                React.createElement('input', {
-                                    type: 'checkbox',
-                                    checked: adminTestPlay,
-                                    disabled: realtimeRunning,
-                                    onChange: function(e) {
-                                        setAdminTestPlay(e.target.checked);
-                                        if (!e.target.checked) setAdminTestPass('');
-                                    }
-                                }),
-                                React.createElement('span', null, t('adminTestPlay', 'Admin test start (no reservation / outside schedule)'))
-                            ),
-                            adminTestPlay ?
-                            React.createElement('div', null,
-                                React.createElement('p', { className: 'text-xs text-gray-400 mb-2' },
-                                    t('adminTestPlayHint', 'Uses the admin password. Starts Realtime Play even with no booking or outside the scheduled time.')),
-                                React.createElement('label', { className: 'text-xs text-gray-300 block mb-1' },
-                                    t('adminPasswordLabel', 'Admin password')),
-                                React.createElement('input', {
-                                    type: 'password',
-                                    value: adminTestPass,
-                                    disabled: realtimeRunning,
-                                    autoComplete: 'current-password',
-                                    placeholder: '••••••••',
-                                    className: 'w-full max-w-xs',
-                                    style: {
-                                        background: 'rgba(0,0,0,0.35)',
-                                        border: '1px solid rgba(255,255,255,0.15)',
-                                        borderRadius: 8,
-                                        padding: '8px 10px',
-                                        color: '#fff'
-                                    },
-                                    onChange: function(e) { setAdminTestPass(e.target.value); },
-                                    onKeyDown: function(e) {
-                                        if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
-                                            startRealtimePlayback();
-                                        }
-                                    }
-                                })
-                            ) : null
-                        ) : null,
                         savingSession ?
                         React.createElement('div', { className: "mb-4 p-2 bg-blue-600/20 rounded-xl text-center" },
                             React.createElement('p', { className: "text-blue-300 text-sm" },
