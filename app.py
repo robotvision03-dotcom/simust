@@ -3606,7 +3606,11 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             0: -6,   # tile 0 (slice 12) – shift left 6px
             1: -17,  # tile 1 (slice 13) – shift left 17px
             5: 17,   # tile 5 (slice 3)  – shift right 17px
-            6: 6     # tile 6 (slice 4)  – shift right 6px
+            6: 6,    # tile 6 (slice 4)  – shift right 6px
+            7: -6,   # tile 7 (slice 5)  – same as slice 12
+            8: -17,  # tile 8 (slice 6)  – same as slice 13
+            12: 19,  # tile 12 (slice 10) – shift right 19px
+            13: 7,   # tile 13 (slice 11) – shift right 7px
         }
 
         def render_overlay_once(base_bgr):

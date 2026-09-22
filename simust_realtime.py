@@ -181,6 +181,7 @@ GOAL_POST_RADIUS = 30.0  # GOAL mouth endpoints
 PASS_POST_RADIUS = 45.0  # PASS/TARGET graze near left/right keypoints
 PRESS_POST_RADIUS = 70.0  # PRESS player can finish slightly past the short screen segment
 BALL_TRACK_MAX_STEP_PX = 280  # ignore distant junk blobs as the same ball
+BALL_RETURN_MAX_STEP_PX = 160  # tighter: come-back must leave the screen continuously
 BALL_RETURN_MAX_GAP_SEC = 0.75  # long dropout + far reappear = not a bounce (last-of-video Miss)
 BALL_RETURN_GAP_NEAR_PX = 100  # after a long dropout, only keep the ball if it reappears nearby
 BALL_RETURN_MAX_AFTER_ARRIVE = 1.25  # unused legacy; gap rule handles false returns
@@ -1513,11 +1514,14 @@ def on_origin_side(point, p0, p1, origin):
     return line_side_sign(point, p0, p1) * line_side_sign(origin, p0, p1) > 1e-6
 
 
-def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, depth, origin=None, post_radius=GOAL_POST_RADIUS, max_after_arrive=None):
+def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, depth, origin=None, post_radius=GOAL_POST_RADIUS, max_after_arrive=None,
+                           max_step_px=BALL_RETURN_MAX_STEP_PX):
     """Come-back: leave the line band back toward the send/player origin.
 
     Continuing past the line toward the camera is a finish, not a return.
-    Long dropouts are already removed by append_continuing_ball for PASS/TARGET.
+    Same-frame dual balls and far teleports after arrival are ignored so a ball
+    that stays in / disappears into the screen (no bounce) scores Miss — e.g.
+    realtime_20260922_094344_684 Field A S8 (PASS screen 3).
     """
     p0, p1 = get_screen_info(screen, goal_lines)
     if p0 is None or arrive_time is None:
@@ -1525,17 +1529,48 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
     if origin is None:
         origin = goal_send_origin(screens)
     leave_depth = float(depth) * 1.15
+    step = float(max_step_px)
+
+    # One continuous identity after arrival: per timestamp keep the candidate
+    # closest to the last accepted point (rejects far junk on the other camera).
+    samples = [
+        (float(t), float(x), float(y))
+        for t, x, y in (positions or [])
+        if float(t) + 1e-6 >= float(arrive_time)
+    ]
+    path = []
+    last_pt = None
+    i = 0
+    while i < len(samples):
+        t0 = samples[i][0]
+        group = []
+        while i < len(samples) and abs(samples[i][0] - t0) < 1e-6:
+            group.append(samples[i])
+            i += 1
+        if last_pt is None:
+            # Prefer a point already in the goal band when starting the leave path.
+            in_pts = [g for g in group if in_goal_area((g[1], g[2]), p0, p1, depth, post_radius=post_radius)]
+            cand = in_pts[0] if in_pts else group[0]
+        else:
+            within = [
+                g for g in group
+                if math.hypot(g[1] - last_pt[0], g[2] - last_pt[1]) <= step
+            ]
+            if not within:
+                continue
+            cand = min(within, key=lambda g: math.hypot(g[1] - last_pt[0], g[2] - last_pt[1]))
+        path.append(cand)
+        last_pt = (cand[1], cand[2])
+
     seen_in = False
     away = 0
-    for t, x, y in positions:
-        if t + 1e-6 < arrive_time:
-            continue
+    for t, x, y in path:
         pt = (x, y)
         if in_goal_area(pt, p0, p1, depth, post_radius=post_radius):
             seen_in = True
             away = 0
             continue
-        if not seen_in or t <= arrive_time + 0.08:
+        if not seen_in or t <= float(arrive_time) + 0.08:
             continue
         if in_goal_area(pt, p0, p1, leave_depth, post_radius=post_radius):
             continue

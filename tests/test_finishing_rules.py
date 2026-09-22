@@ -1,5 +1,6 @@
 """Finishing rules for PASS / PRESS / TARGET / GOAL. No live cameras."""
 
+import json
 import math
 import os
 import sys
@@ -345,6 +346,48 @@ class FinishingRuleTests(unittest.TestCase):
         session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
         junk = [{"t": round(i * 0.04, 3), "b": [[724, 134]], "p": [[280, 268]], "hp": [280, 268]} for i in range(30)]
         result = _analyze("PASS", [screen], session, after=junk)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_pass_in_session_far_blob_after_arrive_is_miss(self):
+        """realtime_20260922_094344_684 S8: arrive at screen 3, no bounce; far junk ≠ return."""
+        screen = "3"
+        start = rt.ArenaSimulator.BALL_HOME
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        session = _travel(start, dest, arrive_s=0.80, hold_s=0.20)
+        # Same-session teleport junk on the opposite side (screen 14 area), like S8.
+        for i in range(25):
+            t = round(1.05 + i * 0.04, 3)
+            session.append({
+                "t": t,
+                "b": [[348, 114]],
+                "p": [[280, 268]],
+                "hp": [280, 268],
+            })
+        result = _analyze("PASS", [screen], session)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+
+    def test_real_session_s8_no_return_is_miss(self):
+        """Rescore Field A S8 from realtime_20260922_094344_684 (ball stayed in screen)."""
+        folder = os.path.join(
+            os.path.expanduser("~"),
+            "Documents",
+            "simust_realtime_recordings",
+            "realtime_20260922_094344_684",
+            "field_A",
+        )
+        recog = os.path.join(folder, "recognition.json")
+        if not os.path.isfile(recog):
+            self.skipTest(f"missing recording {recog}")
+        with open(recog, encoding="utf-8") as f:
+            rec = json.load(f)
+        idx = next(i for i, b in enumerate(rec) if b.get("id") == "S8")
+        block = rec[idx]
+        cam = object.__new__(rt.SimustRealtimeCamera)
+        gl = rt.SimustRealtimeCamera.get_goal_lines(
+            cam, block["screens"], block["action"], block.get("keypoints") or []
+        )
+        result = rt.analyze_action_with_context(block, gl, block["action"], rec, idx)
         self.assertEqual(result.get("Result"), "Miss", msg=result)
 
     def test_pass_player_ball_after_long_gap_is_not_a_return(self):
