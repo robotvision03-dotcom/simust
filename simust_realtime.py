@@ -50,19 +50,87 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 QR_OFFSET_FRAMES = 21
 TARGET_FPS = 25.0
 QR_OFFSET_SECONDS = QR_OFFSET_FRAMES / TARGET_FPS
+# End: wait this many frames after cue goes off before clearing keypoints / ending session
+QR_END_OFFSET_FRAMES = 46
+QR_END_OFFSET_SECONDS = QR_END_OFFSET_FRAMES / TARGET_FPS
 MAX_SESSION_DURATION = 5.0
 QR_COOLDOWN = 0.5
-# Require continuous QR absence before ending a session / clearing last_raw_data.
-# Brief decoder flicker otherwise splits one action into a ghost Wrong + a real one
-# (e.g. SF-60N 40 → 41 with duplicate consecutive screens).
+# Image-based player: sessions come from image_action_cue.json only.
+# Camera QR decode is disabled (high CPU); teammate flash + delay drives keypoints.
+CAMERA_QR_ENABLED = False
+# Keypoints ignore teammate-image paint timing. Cue edges still come from the
+# player flash (On/Gap boxes), then realtime waits a fixed 21 frames @ 30 FPS
+# before showing or clearing goal lines.
+IMAGE_CUE_FPS = 30.0
+IMAGE_CUE_KEYPOINT_DELAY_FRAMES = 28  # was 21; +7 frames shift on appear/clear
+IMAGE_CUE_START_OFFSET_FRAMES = IMAGE_CUE_KEYPOINT_DELAY_FRAMES
+IMAGE_CUE_END_OFFSET_FRAMES = IMAGE_CUE_KEYPOINT_DELAY_FRAMES
+IMAGE_CUE_START_OFFSET_SECONDS = IMAGE_CUE_START_OFFSET_FRAMES / IMAGE_CUE_FPS
+IMAGE_CUE_END_OFFSET_SECONDS = IMAGE_CUE_END_OFFSET_FRAMES / IMAGE_CUE_FPS
+# Camera-QR flicker guard. Image-cue mode uses 0 so end offset alone controls sync.
 QR_DISAPPEAR_DEBOUNCE = 0.35
+IMAGE_CUE_END_DEBOUNCE = 0.0
 # Dual-field: video QRs for A/B appear together but decoder can lag one ROI by ~1–2s.
 # Pair within this window so both fields share the same action id and session clock.
 QR_PAIR_WINDOW_SEC = 2.5
 SAVE_EVERY_N_ACTIONS = 1
 
+
+def _start_offset_seconds():
+    """Keypoint show delay: fixed 21 frames (not tied to teammate paint)."""
+    if not CAMERA_QR_ENABLED:
+        return IMAGE_CUE_START_OFFSET_SECONDS
+    return QR_OFFSET_SECONDS
+
+
+def _end_offset_seconds():
+    """Keypoint clear delay: fixed 21 frames after On window ends."""
+    if not CAMERA_QR_ENABLED:
+        return IMAGE_CUE_END_OFFSET_SECONDS
+    return QR_END_OFFSET_SECONDS
+
+
+def _start_offset_frames():
+    return IMAGE_CUE_START_OFFSET_FRAMES if not CAMERA_QR_ENABLED else QR_OFFSET_FRAMES
+
+
+def _end_offset_frames():
+    return IMAGE_CUE_END_OFFSET_FRAMES if not CAMERA_QR_ENABLED else QR_END_OFFSET_FRAMES
+
+
 DEFAULT_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
 SIMUST_PLAYER_DIRECTORY = "C:/Users/siama/Documents/simust_player"
+IMAGE_ACTION_CUE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "image_action_cue.json")
+TEAMMATE_FLASH_TIMING_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "teammate_flash_timing.json")
+
+
+def _read_teammate_on_gap():
+    """Read On/Gap seconds from the frontend boxes (teammate_flash_timing.json)."""
+    on_sec, gap_sec = 1.2, 0.5
+    try:
+        if os.path.isfile(TEAMMATE_FLASH_TIMING_FILE):
+            with open(TEAMMATE_FLASH_TIMING_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            if "on_sec" in data:
+                on_sec = float(data["on_sec"])
+            elif "on_ms" in data:
+                on_sec = float(data["on_ms"]) / 1000.0
+            if "gap_sec" in data:
+                gap_sec = float(data["gap_sec"])
+            elif "gap_ms" in data:
+                gap_sec = float(data["gap_ms"]) / 1000.0
+    except Exception:
+        pass
+    on_sec = max(0.1, min(9.9, float(on_sec)))
+    gap_sec = max(0.1, min(9.9, float(gap_sec)))
+    return on_sec, gap_sec
+
+
+def _on_hold_frames(on_sec=None):
+    """UI On box → exact display frames at IMAGE_CUE_FPS (1.0s → 30 frames)."""
+    if on_sec is None:
+        on_sec, _ = _read_teammate_on_gap()
+    return max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
 
 DETECTION_CONF = 0.12  # lower to keep blurred / distant balls (GOAL motion blur)
 MAX_PLAYERS = 2
@@ -2814,9 +2882,10 @@ def add_offset_to_time(time_str, offset_seconds):
 def detect_qr_in_roi(frame, roi):
     """Decode QR inside ROI.
 
-    OpenCV often fails on tall Field-B crops (screen-7 QRs) while a shorter top
-    band or a mild upscale succeeds — try several crops before giving up.
+    Disabled when CAMERA_QR_ENABLED is False (image-cue / teammate-flash mode).
     """
+    if not CAMERA_QR_ENABLED:
+        return "", None
     x1, y1, x2, y2 = roi
     h, w = frame.shape[:2]
     x1 = max(0, min(x1, w - 1))
@@ -2926,6 +2995,15 @@ def parse_qr_data(raw_data):
         if numbers:
             screens = numbers
 
+    if not action:
+        m = re.match(
+            r'^\s*([A-Za-z_]+)\s*[,:]\s*([0-9]+(?:\s*,\s*[0-9LRlr]+)*)\s*$',
+            raw_data,
+        )
+        if m:
+            action = m.group(1).strip().upper()
+            screens = [s.strip() for s in re.split(r'\s*,\s*', m.group(2)) if s.strip()]
+
     return action.upper(), screens, keypoints
 
 # ============================================================================
@@ -2961,6 +3039,11 @@ class FieldRuntime:
         self.session_start_timestamp = 0
         self.session_frame_count = 0
         self.session_fps_sum = 0
+        # Image-cue: paint On-box frames at 30 FPS (1.0s On → 30 keypoint frames)
+        self.keypoint_hold_frames = 0
+        self.keypoint_frames_shown = 0
+        self.keypoint_clear_armed = False
+        self.keypoint_hold_until = 0.0
         self.between_session_start_time = 0
         self.between_session_start_ts = 0.0
         self.between_session_end_time = ""
@@ -2999,6 +3082,10 @@ class FieldRuntime:
         self.pending_start = None
         self.pending_end = False
         self.current_qr_block = None
+        self.keypoint_hold_frames = 0
+        self.keypoint_frames_shown = 0
+        self.keypoint_clear_armed = False
+        self.keypoint_hold_until = 0.0
         self.all_player_positions = []
         self.pending_analysis = None
         self.analysis_timer = None
@@ -3148,6 +3235,35 @@ class SimustRealtimeCamera:
         print(f"Recordings: {DEFAULT_RECORDINGS_DIR}")
         print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
         print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (Field A + Field B)")
+        print(
+            f"Action cues: {'image_action_cue.json only (camera QR OFF)' if not CAMERA_QR_ENABLED else 'camera QR + image cue'}"
+        )
+        on_sec, gap_sec = _read_teammate_on_gap()
+        hold_frames = _on_hold_frames(on_sec)
+        print(
+            f"Keypoints: On={on_sec}s → {hold_frames} frames @ {IMAGE_CUE_FPS:.0f} FPS | "
+            f"Gap={gap_sec}s | appear/clear delay {_start_offset_frames()}f "
+            f"({_start_offset_seconds():.3f}s) — frame-counted hold (not wall-clock alone)"
+        )
+        try:
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "keypoint_timing.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "teammate_on_sec": on_sec,
+                    "teammate_gap_sec": gap_sec,
+                    "on_hold_frames": hold_frames,
+                    "start_frames": _start_offset_frames(),
+                    "start_sec": _start_offset_seconds(),
+                    "end_frames": _end_offset_frames(),
+                    "end_sec": _end_offset_seconds(),
+                    "cue_fps": IMAGE_CUE_FPS if not CAMERA_QR_ENABLED else TARGET_FPS,
+                    "camera_qr": CAMERA_QR_ENABLED,
+                    "ignore_teammate_paint": not CAMERA_QR_ENABLED,
+                    "pid": os.getpid(),
+                    "timestamp": time.time(),
+                }, f, indent=2)
+        except Exception as exc:
+            print(f"Could not write keypoint_timing.json: {exc}")
         print("-" * 60)
 
     def signal_handler(self, signum, frame):
@@ -3550,7 +3666,7 @@ class SimustRealtimeCamera:
             return None
         if peer.pending_end:
             return None
-        window = QR_PAIR_WINDOW_SEC + QR_OFFSET_SECONDS + 0.5
+        window = QR_PAIR_WINDOW_SEC + _start_offset_seconds() + 0.5
         if peer.pending_start:
             block_id = peer.pending_start.get("block_id")
             if self._field_completed_block(ch, block_id):
@@ -3575,7 +3691,7 @@ class SimustRealtimeCamera:
                     "pending_start_time": float(peer.session_start_timestamp),
                     "offset_start_time_str": (peer.current_qr_block or {}).get("start_time"),
                     "paired_session_start": float(peer.session_start_timestamp),
-                    "detected_timestamp": float(peer.session_start_timestamp) - QR_OFFSET_SECONDS,
+                    "detected_timestamp": float(peer.session_start_timestamp) - _start_offset_seconds(),
                 }
         return None
 
@@ -3635,7 +3751,7 @@ class SimustRealtimeCamera:
 
     def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp, ch,
                                paired_session_start=None, paired_offset_str=None):
-        offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, QR_OFFSET_SECONDS)
+        offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, _start_offset_seconds())
         with self.session_lock:
             ch.pending_start = {
                 "action": action.upper(),
@@ -3652,18 +3768,24 @@ class SimustRealtimeCamera:
                 # Start as soon as check_pending runs (catch-up)
                 ch.pending_start_time = float(paired_session_start)
             else:
-                ch.pending_start_time = detected_timestamp + QR_OFFSET_SECONDS
+                ch.pending_start_time = detected_timestamp + _start_offset_seconds()
             peer = self._peer_channel(ch)
             if peer is not None:
                 self._align_pending_start_to_peer(ch, peer)
 
     def schedule_session_end(self, current_time_str, current_timestamp, ch):
         if ch.session_active:
-            offset_end_time_str = add_offset_to_time(current_time_str, QR_OFFSET_SECONDS)
+            end_off = _end_offset_seconds()
+            end_frames = _end_offset_frames()
+            offset_end_time_str = add_offset_to_time(current_time_str, end_off)
             with self.session_lock:
                 ch.pending_end = True
-                ch.pending_end_time = current_timestamp + QR_OFFSET_SECONDS
+                ch.pending_end_time = current_timestamp + end_off
                 ch.pending_end_time_str = offset_end_time_str
+                print(
+                    f"[{ch.label}] END scheduled in {end_frames} frames "
+                    f"({end_off:.2f}s) → keypoints clear at {offset_end_time_str}"
+                )
                 peer = self._peer_channel(ch)
                 if peer is None or not peer.session_active:
                     return
@@ -3881,7 +4003,7 @@ class SimustRealtimeCamera:
             ch.qr_state["last_raw_data"] = None
             ch.qr_state["missing_since"] = None
 
-        offset_end_time_str = add_offset_to_time(current_time_str, QR_OFFSET_SECONDS)
+        offset_end_time_str = add_offset_to_time(current_time_str, _end_offset_seconds())
 
         if ch.current_qr_block:
             if ch.session_data:
@@ -3941,6 +4063,10 @@ class SimustRealtimeCamera:
         ch.session_data = []
         ch.session_fps_sum = 0
         ch.session_frame_count = 0
+        ch.keypoint_hold_frames = 0
+        ch.keypoint_frames_shown = 0
+        ch.keypoint_clear_armed = False
+        ch.keypoint_hold_until = 0.0
 
         ch.between_sessions_active = True
         ch.between_session_data = []
@@ -3995,6 +4121,23 @@ class SimustRealtimeCamera:
             if sim is not None:
                 sim.start_action(ch.current_action, ch.current_screens)
 
+        # Image-cue mode: stay ON for exactly On-box frames @ 30 FPS (1.0s → 30 frames),
+        # then wait 21f before clear. Do not use wall-clock alone (slow loops showed ~22f).
+        if not CAMERA_QR_ENABLED:
+            on_sec, gap_sec = _read_teammate_on_gap()
+            hold_frames = _on_hold_frames(on_sec)
+            ch.keypoint_hold_frames = hold_frames
+            ch.keypoint_frames_shown = 0
+            ch.keypoint_clear_armed = False
+            ch.keypoint_hold_until = float(current_timestamp) + (hold_frames / IMAGE_CUE_FPS)
+            ch.pending_end = False
+            ch.pending_end_time = 0
+            print(
+                f"[{ch.label}] Keypoints hold {hold_frames} frames AND "
+                f"{hold_frames / IMAGE_CUE_FPS:.2f}s (On={on_sec}s @ {IMAGE_CUE_FPS:.0f} FPS), then "
+                f"+{_end_offset_frames()}f clear | Gap box={gap_sec}s"
+            )
+
         print(f"\n{'='*50}")
         print(f"[{ch.label}] SESSION {ch.current_block_id} - {ch.current_action}")
         print(f"Screens: {ch.current_screens}")
@@ -4009,6 +4152,7 @@ class SimustRealtimeCamera:
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
+        now = time.time()
         for channel in channels:
             if not channel.session_active or not channel.active_goal_lines:
                 continue
@@ -4023,6 +4167,37 @@ class SimustRealtimeCamera:
                 cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         return frame
+
+    def _tick_keypoint_hold(self, ch, current_timestamp=None):
+        """Hold keypoints for On box: both wall time AND frame count @ 30 FPS.
+
+        On=1.0s → must stay ≥1.0s and ≥30 painted/session frames, then +21f clear.
+        """
+        if CAMERA_QR_ENABLED or ch is None:
+            return
+        if not ch.session_active or not ch.active_goal_lines:
+            return
+        if getattr(ch, "keypoint_clear_armed", False):
+            return
+        hold = int(getattr(ch, "keypoint_hold_frames", 0) or 0)
+        if hold <= 0:
+            return
+        now = float(current_timestamp if current_timestamp is not None else time.time())
+        ch.keypoint_frames_shown = int(getattr(ch, "keypoint_frames_shown", 0) or 0) + 1
+        hold_until = float(getattr(ch, "keypoint_hold_until", 0) or 0)
+        if ch.keypoint_frames_shown < hold:
+            return
+        if hold_until and now < hold_until:
+            return
+        ch.keypoint_clear_armed = True
+        ch.pending_end = True
+        ch.pending_end_time = now + _end_offset_seconds()
+        ch.pending_end_time_str = add_offset_to_time(get_current_time_ms(), _end_offset_seconds())
+        elapsed = now - float(ch.session_start_timestamp or now)
+        print(
+            f"[{ch.label}] Keypoint hold done: {ch.keypoint_frames_shown}/{hold} frames, "
+            f"{elapsed:.2f}s elapsed (On box) — clear in {_end_offset_frames()}f"
+        )
 
     def draw_results_overlay(self, frame):
         """Results labels only for active fields."""
@@ -4202,6 +4377,7 @@ class SimustRealtimeCamera:
             ch.session_frame_count += 1
             if ch.current_qr_block is not None:
                 ch.current_qr_block["data"].append(frame_data)
+            self._tick_keypoint_hold(ch, current_timestamp)
         else:
             ch.between_session_data.append(frame_data)
         return sx, sy
@@ -4228,10 +4404,104 @@ class SimustRealtimeCamera:
         frame = self.draw_all_annotations(frame, balls, players)
         return frame
 
+    def _read_image_action_cue(self):
+        """Optional PASS cue from image-based smart player (teammate flash)."""
+        try:
+            if not os.path.isfile(IMAGE_ACTION_CUE_FILE):
+                return None
+            with open(IMAGE_ACTION_CUE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return None
+            return data
+        except Exception:
+            return None
+
+    def _image_cue_for_field(self, cue, field_id):
+        """Synthetic action detection from image player cue file.
+
+        When CAMERA_QR_ENABLED is False, always returns a detection dict
+        (empty when no active cue) so camera QR is never used.
+        """
+        empty = {
+            "raw": "",
+            "action": "",
+            "screens": [],
+            "keypoints": [],
+            "bbox": None,
+        }
+        if not cue:
+            return empty if not CAMERA_QR_ENABLED else None
+        # Stale cue (player crashed): ignore after a few seconds without refresh
+        try:
+            ts = float(cue.get("timestamp") or 0)
+            if ts and (time.time() - ts) > 3.0 and not cue.get("active"):
+                return empty if not CAMERA_QR_ENABLED else None
+            if ts and (time.time() - ts) > 5.0:
+                return empty if not CAMERA_QR_ENABLED else None
+        except Exception:
+            pass
+        if not cue.get("active"):
+            return empty
+        fields = cue.get("fields") or {}
+        entry = fields.get(str(field_id).upper()) or fields.get(str(field_id))
+        if not entry:
+            return empty
+        action = str(entry.get("action") or "PASS").strip().upper()
+        screens = entry.get("screens") or []
+        if isinstance(screens, str):
+            screens = [s.strip() for s in screens.split(",") if s.strip()]
+        else:
+            screens = [str(s).strip() for s in screens if s is not None and str(s).strip()]
+        if not action or not screens:
+            return empty
+        seq = cue.get("seq", 0)
+        raw = f"IMAGE|{seq}|{action}|{','.join(screens)}"
+        return {
+            "raw": raw,
+            "action": action,
+            "screens": screens,
+            "keypoints": [],
+            "bbox": None,
+        }
+
+    def _force_end_image_cue_sessions(self, current_time_str, current_timestamp):
+        """Clear keypoints immediately when teammate flash sequence finishes.
+
+        Image-cue mode ignores cue OFF for hold timing; force_end is the only
+        signal that the last action's keypoints must disappear now.
+        """
+        for fid, ch in self.channels.items():
+            if not self._field_is_active(fid):
+                continue
+            with self.session_lock:
+                if ch.pending_start:
+                    ch.pending_start = None
+                    ch.pending_start_time = 0
+                ch.keypoint_hold_frames = 0
+                ch.keypoint_frames_shown = 0
+                ch.keypoint_clear_armed = False
+                ch.keypoint_hold_until = 0.0
+                if ch.session_active:
+                    print(f"[{ch.label}] force_end: clearing keypoints (flash sequence done)")
+                    self._end_session_locked(current_time_str, current_timestamp, ch)
+                ch.pending_end = False
+                ch.pending_end_time = 0
+                # Safety: even if session already inactive, drop any leftover lines
+                if ch.active_goal_lines:
+                    ch.active_goal_lines = {}
+
     def process_qr_detection(self, frame, current_time_str, current_timestamp):
-        """Detect QR only for fields with a selected player."""
-        # Pass 1: detect ROIs for active fields only
+        """Drive sessions from image_action_cue.json (camera QR decode disabled)."""
+        # Pass 1: cue file only when CAMERA_QR_ENABLED is False
         detected = {}
+        image_cue = self._read_image_action_cue()
+        if (
+            not CAMERA_QR_ENABLED
+            and isinstance(image_cue, dict)
+            and image_cue.get("force_end")
+        ):
+            self._force_end_image_cue_sessions(current_time_str, current_timestamp)
         for fid, ch in self.channels.items():
             if not self._field_is_active(fid):
                 detected[fid] = {
@@ -4242,10 +4512,14 @@ class SimustRealtimeCamera:
                     "bbox": None,
                 }
                 continue
+            cue_hit = self._image_cue_for_field(image_cue, fid)
+            if cue_hit is not None:
+                detected[fid] = cue_hit
+                continue
+            # Legacy camera QR path (only if CAMERA_QR_ENABLED)
             roi = self.qr_rois.get(fid) or ch.qr_roi
             raw_data, bbox = detect_qr_in_roi(frame, roi)
             action, screens, keypoints = parse_qr_data(raw_data) if raw_data else ("", [], [])
-            # Trust the ROI: do not drop QR based on screen→field mapping (that lagged B behind A).
             detected[fid] = {
                 "raw": raw_data,
                 "action": action,
@@ -4277,9 +4551,10 @@ class SimustRealtimeCamera:
             else:
                 ch.qr_state["missing_since"] = None
 
+            cooldown = 0.0 if not CAMERA_QR_ENABLED else ch.qr_state["cooldown"]
             is_new_qr = (
                 raw_data and raw_data != ch.qr_state["last_raw_data"] and action and screens and
-                (current_timestamp - ch.qr_state["last_detection_time"] >= ch.qr_state["cooldown"])
+                (current_timestamp - ch.qr_state["last_detection_time"] >= cooldown)
             )
             if is_new_qr:
                 new_qr_fields.append(fid)
@@ -4391,15 +4666,22 @@ class SimustRealtimeCamera:
             if fid in new_qr_fields:
                 continue
             raw_data = detected[fid]["raw"]
+            # Image-cue mode: end is armed from UI On time in _execute_start —
+            # ignore teammate/cue OFF so keypoints are not tied to image paint.
             if (
-                not raw_data
+                CAMERA_QR_ENABLED
+                and not raw_data
                 and ch.current_qr_block
                 and not ch.pending_end
                 and ch.qr_state["missing_since"] is not None
                 and (current_timestamp - ch.qr_state["missing_since"]) >= QR_DISAPPEAR_DEBOUNCE
             ):
                 self.schedule_session_end(current_time_str, current_timestamp, ch)
-            elif ch.session_active and (current_timestamp - ch.session_start_timestamp) > MAX_SESSION_DURATION:
+            elif (
+                ch.session_active
+                and not ch.pending_end
+                and (current_timestamp - ch.session_start_timestamp) > MAX_SESSION_DURATION
+            ):
                 self._execute_end(current_time_str, current_timestamp, ch)
                 ch.pending_end = False
 

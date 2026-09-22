@@ -71,6 +71,24 @@
         input:checked + .slider::before { transform: translateX(28px); }
         .viz-status-on { color: var(--green); font-weight: bold; }
         .viz-status-off { color: var(--red); font-weight: bold; }
+        .teammate-time-input {
+            width: 3.4rem;
+            background: #07111f;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--gold-light);
+            font-weight: 800;
+            font-size: 14px;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            padding: 6px 4px;
+            margin: 0 4px;
+            outline: none;
+        }
+        .teammate-time-input:focus { border-color: var(--gold); }
+        .teammate-time-input::-webkit-outer-spin-button,
+        .teammate-time-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .teammate-time-input[type=number] { -moz-appearance: textfield; appearance: textfield; }
         .toast { position: fixed; bottom: 24px; inset-inline-end: 24px; background: var(--portal-panel); border-inline-start: 4px solid var(--gold); padding: 14px 24px; border-radius: 8px; z-index: 1100; box-shadow: 0 10px 40px rgba(0,0,0,0.6); animation: slideIn 0.3s ease; border: 1px solid var(--line); color: var(--ink); }
         @keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
         .loading-spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--gold); border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; }
@@ -2625,6 +2643,12 @@
             var simulationEnabledState = useState(false);
             var simulationEnabled = simulationEnabledState[0];
             var setSimulationEnabled = simulationEnabledState[1];
+            var teammateOnSecState = useState(1.2);
+            var teammateOnSec = teammateOnSecState[0];
+            var setTeammateOnSec = teammateOnSecState[1];
+            var teammateGapSecState = useState(0.5);
+            var teammateGapSec = teammateGapSecState[0];
+            var setTeammateGapSec = teammateGapSecState[1];
             var lastUpdateTimeState = useState(null);
             var lastUpdateTime = lastUpdateTimeState[0];
             var setLastUpdateTime = lastUpdateTimeState[1];
@@ -2752,6 +2776,8 @@
             var vizRequestSeqRef = useRef(0);
             var simulationEnabledRef = useRef(false);
             var simRequestSeqRef = useRef(0);
+            var teammateOnSecRef = useRef(1.2);
+            var teammateGapSecRef = useRef(0.5);
 
             var REPORTS_BASE = "C:/Users/siama/Documents/simust_reports";
 
@@ -3642,6 +3668,26 @@
                 });
             };
 
+            var clampTeammateSec = function(val, fallback) {
+                var n = parseFloat(val);
+                if (!isFinite(n)) n = fallback;
+                if (n < 0.1) n = 0.1;
+                if (n > 9.9) n = 9.9;
+                return Math.round(n * 10) / 10;
+            };
+            var updateTeammateOnSec = function(raw) {
+                var n = clampTeammateSec(raw, 1.2);
+                teammateOnSecRef.current = n;
+                setTeammateOnSec(n);
+                localStorage.setItem('simust_teammate_on_sec', String(n));
+            };
+            var updateTeammateGapSec = function(raw) {
+                var n = clampTeammateSec(raw, 0.5);
+                teammateGapSecRef.current = n;
+                setTeammateGapSec(n);
+                localStorage.setItem('simust_teammate_gap_sec', String(n));
+            };
+
             var toggleVisualization = function(enabled) {
                 visualizationEnabledRef.current = enabled;
                 setVisualizationEnabled(enabled);
@@ -3880,6 +3926,9 @@
                 setRealtimePaused(false);
                 clearResultsDisplay();
 
+                updateTeammateOnSec(teammateOnSec);
+                updateTeammateGapSec(teammateGapSec);
+
                 var primary = playerA || playerB;
                 var payload = {
                     level: selectedLevel,
@@ -3890,6 +3939,8 @@
                     player_player_id: primary.playerId,
                     visualization_enabled: visualizationEnabledRef.current,
                     simulation_enabled: simulationEnabledRef.current,
+                    teammate_on_sec: teammateOnSecRef.current,
+                    teammate_gap_sec: teammateGapSecRef.current,
                     field: playerA ? "A" : "B",
                     players: []
                 };
@@ -4238,6 +4289,26 @@
                     setSimulationEnabled(false);
                     localStorage.setItem('simust_simulation', JSON.stringify(false));
                     axios.post("/set-simulation", { enabled: false }).catch(function() {});
+                }
+                var storedOn = localStorage.getItem('simust_teammate_on_sec');
+                if (storedOn !== null) {
+                    var onN = parseFloat(storedOn);
+                    if (!isFinite(onN)) onN = 1.2;
+                    if (onN < 0.1) onN = 0.1;
+                    if (onN > 9.9) onN = 9.9;
+                    onN = Math.round(onN * 10) / 10;
+                    teammateOnSecRef.current = onN;
+                    setTeammateOnSec(onN);
+                }
+                var storedGap = localStorage.getItem('simust_teammate_gap_sec');
+                if (storedGap !== null) {
+                    var gapN = parseFloat(storedGap);
+                    if (!isFinite(gapN)) gapN = 0.5;
+                    if (gapN < 0.1) gapN = 0.1;
+                    if (gapN > 9.9) gapN = 9.9;
+                    gapN = Math.round(gapN * 10) / 10;
+                    teammateGapSecRef.current = gapN;
+                    setTeammateGapSec(gapN);
                 }
                 return function() {
                     clearInterval(hostPlayerRefresh);
@@ -4710,7 +4781,61 @@
                             React.createElement('span', { className: "text-sm" + (simulationEnabled ?
                                     ' viz-status-on' : ' text-gray-400') },
                                 simulationEnabled ? 'ON' : 'OFF'
-                            )
+                            ),
+                            React.createElement('span', {
+                                className: "text-white font-bold",
+                                style: { marginInlineStart: '16px' }
+                            }, t("teammateOn"), " "),
+                            React.createElement('input', {
+                                type: "number",
+                                className: "teammate-time-input",
+                                min: 0.1,
+                                max: 9.9,
+                                step: 0.1,
+                                value: teammateOnSec,
+                                title: "Teammate image ON time (seconds)",
+                                onChange: function(e) {
+                                    setTeammateOnSec(e.target.value);
+                                },
+                                onBlur: function(e) {
+                                    updateTeammateOnSec(e.target.value);
+                                },
+                                onKeyDown: function(e) {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        updateTeammateOnSec(e.target.value);
+                                        e.target.blur();
+                                    }
+                                }
+                            }),
+                            React.createElement('span', { className: "text-gray-300 text-sm" }, "s"),
+                            React.createElement('span', {
+                                className: "text-white font-bold",
+                                style: { marginInlineStart: '12px' }
+                            }, t("teammateGap"), " "),
+                            React.createElement('input', {
+                                type: "number",
+                                className: "teammate-time-input",
+                                min: 0.1,
+                                max: 9.9,
+                                step: 0.1,
+                                value: teammateGapSec,
+                                title: "Gap / OFF time between flashes (seconds)",
+                                onChange: function(e) {
+                                    setTeammateGapSec(e.target.value);
+                                },
+                                onBlur: function(e) {
+                                    updateTeammateGapSec(e.target.value);
+                                },
+                                onKeyDown: function(e) {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        updateTeammateGapSec(e.target.value);
+                                        e.target.blur();
+                                    }
+                                }
+                            }),
+                            React.createElement('span', { className: "text-gray-300 text-sm" }, "s")
                         ),
                         React.createElement('div', { className: "transport-bar" },
                             React.createElement('button', {

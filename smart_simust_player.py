@@ -1,10 +1,7 @@
 """
-smart_simust_player.py - Owns Screen 2 for the whole test sequence, with no overlapping windows:
-  action set → 5s waiting overlay → 20s per-video results → next action set (if any)
-  → same 5s waiting overlay → final results video.
-Writes current video index to file for simust_realtime.py.
-Auto-stops only the camera process when the final summary is displayed; the player itself closes
-after the summary video finishes, updating the status file so the frontend disables the Stop button.
+smart_simust_player.py - Screen 2 coach band for image-based PASS flash (no action videos, no VLC).
+  teammate.png flash (On/Gap from frontend) → cue file → realtime keypoints after delay → done.
+  Camera QR and results-video playback are disabled in this mode to keep CPU load low.
 """
 
 import sys
@@ -23,13 +20,91 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QUrl
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-import vlc
+try:
+    import vlc
+except ImportError:
+    vlc = None
 try:
     from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
 except ImportError:
     CHART_CENTER_Y = 140
     RING_RADIUS = 63
     RING_THICKNESS = 15
+
+
+class _NullVlcPlayer:
+    """No-op stand-in so image-based mode never loads/plays videos via VLC."""
+
+    def audio_set_volume(self, *_a, **_k):
+        pass
+
+    def stop(self):
+        pass
+
+    def play(self):
+        pass
+
+    def pause(self):
+        pass
+
+    def release(self):
+        pass
+
+    def set_media(self, *_a, **_k):
+        pass
+
+    def set_time(self, *_a, **_k):
+        pass
+
+    def set_rate(self, *_a, **_k):
+        pass
+
+    def set_pause(self, *_a, **_k):
+        pass
+
+    def get_rate(self):
+        return 1.0
+
+    def get_time(self):
+        return 0
+
+    def get_length(self):
+        return 0
+
+    def get_state(self):
+        return None
+
+    def is_playing(self):
+        return False
+
+    def video_set_aspect_ratio(self, *_a, **_k):
+        pass
+
+    def video_set_scale(self, *_a, **_k):
+        pass
+
+    def video_set_crop_geometry(self, *_a, **_k):
+        pass
+
+    def set_hwnd(self, *_a, **_k):
+        pass
+
+    def set_xwindow(self, *_a, **_k):
+        pass
+
+    def set_nsobject(self, *_a, **_k):
+        pass
+
+
+class _NullVlcInstance:
+    def media_player_new(self):
+        return _NullVlcPlayer()
+
+    def media_new(self, *_a, **_k):
+        return None
+
+    def release(self):
+        pass
 
 # ============================================================
 # SETUP LOGGING
@@ -52,11 +127,166 @@ logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
 WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
 
+# Image-based player: teammate.png flash (no QR drawn on the image).
+# Pattern ×5: 4+11 ON 1.2s → OFF 0.5s → 3+10 ON 1.2s → OFF 0.5s
+# PASS cues for realtime go to image_action_cue.json.
+IMAGE_BASED_ACTIONS = True
+FLASH_ON_MS = 1200
+FLASH_OFF_MS = 500
+FLASH_REPEAT = 5
+# Same clock as image-cue keypoint offsets in simust_realtime (1.0s = 30 frames).
+DISPLAY_FPS = 30.0
+TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
+SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
+FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
+PASS_FLASH_STEPS = (
+    {"A": 4, "B": 11},
+    {"A": 3, "B": 10},
+)
+
 try:
     import requests
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
+
+
+def _snap_ms_to_display_fps(ms):
+    """Snap wall-clock ms to whole frames at DISPLAY_FPS (30)."""
+    frames = max(1, int(round(float(ms) / 1000.0 * DISPLAY_FPS)))
+    return int(round(frames * 1000.0 / DISPLAY_FPS)), frames
+
+
+def _read_flash_timing_ms():
+    """ON / gap ms from frontend, snapped to 30 FPS frame grid."""
+    on_ms = FLASH_ON_MS
+    gap_ms = FLASH_OFF_MS
+    try:
+        if os.path.isfile(FLASH_TIMING_FILE):
+            with open(FLASH_TIMING_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            if "on_ms" in data:
+                on_ms = int(data["on_ms"])
+            elif "on_sec" in data:
+                on_ms = int(round(float(data["on_sec"]) * 1000))
+            if "gap_ms" in data:
+                gap_ms = int(data["gap_ms"])
+            elif "gap_sec" in data:
+                gap_ms = int(round(float(data["gap_sec"]) * 1000))
+    except Exception as exc:
+        logger.warning("Could not read teammate flash timing: %s", exc)
+    on_ms = max(100, min(9900, int(on_ms)))
+    gap_ms = max(100, min(9900, int(gap_ms)))
+    on_ms, on_frames = _snap_ms_to_display_fps(on_ms)
+    gap_ms, gap_frames = _snap_ms_to_display_fps(gap_ms)
+    logger.info(
+        "Flash timing @ %.0f FPS: ON %sms (%s frames), Gap %sms (%s frames)",
+        DISPLAY_FPS, on_ms, on_frames, gap_ms, gap_frames,
+    )
+    return on_ms, gap_ms
+
+
+def _screens_for_active_fields(step, active_fields):
+    screens = []
+    active = set(active_fields or [])
+    for fid in ("A", "B"):
+        if fid not in active:
+            continue
+        sid = step.get(fid)
+        if sid is not None:
+            screens.append(int(sid))
+    return screens
+
+
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False):
+    """Tell simust_realtime which PASS screens are lit (no QR on canvas).
+
+    force_end=True: flash sequence finished — realtime must clear keypoints now
+    (cue OFF alone does not end sessions in image-cue mode).
+    """
+    payload = {
+        "active": bool(active) and not force_end,
+        "force_end": bool(force_end),
+        "seq": int(seq),
+        "fields": {},
+        "timestamp": time.time(),
+    }
+    if active and not force_end and field_screens:
+        for fid, screens in field_screens.items():
+            if not screens:
+                continue
+            payload["fields"][str(fid).upper()] = {
+                "action": "PASS",
+                "screens": [str(s) for s in screens],
+            }
+    try:
+        os.makedirs(os.path.dirname(IMAGE_ACTION_CUE_FILE), exist_ok=True)
+        with open(IMAGE_ACTION_CUE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception as exc:
+        logger.warning("Could not write image action cue: %s", exc)
+
+
+def _clear_image_action_cue(force_end=False):
+    try:
+        _write_image_action_cue(False, {}, seq=0, force_end=force_end)
+    except Exception:
+        pass
+
+
+class ImageActionCanvas(QtWidgets.QWidget):
+    """3712×512 coach band: teammate image only (no QR overlay)."""
+
+    # Drawn at 85% of the slice (15% smaller than full-tile cover)
+    IMAGE_SCALE = 0.85
+
+    def __init__(self, parent=None, image_path=TEAMATE_IMAGE):
+        super().__init__(parent)
+        self.setStyleSheet("background-color: black;")
+        self.setFixedSize(3712, 512)
+        self.active_screens = set()
+        self._teammate = QtGui.QPixmap(image_path) if os.path.isfile(image_path) else QtGui.QPixmap()
+
+    def clear(self):
+        self.active_screens = set()
+        self.update()
+
+    def set_pass_screens(self, screen_ids):
+        self.active_screens = {int(sid) for sid in screen_ids}
+        self.update()
+
+    def _tile_rect(self, screen_id: int) -> QtCore.QRect:
+        i = SLICE_ORDER.index(int(screen_id))
+        n = len(SLICE_ORDER)
+        tile_w = 3712 / float(n)
+        x0 = int(round(i * tile_w))
+        x1 = int(round((i + 1) * tile_w))
+        return QtCore.QRect(x0, 0, max(1, x1 - x0), 512)
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.fillRect(self.rect(), QtGui.QColor(0, 0, 0))
+        if not self.active_screens:
+            painter.end()
+            return
+        for sid in self.active_screens:
+            tile = self._tile_rect(sid)
+            painter.setClipRect(tile)
+            if not self._teammate.isNull():
+                target_w = max(1, int(round(tile.width() * self.IMAGE_SCALE)))
+                target_h = max(1, int(round(tile.height() * self.IMAGE_SCALE)))
+                scaled = self._teammate.scaled(
+                    target_w,
+                    target_h,
+                    QtCore.Qt.KeepAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                px = tile.x() + (tile.width() - scaled.width()) // 2
+                py = tile.y() + (tile.height() - scaled.height()) // 2
+                painter.drawPixmap(px, py, scaled)
+            painter.setClipping(False)
+        painter.end()
 
 
 # ============================================================
@@ -358,6 +588,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._frozen_qt_timers = []
         self.display_phase = "action"
         self._wait_started = 0.0
+        self.image_based = IMAGE_BASED_ACTIONS
+        self.action_timer = None
+        self._action_phase = "idle"  # idle | flash
+        self._flash_cycle = 0
+        self._flash_phase = 0  # 0=4+11, 1=off, 2=3+10, 3=off
+        self._flash_seq = 0
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -365,21 +601,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.final_summary_done.connect(self._on_final_summary_done)
         self.per_video_results_ready.connect(self._on_per_video_results_ready)
 
-        # Get video files
-        self.video_files = self._get_video_files(video_directory)
-        self._update_status_file("playing", 0, len(self.video_files), "Starting playback")
-
-        if not self.video_files:
-            self._update_status_file("error", 0, 0, "No video files found")
-            QtWidgets.QMessageBox.critical(None, "Error", f"No video files found in:\n{video_directory}")
-            self._auto_close(1000)
-            sys.exit(1)
-
-        logger.info(f"Found {len(self.video_files)} video files.")
-        self.video_count = len(self.video_files)
-        self.total_videos = self.video_count
-
-        # Speed file
+        # Speed / control files (needed before building image playlist)
         self.speed_file_dir = "C:/Users/siama/Documents/simust_player"
         self.speed_file_path = os.path.join(self.speed_file_dir, "simust_speed.txt")
         self.pause_file_path = os.path.join(self.speed_file_dir, "pause.txt")
@@ -391,7 +613,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except:
             pass
 
-        # VLC instance
+        if self.image_based:
+            self.video_files = self._build_image_action_playlist()
+            if not self.video_files:
+                self._update_status_file("error", 0, 0, "No active fields for image PASS sequence")
+                QtWidgets.QMessageBox.critical(None, "Error", "No Field A/B players for PASS image sequence.")
+                self._auto_close(1000)
+                sys.exit(1)
+            logger.info(
+                "Image-based PASS playlist: %s action(s) for fields %s",
+                len(self.video_files),
+                self._active_fields(),
+            )
+        else:
+            self.video_files = self._get_video_files(video_directory)
+            if not self.video_files:
+                self._update_status_file("error", 0, 0, "No video files found")
+                QtWidgets.QMessageBox.critical(None, "Error", f"No video files found in:\n{video_directory}")
+                self._auto_close(1000)
+                sys.exit(1)
+            logger.info(f"Found {len(self.video_files)} video files.")
+
+        self._update_status_file("playing", 0, len(self.video_files), "Starting playback")
+        self.video_count = len(self.video_files)
+        self.total_videos = self.video_count
+
+        # VLC used for per-video / final results (action phase is teammate flash when image_based)
         vlc_args = [
             '--quiet', '--no-video-title-show', '--intf', 'dummy',
             '--aspect-ratio', '3712:512',
@@ -401,7 +648,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         ]
         self.instance = vlc.Instance(vlc_args)
         self.player = self.instance.media_player_new()
-        self.player.audio_set_volume(100)   
+        self.player.audio_set_volume(100)
+        if self.image_based:
+            logger.info("Image-based mode: teammate flash for actions; VLC for results videos")
 
 
         # Window
@@ -413,6 +662,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setStyleSheet("background-color: black; border: none;")
         self.videoframe.setFixedSize(self.video_width, self.video_height)
         self.videoframe.installEventFilter(self)
+
+        self.image_canvas = None
+        if self.image_based:
+            self.image_canvas = ImageActionCanvas(self, TEAMATE_IMAGE)
+            self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            self.image_canvas.show()
+            self.image_canvas.raise_()
 
         # Overlays
         self.status = QtWidgets.QLabel("", self)
@@ -463,7 +719,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         for delay in [20, 60, 120, 250, 400, 600, 800, 1000]:
             QtCore.QTimer.singleShot(delay, self._force_top_512)
 
-        # Embed VLC
+        # Embed VLC into videoframe (results playback; action may use image_canvas on top)
         if sys.platform.startswith('linux'):
             self.player.set_xwindow(self.videoframe.winId())
         elif sys.platform == "win32":
@@ -509,6 +765,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.results_timer.stop()
             if self.play_delay_timer:
                 self.play_delay_timer.stop()
+            self._stop_action_timer()
+            _clear_image_action_cue(force_end=True)
         except:
             pass
         try:
@@ -557,6 +815,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass
 
     # ====== MODIFIED: only list videos directly in the given directory (NO recursion) ======
+    def _build_image_action_playlist(self):
+        """One flash sequence: 5× (4+11 ↔ 3+10) for active fields."""
+        active = set(self._active_fields())
+        far = _screens_for_active_fields(PASS_FLASH_STEPS[0], active)
+        near = _screens_for_active_fields(PASS_FLASH_STEPS[1], active)
+        if not far and not near:
+            return []
+        return [{
+            "kind": "image_pass_flash",
+            "index": 1,
+            "screens_far": far,
+            "screens_near": near,
+            "label": f"PASS flash 4/11↔3/10 ×{FLASH_REPEAT}",
+            "path": "image://PASS/flash",
+        }]
+
     def _get_video_files(self, directory):
         """
         List only video files (mp4, avi, mov, mkv, flv, wmv) that are DIRECTLY inside
@@ -588,24 +862,66 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         logger.info(f"Found {len(videos)} video files directly in {directory}.")
         return videos
 
+    def _flash_delay_ms(self, on=True):
+        speed = max(0.25, float(self.player_speed or 1.0))
+        on_ms, gap_ms = _read_flash_timing_ms()
+        base = on_ms if on else gap_ms
+        return max(80, int(base / speed))
+
+    def _stop_action_timer(self):
+        if self.action_timer:
+            try:
+                self.action_timer.stop()
+            except Exception:
+                pass
+            self.action_timer = None
+
+    def _field_screens_map(self, screen_ids):
+        """Map lit screens back to fields for the realtime cue file."""
+        active = set(self._active_fields())
+        out = {}
+        for step in PASS_FLASH_STEPS:
+            for fid in ("A", "B"):
+                if fid not in active:
+                    continue
+                sid = step.get(fid)
+                if sid is not None and int(sid) in {int(s) for s in screen_ids}:
+                    out.setdefault(fid, []).append(int(sid))
+        return out
+
     def _load_video(self, index):
         self._hide_waiting_overlay()
-        if 0 <= index < len(self.video_files):
-            self.player.stop()
-            self.check_timer.stop()
-            self.current_video_index = index
-            self.current_video_path = self.video_files[index]
-            self.video_start_time = time.time()
-            self.video_end_called = False
-            logger.info(f"Loading video {index+1}/{len(self.video_files)}: {os.path.basename(self.current_video_path)}")
-            self._update_status_file("loading", index+1, len(self.video_files), f"Loading: {os.path.basename(self.current_video_path)}")
+        self._stop_action_timer()
+        _clear_image_action_cue(force_end=True)
+        if not (0 <= index < len(self.video_files)):
+            return
+        self.player.stop()
+        self.check_timer.stop()
+        self.current_video_index = index
+        entry = self.video_files[index]
+        self.current_video_path = entry.get("path") if isinstance(entry, dict) else entry
+        self.video_start_time = time.time()
+        self.video_end_called = False
+        self._action_phase = "idle"
+        self._flash_cycle = 0
+        self._flash_phase = 0
+        self._flash_seq = 0
+
+        if self.image_based and isinstance(entry, dict):
+            label = entry.get("label", f"PASS flash {index + 1}")
+            logger.info("Loading image action %s/%s: %s", index + 1, len(self.video_files), label)
+            self._update_status_file(
+                "loading", index + 1, len(self.video_files), f"Loading: {label}"
+            )
             try:
                 with open(self.video_index_file, 'w') as f:
                     f.write(str(index + 1))
             except Exception as e:
                 logger.error(f"Failed to write video index file: {e}")
-            self.media = self.instance.media_new(os.path.abspath(self.current_video_path))
-            self.player.set_media(self.media)
+            if self.image_canvas:
+                self.image_canvas.clear()
+                self.image_canvas.show()
+                self.image_canvas.raise_()
             if self.is_first_video:
                 self.is_first_video = False
                 delay_ms = 3000
@@ -617,6 +933,31 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.play_delay_timer.start(delay_ms)
             else:
                 self._start_playback()
+            return
+
+        self.current_video_path = entry
+        logger.info(f"Loading video {index+1}/{len(self.video_files)}: {os.path.basename(self.current_video_path)}")
+        self._update_status_file("loading", index+1, len(self.video_files), f"Loading: {os.path.basename(self.current_video_path)}")
+        try:
+            with open(self.video_index_file, 'w') as f:
+                f.write(str(index + 1))
+        except Exception as e:
+            logger.error(f"Failed to write video index file: {e}")
+        if self.image_canvas:
+            self.image_canvas.hide()
+        self.media = self.instance.media_new(os.path.abspath(self.current_video_path))
+        self.player.set_media(self.media)
+        if self.is_first_video:
+            self.is_first_video = False
+            delay_ms = 3000
+            if self.play_delay_timer:
+                self.play_delay_timer.stop()
+            self.play_delay_timer = QtCore.QTimer()
+            self.play_delay_timer.setSingleShot(True)
+            self.play_delay_timer.timeout.connect(self._start_playback)
+            self.play_delay_timer.start(delay_ms)
+        else:
+            self._start_playback()
 
     def _start_playback(self):
         if self.operator_paused:
@@ -626,6 +967,35 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.play_delay_timer:
             self.play_delay_timer.stop()
             self.play_delay_timer = None
+        self.completion_label.hide()
+        self.progress_label.hide()
+        self.playlist_finished = False
+        self.waiting_for_results = False
+        self.display_phase = "action"
+
+        if self.image_based:
+            entry = self.video_files[self.current_video_index]
+            label = entry.get("label", "PASS flash") if isinstance(entry, dict) else "PASS flash"
+            logger.info("Starting image PASS flash: %s", label)
+            if self.image_canvas:
+                self.image_canvas.clear()
+                self.image_canvas.show()
+                self.image_canvas.raise_()
+            self.video_start_time = time.time()
+            self._action_phase = "flash"
+            self._flash_cycle = 0
+            self._flash_phase = 0
+            self._flash_seq = 0
+            self._update_status_file(
+                "playing",
+                self.current_video_index + 1,
+                self.total_videos,
+                f"Playing: {label}",
+            )
+            self.check_timer.start()
+            self._apply_flash_phase()
+            return
+
         logger.info("Starting playback now.")
         self.player.set_time(0)
         self.player.video_set_aspect_ratio("3712:512")
@@ -633,19 +1003,106 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.player.video_set_crop_geometry("0:0:3712:512")
         self.player.play()
         self._update_progress_display()
-        self.completion_label.hide()
-        self.playlist_finished = False
-        self.waiting_for_results = False
-        self.display_phase = "action"
         self.check_timer.start()
 
+    def _apply_flash_phase(self):
+        """Match display_teammate_flash: 4+11 / off / 3+10 / off, × FLASH_REPEAT."""
+        if self.display_phase != "action" or self._action_phase != "flash":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._apply_flash_phase)
+            return
+
+        if self._flash_cycle >= FLASH_REPEAT and self._flash_phase == 0:
+            logger.info("PASS flash done — %s cycles complete.", FLASH_REPEAT)
+            if self.image_canvas:
+                self.image_canvas.clear()
+            # Force-clear last-action keypoints (cue OFF alone does not end sessions)
+            _write_image_action_cue(
+                False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
+            )
+            self._action_phase = "idle"
+            self._on_video_ended()
+            return
+
+        entry = self.video_files[self.current_video_index]
+        far = entry.get("screens_far", []) if isinstance(entry, dict) else []
+        near = entry.get("screens_near", []) if isinstance(entry, dict) else []
+
+        if self._flash_phase == 0:
+            screens = far
+            delay = self._flash_delay_ms(on=True)
+            self._flash_seq += 1
+            logger.info(
+                "Flash cycle %s/%s: ON screens %s (%s ms)",
+                self._flash_cycle + 1, FLASH_REPEAT, screens, delay,
+            )
+        elif self._flash_phase == 1:
+            screens = []
+            delay = self._flash_delay_ms(on=False)
+            logger.info(
+                "Flash cycle %s/%s: OFF (%s ms)",
+                self._flash_cycle + 1, FLASH_REPEAT, delay,
+            )
+        elif self._flash_phase == 2:
+            screens = near
+            delay = self._flash_delay_ms(on=True)
+            self._flash_seq += 1
+            logger.info(
+                "Flash cycle %s/%s: ON screens %s (%s ms)",
+                self._flash_cycle + 1, FLASH_REPEAT, screens, delay,
+            )
+        else:
+            screens = []
+            delay = self._flash_delay_ms(on=False)
+            logger.info(
+                "Flash cycle %s/%s: OFF (%s ms)",
+                self._flash_cycle + 1, FLASH_REPEAT, delay,
+            )
+
+        if self.image_canvas:
+            if screens:
+                self.image_canvas.set_pass_screens(screens)
+            else:
+                self.image_canvas.clear()
+
+        if screens:
+            _write_image_action_cue(True, self._field_screens_map(screens), seq=self._flash_seq)
+        else:
+            # Keep cue file present but inactive so realtime ends the PASS session
+            _write_image_action_cue(False, {}, seq=self._flash_seq)
+
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._advance_flash_phase)
+        self.action_timer.start(delay)
+
+    def _advance_flash_phase(self):
+        if self.display_phase != "action" or self._action_phase != "flash":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._advance_flash_phase)
+            return
+        self._flash_phase += 1
+        if self._flash_phase > 3:
+            self._flash_phase = 0
+            self._flash_cycle += 1
+        self._apply_flash_phase()
+
     def _update_progress_display(self):
+        if self.image_based and self.display_phase == "action":
+            self.progress_label.hide()
+            return
         current = self.current_video_index + 1
         total = len(self.video_files)
-        name = os.path.basename(self.current_video_path)
+        entry = self.video_files[self.current_video_index] if self.video_files else None
+        if isinstance(entry, dict):
+            name = entry.get("label") or entry.get("path") or "PASS"
+        else:
+            name = os.path.basename(self.current_video_path or "")
         if len(name) > 40:
             name = name[:37] + "..."
-        self.progress_label.setText(f"Video {current}/{total} | {name}")
+        self.progress_label.setText(f"Action {current}/{total} | {name}")
         self.progress_label.adjustSize()
         self.progress_label.move(self.video_width - self.progress_label.width() - 10,
                                  self.video_height - self.progress_label.height() - 5)
@@ -658,10 +1115,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _show_playlist_status(self):
         total = len(self.video_files)
-        self._update_status_file("playing", 0, total, f"Playlist loaded: {total} videos")
-        logger.info(f"Playlist loaded: {total} videos")
+        kind = "image PASS actions" if self.image_based else "videos"
+        self._update_status_file("playing", 0, total, f"Playlist loaded: {total} {kind}")
+        logger.info("Playlist loaded: %s %s", total, kind)
 
     def _show_waiting_overlay(self, status_text=""):
+        if self.image_canvas:
+            self.image_canvas.clear()
+            self.image_canvas.hide()
         if self.waiting_overlay is None:
             self.waiting_overlay = WaitingOverlay(self.videoframe)
             self.videoframe.installEventFilter(self)
@@ -725,6 +1186,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return max(0, WAIT_ANIMATION_MS - elapsed_ms)
 
     def _play_local_clip(self, video_path, rate=1.0):
+        if self.image_canvas:
+            self.image_canvas.hide()
+        self.videoframe.show()
+        self.videoframe.raise_()
         self.player.stop()
         self.media = self.instance.media_new(os.path.abspath(video_path))
         self.player.set_media(self.media)
@@ -808,6 +1273,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.display_phase = "per_video_results"
         self.waiting_for_results = True
         self.completion_label.hide()
+        if self.image_canvas:
+            self.image_canvas.hide()
         self._update_status_file(
             "playing_results",
             self.current_video_index + 1,
@@ -914,6 +1381,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             # Set status to "playing_final" – not "completed" yet
             self._update_status_file("playing_final", self.total_videos, self.total_videos, "Playing final summary...")
             logger.info(f"Playing final summary video: {video_path}")
+            if self.image_canvas:
+                self.image_canvas.hide()
             self._play_local_clip(video_path, rate=1.0)
 
             self.completion_label.setText("Final summary playing...")
@@ -996,11 +1465,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.waiting_for_results = True
         self.display_phase = "wait_per_video"
         self.check_timer.stop()
+        self._stop_action_timer()
+        _write_image_action_cue(
+            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
+        )
         self._wait_started = time.time()
+        if self.image_canvas:
+            self.image_canvas.clear()
+            self.image_canvas.hide()
         self._show_waiting_overlay()
         video_num = self.current_video_index + 1
         logger.info("Action set %s finished; 5s wait then 20s per-video results", video_num)
-        self.player.stop()
+        try:
+            self.player.stop()
+        except Exception:
+            pass
         start_time = self.video_start_time
         end_time = time.time()
         thread = threading.Thread(
@@ -1049,6 +1528,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
         self.setFixedSize(self.video_width, self.video_height)
         self.videoframe.raise_()
+        if self.image_canvas and self.image_based and self.display_phase == "action":
+            self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            self.image_canvas.show()
+            self.image_canvas.raise_()
         self.videoframe.repaint()
         self.repaint()
         try:
@@ -1124,7 +1607,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _freeze_qt_timers(self):
         frozen = []
-        for name in ("results_timer", "close_timer", "play_delay_timer", "_force_close_timer"):
+        for name in ("results_timer", "close_timer", "play_delay_timer", "_force_close_timer", "action_timer"):
             timer = getattr(self, name, None)
             if timer is None:
                 continue
@@ -1189,6 +1672,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     self._status_completed = True
                     self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed")
                     self.close()
+                return
+
+            # Image-based actions end via action_timer, not VLC state
+            if self.image_based and self.display_phase == "action":
                 return
 
             # Normal playlist video playback
@@ -1305,14 +1792,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 # ============================================================
 def main():
     logger.info("Starting main()")
+    # Image-based mode only needs a directory arg for API compatibility with app.py
     if len(sys.argv) < 2:
         app = QtWidgets.QApplication(sys.argv)
         QtWidgets.QMessageBox.critical(None, "Error",
-            "Usage: smart_simust_player.py <video-directory> [player_speed] [screen_index]")
+            "Usage: smart_simust_player.py <level-directory> [player_speed] [screen_index]")
         sys.exit(1)
 
     video_dir = sys.argv[1]
-    if not os.path.isdir(video_dir):
+    if not IMAGE_BASED_ACTIONS and not os.path.isdir(video_dir):
         app = QtWidgets.QApplication(sys.argv)
         QtWidgets.QMessageBox.critical(None, "Error", f"Directory not found:\n{video_dir}")
         sys.exit(1)

@@ -954,6 +954,42 @@ def write_simulation_setting(enabled):
     os.replace(tmp_file, sim_file)
 
 
+def write_teammate_flash_timing(on_sec, gap_sec):
+    """Write teammate image ON / gap seconds for the image-based smart player."""
+    def _clamp(v, default):
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            n = float(default)
+        if n < 0.1:
+            n = 0.1
+        if n > 9.9:
+            n = 9.9
+        return round(n, 1)
+
+    on_s = _clamp(on_sec, 1.2)
+    gap_s = _clamp(gap_sec, 0.5)
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "teammate_flash_timing.json")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    payload = {
+        "on_sec": on_s,
+        "gap_sec": gap_s,
+        "on_ms": int(round(on_s * 1000)),
+        "gap_ms": int(round(gap_s * 1000)),
+        "display_fps": 30.0,
+        "on_frames": int(round(on_s * 30.0)),
+        "gap_frames": int(round(gap_s * 30.0)),
+        "timestamp": time.time(),
+    }
+    tmp_file = path + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, path)
+    return payload
+
+
 def write_pause_setting(paused: bool) -> None:
     """Atomically tell the smart player and camera to freeze or continue."""
     pause_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
@@ -1883,6 +1919,15 @@ async def start_realtime_playback(req: Request):
 
         write_visualization_setting(bool(data.get("visualization_enabled", False)))
         write_simulation_setting(bool(data.get("simulation_enabled", False)))
+        flash_timing = write_teammate_flash_timing(
+            data.get("teammate_on_sec", data.get("on_sec", 1.2)),
+            data.get("teammate_gap_sec", data.get("gap_sec", 0.5)),
+        )
+        logger.info(
+            "Teammate flash timing: on=%ss gap=%ss",
+            flash_timing.get("on_sec"),
+            flash_timing.get("gap_sec"),
+        )
 
         realtime_active_player_id = (player_id or "").strip()
         _realtime_dirs_at_start = _realtime_dir_names()
