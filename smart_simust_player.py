@@ -1,7 +1,8 @@
 """
-smart_simust_player.py - Screen 2 coach band for image-based PASS flash (no action videos, no VLC).
-  teammate.png flash (On/Gap from frontend) → cue file → realtime keypoints after delay → done.
-  Camera QR and results-video playback are disabled in this mode to keep CPU load low.
+smart_simust_player.py - Screen 2 coach band for image-based labeled actions.
+  SF-30N style assets (N_pass_s1_s2, filler_*, gap_*) → cue file → realtime keypoints.
+  Pre-start waiting animation ("starting"), then On/Gap from frontend timing.
+  VLC used only for per-video / final results.
 """
 
 import sys
@@ -15,6 +16,7 @@ import logging
 import threading
 import random
 import math
+import re
 from pathlib import Path
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QUrl
@@ -30,6 +32,10 @@ except ImportError:
     CHART_CENTER_Y = 140
     RING_RADIUS = 63
     RING_THICKNESS = 15
+try:
+    import simust_fields
+except ImportError:
+    simust_fields = None
 
 
 class _NullVlcPlayer:
@@ -127,23 +133,30 @@ logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
 WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
 
-# Image-based player: teammate.png flash (no QR drawn on the image).
-# Pattern ×5: 4+11 ON 1.2s → OFF 0.5s → 3+10 ON 1.2s → OFF 0.5s
-# PASS cues for realtime go to image_action_cue.json.
+# Image-based player: labeled assets in the foundation folder (e.g. SF-30N).
+# Filenames: 1_pass_14_3.png, filler_3.png, gap_1.png
 IMAGE_BASED_ACTIONS = True
 FLASH_ON_MS = 1200
 FLASH_OFF_MS = 500
-FLASH_REPEAT = 5
+FLASH_REPEAT = 5  # legacy teammate-flash fallback only
 # Same clock as image-cue keypoint offsets in simust_realtime (1.0s = 30 frames).
 DISPLAY_FPS = 30.0
 TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
 SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
+# Gap images (gap_N) appear on these slices BEFORE action N
+# (gap_1 before action 1; gap_2 between action 1 and 2; …).
+GAP_SCREENS = (2, 14, 7, 9)
 PASS_FLASH_STEPS = (
     {"A": 4, "B": 11},
     {"A": 3, "B": 10},
 )
+_ACTION_FILE_RE = re.compile(
+    r"^(\d+)[_-]([A-Za-z]+)[_-](\d+)[_-](\d+)$", re.IGNORECASE
+)
+_FILLER_FILE_RE = re.compile(r"^filler[_-](\d+)$", re.IGNORECASE)
+_GAP_FILE_RE = re.compile(r"^gap[_-](\d+)$", re.IGNORECASE)
 
 try:
     import requests
@@ -199,11 +212,128 @@ def _screens_for_active_fields(step, active_fields):
     return screens
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False):
-    """Tell simust_realtime which PASS screens are lit (no QR on canvas).
+def _field_for_screen(screen_id):
+    sid = str(int(screen_id))
+    if simust_fields is not None:
+        return simust_fields.field_for_screens([sid]) or "A"
+    if sid in {"1", "2", "3", "4", "12", "13", "14"}:
+        return "A"
+    return "B"
 
-    force_end=True: flash sequence finished — realtime must clear keypoints now
-    (cue OFF alone does not end sessions in image-cue mode).
+
+def _active_field_screens(active_fields):
+    """All coach-band screens belonging to currently active fields."""
+    screens = []
+    for fid in sorted(active_fields or []):
+        if simust_fields is not None:
+            for s in sorted(simust_fields.screens_for_field(fid), key=lambda x: int(x)):
+                screens.append(int(s))
+        elif fid == "A":
+            screens.extend([1, 2, 3, 4, 12, 13, 14])
+        elif fid == "B":
+            screens.extend([5, 6, 7, 8, 9, 10, 11])
+    return screens
+
+
+def _scan_label_assets(directory):
+    """Parse SF-30N-style labeled images from a foundation subdirectory."""
+    actions = {}
+    fillers = {}
+    gaps = {}
+    if not directory or not os.path.isdir(directory):
+        return actions, fillers, gaps
+    image_ext = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    try:
+        entries = os.listdir(directory)
+    except Exception as exc:
+        logger.error("Could not list labeled assets in %s: %s", directory, exc)
+        return actions, fillers, gaps
+
+    for name in entries:
+        full = os.path.join(directory, name)
+        if not os.path.isfile(full):
+            continue
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in image_ext:
+            continue
+        m = _ACTION_FILE_RE.match(stem)
+        if m:
+            num = int(m.group(1))
+            action = m.group(2).upper()
+            s1, s2 = int(m.group(3)), int(m.group(4))
+            screens = [s1, s2]
+            field = _field_for_screen(s1)
+            f2 = _field_for_screen(s2)
+            if f2 != field and simust_fields is not None:
+                field = simust_fields.field_for_screens([str(s1), str(s2)]) or field
+            bucket = actions.setdefault(num, {"action": action, "parts": []})
+            if not bucket.get("action"):
+                bucket["action"] = action
+            bucket["parts"].append({
+                "screens": screens,
+                "path": full,
+                "field": field,
+                "stem": stem,
+            })
+            continue
+        m = _FILLER_FILE_RE.match(stem)
+        if m:
+            fillers[int(m.group(1))] = full
+            continue
+        m = _GAP_FILE_RE.match(stem)
+        if m:
+            gaps[int(m.group(1))] = full
+            continue
+    return actions, fillers, gaps
+
+
+def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
+    """Place fillers on non-action screens; never reuse filler_N when action is N.
+
+    Dual field: distribute fillers evenly across A and B free screens.
+    Single field: only place on that field's free screens.
+    Positions reshuffled each call.
+    """
+    banned = {int(action_num)}
+    pool_ids = [fid for fid in fillers.keys() if int(fid) not in banned and int(fid) >= 1]
+    if not pool_ids:
+        pool_ids = [fid for fid in fillers.keys() if int(fid) not in banned]
+    if not pool_ids:
+        return {}
+
+    free_by_field = {"A": [], "B": []}
+    action_set = {int(s) for s in action_screens}
+    for sid in _active_field_screens(active_fields):
+        if int(sid) in action_set:
+            continue
+        free_by_field[_field_for_screen(sid)].append(int(sid))
+
+    active = [f for f in ("A", "B") if f in set(active_fields or []) and free_by_field[f]]
+    if not active:
+        return {}
+
+    random.shuffle(pool_ids)
+    field_pools = {f: [] for f in active}
+    for i, fid in enumerate(pool_ids):
+        field_pools[active[i % len(active)]].append(fid)
+
+    placements = {}
+    for fid in active:
+        screens = list(free_by_field[fid])
+        random.shuffle(screens)
+        fpool = field_pools[fid] or list(pool_ids)
+        if not fpool:
+            continue
+        random.shuffle(fpool)
+        for i, sid in enumerate(screens):
+            placements[sid] = fillers[fpool[i % len(fpool)]]
+    return placements
+
+
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS"):
+    """Tell simust_realtime which screens are lit (no QR on canvas).
+
+    force_end=True: sequence finished — realtime must clear keypoints now.
     """
     payload = {
         "active": bool(active) and not force_end,
@@ -212,12 +342,13 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False):
         "fields": {},
         "timestamp": time.time(),
     }
+    action_name = str(action or "PASS").strip().upper() or "PASS"
     if active and not force_end and field_screens:
         for fid, screens in field_screens.items():
             if not screens:
                 continue
             payload["fields"][str(fid).upper()] = {
-                "action": "PASS",
+                "action": action_name,
                 "screens": [str(s) for s in screens],
             }
     try:
@@ -236,7 +367,7 @@ def _clear_image_action_cue(force_end=False):
 
 
 class ImageActionCanvas(QtWidgets.QWidget):
-    """3712×512 coach band: teammate image only (no QR overlay)."""
+    """3712×512 coach band: per-slice labeled action / filler / gap images."""
 
     # Drawn at 85% of the slice (15% smaller than full-tile cover)
     IMAGE_SCALE = 0.85
@@ -246,15 +377,49 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self.setStyleSheet("background-color: black;")
         self.setFixedSize(3712, 512)
         self.active_screens = set()
-        self._teammate = QtGui.QPixmap(image_path) if os.path.isfile(image_path) else QtGui.QPixmap()
+        self._screen_pixmaps = {}  # screen_id -> QPixmap
+        self._pixmap_cache = {}  # path -> QPixmap
+        self._fallback = QtGui.QPixmap(image_path) if os.path.isfile(image_path) else QtGui.QPixmap()
 
     def clear(self):
         self.active_screens = set()
+        self._screen_pixmaps = {}
         self.update()
 
     def set_pass_screens(self, screen_ids):
+        """Legacy: same fallback image on each lit screen."""
         self.active_screens = {int(sid) for sid in screen_ids}
+        self._screen_pixmaps = {}
+        for sid in self.active_screens:
+            if not self._fallback.isNull():
+                self._screen_pixmaps[int(sid)] = self._fallback
         self.update()
+
+    def set_screen_images(self, screen_to_path):
+        """Map screen id → image path (action, filler, or gap)."""
+        self._screen_pixmaps = {}
+        self.active_screens = set()
+        for sid, path in (screen_to_path or {}).items():
+            pix = self._load_pixmap(path)
+            if pix is None or pix.isNull():
+                continue
+            self._screen_pixmaps[int(sid)] = pix
+            self.active_screens.add(int(sid))
+        self.update()
+
+    def _load_pixmap(self, path):
+        if not path:
+            return None
+        key = os.path.abspath(path)
+        if key in self._pixmap_cache:
+            return self._pixmap_cache[key]
+        if not os.path.isfile(key):
+            return None
+        pix = QtGui.QPixmap(key)
+        if pix.isNull():
+            return None
+        self._pixmap_cache[key] = pix
+        return pix
 
     def _tile_rect(self, screen_id: int) -> QtCore.QRect:
         i = SLICE_ORDER.index(int(screen_id))
@@ -267,16 +432,19 @@ class ImageActionCanvas(QtWidgets.QWidget):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtGui.QColor(0, 0, 0))
-        if not self.active_screens:
+        if not self._screen_pixmaps:
             painter.end()
             return
-        for sid in self.active_screens:
-            tile = self._tile_rect(sid)
+        for sid, pix in self._screen_pixmaps.items():
+            try:
+                tile = self._tile_rect(sid)
+            except ValueError:
+                continue
             painter.setClipRect(tile)
-            if not self._teammate.isNull():
+            if not pix.isNull():
                 target_w = max(1, int(round(tile.width() * self.IMAGE_SCALE)))
                 target_h = max(1, int(round(tile.height() * self.IMAGE_SCALE)))
-                scaled = self._teammate.scaled(
+                scaled = pix.scaled(
                     target_w,
                     target_h,
                     QtCore.Qt.KeepAspectRatio,
@@ -590,10 +758,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._wait_started = 0.0
         self.image_based = IMAGE_BASED_ACTIONS
         self.action_timer = None
-        self._action_phase = "idle"  # idle | flash
+        self._action_phase = "idle"  # idle | label | flash
+        self._label_phase = "action"  # gap (before action) | action
         self._flash_cycle = 0
-        self._flash_phase = 0  # 0=4+11, 1=off, 2=3+10, 3=off
+        self._flash_phase = 0  # legacy teammate flash
         self._flash_seq = 0
+        self._label_mode = False
+        self._asset_fillers = {}
+        self._asset_gaps = {}
+        self._prestart_done = False  # "starting" wait only once per session
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -616,14 +789,20 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_based:
             self.video_files = self._build_image_action_playlist()
             if not self.video_files:
-                self._update_status_file("error", 0, 0, "No active fields for image PASS sequence")
-                QtWidgets.QMessageBox.critical(None, "Error", "No Field A/B players for PASS image sequence.")
+                self._update_status_file("error", 0, 0, "No labeled actions / fields for image playlist")
+                QtWidgets.QMessageBox.critical(
+                    None,
+                    "Error",
+                    "No labeled action images found and no Field A/B for image sequence.\n"
+                    f"Expected files like 1_pass_14_3.png in:\n{video_directory}",
+                )
                 self._auto_close(1000)
                 sys.exit(1)
             logger.info(
-                "Image-based PASS playlist: %s action(s) for fields %s",
+                "Image-based playlist: %s action(s) for fields %s (label_mode=%s)",
                 len(self.video_files),
                 self._active_fields(),
+                self._label_mode,
             )
         else:
             self.video_files = self._get_video_files(video_directory)
@@ -650,7 +829,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.player = self.instance.media_player_new()
         self.player.audio_set_volume(100)
         if self.image_based:
-            logger.info("Image-based mode: teammate flash for actions; VLC for results videos")
+            logger.info("Image-based mode: labeled/teammate images for actions; VLC for results")
 
 
         # Window
@@ -727,8 +906,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elif sys.platform == "darwin":
             self.player.set_nsobject(int(self.videoframe.winId()))
 
-        # Start first video
-        self._load_video(0)
+        # Pre-start waiting ("starting") then first action, or start immediately for video mode
+        if self.image_based:
+            self._begin_prestart_waiting()
+        else:
+            self._load_video(0)
 
         self.speed_monitor_timer.start()
         self._show_playlist_status()
@@ -816,8 +998,67 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     # ====== MODIFIED: only list videos directly in the given directory (NO recursion) ======
     def _build_image_action_playlist(self):
-        """One flash sequence: 5× (4+11 ↔ 3+10) for active fields."""
+        """Build playlist from labeled SF-30N assets, else legacy teammate flash."""
         active = set(self._active_fields())
+        if not active:
+            return []
+
+        actions, fillers, gaps = _scan_label_assets(self.video_directory)
+        self._asset_fillers = fillers
+        self._asset_gaps = gaps
+
+        if actions:
+            self._label_mode = True
+            playlist = []
+            for num in sorted(actions.keys()):
+                info = actions[num]
+                parts = []
+                field_screens = {}
+                screen_images = {}
+                for part in info.get("parts") or []:
+                    field = part.get("field") or _field_for_screen(part["screens"][0])
+                    if field not in active:
+                        keep = [s for s in part["screens"] if _field_for_screen(s) in active]
+                        if not keep:
+                            continue
+                        part = dict(part)
+                        part["screens"] = keep
+                        part["field"] = _field_for_screen(keep[0])
+                        field = part["field"]
+                    parts.append(part)
+                    field_screens.setdefault(field, [])
+                    for s in part["screens"]:
+                        if int(s) not in field_screens[field]:
+                            field_screens[field].append(int(s))
+                        screen_images[int(s)] = part["path"]
+                if not parts:
+                    continue
+                action_name = str(info.get("action") or "PASS").upper()
+                playlist.append({
+                    "kind": "labeled_action",
+                    "index": num,
+                    "action_num": num,
+                    "action": action_name,
+                    "parts": parts,
+                    "field_screens": field_screens,
+                    "screen_images": screen_images,
+                    "gap_path": gaps.get(num),
+                    "label": f"{num}_{action_name.lower()}_" + "_".join(
+                        str(s) for p in parts for s in p["screens"]
+                    ),
+                    "path": f"image://{num}/{action_name}",
+                })
+            logger.info(
+                "Labeled assets in %s: %s action(s), %s filler(s), %s gap(s)",
+                self.video_directory,
+                len(playlist),
+                len(fillers),
+                len(gaps),
+            )
+            return playlist
+
+        # Fallback: legacy teammate flash (4+11 ↔ 3+10 ×5)
+        self._label_mode = False
         far = _screens_for_active_fields(PASS_FLASH_STEPS[0], active)
         near = _screens_for_active_fields(PASS_FLASH_STEPS[1], active)
         if not far and not near:
@@ -830,6 +1071,36 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "label": f"PASS flash 4/11↔3/10 ×{FLASH_REPEAT}",
             "path": "image://PASS/flash",
         }]
+
+    def _begin_prestart_waiting(self):
+        """Show waiting rings with 'starting' once, only before the first action."""
+        if self._prestart_done:
+            self._load_video(0)
+            return
+        self.display_phase = "prestart"
+        if self.image_canvas:
+            self.image_canvas.clear()
+            self.image_canvas.hide()
+        self._update_status_file("starting", 0, self.total_videos, "Starting...")
+        self._show_waiting_overlay("starting")
+        logger.info("Pre-start waiting animation (%sms) — ring text: starting (once)", WAIT_ANIMATION_MS)
+        if self.play_delay_timer:
+            self.play_delay_timer.stop()
+        self.play_delay_timer = QtCore.QTimer(singleShot=True)
+        self.play_delay_timer.timeout.connect(self._after_prestart_waiting)
+        self.play_delay_timer.start(WAIT_ANIMATION_MS)
+
+    def _after_prestart_waiting(self):
+        if self.operator_paused:
+            QTimer.singleShot(200, self._after_prestart_waiting)
+            return
+        self._prestart_done = True
+        self.is_first_video = False
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        self._load_video(0)
 
     def _get_video_files(self, directory):
         """
@@ -880,13 +1151,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """Map lit screens back to fields for the realtime cue file."""
         active = set(self._active_fields())
         out = {}
-        for step in PASS_FLASH_STEPS:
-            for fid in ("A", "B"):
-                if fid not in active:
-                    continue
-                sid = step.get(fid)
-                if sid is not None and int(sid) in {int(s) for s in screen_ids}:
-                    out.setdefault(fid, []).append(int(sid))
+        for sid in screen_ids or []:
+            fid = _field_for_screen(sid)
+            if fid not in active:
+                continue
+            out.setdefault(fid, []).append(int(sid))
         return out
 
     def _load_video(self, index):
@@ -903,12 +1172,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.video_start_time = time.time()
         self.video_end_called = False
         self._action_phase = "idle"
+        self._label_phase = "gap"  # gap_N before action N
         self._flash_cycle = 0
         self._flash_phase = 0
         self._flash_seq = 0
 
         if self.image_based and isinstance(entry, dict):
-            label = entry.get("label", f"PASS flash {index + 1}")
+            label = entry.get("label", f"action {index + 1}")
             logger.info("Loading image action %s/%s: %s", index + 1, len(self.video_files), label)
             self._update_status_file(
                 "loading", index + 1, len(self.video_files), f"Loading: {label}"
@@ -922,17 +1192,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas.clear()
                 self.image_canvas.show()
                 self.image_canvas.raise_()
-            if self.is_first_video:
-                self.is_first_video = False
-                delay_ms = 3000
-                if self.play_delay_timer:
-                    self.play_delay_timer.stop()
-                self.play_delay_timer = QtCore.QTimer()
-                self.play_delay_timer.setSingleShot(True)
-                self.play_delay_timer.timeout.connect(self._start_playback)
-                self.play_delay_timer.start(delay_ms)
-            else:
-                self._start_playback()
+            # After one-time prestart, never insert another delay/wait before gap images
+            self.is_first_video = False
+            self._start_playback()
             return
 
         self.current_video_path = entry
@@ -975,16 +1237,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         if self.image_based:
             entry = self.video_files[self.current_video_index]
-            label = entry.get("label", "PASS flash") if isinstance(entry, dict) else "PASS flash"
-            logger.info("Starting image PASS flash: %s", label)
+            label = entry.get("label", "image action") if isinstance(entry, dict) else "image action"
+            logger.info("Starting image action: %s", label)
             if self.image_canvas:
                 self.image_canvas.clear()
                 self.image_canvas.show()
                 self.image_canvas.raise_()
             self.video_start_time = time.time()
-            self._action_phase = "flash"
-            self._flash_cycle = 0
-            self._flash_phase = 0
             self._flash_seq = 0
             self._update_status_file(
                 "playing",
@@ -993,7 +1252,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 f"Playing: {label}",
             )
             self.check_timer.start()
-            self._apply_flash_phase()
+            if (isinstance(entry, dict) and entry.get("kind") == "labeled_action") or self._label_mode:
+                self._action_phase = "label"
+                # gap_N before action N (gap_1 before first action; gap_2 between 1→2)
+                self._label_phase = "gap"
+                self._apply_label_phase()
+            else:
+                self._action_phase = "flash"
+                self._flash_cycle = 0
+                self._flash_phase = 0
+                self._apply_flash_phase()
             return
 
         logger.info("Starting playback now.")
@@ -1005,8 +1273,162 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._update_progress_display()
         self.check_timer.start()
 
+    def _apply_label_phase(self):
+        """gap_N (before action) → labeled action (+ fillers). Cue only during action."""
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._apply_label_phase)
+            return
+
+        entry = self.video_files[self.current_video_index]
+        if not isinstance(entry, dict):
+            self._on_video_ended()
+            return
+
+        action_num = int(entry.get("action_num") or entry.get("index") or 1)
+        action_name = str(entry.get("action") or "PASS").upper()
+        active = set(self._active_fields())
+
+        # ---- Gap BEFORE this action: gap_N on slices 2/14/7/9 ----
+        if self._label_phase == "gap":
+            # Never let waiting rings cover gap images
+            self._hide_waiting_overlay()
+            if self.image_canvas:
+                self.image_canvas.show()
+                self.image_canvas.raise_()
+
+            gap_path = entry.get("gap_path") or (self._asset_gaps or {}).get(action_num)
+            gap_images = {}
+            if gap_path and os.path.isfile(gap_path):
+                for sid in GAP_SCREENS:
+                    if _field_for_screen(sid) in active:
+                        gap_images[int(sid)] = gap_path
+            if self.image_canvas:
+                if gap_images:
+                    self.image_canvas.set_screen_images(gap_images)
+                else:
+                    self.image_canvas.clear()
+                    logger.warning(
+                        "No gap image for action %s (looked for gap_%s in folder)",
+                        action_num,
+                        action_num,
+                    )
+
+            # No keypoints during gap (cue inactive)
+            _write_image_action_cue(False, {}, seq=self._flash_seq, action=action_name)
+            delay = self._flash_delay_ms(on=False)
+            logger.info(
+                "Gap %s BEFORE action %s (%s) on screens %s for %sms",
+                action_num,
+                action_num,
+                os.path.basename(gap_path) if gap_path else "none",
+                list(gap_images.keys()),
+                delay,
+            )
+            self._stop_action_timer()
+            self.action_timer = QtCore.QTimer(singleShot=True)
+            self.action_timer.timeout.connect(self._advance_label_phase)
+            self.action_timer.start(delay)
+            return
+
+        # ---- Action ON: labeled images + fillers ----
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+
+        screen_images = dict(entry.get("screen_images") or {})
+        screen_images = {
+            int(s): p for s, p in screen_images.items()
+            if _field_for_screen(s) in active
+        }
+        action_screens = list(screen_images.keys())
+        fillers = _pick_filler_placements(
+            action_num, action_screens, active, self._asset_fillers or {}
+        )
+        for sid, path in fillers.items():
+            if int(sid) not in screen_images:
+                screen_images[int(sid)] = path
+
+        field_screens = {}
+        for sid in action_screens:
+            fid = _field_for_screen(sid)
+            field_screens.setdefault(fid, []).append(int(sid))
+
+        if self.image_canvas:
+            self.image_canvas.set_screen_images(screen_images)
+
+        self._flash_seq += 1
+        _write_image_action_cue(
+            True,
+            field_screens,
+            seq=self._flash_seq,
+            action=action_name,
+        )
+        delay = self._flash_delay_ms(on=True)
+        logger.info(
+            "Labeled action %s %s ON screens %s (+%s fillers) for %sms",
+            action_num,
+            action_name,
+            action_screens,
+            len(fillers),
+            delay,
+        )
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._finish_label_action)
+        self.action_timer.start(delay)
+
+    def _advance_label_phase(self):
+        """After pre-action gap → show the action."""
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._advance_label_phase)
+            return
+        self._label_phase = "action"
+        self._apply_label_phase()
+
+    def _finish_label_action(self):
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._finish_label_action)
+            return
+        if self.image_canvas:
+            self.image_canvas.clear()
+        _write_image_action_cue(
+            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
+        )
+        self._action_phase = "idle"
+
+        # Between labeled actions: go straight to next gap_N (no waiting rings).
+        # Waiting animation is only for pre-start "starting" and post-playlist results.
+        next_idx = self.current_video_index + 1
+        if (
+            self._label_mode
+            and next_idx < len(self.video_files)
+            and isinstance(self.video_files[next_idx], dict)
+            and self.video_files[next_idx].get("kind") == "labeled_action"
+        ):
+            logger.info(
+                "Labeled action done — next gap/action (skip waiting overlay between actions)"
+            )
+            self.video_end_called = False
+            self.waiting_for_results = False
+            self.check_timer.stop()
+            self._stop_action_timer()
+            self._hide_waiting_overlay()
+            self.current_video_index = next_idx
+            self.display_phase = "action"
+            self._load_video(self.current_video_index)
+            return
+
+        self._on_video_ended()
+
     def _apply_flash_phase(self):
-        """Match display_teammate_flash: 4+11 / off / 3+10 / off, × FLASH_REPEAT."""
+        """Legacy teammate flash: 4+11 / off / 3+10 / off, × FLASH_REPEAT."""
         if self.display_phase != "action" or self._action_phase != "flash":
             return
         if self.operator_paused:
@@ -1115,7 +1537,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _show_playlist_status(self):
         total = len(self.video_files)
-        kind = "image PASS actions" if self.image_based else "videos"
+        kind = "labeled image actions" if (self.image_based and self._label_mode) else (
+            "image PASS actions" if self.image_based else "videos"
+        )
         self._update_status_file("playing", 0, total, f"Playlist loaded: {total} {kind}")
         logger.info("Playlist loaded: %s %s", total, kind)
 
