@@ -740,9 +740,21 @@
 
         // Subdirectories for Foundation — locked until paid 30-minute credits unlock them
         var LEVEL_SUBDIRS = {
-            'L00-Foundation': ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N']
+            'L00-Foundation': [
+                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N',
+                'digit', 'random', 'rotation', 'sum', 'sub', 'multiply', 'divide',
+                'sequence', 'compound', 'color_rule', 'go_nogo', 'stroop',
+                'spatial', 'memory', 'move_memory', 'tracking', 'tactical',
+                'flex', 'dual_rule', 'peripheral', 'emotion', 'symbols'
+            ]
         };
-        var FOUNDATION_PLAYLISTS = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
+        var FOUNDATION_PLAYLISTS = LEVEL_SUBDIRS['L00-Foundation'].slice();
+        var FOUNDATION_EXTRA_PLAYLISTS = [
+            'digit', 'random', 'rotation', 'sum', 'sub', 'multiply', 'divide',
+            'sequence', 'compound', 'color_rule', 'go_nogo', 'stroop',
+            'spatial', 'memory', 'move_memory', 'tracking', 'tactical',
+            'flex', 'dual_rule', 'peripheral', 'emotion', 'symbols'
+        ];
 
         // =====================================================================
         // LOGIN COMPONENT
@@ -1293,11 +1305,12 @@
         };
 
         // =====================================================================
-        // LEVEL PROGRESS COMPONENT (with ordered categories)
+        // LEVEL PROGRESS COMPONENT (with ordered categories + Foundation playlists)
         // =====================================================================
         var LevelProgress = function(props) {
             var allLevels = props.allLevels || [];
             var unlocked = props.unlocked || [];
+            var unlockedPlaylists = props.unlockedPlaylists || [];
             var completed = props.completed || [];
             var current = props.current || '';
             var isAdmin = props.isAdmin || false;
@@ -1311,11 +1324,40 @@
             sortedLevels.forEach(function(lvl) {
                 var cat = getCategoryFromId(lvl.id);
                 if (!grouped[cat]) grouped[cat] = [];
+                // Foundation umbrella is replaced by per-playlist chips below
+                if (lvl.id === 'L00-Foundation') return;
                 var isUnlocked = unlocked.indexOf(lvl.id) !== -1;
                 var isCompleted = completed.indexOf(lvl.id) !== -1;
                 var isCurrent = lvl.id === current;
-                grouped[cat].push({ id: lvl.id, display: lvl.display, isUnlocked: isUnlocked, isCompleted: isCompleted,
-                    isCurrent: isCurrent });
+                grouped[cat].push({
+                    id: lvl.id,
+                    display: lvl.display,
+                    isUnlocked: isUnlocked,
+                    isCompleted: isCompleted,
+                    isCurrent: isCurrent,
+                    isFoundationPlaylist: false
+                });
+            });
+
+            // Always show Foundation playlists in PROGRESS (unlock individually if needed)
+            var foundationPlaylists = (LEVEL_SUBDIRS['L00-Foundation'] || FOUNDATION_PLAYLISTS || []).slice();
+            grouped['Foundation'] = foundationPlaylists.map(function(sub) {
+                var isUnlocked = unlockedPlaylists.indexOf(sub) !== -1;
+                // Extra playlists open once any SF playlist is unlocked
+                if (!isUnlocked && FOUNDATION_EXTRA_PLAYLISTS.indexOf(sub) !== -1 && unlockedPlaylists.length > 0) {
+                    isUnlocked = true;
+                }
+                return {
+                    id: 'L00-Foundation/' + sub,
+                    playlist: sub,
+                    display: sub,
+                    isUnlocked: isUnlocked,
+                    isCompleted: false,
+                    isCurrent: current === 'L00-Foundation' && isUnlocked
+                        && unlockedPlaylists.length
+                        && unlockedPlaylists[unlockedPlaylists.length - 1] === sub,
+                    isFoundationPlaylist: true
+                };
             });
 
             var categoryKeys = Object.keys(grouped).sort(function(a, b) {
@@ -1325,8 +1367,11 @@
 
             var displayGrouped = {};
             categoryKeys.forEach(function(cat) {
-                var items = grouped[cat];
-                if (isAdmin) {
+                var items = grouped[cat] || [];
+                if (cat === 'Foundation') {
+                    // Always list Foundation playlists so locked ones can be unlocked
+                    displayGrouped[cat] = items;
+                } else if (isAdmin) {
                     displayGrouped[cat] = items;
                 } else {
                     displayGrouped[cat] = items.filter(function(item) { return item.isUnlocked; });
@@ -1338,6 +1383,7 @@
             if (displayKeys.length === 0) return null;
 
             var totalLevels = allLevels.length;
+            var openPlaylists = unlockedPlaylists.length;
 
             return React.createElement('div', { className: "level-progress" },
                 React.createElement('div', { className: "text-xs text-gray-400 mb-1 font-semibold" }, "PROGRESS"),
@@ -1364,19 +1410,29 @@
 
                                     var lockUnlockButton = null;
                                     if (isAdmin) {
-                                        if (lvl.isUnlocked && lvl.id !== "L00-Foundation") {
+                                        if (lvl.isUnlocked && !lvl.isFoundationPlaylist) {
                                             lockUnlockButton = React.createElement('button', {
                                                 className: "lock-btn",
                                                 onClick: function(e) { e.stopPropagation();
                                                     onLock(lvl.id); },
                                                 title: "Lock this level"
                                             }, '🔒');
+                                        } else if (lvl.isUnlocked && lvl.isFoundationPlaylist
+                                            && FOUNDATION_EXTRA_PLAYLISTS.indexOf(lvl.playlist) === -1) {
+                                            lockUnlockButton = React.createElement('button', {
+                                                className: "lock-btn",
+                                                onClick: function(e) { e.stopPropagation();
+                                                    onLock(lvl.id); },
+                                                title: "Lock playlist " + lvl.playlist
+                                            }, '🔒');
                                         } else if (!lvl.isUnlocked) {
                                             lockUnlockButton = React.createElement('button', {
                                                 className: "unlock-btn",
                                                 onClick: function(e) { e.stopPropagation();
                                                     onUnlock(lvl.id); },
-                                                title: "Unlock this level"
+                                                title: lvl.isFoundationPlaylist
+                                                    ? ("Unlock playlist " + (lvl.playlist || shortLabel))
+                                                    : "Unlock this level"
                                             }, '🔓');
                                         }
                                     }
@@ -1395,6 +1451,8 @@
                 ),
                 React.createElement('div', { className: "level-summary" },
                     React.createElement('span', null, "Current: " + (current || 'None')),
+                    React.createElement('span', null,
+                        "Foundation: " + openPlaylists + " / " + foundationPlaylists.length + " playlists"),
                     React.createElement('span', null, "Completed: " + completed.length + " / " + totalLevels),
                     isAdmin ? React.createElement('span', { style: { color: '#4ade80' } }, "🔓 Unlock · 🔒 Lock") :
                         null
@@ -1455,6 +1513,10 @@
                 if (isFoundation && LEVEL_SUBDIRS['L00-Foundation']) {
                     hasSubdirs = true;
                     lockedSubdirs = FOUNDATION_PLAYLISTS.filter(function(sub) {
+                        if (FOUNDATION_EXTRA_PLAYLISTS.indexOf(sub) !== -1) {
+                            // Open once any SF playlist is unlocked
+                            return unlockedPlaylists.length === 0;
+                        }
                         return unlockedPlaylists.indexOf(sub) === -1;
                     });
                 }
@@ -1674,6 +1736,7 @@
                     selectedPlayer && React.createElement(LevelProgress, {
                         allLevels: allLevels,
                         unlocked: unlockedLevels,
+                        unlockedPlaylists: unlockedPlaylists,
                         completed: completedLevels,
                         current: currentLevel,
                         isAdmin: isAdmin,
@@ -1812,10 +1875,39 @@
             var total = stats.total || 0;
 
             var avgFinishingTime = stats.avg_finishing_time || 0;
+            var avgSessionTime = stats.avg_session_time || 0;
+            var aetPercent = stats.aet_percent;
             var totalDistance = stats.total_distance || 0;
             var avgAe = stats.avg_ae || 0;
 
             var aac = total > 0 ? ((correct + late) / total * 100) : 0;
+
+            // Prefer backend ET ring; else compute 1-(avg goal/avg session) from non-Wrong actions
+            if (aetPercent === undefined || aetPercent === null) {
+                var goalTimes = [];
+                var sessTimes = [];
+                (actions || []).forEach(function(r) {
+                    if (r.result !== 'Correct' && r.result !== 'Miss' && r.result !== 'Late') return;
+                    var tm = parseFloat(r.time_of_min || r.finishing_time);
+                    var sd = parseFloat(r.session_duration);
+                    if (!isNaN(sd) && sd > 0) sessTimes.push(sd);
+                    if ((isNaN(tm) || tm <= 0) && r.result === 'Miss' && !isNaN(sd) && sd > 0) tm = sd;
+                    if (!isNaN(tm) && tm > 0 && !isNaN(sd) && sd > 0 && tm > sd) tm = sd;
+                    if (!isNaN(tm) && tm > 0) goalTimes.push(tm);
+                });
+                if (goalTimes.length) {
+                    avgFinishingTime = goalTimes.reduce(function(a, b) { return a + b; }, 0) / goalTimes.length;
+                }
+                if (sessTimes.length) {
+                    avgSessionTime = sessTimes.reduce(function(a, b) { return a + b; }, 0) / sessTimes.length;
+                }
+                if (avgFinishingTime > 0 && avgSessionTime > 0) {
+                    aetPercent = Math.max(0, Math.min(100, (1 - avgFinishingTime / avgSessionTime) * 100));
+                } else {
+                    aetPercent = 0;
+                }
+            }
+            aetPercent = Number(aetPercent) || 0;
 
             var rightScreens = ['2', '3', '4', '9', '10', '11'];
             var leftScreens = ['5', '6', '7', '12', '13', '14'];
@@ -1868,10 +1960,11 @@
                 'FAC: No data';
 
             var aetColor = avgFinishingTime > 0 ?
-                (avgFinishingTime < 1.5 ? 'text-green-400' : avgFinishingTime < 3 ? 'text-yellow-400' :
+                (aetPercent >= 50 ? 'text-green-400' : aetPercent >= 25 ? 'text-yellow-400' :
                     'text-red-400') :
                 'text-gray-400';
             var aetDisplay = avgFinishingTime > 0 ? avgFinishingTime.toFixed(2) + 's' : '–';
+            var etEligible = correct + late + miss;
             var bdpDisplay = totalDistance > 0 ? Math.round(totalDistance) + 'm' : '–';
             var avgDistPerAction = total > 0 ? (totalDistance / total) : 0;
             var avgDistDisplay = avgDistPerAction > 0 ? avgDistPerAction.toFixed(1) + ' m' : '–';
@@ -1883,12 +1976,14 @@
                     React.createElement('div', { className: "metric-ring" },
                         React.createElement('div', { className: "label" }, "Average Execution Time"),
                         React.createElement('div', { className: "value " + aetColor }, aetDisplay),
-                        React.createElement('div', { className: "sub" }, "from " + correct + " correct"),
+                        React.createElement('div', { className: "sub" },
+                            avgSessionTime > 0
+                                ? ("1−(goal/session) · sess " + avgSessionTime.toFixed(2) + "s")
+                                : ("from " + etEligible + " non-wrong")),
                         React.createElement(MetricRingChart, {
-                            value: avgFinishingTime > 0 ? Math.min(100, (1 - avgFinishingTime / 5) *
-                                100) : 0,
-                            color: avgFinishingTime > 0 ? (avgFinishingTime < 1.5 ? '#2ecc71' :
-                                avgFinishingTime < 3 ? '#fbbf24' : '#e74c3c') : '#1a2d4a',
+                            value: aetPercent,
+                            color: aetPercent >= 50 ? '#2ecc71' :
+                                aetPercent >= 25 ? '#fbbf24' : (avgFinishingTime > 0 ? '#e74c3c' : '#1a2d4a'),
                             label: '',
                             sub: ''
                         })
@@ -2619,6 +2714,9 @@
             var selectedSubdirectoryState = useState("");
             var selectedSubdirectory = selectedSubdirectoryState[0];
             var setSelectedSubdirectory = selectedSubdirectoryState[1];
+            var selectedSubdirectoryBState = useState("");
+            var selectedSubdirectoryB = selectedSubdirectoryBState[0];
+            var setSelectedSubdirectoryB = selectedSubdirectoryBState[1];
             var realtimeRunningState = useState(false);
             var realtimeRunning = realtimeRunningState[0];
             var setRealtimeRunning = realtimeRunningState[1];
@@ -3102,6 +3200,10 @@
                         softPreserveSharedLevel(unlocked, playlists);
                     }
                 }
+                // Field B keeps its own playlist choice (e.g. random while A is SF-30N)
+                if (preferDefaults && playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1) {
+                    setSelectedSubdirectoryB(playlists[playlists.length - 1] || "");
+                }
             };
 
             var playerMatchesQuery = function(p, lower) {
@@ -3202,6 +3304,7 @@
                 setEligibleLevelsB([]);
                 setCompletedLevelsB([]);
                 setCurrentLevelB("");
+                setSelectedSubdirectoryB("");
                 if (!selectedPlayerIdRef.current) {
                     setSelectedLevel("");
                     setSelectedSubdirectory("");
@@ -3418,12 +3521,39 @@
 
             // ----- UNLOCK / LOCK LEVEL (FIXED: immediate UI update) -----
             var applyLocalUnlock = function(playerId, levelId, refreshA, refreshB) {
+                var playlist = null;
+                if (typeof levelId === 'string' && levelId.indexOf('L00-Foundation/') === 0) {
+                    playlist = levelId.split('/')[1];
+                    levelId = 'L00-Foundation';
+                }
                 var updatedPlayers = players.map(function(p) {
                     if (p.id === playerId) {
-                        var progress = p.progress || { current_level: "L00-Foundation",
-                            unlocked_levels: ["L00-Foundation"], completed_levels: [] };
-                        if (progress.unlocked_levels.indexOf(levelId) === -1) {
+                        var progress = p.progress || {
+                            current_level: "L00-Foundation",
+                            unlocked_levels: [],
+                            unlocked_playlists: [],
+                            completed_levels: []
+                        };
+                        progress.unlocked_levels = progress.unlocked_levels || [];
+                        progress.unlocked_playlists = progress.unlocked_playlists || [];
+                        progress.completed_levels = progress.completed_levels || [];
+                        if (playlist) {
+                            if (progress.unlocked_playlists.indexOf(playlist) === -1) {
+                                progress.unlocked_playlists.push(playlist);
+                            }
+                            if (progress.unlocked_levels.indexOf('L00-Foundation') === -1) {
+                                progress.unlocked_levels.push('L00-Foundation');
+                            }
+                            progress.current_level = 'L00-Foundation';
+                        } else if (progress.unlocked_levels.indexOf(levelId) === -1) {
                             progress.unlocked_levels.push(levelId);
+                            if (levelId === 'L00-Foundation') {
+                                FOUNDATION_PLAYLISTS.forEach(function(sub) {
+                                    if (progress.unlocked_playlists.indexOf(sub) === -1) {
+                                        progress.unlocked_playlists.push(sub);
+                                    }
+                                });
+                            }
                             var sorted = sortLevels(allLevels);
                             var highest = null;
                             for (var i = sorted.length - 1; i >= 0; i--) {
@@ -3451,7 +3581,7 @@
                 if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
-                        showToast("Level " + levelId + " unlocked!", 'success');
+                        showToast("Unlocked " + levelId, 'success');
                         applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
@@ -3467,7 +3597,7 @@
                 if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
                 axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
-                        showToast("Level " + levelId + " unlocked for Field B!", 'success');
+                        showToast("Unlocked " + levelId + " for Field B", 'success');
                         applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
@@ -3479,27 +3609,51 @@
             };
 
             var applyLocalLock = function(playerId, levelId, refreshA, refreshB) {
+                var playlist = null;
+                if (typeof levelId === 'string' && levelId.indexOf('L00-Foundation/') === 0) {
+                    playlist = levelId.split('/')[1];
+                    levelId = 'L00-Foundation';
+                }
                 var updatedPlayers = players.map(function(p) {
                     if (p.id === playerId) {
-                        var progress = p.progress || { current_level: "L00-Foundation",
-                            unlocked_levels: ["L00-Foundation"], completed_levels: [] };
-                        progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
-                        progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
-                        if (progress.unlocked_levels.indexOf("L00-Foundation") === -1) {
-                            progress.unlocked_levels.unshift("L00-Foundation");
-                        }
-                        if (progress.current_level === levelId) {
-                            progress.current_level = "L00-Foundation";
-                            var sorted = sortLevels(allLevels);
-                            var highest = null;
-                            for (var i = sorted.length - 1; i >= 0; i--) {
-                                if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
-                                    progress.completed_levels.indexOf(sorted[i].id) === -1) {
-                                    highest = sorted[i].id;
-                                    break;
-                                }
+                        var progress = p.progress || {
+                            current_level: "L00-Foundation",
+                            unlocked_levels: [],
+                            unlocked_playlists: [],
+                            completed_levels: []
+                        };
+                        progress.unlocked_levels = progress.unlocked_levels || [];
+                        progress.unlocked_playlists = progress.unlocked_playlists || [];
+                        progress.completed_levels = progress.completed_levels || [];
+                        if (playlist) {
+                            progress.unlocked_playlists = progress.unlocked_playlists.filter(function(id) {
+                                return id !== playlist;
+                            });
+                            if (!progress.unlocked_playlists.length) {
+                                progress.unlocked_levels = progress.unlocked_levels.filter(function(id) {
+                                    return id !== 'L00-Foundation';
+                                });
                             }
-                            if (highest) progress.current_level = highest;
+                        } else {
+                            progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
+                            progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
+                            if (progress.unlocked_levels.indexOf("L00-Foundation") === -1 &&
+                                progress.unlocked_playlists.length) {
+                                progress.unlocked_levels.unshift("L00-Foundation");
+                            }
+                            if (progress.current_level === levelId) {
+                                progress.current_level = "L00-Foundation";
+                                var sorted = sortLevels(allLevels);
+                                var highest = null;
+                                for (var i = sorted.length - 1; i >= 0; i--) {
+                                    if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
+                                        progress.completed_levels.indexOf(sorted[i].id) === -1) {
+                                        highest = sorted[i].id;
+                                        break;
+                                    }
+                                }
+                                if (highest) progress.current_level = highest;
+                            }
                         }
                         return Object.assign({}, p, { progress: progress });
                     }
@@ -3516,12 +3670,12 @@
                 if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
                 if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
                 if (levelId === "L00-Foundation") {
-                    showToast("Foundation cannot be locked", 'error');
+                    showToast("Lock individual Foundation playlists from PROGRESS", 'error');
                     return;
                 }
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
-                        showToast("Level " + levelId + " locked!", 'info');
+                        showToast("Locked " + levelId, 'info');
                         applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
@@ -3536,12 +3690,12 @@
                 if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
                 if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
                 if (levelId === "L00-Foundation") {
-                    showToast("Foundation cannot be locked", 'error');
+                    showToast("Lock individual Foundation playlists from PROGRESS", 'error');
                     return;
                 }
                 axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     if (res.data.status === "success") {
-                        showToast("Level " + levelId + " locked for Field B!", 'info');
+                        showToast("Locked " + levelId + " for Field B", 'info');
                         applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
@@ -3898,7 +4052,7 @@
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
+                if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectoryB || selectedSubdirectory)) {
                     setError("Field B: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
@@ -3910,8 +4064,13 @@
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (hasSubdirs && !selectedSubdirectory) {
-                    setError("Please select a subdirectory for this level.");
+                if (hasSubdirs && playerA && !selectedSubdirectory) {
+                    setError("Please select a playlist for Field A (e.g. SF-30N or random).");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+                if (hasSubdirs && playerB && !selectedSubdirectoryB) {
+                    setError("Please select a playlist for Field B (e.g. SF-30N or random).");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
@@ -3949,7 +4108,8 @@
                         player_id: playerA.id,
                         player_name: playerA.name,
                         player_surname: playerA.surname,
-                        field: "A"
+                        field: "A",
+                        subdirectory: selectedSubdirectory || ""
                     });
                 }
                 if (playerB) {
@@ -3957,12 +4117,17 @@
                         player_id: playerB.id,
                         player_name: playerB.name,
                         player_surname: playerB.surname,
-                        field: "B"
+                        field: "B",
+                        subdirectory: selectedSubdirectoryB || selectedSubdirectory || ""
                     });
                     payload.player_b_id = playerB.id;
                 }
-                if (selectedSubdirectory) {
-                    payload.subdirectory = selectedSubdirectory;
+                // Primary subdirectory (first phase) for legacy backends
+                var primarySub = playerA
+                    ? (selectedSubdirectory || "")
+                    : (selectedSubdirectoryB || selectedSubdirectory || "");
+                if (primarySub) {
+                    payload.subdirectory = primarySub;
                 }
                 if (useAdminTest) {
                     payload.admin_password = String(adminTestPass || '').trim();
@@ -3972,16 +4137,21 @@
                 axios.post("/start-realtime-playback", payload).then(function() {
                     var dualMsg;
                     if (playerA && playerB) {
-                        dualMsg = "Field A: " + playerA.name + " · Field B: " + playerB.name;
+                        dualMsg = "Field A: " + playerA.name +
+                            (selectedSubdirectory ? " [" + selectedSubdirectory + "]" : "") +
+                            " + Field B: " + playerB.name +
+                            (selectedSubdirectoryB ? " [" + selectedSubdirectoryB + "]" : "") +
+                            " (together)";
                     } else if (playerA) {
-                        dualMsg = playerA.name + ' ' + playerA.surname + " (Field A only)";
+                        dualMsg = playerA.name + ' ' + playerA.surname + " (Field A only" +
+                            (selectedSubdirectory ? ", " + selectedSubdirectory : "") + ")";
                     } else {
-                        dualMsg = playerB.name + ' ' + playerB.surname + " (Field B only)";
+                        dualMsg = playerB.name + ' ' + playerB.surname + " (Field B only" +
+                            (selectedSubdirectoryB ? ", " + selectedSubdirectoryB : "") + ")";
                     }
                     showToast((window.SIMUST_PUBLIC
                         ? "Sent to the lab over the internet: "
-                        : (useAdminTest ? "Admin test play started — " : "Realtime playback started — ")) + dualMsg +
-                        (selectedSubdirectory ? ' [' + selectedSubdirectory + ']' : ''), 'success');
+                        : (useAdminTest ? "Admin test play started — " : "Realtime playback started — ")) + dualMsg, 'success');
 
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
@@ -4408,9 +4578,11 @@
                     var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
                     if (!isFoundation || !LEVEL_SUBDIRS['L00-Foundation']) {
                         setSelectedSubdirectory("");
+                        setSelectedSubdirectoryB("");
                     }
                 } else {
                     setSelectedSubdirectory("");
+                    setSelectedSubdirectoryB("");
                 }
             }, [selectedLevel]);
 
@@ -4429,7 +4601,7 @@
                 if (selectedPlayerId && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
                     return false;
                 }
-                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectory)) {
+                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectoryB || selectedSubdirectory)) {
                     return false;
                 }
                 return true;
@@ -4570,7 +4742,7 @@
                         React.createElement(React.Fragment, null,
                             reportDataB && reportDataB.actions && reportDataB.actions.length ?
                             React.createElement('div', { className: "mb-2 text-sm text-gray-400" },
-                                "Team A / Field A and Team B / Field B shown separately when both played.") : null,
+                                "Team A / Field A and Team B / Field B shown when both played.") : null,
                             React.createElement('h3', { className: "gold-accent font-bold mb-2" }, "Team A – Field A"),
                             React.createElement(SummaryMetrics, { stats: reportData.statistics || {},
                                 actions: analysisResults }),
@@ -4672,17 +4844,17 @@
                             onLockLevel: handleLockLevelB,
                             onLevelChange: function(level) {
                                 setSelectedLevel(level);
-                                setSelectedSubdirectory("");
+                                setSelectedSubdirectoryB("");
                             },
                             selectedLevel: selectedLevel,
-                            selectedSubdirectory: selectedSubdirectory,
-                            onSubdirectoryChange: setSelectedSubdirectory,
+                            selectedSubdirectory: selectedSubdirectoryB,
+                            onSubdirectoryChange: setSelectedSubdirectoryB,
                             t: t,
                             fieldLabel: "Field B",
                             hideAddPlayer: true
                         }),
                         React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
-                            "Realtime Play works with Field A only, Field B only, or both. Shared level must be unlocked for every selected player."),
+                            "Field A and Field B play together. Each field can use its own challenge (e.g. A=SF-30N, B=random); both halves stay lit on the same timeline."),
                         (selectedPlayerId || selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",

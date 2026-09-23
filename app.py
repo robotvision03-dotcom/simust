@@ -1639,7 +1639,14 @@ async def app_config():
         "public_mode": PUBLIC_MODE,
         "operator_path": "/operator",
         "player_path": "/login",
-        "foundation_subdirs": ["SF-30N", "SF-60N", "SF-110N", "SF-180N"],
+        "foundation_subdirs": [
+            "SF-30N", "SF-60N", "SF-110N", "SF-180N",
+            "digit", "random", "rotation",
+            "sum", "sub", "multiply", "divide",
+            "sequence", "compound", "color_rule", "go_nogo", "stroop",
+            "spatial", "memory", "move_memory", "tracking", "tactical",
+            "flex", "dual_rule", "peripheral", "emotion", "symbols",
+        ],
         "levels": levels,
         "worldwide": True,
         "lab_online": True if not PUBLIC_MODE else bool((simust_remote.get_status() or {}).get("lab_online")),
@@ -1890,8 +1897,9 @@ async def start_realtime_playback(req: Request):
                 raise HTTPException(404, f"Player not found: {pid}")
             progress = simust_progress.ensure_progress(users[pid])
             users[pid]["progress"] = progress
+            entry_sub = str((_entry or {}).get("subdirectory") or subdirectory or "").strip()
             if not admin_test_override:
-                ok, reason = simust_progress.can_play(progress, level_id, subdirectory)
+                ok, reason = simust_progress.can_play(progress, level_id, entry_sub or subdirectory)
                 if not ok:
                     raise HTTPException(403, f"{pid}: {reason}")
                 # Scheduled booking window: only during start <= now < end on this field
@@ -1901,21 +1909,36 @@ async def start_realtime_playback(req: Request):
         level_path = get_level_path(level_id)
 
         # ---- If subdirectory is provided, append it to the path ----
-        if subdirectory:
-            level_path = os.path.join(level_path, subdirectory)
-            # Ensure the path exists
-            if not os.path.isdir(level_path):
-                raise HTTPException(400, f"Subdirectory not found: {level_path}")
+        # Foundation: launch at level root so the player can run Field A / Field B
+        # as separate phases (e.g. A=SF-30N then B=random), each with its own tests.
+        launch_path = level_path
+        if subdirectory and level_id != "L00-Foundation":
+            launch_path = os.path.join(level_path, subdirectory)
+            if not os.path.isdir(launch_path):
+                raise HTTPException(400, f"Subdirectory not found: {launch_path}")
+        elif subdirectory and level_id == "L00-Foundation":
+            # Validate every selected field's subdirectory exists
+            subs_to_check = set()
+            for _pid, _fid, entry in play_slots:
+                sub = str((entry or {}).get("subdirectory") or subdirectory or "").strip()
+                if sub:
+                    subs_to_check.add(sub)
+            if not subs_to_check and subdirectory:
+                subs_to_check.add(subdirectory)
+            for sub in subs_to_check:
+                cand = os.path.join(level_path, sub)
+                if not os.path.isdir(cand):
+                    raise HTTPException(400, f"Subdirectory not found: {cand}")
+            launch_path = level_path
 
         # For Foundation, we may need to create a dummy path if it doesn't exist
         if level_id == "L00-Foundation" and not subdirectory:
-            # If no subdirectory given, we default to the main folder (but we want to enforce subdirectory selection)
-            # Actually the frontend should always send a subdirectory for Foundation.
             if not os.path.exists(level_path):
                 os.makedirs(level_path, exist_ok=True)
 
-        if not os.path.isdir(level_path):
-            raise HTTPException(400, f"Level directory not found: {level_path}")
+        if not os.path.isdir(launch_path):
+            raise HTTPException(400, f"Level directory not found: {launch_path}")
+        level_path = launch_path
 
         write_visualization_setting(bool(data.get("visualization_enabled", False)))
         write_simulation_setting(bool(data.get("simulation_enabled", False)))
@@ -1944,15 +1967,31 @@ async def start_realtime_playback(req: Request):
             field_map = {"A": None, "B": None}
             for entry in players_payload:
                 fid = _reservation_field_id(entry)
+                entry_sub = str((entry or {}).get("subdirectory") or subdirectory or "").strip()
                 field_map[fid] = {
                     "player_id": (entry or {}).get("player_id") or "",
                     "player_name": (entry or {}).get("player_name") or "",
                     "player_surname": (entry or {}).get("player_surname") or "",
                     "field": fid,
+                    "subdirectory": entry_sub,
+                    "level": level_id,
                 }
+            active_list = [
+                fid for fid in ("A", "B")
+                if isinstance(field_map.get(fid), dict)
+                and str(field_map[fid].get("player_id") or "").strip()
+            ]
+            # Both selected fields stay active together (neither half dark).
+            phase_active = active_list or ["A"]
             os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
             with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"), "w", encoding="utf-8") as f:
-                json.dump({"fields": field_map, "players": players_payload}, f, indent=2)
+                json.dump({
+                    "fields": field_map,
+                    "players": players_payload,
+                    "active": phase_active,
+                    "level": level_id,
+                    "separate_fields": False,
+                }, f, indent=2)
         except Exception as e:
             logger.warning("Could not write players_fields.json: %s", e)
         try:
@@ -2302,18 +2341,40 @@ def _format_realtime_field_report(folder: str) -> Optional[dict]:
     wrong = sum(1 for r in formatted_results if r["result"] == "Wrong")
     miss = sum(1 for r in formatted_results if r["result"] == "Miss")
     total = len(formatted_results)
-    correct_times = []
+    # ET: avg goal-entry & avg session over Correct/Miss/Late only (Wrong excluded)
+    goal_times = []
+    session_durs = []
     for r in formatted_results:
-        if r["result"] == "Correct":
-            tm = r.get("time_of_min")
-            try:
-                if tm is not None and tm != "-" and tm != "N/A":
-                    val = float(tm)
-                    if val > 0:
-                        correct_times.append(val)
-            except Exception:
-                pass
-    avg_finishing_time = sum(correct_times) / len(correct_times) if correct_times else 0
+        if r["result"] not in ("Correct", "Miss", "Late"):
+            continue
+        tm = r.get("time_of_min")
+        sd_raw = r.get("session_duration")
+        try:
+            sd = float(sd_raw) if sd_raw not in (None, "-", "N/A", "") else None
+            if sd is not None and sd <= 0:
+                sd = None
+        except (TypeError, ValueError):
+            sd = None
+        try:
+            val = float(tm) if tm not in (None, "-", "N/A", "") else None
+            if val is not None and val <= 0:
+                val = None
+        except (TypeError, ValueError):
+            val = None
+        if val is None and r["result"] == "Miss" and sd is not None:
+            val = sd
+        if val is not None and sd is not None and val > sd:
+            val = sd
+        if val is not None:
+            goal_times.append(val)
+        if sd is not None:
+            session_durs.append(sd)
+    avg_finishing_time = sum(goal_times) / len(goal_times) if goal_times else 0
+    avg_session_time = sum(session_durs) / len(session_durs) if session_durs else 0
+    if avg_finishing_time > 0 and avg_session_time > 0:
+        aet_percent = max(0.0, min(100.0, (1.0 - (avg_finishing_time / avg_session_time)) * 100.0))
+    else:
+        aet_percent = 0.0
     total_distance = 0.0
     if os.path.exists(os.path.join(folder, "recognition.json")):
         total_distance = compute_total_distance_from_recognition(folder)
@@ -2330,6 +2391,8 @@ def _format_realtime_field_report(folder: str) -> Optional[dict]:
         "miss": miss,
         "total": total,
         "avg_finishing_time": avg_finishing_time,
+        "avg_session_time": avg_session_time,
+        "aet_percent": aet_percent,
         "total_distance": total_distance,
         "goals_by_screen": goals_by_screen,
         "avg_ae": avg_ae,
@@ -3017,6 +3080,7 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
             "aet": metrics.get("aet"),
             "aet_percent": float(metrics.get("aet_percent") or 0.0),
             "aet_display": metrics.get("aet_display") or "-",
+            "aet_session_display": metrics.get("aet_session_display"),
             "correct": int(metrics.get("correct") or 0),
             "late": int(metrics.get("late") or 0),
             "wrong": int(metrics.get("wrong") or 0),
@@ -3071,34 +3135,53 @@ def summarize_results_section_metrics(results_list):
             pass
     avg_ae = (sum(ae_values) / len(ae_values)) if ae_values else 0.0
 
-    correct_times = []
-    correct_ratios = []
+    # Execution Time (ET) — Wrong excluded from both averages:
+    #   avg_goal    = mean goal-entry time over Correct / Miss / Late
+    #   avg_session = mean session duration over Correct / Miss / Late
+    #   ring fill   = (1 - avg_goal / avg_session) × 100
+    # Miss with no stamped entry → treat goal-entry as full session.
+    entry_times = []
+    session_durs = []
+
     for r in results_list:
-        if r.get("result") != "Correct":
+        res = r.get("result")
+        if res not in ("Correct", "Miss", "Late"):
             continue
         tm = r.get("finishing_time")
-        if tm is None or tm == 0 or tm == "0" or tm == "-":
+        if tm is None or tm == 0 or tm == "0" or tm == "-" or tm == "":
             tm = r.get("time_of_min")
         tm = _parse_positive_float(tm)
         sd = _parse_positive_float(r.get("session_duration"))
-        if tm is None:
-            continue
-        correct_times.append(tm)
-        if sd is not None:
-            correct_ratios.append(tm / sd)
 
-    if correct_times:
-        aet = sum(correct_times) / len(correct_times)
-        if correct_ratios:
-            avg_ratio = sum(correct_ratios) / len(correct_ratios)
-            aet_percent = max(0.0, min(100.0, (1.0 - avg_ratio) * 100.0))
-        else:
-            aet_percent = 0.0
+        if sd is not None:
+            session_durs.append(sd)
+        # Miss with no stamped entry → count full session as goal-entry
+        if tm is None and res == "Miss" and sd is not None:
+            tm = sd
+        # Goal-entry must not exceed session window
+        if tm is not None and sd is not None and tm > sd:
+            tm = sd
+        if tm is not None:
+            entry_times.append(tm)
+
+    if entry_times:
+        aet = sum(entry_times) / len(entry_times)
         aet_display = f"{aet:.2f}s"
     else:
         aet = None
-        aet_percent = 0.0
         aet_display = "-"
+
+    if session_durs:
+        avg_session = sum(session_durs) / len(session_durs)
+        aet_session_display = f"{avg_session:.2f}s"
+    else:
+        avg_session = None
+        aet_session_display = None
+
+    if aet is not None and avg_session is not None and avg_session > 0:
+        aet_percent = max(0.0, min(100.0, (1.0 - (aet / avg_session)) * 100.0))
+    else:
+        aet_percent = 0.0
 
     return {
         "total_distance": float(total_distance),
@@ -3113,6 +3196,7 @@ def summarize_results_section_metrics(results_list):
         "aet": aet,
         "aet_percent": float(aet_percent),
         "aet_display": aet_display,
+        "aet_session_display": aet_session_display,
     }
 
 
@@ -3138,19 +3222,33 @@ def _combine_section_metrics(section_metrics):
     aac = sum(float(m.get("aac") or 0.0) for m in section_metrics) / len(section_metrics)
     avg_ae = sum(float(m.get("avg_ae") or 0.0) for m in section_metrics) / len(section_metrics)
     aets = [m.get("aet") for m in section_metrics if m.get("aet") is not None]
-    aet_percents = [
-        float(m.get("aet_percent") or 0.0)
-        for m in section_metrics
-        if m.get("aet") is not None
-    ]
     if aets:
         aet = sum(float(a) for a in aets) / len(aets)
-        aet_percent = sum(aet_percents) / len(aet_percents) if aet_percents else 0.0
         aet_display = f"{aet:.2f}s"
+        sess = [
+            m.get("aet_session_display")
+            for m in section_metrics
+            if m.get("aet_session_display") and m.get("aet_session_display") != "-"
+        ]
+        # Average numeric session displays when present
+        sess_vals = []
+        for s in sess:
+            try:
+                sess_vals.append(float(str(s).rstrip("sS")))
+            except (TypeError, ValueError):
+                pass
+        if sess_vals:
+            avg_session = sum(sess_vals) / len(sess_vals)
+            aet_session_display = f"{avg_session:.2f}s"
+            aet_percent = max(0.0, min(100.0, (1.0 - (aet / avg_session)) * 100.0))
+        else:
+            aet_session_display = None
+            aet_percent = 0.0
     else:
         aet = None
         aet_percent = 0.0
         aet_display = "-"
+        aet_session_display = None
 
     return {
         "total_distance": float(total_distance),
@@ -3166,6 +3264,7 @@ def _combine_section_metrics(section_metrics):
         "aet": aet,
         "aet_percent": float(aet_percent),
         "aet_display": aet_display,
+        "aet_session_display": aet_session_display,
         "section_metrics": section_metrics,
     }
 
@@ -3245,6 +3344,7 @@ def build_results_ring_panel(metrics, field="A"):
         "slice_disp": int(slices.get("displacement") or 4),
         "aet_percent": float(metrics.get("aet_percent") or 0.0),
         "aet_display": metrics.get("aet_display") or "-",
+        "aet_session_display": metrics.get("aet_session_display"),
         "avg_ae": float(metrics.get("avg_ae") or 0.0),
         "ae_display": metrics.get("ae_display") or "-",
         "aac": float(metrics.get("aac") or 0.0),
@@ -3380,6 +3480,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             "slice_disp": slice_disp,
             "aet_percent": aet_percent,
             "aet_display": aet_display,
+            "aet_session_display": metrics.get("aet_session_display"),
             "avg_ae": avg_ae,
             "ae_display": ae_display,
             "aac": aac,
@@ -3701,7 +3802,14 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 kind, panel = hit
                 if kind == "aet":
                     ad = panel.get("aet_display") or "-"
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ad if ad != "-" else "-"])
+                    sd = panel.get("aet_session_display")
+                    # Goal-entry average on top of average session (On) time
+                    lines = [ad if ad != "-" else "-"]
+                    if sd and sd != "-":
+                        lines.append(str(sd))
+                    draw_text_inside_ring_on_pil(
+                        draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, lines
+                    )
                     draw_metric_label(draw, "Execution Time", center_x, rect_y)
                 elif kind == "ae":
                     ed = panel.get("ae_display") or "-"
@@ -4056,7 +4164,10 @@ async def create_video_results(req: Request):
                 except Exception as exc:
                     logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
 
-            video_results = [r for r in all_results if r.get("video_index") == video_index]
+            video_results = [
+                r for r in all_results
+                if int(r.get("video_index") or 0) == int(video_index)
+            ]
             if not video_results:
                 logger.warning("No results for video_index %s on Field %s", video_index, fid)
                 continue
@@ -4075,14 +4186,19 @@ async def create_video_results(req: Request):
             return {"status": "error", "message": "No results available"}
 
         # One results video: only active fields' rings (A and/or B)
-        video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
+        # Separate field phases → distinct files so A then B do not overwrite.
+        if len(panels) == 1:
+            only_fid = next(iter(panels.keys()))
+            video_path = os.path.join(session_root, f"results_video_{video_index}_field_{only_fid}.mp4")
+        else:
+            video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
         extra = [panels[fid] for fid in ("A", "B") if fid in panels and fid != primary_fid]
         if "A" in panels and "B" in panels:
             primary_fid = "A"
             primary_dir = os.path.join(session_root, "field_A")
             primary_rows = [
                 r for r in next(j[2] for j in field_jobs if j[0] == "A")
-                if r.get("video_index") == video_index
+                if int(r.get("video_index") or 0) == int(video_index)
             ]
             extra = [panels["B"]]
         elif "B" in panels and "A" not in panels:
@@ -4090,7 +4206,7 @@ async def create_video_results(req: Request):
             primary_dir = os.path.join(session_root, "field_B")
             primary_rows = [
                 r for r in next(j[2] for j in field_jobs if j[0] == "B")
-                if r.get("video_index") == video_index
+                if int(r.get("video_index") or 0) == int(video_index)
             ]
             extra = []
 
@@ -4273,6 +4389,9 @@ async def create_results_video(req: Request):
                 primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "B")
 
             video_path = os.path.join(session_root, "final_results_video.mp4")
+            if len(panels) == 1:
+                only_fid = next(iter(panels.keys()))
+                video_path = os.path.join(session_root, f"final_results_video_field_{only_fid}.mp4")
             logger.info(
                 "Generating final results video for fields %s (coach clip on primary %s): %s",
                 ",".join(sorted(panels.keys())),
@@ -4627,12 +4746,15 @@ async def unlock_level(req: Request):
         data = await req.json()
         player_id = data.get("player_id")
         level_id = data.get("level_id")
+        subdirectory = str(data.get("subdirectory") or "").strip()
 
         if not player_id or not level_id:
             raise HTTPException(400, "Missing player_id or level_id")
 
-        if level_id not in ALL_LEVELS:
-            raise HTTPException(400, "Invalid level ID")
+        # Foundation playlist chips from PROGRESS: L00-Foundation/SF-30N
+        if isinstance(level_id, str) and level_id.startswith(f"{simust_progress.FOUNDATION_LEVEL}/"):
+            subdirectory = level_id.split("/", 1)[1].strip()
+            level_id = simust_progress.FOUNDATION_LEVEL
 
         users = load_users()
         if player_id not in users:
@@ -4641,6 +4763,33 @@ async def unlock_level(req: Request):
         progress = simust_progress.ensure_progress(users[player_id])
         unlocked = list(progress.get("unlocked_levels") or [])
         playlists = list(progress.get("unlocked_playlists") or [])
+
+        if level_id == simust_progress.FOUNDATION_LEVEL and subdirectory:
+            if subdirectory not in simust_progress.FOUNDATION_ALL_PLAYLISTS:
+                raise HTTPException(400, f"Invalid Foundation playlist: {subdirectory}")
+            changed = False
+            if subdirectory not in playlists:
+                playlists.append(subdirectory)
+                progress["unlocked_playlists"] = playlists
+                changed = True
+            if simust_progress.FOUNDATION_LEVEL not in unlocked:
+                unlocked.append(simust_progress.FOUNDATION_LEVEL)
+                progress["unlocked_levels"] = unlocked
+                changed = True
+            progress["current_level"] = simust_progress.FOUNDATION_LEVEL
+            if changed:
+                users[player_id]["progress"] = progress
+                save_users(users)
+                return {
+                    "status": "success",
+                    "message": f"Foundation playlist {subdirectory} unlocked for player {player_id}",
+                    "unlocked_playlists": playlists,
+                }
+            return {"status": "info", "message": f"Playlist {subdirectory} already unlocked"}
+
+        if level_id not in ALL_LEVELS:
+            raise HTTPException(400, "Invalid level ID")
+
         if level_id == simust_progress.FOUNDATION_LEVEL:
             # Admin force-unlock of Foundation opens all SF playlists.
             for name in simust_progress.FOUNDATION_PLAYLISTS:
@@ -4662,7 +4811,7 @@ async def unlock_level(req: Request):
             save_users(users)
             return {"status": "success", "message": f"Level {level_id} unlocked for player {player_id}"}
         else:
-            if level_id == simust_progress.FOUNDATION_LEVEL and playlists != list(progress.get("unlocked_playlists") or []):
+            if level_id == simust_progress.FOUNDATION_LEVEL:
                 progress["unlocked_playlists"] = playlists
                 users[player_id]["progress"] = progress
                 save_users(users)
@@ -4681,21 +4830,48 @@ async def lock_level(req: Request):
         data = await req.json()
         player_id = data.get("player_id")
         level_id = data.get("level_id")
+        subdirectory = str(data.get("subdirectory") or "").strip()
 
         if not player_id or not level_id:
             raise HTTPException(400, "Missing player_id or level_id")
 
-        if level_id not in ALL_LEVELS:
-            raise HTTPException(400, "Invalid level ID")
-
-        if level_id == "L00-Foundation":
-            raise HTTPException(400, "Lock Foundation playlists via booking policy; Foundation umbrella cannot be locked here")
+        if isinstance(level_id, str) and level_id.startswith(f"{simust_progress.FOUNDATION_LEVEL}/"):
+            subdirectory = level_id.split("/", 1)[1].strip()
+            level_id = simust_progress.FOUNDATION_LEVEL
 
         users = load_users()
         if player_id not in users:
             raise HTTPException(404, "Player not found")
 
         progress = simust_progress.ensure_progress(users[player_id])
+
+        if level_id == simust_progress.FOUNDATION_LEVEL and subdirectory:
+            if subdirectory not in simust_progress.FOUNDATION_ALL_PLAYLISTS:
+                raise HTTPException(400, f"Invalid Foundation playlist: {subdirectory}")
+            if subdirectory in ("digit", "random"):
+                raise HTTPException(400, f"{subdirectory} follows SF unlocks; lock SF playlists instead")
+            playlists = [p for p in (progress.get("unlocked_playlists") or []) if p != subdirectory]
+            progress["unlocked_playlists"] = playlists
+            unlocked = list(progress.get("unlocked_levels") or [])
+            if not playlists and simust_progress.FOUNDATION_LEVEL in unlocked:
+                unlocked = [lvl for lvl in unlocked if lvl != simust_progress.FOUNDATION_LEVEL]
+                progress["unlocked_levels"] = unlocked
+                if progress.get("current_level") == simust_progress.FOUNDATION_LEVEL:
+                    progress["current_level"] = unlocked[0] if unlocked else ""
+            users[player_id]["progress"] = progress
+            save_users(users)
+            return {
+                "status": "success",
+                "message": f"Foundation playlist {subdirectory} locked for player {player_id}",
+                "unlocked_playlists": playlists,
+            }
+
+        if level_id not in ALL_LEVELS:
+            raise HTTPException(400, "Invalid level ID")
+
+        if level_id == "L00-Foundation":
+            raise HTTPException(400, "Lock Foundation playlists individually; Foundation umbrella cannot be locked here")
+
         unlocked = list(progress.get("unlocked_levels", []))
         completed = list(progress.get("completed_levels", []))
 

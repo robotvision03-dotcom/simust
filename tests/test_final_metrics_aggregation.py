@@ -20,13 +20,28 @@ class FinalMetricsAggregationTests(unittest.TestCase):
         rows = [
             {"result": "Correct", "finishing_time": "1.00", "session_duration": "1.50", "ae": 80},
             {"result": "Late", "finishing_time": "0.50", "session_duration": "0.80", "ae": 60},
-            {"result": "Wrong", "finishing_time": "-", "session_duration": "-", "ae": 33},
+            {"result": "Wrong", "finishing_time": "0.90", "session_duration": "1.00", "ae": 33},
         ]
         m = simust_app.summarize_results_section_metrics(rows)
-        self.assertAlmostEqual(m["aet"], 1.0)
-        self.assertEqual(m["aet_display"], "1.00s")
+        # Wrong excluded: avg goal=(1.0+0.5)/2=0.75, avg session=(1.5+0.8)/2=1.15
+        self.assertAlmostEqual(m["aet"], 0.75)
+        self.assertEqual(m["aet_display"], "0.75s")
+        self.assertEqual(m["aet_session_display"], "1.15s")
+        # Ring = (1 - 0.75/1.15) * 100
+        self.assertAlmostEqual(m["aet_percent"], (1.0 - 0.75 / 1.15) * 100.0)
         self.assertAlmostEqual(m["aac"], 200.0 / 3.0)
         self.assertAlmostEqual(m["avg_ae"], (80 + 60 + 33) / 3.0)
+
+    def test_section_aet_ignores_wrong_completely(self):
+        rows = [
+            {"result": "Wrong", "finishing_time": "0.10", "session_duration": "2.00", "ae": 10},
+            {"result": "Wrong", "finishing_time": "0.20", "session_duration": "2.00", "ae": 10},
+        ]
+        m = simust_app.summarize_results_section_metrics(rows)
+        self.assertIsNone(m["aet"])
+        self.assertEqual(m["aet_display"], "-")
+        self.assertIsNone(m["aet_session_display"])
+        self.assertEqual(m["aet_percent"], 0.0)
 
     def test_final_uses_saved_section_rings(self):
         all_results = [
@@ -75,9 +90,15 @@ class FinalMetricsAggregationTests(unittest.TestCase):
             final = simust_app.aggregate_final_section_metrics(all_results, session_folder=tmp)
         # Display metres 37+42+54 = 133 (not raw float sum).
         self.assertEqual(final["distance_m_display"], 37 + 42 + 54)
-        self.assertAlmostEqual(final["aet"], 1.0)
+        # Per video avg goals: (1.2+0.6)/2=0.9, 0.8, 1.0 → final avg 0.9
+        self.assertAlmostEqual(final["aet"], 0.9)
+        # Sessions: (1.5+0.9)/2=1.2, 1.0, 1.2 → avg 1.133…; ring from combined avgs
+        # _combine averages section aets and sessions then 1-(aet/session)
         self.assertAlmostEqual(final["aac"], 100.0)
         self.assertAlmostEqual(final["avg_ae"], (70 + 70 + 50) / 3.0)
+        # Section percents recomputed from avg aet / avg session across boards
+        self.assertGreater(final["aet_percent"], 0.0)
+        self.assertLess(final["aet_percent"], 100.0)
 
 
 if __name__ == "__main__":

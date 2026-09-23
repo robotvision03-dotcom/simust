@@ -1,8 +1,10 @@
 """
 smart_simust_player.py - Screen 2 coach band for image-based labeled actions.
-  SF-30N style assets (N_pass_s1_s2, filler_*, gap_*) → cue file → realtime keypoints.
-  Pre-start waiting animation ("starting"), then On/Gap from frontend timing.
-  VLC used only for per-video / final results.
+  Foundation SF-30/60/110/180N: degree-spaced screens; digit/random: random
+  screens; rotation: spin then hold; sum/sub/multiply/divide: equations on all
+  screens with 2 correct targets per field. 5 tests × 10 actions, On/Gap then
+  −10% each test. Fields are independent.
+  Missing filler/gap → black.
 """
 
 import sys
@@ -18,6 +20,7 @@ import random
 import math
 import re
 from pathlib import Path
+from typing import List, Optional, Tuple
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal, QUrl
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
@@ -141,12 +144,396 @@ FLASH_OFF_MS = 500
 FLASH_REPEAT = 5  # legacy teammate-flash fallback only
 # Same clock as image-cue keypoint offsets in simust_realtime (1.0s = 30 frames).
 DISPLAY_FPS = 30.0
+# 5 tests; foundation SF-*N always uses 10 actions per test.
+LABEL_TEST_COUNT = 5
+LABEL_TIMING_DECAY = 0.90
+LABEL_ACTIONS_PER_TEST = 10
+# Foundation SF degree → screens-between on the field arc (30° per step).
+# SF-30N: adjacent (e.g. 2,3); SF-60N: +1 between; SF-110N: +2; SF-180N: +3.
+FOUNDATION_SF_GAPS = {
+    "SF-30N": 0,
+    "SF-60N": 1,
+    "SF-110N": 2,
+    "SF-180N": 3,
+}
+# Working arcs (adjacent = ~30°). Screens 1 and 8 do not exist.
+FOUNDATION_ARC_A = [2, 3, 4, 12, 13, 14]
+FOUNDATION_ARC_B = [11, 10, 9, 7, 6, 5]
+DISABLED_DISPLAY_SCREENS = {1, 8}
+FOUNDATION_MATH_MODES = ("sum", "sub", "multiply", "divide")
+try:
+    from simust_cognitive import (
+        FOUNDATION_COGNITIVE_MODES,
+        COG_ENCODE_MS,
+        COG_BLANK_MS,
+        build_cognitive_playlist,
+    )
+except ImportError:
+    FOUNDATION_COGNITIVE_MODES = ()
+    COG_ENCODE_MS = 1200
+    COG_BLANK_MS = 400
+
+    def build_cognitive_playlist(*_a, **_k):
+        return []
+
+FOUNDATION_EXTRA_MODES = (
+    ("digit", "random", "rotation")
+    + FOUNDATION_MATH_MODES
+    + tuple(FOUNDATION_COGNITIVE_MODES)
+)
+_FOUNDATION_SF_RE = re.compile(r"(SF-30N|SF-60N|SF-110N|SF-180N)", re.IGNORECASE)
+_cog_alt = "|".join(
+    re.escape(m) for m in (
+        ("digit", "random", "rotation")
+        + FOUNDATION_MATH_MODES
+        + tuple(FOUNDATION_COGNITIVE_MODES)
+    )
+)
+_FOUNDATION_EXTRA_RE = re.compile(
+    rf"(?:^|[/\\])({_cog_alt})(?:[/\\]?)$",
+    re.IGNORECASE,
+)
 TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
 SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
+PLAYERS_FIELDS_FILE = "C:/Users/siama/Documents/simust_player/players_fields.json"
+# Rotation mode: fast pass-image spin around the field arc, then hold on one screen.
+ROTATION_ARC_A = list(FOUNDATION_ARC_A)  # 2→3→4→12→13→14→…
+ROTATION_ARC_B = list(FOUNDATION_ARC_B)  # 11→10→9→7→6→5→…
+ROTATION_STEP_MS = 45
+ROTATION_MIN_LAPS = 2
+# Math modes: equations on every field screen; exactly 2 correct targets per field.
+MATH_CORRECT_PER_FIELD = 2
+MATH_EQ_CACHE_DIR = "C:/Users/siama/Documents/simust_player/math_eq_cache"
+MATH_OP_SYMBOL = {
+    "sum": "+",
+    "sub": "-",
+    "multiply": "x",
+    "divide": "/",
+}
+
+
+def _foundation_challenge_root(path: str) -> str:
+    """Parent L00-Foundation-Challenge folder, even if path is …/SF-30N or …/random."""
+    if not path:
+        return path
+    cur = os.path.normpath(str(path))
+    base = os.path.basename(cur.rstrip("\\/"))
+    low = base.lower()
+    if low in FOUNDATION_EXTRA_MODES or _FOUNDATION_SF_RE.fullmatch(base):
+        return os.path.dirname(cur)
+    # Already the challenge root (or unknown)
+    return cur
+
+
+def _resolve_foundation_mode_dir(level_root: str, subdirectory: str = "") -> Tuple[str, str]:
+    """Return (directory, mode_id) for a Foundation playlist.
+
+    mode_id is 'random' / 'digit' / 'SF-30N' / … from the subdirectory name,
+    not from whatever folder the process was launched in.
+    """
+    root = _foundation_challenge_root(level_root)
+    sub = str(subdirectory or "").strip()
+    if not sub:
+        base = os.path.basename(os.path.normpath(level_root).rstrip("\\/"))
+        low = base.lower()
+        if low in FOUNDATION_EXTRA_MODES:
+            return os.path.normpath(level_root), low
+        sf = _detect_foundation_sf(level_root)
+        if sf:
+            return os.path.normpath(level_root), sf
+        return root, ""
+    cand = os.path.join(root, sub)
+    if not os.path.isdir(cand):
+        try:
+            os.makedirs(cand, exist_ok=True)
+        except Exception:
+            pass
+    if os.path.isdir(cand):
+        return cand, sub
+    return root, sub
+
+
+def _read_players_fields_payload():
+    try:
+        if os.path.isfile(PLAYERS_FIELDS_FILE):
+            with open(PLAYERS_FIELDS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+    except Exception as exc:
+        logger.warning("Could not read players_fields.json: %s", exc)
+    return {}
+
+
+def _write_players_fields_active(active_fields):
+    """Tell realtime which halves are live for this phase (A, B, or both)."""
+    try:
+        payload = _read_players_fields_payload()
+        payload["active"] = [str(f).upper() for f in (active_fields or []) if str(f).strip()]
+        os.makedirs(os.path.dirname(PLAYERS_FIELDS_FILE), exist_ok=True)
+        with open(PLAYERS_FIELDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as exc:
+        logger.warning("Could not write players_fields active: %s", exc)
+
+
+def _build_separate_field_phases(level_root: str) -> List[dict]:
+    """Build run phases for selected fields.
+
+    - One field → one phase for that half only.
+    - Both fields → one dual phase (both halves lit together).
+      Same playlist: shared SF/random rules.
+      Different playlists: independent screen rules per half in the same tests.
+    """
+    payload = _read_players_fields_payload()
+    fields = payload.get("fields") if isinstance(payload, dict) else {}
+    if not isinstance(fields, dict):
+        fields = {}
+    root = _foundation_challenge_root(level_root)
+    slots = []
+    for fid in ("A", "B"):
+        entry = fields.get(fid)
+        if not isinstance(entry, dict):
+            continue
+        if not str(entry.get("player_id") or "").strip():
+            continue
+        sub = str(entry.get("subdirectory") or "").strip()
+        directory, mode_id = _resolve_foundation_mode_dir(root, sub)
+        slots.append({
+            "field": fid,
+            "directory": directory,
+            "subdirectory": sub or mode_id,
+            "mode_id": mode_id or sub,
+            "player_id": str(entry.get("player_id") or ""),
+        })
+    if not slots:
+        try:
+            import simust_fields
+            active = sorted(simust_fields.load_active_fields(PLAYERS_FIELDS_FILE))
+        except Exception:
+            active = ["A", "B"]
+        directory, mode_id = _resolve_foundation_mode_dir(level_root, "")
+        return [{
+            "active": active,
+            "directory": directory,
+            "subdirectory": mode_id,
+            "mode_id": mode_id,
+            "field_modes": {fid: mode_id for fid in active},
+            "label": "Fields " + "+".join(active),
+            "player_id": "",
+        }]
+
+    if len(slots) == 1:
+        s = slots[0]
+        return [{
+            "active": [s["field"]],
+            "directory": s["directory"],
+            "subdirectory": s["subdirectory"],
+            "mode_id": s["mode_id"],
+            "field_modes": {s["field"]: s["mode_id"]},
+            "label": f"Field {s['field']}" + (f" [{s['subdirectory']}]" if s["subdirectory"] else ""),
+            "player_id": s["player_id"],
+        }]
+
+    # Both A and B — always together so neither half stays dark.
+    modes = {s["field"]: s["mode_id"] for s in slots}
+    dirs = {s["field"]: s["directory"] for s in slots}
+    same_mode = len(set(m for m in modes.values() if m)) == 1 and all(modes.values())
+    label_parts = [f"{s['field']}[{s['subdirectory'] or s['mode_id'] or '?'}]" for s in slots]
+    return [{
+        "active": [s["field"] for s in slots],
+        "directory": dirs.get("A") or dirs.get("B") or root,
+        "subdirectory": (modes.get("A") if same_mode else ""),
+        "mode_id": (modes.get("A") if same_mode else "dual"),
+        "field_modes": modes,
+        "field_directories": dirs,
+        "dual_independent": (not same_mode),
+        "label": " + ".join(label_parts),
+        "player_id": "",
+    }]
+
+
+def _mode_slot_factory(mode_id: str, active_fields):
+    """Return make_slot(action_in_set, test_num) for SF degree or extra modes."""
+    active = set(active_fields or [])
+    mode = str(mode_id or "").strip()
+    mode_low = mode.lower()
+    if mode_low in FOUNDATION_MATH_MODES:
+        return lambda *_: _math_correct_slot(active)
+    if mode_low == "rotation":
+        return lambda *_: _rotation_field_slot(active)
+    if mode_low in FOUNDATION_EXTRA_MODES or not mode or mode_low == "dual":
+        return lambda *_: _random_field_slot(active)
+    sf_id = None
+    if mode.upper() in FOUNDATION_SF_GAPS:
+        for name in FOUNDATION_SF_GAPS:
+            if name.upper() == mode.upper():
+                sf_id = name
+                break
+    if not sf_id:
+        return lambda *_: _random_field_slot(active)
+    slots = _foundation_action_slots(sf_id, active, LABEL_ACTIONS_PER_TEST)
+    if not slots:
+        return lambda *_: _random_field_slot(active)
+
+    def _sf_slot(action_in_set, _test_num):
+        return slots[(int(action_in_set) - 1) % len(slots)]
+
+    return _sf_slot
+
+
+def _build_dual_field_playlist(
+    field_modes: dict,
+    field_directories: dict,
+    active_fields,
+    gaps: dict = None,
+) -> List[dict]:
+    """One shared 5×10 timeline; each field uses its own challenge screen rules."""
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active:
+        return []
+    gaps = gaps or {}
+    factories = {}
+    images = {}
+    for fid in active:
+        mode = (field_modes or {}).get(fid) or ""
+        mode_low = str(mode).strip().lower()
+        directory = (field_directories or {}).get(fid) or ""
+        factories[fid] = _mode_slot_factory(mode, [fid])
+        if mode_low in FOUNDATION_MATH_MODES:
+            images[fid] = None
+            continue
+        if mode_low in FOUNDATION_COGNITIVE_MODES:
+            images[fid] = None
+            continue
+        images[fid] = _find_any_foundation_pass_image(directory)
+        if not images[fid] and TEAMATE_IMAGE and os.path.isfile(TEAMATE_IMAGE):
+            images[fid] = TEAMATE_IMAGE
+    non_math = [
+        f for f in active
+        if str((field_modes or {}).get(f) or "").strip().lower()
+        not in FOUNDATION_MATH_MODES
+        and str((field_modes or {}).get(f) or "").strip().lower()
+        not in FOUNDATION_COGNITIVE_MODES
+    ]
+    if non_math and not any(images.get(f) for f in non_math):
+        return []
+
+    playlist = []
+    for test_num in range(1, LABEL_TEST_COUNT + 1):
+        scale = LABEL_TIMING_DECAY ** (test_num - 1)
+        for action_in_set in range(1, LABEL_ACTIONS_PER_TEST + 1):
+            field_screens = {}
+            screen_images = {}
+            mode_bits = []
+            for fid in active:
+                mode = str((field_modes or {}).get(fid) or "").strip()
+                mode_low = mode.lower()
+                if mode_low in FOUNDATION_MATH_MODES:
+                    correct, imgs = _math_screen_layout(mode_low, fid)
+                    if not correct or not imgs:
+                        continue
+                    field_screens[fid] = correct
+                    screen_images.update(imgs)
+                    mode_bits.append(f"{fid}:{mode_low}")
+                    continue
+                if mode_low in FOUNDATION_COGNITIVE_MODES:
+                    try:
+                        from simust_cognitive import build_cognitive_layout
+                        correct, probe, encode, meta = build_cognitive_layout(
+                            mode_low, fid, action_in_set
+                        )
+                    except Exception:
+                        continue
+                    if not probe:
+                        continue
+                    field_screens[fid] = list(correct or [])
+                    screen_images.update({int(k): v for k, v in probe.items() if v})
+                    mode_bits.append(f"{fid}:{mode_low}")
+                    continue
+                slot = factories[fid](action_in_set, test_num) or {}
+                sids = [int(s) for s in (slot.get(fid) or [])]
+                if not sids:
+                    continue
+                img = images.get(fid)
+                if not img:
+                    continue
+                field_screens[fid] = sids
+                for s in sids:
+                    screen_images[int(s)] = img
+                mode_bits.append(f"{fid}:{(field_modes or {}).get(fid) or '?'}")
+            if not screen_images:
+                continue
+            rotation_fields = [
+                fid for fid in active
+                if str((field_modes or {}).get(fid) or "").strip().lower() == "rotation"
+            ]
+            math_fields = [
+                fid for fid in active
+                if str((field_modes or {}).get(fid) or "").strip().lower() in FOUNDATION_MATH_MODES
+            ]
+            cog_fields = [
+                fid for fid in active
+                if str((field_modes or {}).get(fid) or "").strip().lower() in FOUNDATION_COGNITIVE_MODES
+            ]
+            lit = "_".join(str(s) for s in sorted(screen_images.keys())
+                           if any(int(s) in (field_screens.get(f) or []) for f in field_screens))
+            # Prefer listing only correct/target screens in label
+            target_ids = sorted(
+                int(s) for sids in field_screens.values() for s in sids
+            )
+            lit = "_".join(str(s) for s in target_ids) if target_ids else lit
+            entry = {
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": LABEL_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == LABEL_ACTIONS_PER_TEST,
+                "timing_scale": scale,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "parts": [{
+                    "screens": list(field_screens.get(next(iter(field_screens)), [])),
+                    "path": next(iter(screen_images.values())),
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": screen_images,
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"dual({'|'.join(mode_bits)}) T{test_num}/{LABEL_TEST_COUNT} "
+                    f"a{action_in_set}/{LABEL_ACTIONS_PER_TEST} "
+                    f"pass_{lit} x{scale:.2f}"
+                ),
+                "path": f"image://dual/test{test_num}/{action_in_set}",
+                "foundation_sf": "dual",
+            }
+            if math_fields or cog_fields:
+                entry["no_fillers"] = True
+            if math_fields:
+                entry["math_op"] = str(
+                    (field_modes or {}).get(math_fields[0]) or ""
+                ).lower()
+            if cog_fields:
+                entry["cognitive"] = str(
+                    (field_modes or {}).get(cog_fields[0]) or ""
+                ).lower()
+            if rotation_fields:
+                entry["rotation"] = True
+                entry["rotation_fields"] = rotation_fields
+                entry["spin_arcs"] = _spin_arcs_for_fields(rotation_fields)
+            playlist.append(entry)
+    return playlist
+
+
 # Gap images (gap_N) appear on these slices BEFORE action N
 # (gap_1 before action 1; gap_2 between action 1 and 2; …).
+# Missing gap_/filler_ → black (nothing displayed on those slices).
 GAP_SCREENS = (2, 14, 7, 9)
 PASS_FLASH_STEPS = (
     {"A": 4, "B": 11},
@@ -216,22 +603,24 @@ def _field_for_screen(screen_id):
     sid = str(int(screen_id))
     if simust_fields is not None:
         return simust_fields.field_for_screens([sid]) or "A"
-    if sid in {"1", "2", "3", "4", "12", "13", "14"}:
+    if sid in {"2", "3", "4", "12", "13", "14"}:
         return "A"
     return "B"
 
 
 def _active_field_screens(active_fields):
-    """All coach-band screens belonging to currently active fields."""
+    """All existing coach-band screens for currently active fields (never 1 or 8)."""
     screens = []
     for fid in sorted(active_fields or []):
         if simust_fields is not None:
             for s in sorted(simust_fields.screens_for_field(fid), key=lambda x: int(x)):
+                if int(s) in DISABLED_DISPLAY_SCREENS:
+                    continue
                 screens.append(int(s))
         elif fid == "A":
-            screens.extend([1, 2, 3, 4, 12, 13, 14])
+            screens.extend([2, 3, 4, 12, 13, 14])
         elif fid == "B":
-            screens.extend([5, 6, 7, 8, 9, 10, 11])
+            screens.extend([5, 6, 7, 9, 10, 11])
     return screens
 
 
@@ -287,6 +676,579 @@ def _scan_label_assets(directory):
     return actions, fillers, gaps
 
 
+def _detect_foundation_sf(directory) -> Optional[str]:
+    """Return canonical SF-30N / SF-60N / SF-110N / SF-180N for Foundation folders."""
+    if not directory:
+        return None
+    norm = os.path.normpath(str(directory)).replace("\\", "/")
+    base = os.path.basename(norm.rstrip("/"))
+    m = _FOUNDATION_SF_RE.search(base) or _FOUNDATION_SF_RE.search(norm)
+    if not m:
+        return None
+    found = m.group(1).upper()
+    for name in FOUNDATION_SF_GAPS:
+        if name.upper() == found:
+            return name
+    return found
+
+
+def _detect_foundation_extra_mode(directory) -> Optional[str]:
+    """Return 'digit' or 'random' when the Foundation subdirectory is that mode."""
+    if not directory:
+        return None
+    norm = os.path.normpath(str(directory)).replace("\\", "/")
+    base = os.path.basename(norm.rstrip("/")).lower()
+    if base in FOUNDATION_EXTRA_MODES:
+        return base
+    m = _FOUNDATION_EXTRA_RE.search(norm)
+    return m.group(1).lower() if m else None
+
+
+def _foundation_sf_id(directory) -> Optional[str]:
+    return _detect_foundation_sf(directory)
+
+
+def _find_foundation_pass_image(directory) -> Optional[str]:
+    """One pass image in the SF/digit/random folder (any *pass* image, else first image)."""
+    if not directory or not os.path.isdir(directory):
+        return None
+    image_ext = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    try:
+        names = sorted(os.listdir(directory))
+    except Exception:
+        return None
+    images = []
+    for name in names:
+        full = os.path.join(directory, name)
+        if not os.path.isfile(full):
+            continue
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in image_ext:
+            continue
+        if _GAP_FILE_RE.match(stem) or _FILLER_FILE_RE.match(stem):
+            continue
+        images.append(full)
+    if not images:
+        return None
+    for path in images:
+        if "pass" in os.path.basename(path).lower():
+            return path
+    for path in images:
+        if _ACTION_FILE_RE.match(os.path.splitext(os.path.basename(path))[0]):
+            return path
+    return images[0]
+
+
+def _find_any_foundation_pass_image(directory) -> Optional[str]:
+    """Pass image from this folder, then sibling Foundation folders, then teamate.png."""
+    direct = _find_foundation_pass_image(directory)
+    if direct:
+        return direct
+    root = _foundation_challenge_root(directory) if directory else None
+    if root and os.path.isdir(root):
+        try:
+            names = sorted(os.listdir(root))
+        except Exception:
+            names = []
+        for name in names:
+            sibling = os.path.join(root, name)
+            if not os.path.isdir(sibling) or sibling == directory:
+                continue
+            hit = _find_foundation_pass_image(sibling)
+            if hit:
+                return hit
+    if TEAMATE_IMAGE and os.path.isfile(TEAMATE_IMAGE):
+        return TEAMATE_IMAGE
+    return None
+
+
+def _find_digit_images(directory) -> List[str]:
+    """Digit assets: 0.png…9.png, digit_N.*, or any image in digit/ (fallback)."""
+    if not directory or not os.path.isdir(directory):
+        return []
+    image_ext = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    digit_named = []
+    other = []
+    try:
+        names = sorted(os.listdir(directory))
+    except Exception:
+        return []
+    for name in names:
+        full = os.path.join(directory, name)
+        if not os.path.isfile(full):
+            continue
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in image_ext:
+            continue
+        if _GAP_FILE_RE.match(stem) or _FILLER_FILE_RE.match(stem):
+            continue
+        low = stem.lower()
+        if re.fullmatch(r"\d", stem) or re.fullmatch(r"digit[_-]?\d+", low):
+            digit_named.append(full)
+        else:
+            other.append(full)
+    return digit_named or other
+
+
+def _pairs_for_degree_gap(arc: List[int], gap: int) -> List[Tuple[int, int]]:
+    """Pairs on arc with exactly `gap` screens between (includes wrap-around)."""
+    n = len(arc or [])
+    if n < 2:
+        return []
+    pairs = []
+    seen = set()
+    span = int(gap) + 1
+    for i in range(n):
+        j = (i + span) % n
+        if i == j:
+            continue
+        a, b = int(arc[i]), int(arc[j])
+        key = (min(a, b), max(a, b))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((a, b))
+    return pairs
+
+
+def _foundation_action_slots(sf_id: str, active_fields, count: int = LABEL_ACTIONS_PER_TEST):
+    """Build `count` screen assignments for this SF degree and active fields.
+
+    Single field: both lit screens are a degree-correct pair on that field's arc.
+    Dual A+B: one screen on A and the mirrored screen on B (same pass image).
+    """
+    gap = int(FOUNDATION_SF_GAPS.get(sf_id, 0))
+    active = set(active_fields or [])
+    pairs_a = _pairs_for_degree_gap(FOUNDATION_ARC_A, gap)
+    pairs_b = _pairs_for_degree_gap(FOUNDATION_ARC_B, gap)
+    slots = []
+    if "A" in active and "B" in active:
+        for i in range(count):
+            if pairs_a:
+                sa = pairs_a[i % len(pairs_a)][0]
+                try:
+                    idx = FOUNDATION_ARC_A.index(sa)
+                except ValueError:
+                    idx = i % len(FOUNDATION_ARC_A)
+                sb = FOUNDATION_ARC_B[idx % len(FOUNDATION_ARC_B)]
+            else:
+                idx = i % len(FOUNDATION_ARC_A)
+                sa = FOUNDATION_ARC_A[idx]
+                sb = FOUNDATION_ARC_B[idx % len(FOUNDATION_ARC_B)]
+            slots.append({"A": [sa], "B": [sb]})
+    elif "A" in active:
+        src = pairs_a or [
+            (FOUNDATION_ARC_A[i], FOUNDATION_ARC_A[(i + gap + 1) % len(FOUNDATION_ARC_A)])
+            for i in range(len(FOUNDATION_ARC_A))
+        ]
+        for i in range(count):
+            a, b = src[i % len(src)]
+            slots.append({"A": [a, b]})
+    elif "B" in active:
+        src = pairs_b or [
+            (FOUNDATION_ARC_B[i], FOUNDATION_ARC_B[(i + gap + 1) % len(FOUNDATION_ARC_B)])
+            for i in range(len(FOUNDATION_ARC_B))
+        ]
+        for i in range(count):
+            a, b = src[i % len(src)]
+            slots.append({"B": [a, b]})
+    return slots
+
+
+def _random_field_slot(active_fields) -> dict:
+    """Fully random lit screens on the working arc — never SF degree pairs.
+
+    Always one random screen per active field (single or dual).
+    """
+    active = set(active_fields or [])
+    slot = {}
+    if "A" in active:
+        slot["A"] = [int(random.choice(FOUNDATION_ARC_A))]
+    if "B" in active:
+        slot["B"] = [int(random.choice(FOUNDATION_ARC_B))]
+    return slot
+
+
+def _rotation_arc_for_field(fid: str) -> List[int]:
+    return list(ROTATION_ARC_A if str(fid).upper() == "A" else ROTATION_ARC_B)
+
+
+def _rotation_field_slot(active_fields) -> dict:
+    """One random stop screen per active field on that field's rotation circle."""
+    active = set(active_fields or [])
+    slot = {}
+    if "A" in active:
+        slot["A"] = [int(random.choice(ROTATION_ARC_A))]
+    if "B" in active:
+        slot["B"] = [int(random.choice(ROTATION_ARC_B))]
+    return slot
+
+
+def _field_all_screens(fid: str) -> List[int]:
+    """Every existing coach-band screen belonging to Field A or B (never 1 or 8)."""
+    fid = str(fid).upper()
+    if simust_fields is not None:
+        try:
+            return sorted(
+                (
+                    int(s) for s in simust_fields.screens_for_field(fid)
+                    if int(s) not in DISABLED_DISPLAY_SCREENS
+                ),
+                key=lambda x: int(x),
+            )
+        except Exception:
+            pass
+    if fid == "A":
+        return [2, 3, 4, 12, 13, 14]
+    return [5, 6, 7, 9, 10, 11]
+
+
+def _math_correct_slot(active_fields, count: int = None) -> dict:
+    """Pick MATH_CORRECT_PER_FIELD distinct target screens per active field."""
+    n = int(count or MATH_CORRECT_PER_FIELD)
+    active = set(active_fields or [])
+    slot = {}
+    for fid in ("A", "B"):
+        if fid not in active:
+            continue
+        pool = list(_field_all_screens(fid))
+        if not pool:
+            continue
+        k = min(n, len(pool))
+        picked = random.sample(pool, k)
+        random.shuffle(picked)
+        slot[fid] = [int(s) for s in picked]
+    return slot
+
+
+def _math_correct_equation(op: str) -> Tuple[str, int, int, int]:
+    """Return (display_text, a, b, result) for a true equation."""
+    op = str(op or "sum").lower()
+    sym = MATH_OP_SYMBOL.get(op, "+")
+    if op == "sub":
+        a = random.randint(0, 9)
+        b = random.randint(0, a)
+        result = a - b
+        return f"{a}{sym}{b}={result}", a, b, result
+    if op == "multiply":
+        a = random.randint(1, 9)
+        b = random.randint(1, 9)
+        result = a * b
+        return f"{a}{sym}{b}={result}", a, b, result
+    if op == "divide":
+        b = random.randint(1, 9)
+        result = random.randint(1, 9)
+        a = b * result
+        return f"{a}{sym}{b}={result}", a, b, result
+    # sum (default)
+    a = random.randint(0, 9)
+    b = random.randint(0, 9)
+    result = a + b
+    return f"{a}{sym}{b}={result}", a, b, result
+
+
+def _math_wrong_equation(op: str) -> str:
+    """Same operands style as correct, but an incorrect result."""
+    text, a, b, right = _math_correct_equation(op)
+    sym = MATH_OP_SYMBOL.get(str(op or "sum").lower(), "+")
+    wrong = right
+    attempts = 0
+    while wrong == right and attempts < 20:
+        attempts += 1
+        lo = 0
+        hi = max(18, right + 9)
+        wrong = random.randint(lo, hi)
+    return f"{a}{sym}{b}={wrong}"
+
+
+def _render_math_equation_image(eq_text: str) -> Optional[str]:
+    """Render equation text to a cached PNG (coach-band tile)."""
+    text = str(eq_text or "").strip()
+    if not text:
+        return None
+    try:
+        os.makedirs(MATH_EQ_CACHE_DIR, exist_ok=True)
+    except Exception:
+        return None
+    safe = re.sub(r"[^\w=+×÷−\-]+", "_", text, flags=re.UNICODE)
+    path = os.path.join(MATH_EQ_CACHE_DIR, f"eq_{safe}.png")
+    if os.path.isfile(path):
+        return path
+    try:
+        from PyQt5.QtGui import QImage, QPainter, QColor, QFont, QPen
+        from PyQt5.QtCore import Qt as _Qt
+    except Exception:
+        try:
+            from PyQt5.QtGui import QImage, QPainter, QColor, QFont, QPen
+            from PyQt5.QtCore import Qt as _Qt
+        except Exception as exc:
+            logger.warning("Cannot render math equation (no Qt): %s", exc)
+            return None
+    w, h = 512, 512
+    img = QImage(w, h, QImage.Format_ARGB32)
+    img.fill(QColor(10, 12, 18))
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.TextAntialiasing)
+    # Subtle tile frame
+    painter.setPen(QPen(QColor(60, 70, 90), 4))
+    painter.drawRoundedRect(12, 12, w - 24, h - 24, 24, 24)
+    font = QFont("Segoe UI", 72, QFont.Bold)
+    painter.setFont(font)
+    painter.setPen(QColor(255, 220, 80))
+    metrics = painter.fontMetrics()
+    # Shrink font if equation is wide (e.g. 8×9=72)
+    while metrics.width(text) > w - 40 and font.pointSize() > 28:
+        font.setPointSize(font.pointSize() - 4)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+    tw = metrics.width(text)
+    th = metrics.height()
+    painter.drawText((w - tw) // 2, (h + th) // 2 - metrics.descent(), text)
+    painter.end()
+    if not img.save(path, "PNG"):
+        return None
+    return path
+
+
+def _math_screen_layout(op: str, fid: str) -> Tuple[List[int], dict]:
+    """All field screens show equations; return (correct_screens, screen_images)."""
+    op = str(op or "sum").lower()
+    screens = list(_field_all_screens(fid))
+    if not screens:
+        return [], {}
+    k = min(MATH_CORRECT_PER_FIELD, len(screens))
+    correct = random.sample(screens, k)
+    correct_set = set(int(s) for s in correct)
+    screen_images = {}
+    used_texts = set()
+    for sid in screens:
+        if int(sid) in correct_set:
+            text, _, _, _ = _math_correct_equation(op)
+            # Avoid duplicate identical correct texts when possible
+            tries = 0
+            while text in used_texts and tries < 8:
+                text, _, _, _ = _math_correct_equation(op)
+                tries += 1
+        else:
+            text = _math_wrong_equation(op)
+            tries = 0
+            while text in used_texts and tries < 8:
+                text = _math_wrong_equation(op)
+                tries += 1
+        used_texts.add(text)
+        path = _render_math_equation_image(text)
+        if path:
+            screen_images[int(sid)] = path
+    if len(screen_images) < k:
+        return [], {}
+    # Only keep correct targets that actually have images
+    correct_out = [int(s) for s in correct if int(s) in screen_images]
+    if len(correct_out) < k:
+        return [], {}
+    return correct_out, screen_images
+
+
+def _build_math_playlist(
+    op: str,
+    active_fields,
+    gaps: dict = None,
+) -> List[dict]:
+    """5×10 math challenge: equations on all screens, 2 correct targets per field."""
+    op = str(op or "sum").lower()
+    if op not in FOUNDATION_MATH_MODES:
+        return []
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active:
+        return []
+    gaps = gaps or {}
+    playlist = []
+    for test_num in range(1, LABEL_TEST_COUNT + 1):
+        scale = LABEL_TIMING_DECAY ** (test_num - 1)
+        for action_in_set in range(1, LABEL_ACTIONS_PER_TEST + 1):
+            field_screens = {}
+            screen_images = {}
+            for fid in active:
+                correct, imgs = _math_screen_layout(op, fid)
+                if not correct or not imgs:
+                    continue
+                field_screens[fid] = correct
+                screen_images.update(imgs)
+            if not field_screens or not screen_images:
+                continue
+            lit = "_".join(str(s) for s in sorted(
+                sid for sids in field_screens.values() for sid in sids
+            ))
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": LABEL_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == LABEL_ACTIONS_PER_TEST,
+                "timing_scale": scale,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "math_op": op,
+                "no_fillers": True,
+                "parts": [{
+                    "screens": list(field_screens.get(next(iter(field_screens)), [])),
+                    "path": next(iter(screen_images.values())),
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": screen_images,
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"{op} T{test_num}/{LABEL_TEST_COUNT} "
+                    f"a{action_in_set}/{LABEL_ACTIONS_PER_TEST} "
+                    f"ok_{lit} x{scale:.2f}"
+                ),
+                "path": f"image://{op}/test{test_num}/{action_in_set}",
+                "foundation_sf": op,
+            })
+    return playlist
+
+
+def _spin_arcs_for_fields(field_ids) -> dict:
+    return {
+        str(fid).upper(): _rotation_arc_for_field(fid)
+        for fid in (field_ids or [])
+        if str(fid).upper() in ("A", "B")
+    }
+
+
+def _build_rotation_playlist(
+    active_fields,
+    pass_image: str,
+    gaps: dict = None,
+) -> List[dict]:
+    """5×10: spin pass image around the field circle, stop on one screen for On time."""
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active or not pass_image:
+        return []
+    gaps = gaps or {}
+    spin_arcs = _spin_arcs_for_fields(active)
+    playlist = []
+    for test_num in range(1, LABEL_TEST_COUNT + 1):
+        scale = LABEL_TIMING_DECAY ** (test_num - 1)
+        for action_in_set in range(1, LABEL_ACTIONS_PER_TEST + 1):
+            slot = _rotation_field_slot(active) or {}
+            field_screens = {}
+            screen_images = {}
+            for fid in active:
+                sids = [int(s) for s in (slot.get(fid) or [])]
+                if not sids:
+                    continue
+                field_screens[fid] = sids
+                for s in sids:
+                    screen_images[int(s)] = pass_image
+            if not screen_images:
+                continue
+            lit = "_".join(str(s) for s in sorted(screen_images.keys()))
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": LABEL_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == LABEL_ACTIONS_PER_TEST,
+                "timing_scale": scale,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "rotation": True,
+                "rotation_fields": list(active),
+                "spin_arcs": spin_arcs,
+                "parts": [{
+                    "screens": list(screen_images.keys()),
+                    "path": pass_image,
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": screen_images,
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"rotation T{test_num}/{LABEL_TEST_COUNT} "
+                    f"a{action_in_set}/{LABEL_ACTIONS_PER_TEST} "
+                    f"stop_{lit} x{scale:.2f}"
+                ),
+                "path": f"image://rotation/test{test_num}/{action_in_set}",
+                "foundation_sf": "rotation",
+            })
+    return playlist
+
+
+def _build_foundation_timed_playlist(
+    mode_id: str,
+    active_fields,
+    image_for_action,
+    gaps: dict,
+    make_slot,
+    label_prefix: str,
+) -> List[dict]:
+    """5 tests × 10 actions, frontend On/Gap then −10% each test."""
+    playlist = []
+    for test_num in range(1, LABEL_TEST_COUNT + 1):
+        scale = LABEL_TIMING_DECAY ** (test_num - 1)
+        for action_in_set in range(1, LABEL_ACTIONS_PER_TEST + 1):
+            slot = make_slot(action_in_set, test_num)
+            if not slot:
+                continue
+            image_path = image_for_action(action_in_set, test_num)
+            if not image_path:
+                continue
+            field_screens = {}
+            screen_images = {}
+            for fid, sids in slot.items():
+                if fid not in set(active_fields or []):
+                    continue
+                field_screens[fid] = [int(s) for s in sids]
+                for s in sids:
+                    screen_images[int(s)] = image_path
+            if not screen_images:
+                continue
+            lit = "_".join(str(s) for s in sorted(screen_images.keys()))
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": LABEL_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == LABEL_ACTIONS_PER_TEST,
+                "timing_scale": scale,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "parts": [{
+                    "screens": list(screen_images.keys()),
+                    "path": image_path,
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": screen_images,
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"{label_prefix} T{test_num}/{LABEL_TEST_COUNT} "
+                    f"a{action_in_set}/{LABEL_ACTIONS_PER_TEST} "
+                    f"pass_{lit} x{scale:.2f}"
+                ),
+                "path": f"image://{mode_id}/test{test_num}/{action_in_set}",
+                "foundation_sf": mode_id,
+            })
+    return playlist
+
+
 def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
     """Place fillers on non-action screens; never reuse filler_N when action is N.
 
@@ -330,10 +1292,11 @@ def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
     return placements
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS"):
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None):
     """Tell simust_realtime which screens are lit (no QR on canvas).
 
     force_end=True: sequence finished — realtime must clear keypoints now.
+    on_sec: effective teammate On duration for this action (session length).
     """
     payload = {
         "active": bool(active) and not force_end,
@@ -342,6 +1305,11 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
         "fields": {},
         "timestamp": time.time(),
     }
+    if on_sec is not None:
+        try:
+            payload["on_sec"] = max(0.1, min(9.9, float(on_sec)))
+        except (TypeError, ValueError):
+            pass
     action_name = str(action or "PASS").strip().upper() or "PASS"
     if active and not force_end and field_screens:
         for fid, screens in field_screens.items():
@@ -496,13 +1464,12 @@ class Ball:
 class WaitingOverlay(QtWidgets.QWidget):
     """
     Enhanced waiting overlay with:
-    - Spinning gold rings in all 14 slices (floating‑point centered)
+    - Spinning gold rings on active-field slices only (inactive half stays dark)
     - "Processing" / "Results" text on rounded, semi‑transparent backgrounds
-    - 2–3 colourful bouncing balls per tile for a lively, professional look
-    - (Slice numbers are not displayed)
+    - 2–3 colourful bouncing balls per active tile
     - Optional status text override (for "Generating final summary…")
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, active_fields=None):
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setMouseTracking(False)
@@ -517,6 +1484,9 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.slice_order = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         self.num_slices = len(self.slice_order)
         self.ring_radius = RING_RADIUS
+        self.active_fields = {"A", "B"}
+        self.active_slice_nums = set(self.slice_order)
+        self.set_active_fields(active_fields)
 
         # Balls per slice (will be created on first paint)
         self.balls_by_slice = None
@@ -545,6 +1515,22 @@ class WaitingOverlay(QtWidgets.QWidget):
         else:
             self.audio_player = None
 
+    def set_active_fields(self, active_fields):
+        """Limit rings/balls to the selected field(s); other half stays black."""
+        active = {
+            str(f).upper()
+            for f in (active_fields or [])
+            if str(f).strip().upper() in ("A", "B")
+        }
+        if not active:
+            active = {"A", "B"}
+        self.active_fields = active
+        # Only physically existing displays (excludes screens 1 and 8)
+        self.active_slice_nums = set(_active_field_screens(active))
+        # Rebuild balls next paint so they stay inside the live half
+        self.balls_by_slice = None
+        self.update()
+
     def set_status_text(self, text):
         """Update the status text (shown inside the rings instead of 'Processing Results')."""
         self.status_text = text
@@ -561,7 +1547,9 @@ class WaitingOverlay(QtWidgets.QWidget):
                 return
             tile_width = w / self.num_slices
             padding = 12
-            for i in range(self.num_slices):
+            for i, slice_num in enumerate(self.slice_order):
+                if int(slice_num) not in self.active_slice_nums:
+                    continue
                 offset_x = self.content_offset.get(i, 0)
                 x0 = int(i * tile_width) + padding + offset_x
                 y0 = padding
@@ -584,13 +1572,17 @@ class WaitingOverlay(QtWidgets.QWidget):
 
         tile_width = w / self.num_slices
 
-        # Draw tile boundaries
+        # Draw tile boundaries only across the active half
         painter.setPen(QPen(QColor(80, 80, 100, 80), 1))
         for i in range(1, self.num_slices):
+            left_num = int(self.slice_order[i - 1])
+            right_num = int(self.slice_order[i])
+            if left_num not in self.active_slice_nums and right_num not in self.active_slice_nums:
+                continue
             x_line = int(i * tile_width)
             painter.drawLine(x_line, 0, x_line, h)
 
-        # Create balls on first paint
+        # Create balls on first paint (active slices only)
         if self.balls_by_slice is None:
             self.balls_by_slice = []
             colors = [
@@ -599,7 +1591,10 @@ class WaitingOverlay(QtWidgets.QWidget):
                 QColor(255, 150, 50), QColor(200, 50, 255), QColor(100, 255, 100),
                 QColor(255, 100, 100)
             ]
-            for i in range(self.num_slices):
+            for i, slice_num in enumerate(self.slice_order):
+                if int(slice_num) not in self.active_slice_nums:
+                    self.balls_by_slice.append([])
+                    continue
                 num_balls = random.randint(2, 3)
                 slice_balls = []
                 padding = 12
@@ -619,8 +1614,10 @@ class WaitingOverlay(QtWidgets.QWidget):
                     slice_balls.append(ball)
                 self.balls_by_slice.append(slice_balls)
 
-        # Draw each slice
+        # Draw each active slice only
         for i, slice_num in enumerate(self.slice_order):
+            if int(slice_num) not in self.active_slice_nums:
+                continue
             offset_x = self.content_offset.get(i, 0)
             cx = int((i + 0.5) * tile_width) + offset_x
             cy = CHART_CENTER_Y
@@ -767,6 +1764,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._asset_fillers = {}
         self._asset_gaps = {}
         self._prestart_done = False  # "starting" wait only once per session
+        self._post_results_index = None
+        self._set_start_time = None
+        self._phase_active = None
+        self._run_phases = []
+        self._phase_index = 0
+        self._level_root = video_directory
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -786,36 +1789,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except:
             pass
 
-        if self.image_based:
-            self.video_files = self._build_image_action_playlist()
-            if not self.video_files:
-                self._update_status_file("error", 0, 0, "No labeled actions / fields for image playlist")
-                QtWidgets.QMessageBox.critical(
-                    None,
-                    "Error",
-                    "No labeled action images found and no Field A/B for image sequence.\n"
-                    f"Expected files like 1_pass_14_3.png in:\n{video_directory}",
-                )
-                self._auto_close(1000)
-                sys.exit(1)
-            logger.info(
-                "Image-based playlist: %s action(s) for fields %s (label_mode=%s)",
-                len(self.video_files),
-                self._active_fields(),
-                self._label_mode,
-            )
-        else:
-            self.video_files = self._get_video_files(video_directory)
-            if not self.video_files:
-                self._update_status_file("error", 0, 0, "No video files found")
-                QtWidgets.QMessageBox.critical(None, "Error", f"No video files found in:\n{video_directory}")
-                self._auto_close(1000)
-                sys.exit(1)
-            logger.info(f"Found {len(self.video_files)} video files.")
+        # Field A and Field B run as separate phases (own playlist, tests, conclusion)
+        self._run_phases = _build_separate_field_phases(self._level_root)
+        self._phase_index = 0
+        if not self._apply_run_phase(0, fatal=True):
+            return
 
-        self._update_status_file("playing", 0, len(self.video_files), "Starting playback")
-        self.video_count = len(self.video_files)
-        self.total_videos = self.video_count
+        logger.info(
+            "Separate field run: %s phase(s): %s",
+            len(self._run_phases),
+            " → ".join(p.get("label") or "?" for p in self._run_phases),
+        )
 
         # VLC used for per-video / final results (action phase is teammate flash when image_based)
         vlc_args = [
@@ -998,7 +1982,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     # ====== MODIFIED: only list videos directly in the given directory (NO recursion) ======
     def _build_image_action_playlist(self):
-        """Build playlist from labeled SF-30N assets, else legacy teammate flash."""
+        """Build 5 timed tests from Foundation SF degree rules or labeled assets.
+
+        Foundation SF-30/60/110/180N: one pass image, 10 actions/test with
+        degree-correct screens; digit/random: fully random screens (never SF gaps).
+        Test 1 = frontend On/Gap; each later test ×0.9. Missing gap/filler → black.
+        """
         active = set(self._active_fields())
         if not active:
             return []
@@ -1007,9 +1996,229 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._asset_fillers = fillers
         self._asset_gaps = gaps
 
+        # Dual A+B with different challenges: one timeline, independent screens per half
+        if (
+            getattr(self, "_phase_dual_independent", False)
+            and len(active) >= 2
+            and getattr(self, "_phase_field_modes", None)
+        ):
+            playlist = _build_dual_field_playlist(
+                self._phase_field_modes,
+                getattr(self, "_phase_field_directories", {}) or {},
+                active,
+                gaps=gaps,
+            )
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "Dual independent playlist: %s steps for modes %s",
+                    len(playlist),
+                    self._phase_field_modes,
+                )
+                return playlist
+            logger.error(
+                "Dual independent playlist empty for modes %s — refusing SF-only fallback",
+                self._phase_field_modes,
+            )
+            self._label_mode = False
+            return []
+
+        # Phase subdirectory / mode_id wins over folder basename (avoids falling
+        # back to SF-30N when random/ is empty or launch path was an SF folder).
+        mode_hint = str(
+            getattr(self, "_phase_mode_id", None)
+            or getattr(self, "_phase_subdirectory", None)
+            or ""
+        ).strip()
+        mode_low = mode_hint.lower()
+        extra_mode = None
+        if mode_low in FOUNDATION_EXTRA_MODES:
+            extra_mode = mode_low
+        else:
+            extra_mode = _detect_foundation_extra_mode(self.video_directory)
+
+        # ---- Foundation random / digit / rotation ----
+        if extra_mode == "random":
+            pass_image = _find_any_foundation_pass_image(self.video_directory)
+            if pass_image:
+                self._label_mode = True
+                playlist = _build_foundation_timed_playlist(
+                    "random",
+                    active,
+                    image_for_action=lambda *_: pass_image,
+                    gaps=gaps,
+                    make_slot=lambda *_: _random_field_slot(active),
+                    label_prefix="random",
+                )
+                if playlist:
+                    logger.info(
+                        "Foundation random playlist: %s tests x %s actions (image=%s) from %s",
+                        LABEL_TEST_COUNT,
+                        LABEL_ACTIONS_PER_TEST,
+                        os.path.basename(pass_image),
+                        self.video_directory,
+                    )
+                    return playlist
+            logger.error(
+                "Random mode selected but no pass image found under %s "
+                "(will NOT fall back to SF-30N degree pairs)",
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+        if extra_mode == "rotation":
+            pass_image = _find_any_foundation_pass_image(self.video_directory)
+            if pass_image:
+                self._label_mode = True
+                playlist = _build_rotation_playlist(active, pass_image, gaps=gaps)
+                if playlist:
+                    logger.info(
+                        "Foundation rotation playlist: %s tests x %s actions "
+                        "(spin→stop, image=%s) from %s",
+                        LABEL_TEST_COUNT,
+                        LABEL_ACTIONS_PER_TEST,
+                        os.path.basename(pass_image),
+                        self.video_directory,
+                    )
+                    return playlist
+            logger.error(
+                "Rotation mode selected but no pass image found under %s "
+                "(will NOT fall back to SF-30N degree pairs)",
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+        if extra_mode in FOUNDATION_MATH_MODES:
+            self._label_mode = True
+            playlist = _build_math_playlist(extra_mode, active, gaps=gaps)
+            if playlist:
+                logger.info(
+                    "Foundation %s playlist: %s tests x %s actions "
+                    "(2 correct equations/field) from %s",
+                    extra_mode,
+                    LABEL_TEST_COUNT,
+                    LABEL_ACTIONS_PER_TEST,
+                    self.video_directory,
+                )
+                return playlist
+            logger.error(
+                "Math mode %s playlist empty (equation render failed?) under %s",
+                extra_mode,
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+        if extra_mode in FOUNDATION_COGNITIVE_MODES:
+            self._label_mode = True
+            playlist = build_cognitive_playlist(
+                extra_mode,
+                active,
+                gaps=gaps,
+                test_count=LABEL_TEST_COUNT,
+                actions_per_test=LABEL_ACTIONS_PER_TEST,
+                timing_decay=LABEL_TIMING_DECAY,
+            )
+            if playlist:
+                logger.info(
+                    "Foundation cognitive %s playlist: %s steps from %s",
+                    extra_mode,
+                    len(playlist),
+                    self.video_directory,
+                )
+                return playlist
+            logger.error(
+                "Cognitive mode %s playlist empty under %s",
+                extra_mode,
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+        if extra_mode == "digit":
+            digit_images = _find_digit_images(self.video_directory)
+            pass_image = _find_any_foundation_pass_image(self.video_directory)
+            pool = digit_images or ([pass_image] if pass_image else [])
+            if pool:
+                self._label_mode = True
+
+                def _digit_image(action_in_set, test_num):
+                    return random.choice(pool)
+
+                playlist = _build_foundation_timed_playlist(
+                    "digit",
+                    active,
+                    image_for_action=_digit_image,
+                    gaps=gaps,
+                    make_slot=lambda *_: _random_field_slot(active),
+                    label_prefix="digit",
+                )
+                if playlist:
+                    logger.info(
+                        "Foundation digit playlist: %s tests x %s actions (%s images) from %s",
+                        LABEL_TEST_COUNT,
+                        LABEL_ACTIONS_PER_TEST,
+                        len(pool),
+                        self.video_directory,
+                    )
+                    return playlist
+            logger.error(
+                "Digit mode selected but no images found under %s "
+                "(will NOT fall back to SF-30N degree pairs)",
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+
+        # ---- Foundation SF-*N: degree spacing + single pass image ----
+        sf_id = None
+        if mode_hint and mode_hint.upper() in FOUNDATION_SF_GAPS:
+            sf_id = mode_hint.upper()
+            for name in FOUNDATION_SF_GAPS:
+                if name.upper() == mode_hint.upper():
+                    sf_id = name
+                    break
+        if not sf_id:
+            sf_id = _foundation_sf_id(self.video_directory)
+        pass_image = _find_any_foundation_pass_image(self.video_directory) if sf_id else None
+        if sf_id and pass_image:
+            self._label_mode = True
+            slots = _foundation_action_slots(sf_id, active, LABEL_ACTIONS_PER_TEST)
+            if not slots:
+                self._label_mode = False
+            else:
+                deg = {0: 30, 1: 60, 2: 110, 3: 180}.get(FOUNDATION_SF_GAPS.get(sf_id, 0), 30)
+
+                def _sf_image(*_):
+                    return pass_image
+
+                def _sf_slot(action_in_set, _test_num):
+                    return slots[(action_in_set - 1) % len(slots)]
+
+                playlist = _build_foundation_timed_playlist(
+                    sf_id,
+                    active,
+                    image_for_action=_sf_image,
+                    gaps=gaps,
+                    make_slot=_sf_slot,
+                    label_prefix=f"{sf_id} ~{deg}deg",
+                )
+                if playlist:
+                    logger.info(
+                        "Foundation %s playlist: %s tests x %s actions (gap=%s ~%sdeg, image=%s) from %s",
+                        sf_id,
+                        LABEL_TEST_COUNT,
+                        LABEL_ACTIONS_PER_TEST,
+                        FOUNDATION_SF_GAPS.get(sf_id, 0),
+                        deg,
+                        os.path.basename(pass_image),
+                        self.video_directory,
+                    )
+                    return playlist
+                self._label_mode = False
+
         if actions:
             self._label_mode = True
-            playlist = []
+            # Action templates from first digit of filenames (may be < 10)
+            templates = []
             for num in sorted(actions.keys()):
                 info = actions[num]
                 parts = []
@@ -1034,28 +2243,60 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if not parts:
                     continue
                 action_name = str(info.get("action") or "PASS").upper()
-                playlist.append({
-                    "kind": "labeled_action",
-                    "index": num,
+                templates.append({
                     "action_num": num,
                     "action": action_name,
                     "parts": parts,
                     "field_screens": field_screens,
                     "screen_images": screen_images,
-                    "gap_path": gaps.get(num),
-                    "label": f"{num}_{action_name.lower()}_" + "_".join(
+                    "gap_path": gaps.get(num) if gaps.get(num) and os.path.isfile(gaps[num]) else None,
+                    "base_label": f"{num}_{action_name.lower()}_" + "_".join(
                         str(s) for p in parts for s in p["screens"]
                     ),
-                    "path": f"image://{num}/{action_name}",
                 })
-            logger.info(
-                "Labeled assets in %s: %s action(s), %s filler(s), %s gap(s)",
-                self.video_directory,
-                len(playlist),
-                len(fillers),
-                len(gaps),
-            )
-            return playlist
+
+            if not templates:
+                self._label_mode = False
+            else:
+                playlist = []
+                n_actions = len(templates)
+                for test_num in range(1, LABEL_TEST_COUNT + 1):
+                    scale = LABEL_TIMING_DECAY ** (test_num - 1)
+                    for i, tmpl in enumerate(templates):
+                        action_in_set = i + 1
+                        playlist.append({
+                            "kind": "labeled_action",
+                            "index": len(playlist) + 1,
+                            "test_num": test_num,
+                            "action_in_set": action_in_set,
+                            "actions_in_set": n_actions,
+                            "is_last_in_set": action_in_set == n_actions,
+                            "timing_scale": scale,
+                            "action_num": tmpl["action_num"],
+                            "action": tmpl["action"],
+                            "parts": tmpl["parts"],
+                            "field_screens": tmpl["field_screens"],
+                            "screen_images": tmpl["screen_images"],
+                            "gap_path": tmpl["gap_path"],
+                            "label": (
+                                f"T{test_num}/{LABEL_TEST_COUNT} "
+                                f"a{action_in_set}/{n_actions} "
+                                f"{tmpl['base_label']} "
+                                f"x{scale:.2f}"
+                            ),
+                            "path": f"image://test{test_num}/{tmpl['action_num']}/{tmpl['action']}",
+                        })
+                logger.info(
+                    "Labeled playlist: %s tests x %s action(s) = %s steps "
+                    "(fillers=%s gaps=%s; missing=black) from %s",
+                    LABEL_TEST_COUNT,
+                    n_actions,
+                    len(playlist),
+                    len(fillers),
+                    len(gaps),
+                    self.video_directory,
+                )
+                return playlist
 
         # Fallback: legacy teammate flash (4+11 ↔ 3+10 ×5)
         self._label_mode = False
@@ -1134,10 +2375,28 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return videos
 
     def _flash_delay_ms(self, on=True):
+        """On/Gap ms from frontend, scaled by current test (−10% each set)."""
         speed = max(0.25, float(self.player_speed or 1.0))
         on_ms, gap_ms = _read_flash_timing_ms()
         base = on_ms if on else gap_ms
-        return max(80, int(base / speed))
+        scale = 1.0
+        try:
+            entry = self.video_files[self.current_video_index]
+            if isinstance(entry, dict):
+                scale = float(entry.get("timing_scale") or 1.0)
+        except Exception:
+            scale = 1.0
+        scale = max(0.05, min(1.0, scale))
+        return max(80, int((base * scale) / speed))
+
+    def _current_test_num(self):
+        try:
+            entry = self.video_files[self.current_video_index]
+            if isinstance(entry, dict) and entry.get("test_num"):
+                return int(entry["test_num"])
+        except Exception:
+            pass
+        return max(1, int(self.current_video_index) + 1)
 
     def _stop_action_timer(self):
         if self.action_timer:
@@ -1169,7 +2428,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.current_video_index = index
         entry = self.video_files[index]
         self.current_video_path = entry.get("path") if isinstance(entry, dict) else entry
-        self.video_start_time = time.time()
         self.video_end_called = False
         self._action_phase = "idle"
         self._label_phase = "gap"  # gap_N before action N
@@ -1179,25 +2437,38 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         if self.image_based and isinstance(entry, dict):
             label = entry.get("label", f"action {index + 1}")
-            logger.info("Loading image action %s/%s: %s", index + 1, len(self.video_files), label)
+            test_num = int(entry.get("test_num") or 1)
+            action_in_set = int(entry.get("action_in_set") or 1)
+            # One wall-clock window per test for per-video results
+            if action_in_set <= 1 or self._set_start_time is None:
+                self._set_start_time = time.time()
+                self.video_start_time = self._set_start_time
+            else:
+                self.video_start_time = self._set_start_time
+            logger.info(
+                "Loading %s (%s/%s)",
+                label, index + 1, len(self.video_files),
+            )
             self._update_status_file(
-                "loading", index + 1, len(self.video_files), f"Loading: {label}"
+                "loading", test_num, self.total_videos, f"Loading: {label}"
             )
             try:
+                # Realtime scores by test number (1..5), not flat step index
                 with open(self.video_index_file, 'w') as f:
-                    f.write(str(index + 1))
+                    f.write(str(test_num))
             except Exception as e:
                 logger.error(f"Failed to write video index file: {e}")
             if self.image_canvas:
                 self.image_canvas.clear()
                 self.image_canvas.show()
                 self.image_canvas.raise_()
-            # After one-time prestart, never insert another delay/wait before gap images
             self.is_first_video = False
             self._start_playback()
             return
 
         self.current_video_path = entry
+        self.video_start_time = time.time()
+        self._set_start_time = self.video_start_time
         logger.info(f"Loading video {index+1}/{len(self.video_files)}: {os.path.basename(self.current_video_path)}")
         self._update_status_file("loading", index+1, len(self.video_files), f"Loading: {os.path.basename(self.current_video_path)}")
         try:
@@ -1299,8 +2570,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas.raise_()
 
             gap_path = entry.get("gap_path") or (self._asset_gaps or {}).get(action_num)
+            if gap_path and not os.path.isfile(gap_path):
+                gap_path = None
             gap_images = {}
-            if gap_path and os.path.isfile(gap_path):
+            if gap_path:
                 for sid in GAP_SCREENS:
                     if _field_for_screen(sid) in active:
                         gap_images[int(sid)] = gap_path
@@ -1308,23 +2581,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if gap_images:
                     self.image_canvas.set_screen_images(gap_images)
                 else:
+                    # No gap image → black (nothing displayed)
                     self.image_canvas.clear()
-                    logger.warning(
-                        "No gap image for action %s (looked for gap_%s in folder)",
-                        action_num,
-                        action_num,
-                    )
 
             # No keypoints during gap (cue inactive)
             _write_image_action_cue(False, {}, seq=self._flash_seq, action=action_name)
             delay = self._flash_delay_ms(on=False)
             logger.info(
-                "Gap %s BEFORE action %s (%s) on screens %s for %sms",
+                "Gap BEFORE action %s (%s) screens %s for %sms [scale=%.2f]",
                 action_num,
-                action_num,
-                os.path.basename(gap_path) if gap_path else "none",
-                list(gap_images.keys()),
+                os.path.basename(gap_path) if gap_path else "black",
+                list(gap_images.keys()) if gap_images else "black",
                 delay,
+                float(entry.get("timing_scale") or 1.0),
             )
             self._stop_action_timer()
             self.action_timer = QtCore.QTimer(singleShot=True)
@@ -1341,39 +2610,61 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         screen_images = dict(entry.get("screen_images") or {})
         screen_images = {
             int(s): p for s, p in screen_images.items()
-            if _field_for_screen(s) in active
+            if _field_for_screen(s) in active and int(s) not in DISABLED_DISPLAY_SCREENS
         }
         action_screens = list(screen_images.keys())
-        fillers = _pick_filler_placements(
-            action_num, action_screens, active, self._asset_fillers or {}
-        )
+        # Math modes already fill every field screen with equations — never overlay fillers.
+        fillers = {}
+        if self._asset_fillers and not entry.get("no_fillers") and not entry.get("math_op"):
+            fillers = _pick_filler_placements(
+                action_num, action_screens, active, self._asset_fillers or {}
+            )
         for sid, path in fillers.items():
             if int(sid) not in screen_images:
                 screen_images[int(sid)] = path
 
+        # Cue only correct/target screens (math: 2 true equations per field).
+        # Display may show equations on every screen via screen_images.
+        raw_fs = entry.get("field_screens") or {}
         field_screens = {}
-        for sid in action_screens:
-            fid = _field_for_screen(sid)
-            field_screens.setdefault(fid, []).append(int(sid))
+        if isinstance(raw_fs, dict) and raw_fs:
+            for fid, sids in raw_fs.items():
+                fid_u = str(fid).upper()
+                if fid_u not in active:
+                    continue
+                field_screens[fid_u] = [
+                    int(s) for s in (sids or [])
+                    if int(s) not in DISABLED_DISPLAY_SCREENS
+                ]
+        if not field_screens:
+            for sid in action_screens:
+                fid = _field_for_screen(sid)
+                if fid in active:
+                    field_screens.setdefault(fid, []).append(int(sid))
 
         if self.image_canvas:
             self.image_canvas.set_screen_images(screen_images)
 
         self._flash_seq += 1
+        delay = self._flash_delay_ms(on=True)
+        on_sec = max(0.1, float(delay) / 1000.0)
         _write_image_action_cue(
             True,
             field_screens,
             seq=self._flash_seq,
             action=action_name,
+            on_sec=on_sec,
         )
-        delay = self._flash_delay_ms(on=True)
         logger.info(
-            "Labeled action %s %s ON screens %s (+%s fillers) for %sms",
+            "Labeled action %s %s ON screens %s (+%s fillers) for %sms [test %s scale=%.2f on=%.3fs]",
             action_num,
             action_name,
             action_screens,
             len(fillers),
             delay,
+            entry.get("test_num"),
+            float(entry.get("timing_scale") or 1.0),
+            on_sec,
         )
         self._stop_action_timer()
         self.action_timer = QtCore.QTimer(singleShot=True)
@@ -1381,14 +2672,187 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.action_timer.start(delay)
 
     def _advance_label_phase(self):
-        """After pre-action gap → show the action."""
+        """After pre-action gap → encode (cognitive) / rotation spin → action hold."""
         if self.display_phase != "action" or self._action_phase != "label":
             return
         if self.operator_paused:
             QTimer.singleShot(200, self._advance_label_phase)
             return
+        entry = self.video_files[self.current_video_index] if self.video_files else {}
+        if isinstance(entry, dict) and entry.get("cognitive_encode") and entry.get("encode_images"):
+            self._label_phase = "encode"
+            self._begin_cognitive_encode(entry)
+            return
+        if isinstance(entry, dict) and entry.get("rotation") and entry.get("rotation_fields"):
+            self._label_phase = "spin"
+            self._begin_rotation_spin(entry)
+            return
         self._label_phase = "action"
         self._apply_label_phase()
+
+    def _begin_cognitive_encode(self, entry):
+        """Brief preview of stimuli (memory/tracking), then blank, then probe+session."""
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
+        encode = {
+            int(s): p for s, p in (entry.get("encode_images") or {}).items()
+            if _field_for_screen(s) in set(self._active_fields())
+        }
+        if self.image_canvas:
+            if encode:
+                self.image_canvas.set_screen_images(encode)
+            else:
+                self.image_canvas.clear()
+        scale = max(0.05, float(entry.get("timing_scale") or 1.0))
+        delay = max(200, int(COG_ENCODE_MS * scale))
+        logger.info(
+            "Cognitive encode %s for %sms (%s tiles)",
+            entry.get("cognitive"), delay, len(encode),
+        )
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._cognitive_encode_blank)
+        self.action_timer.start(delay)
+
+    def _cognitive_encode_blank(self):
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._cognitive_encode_blank)
+            return
+        if self.image_canvas:
+            self.image_canvas.clear()
+        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
+        entry = self.video_files[self.current_video_index] if self.video_files else {}
+        scale = max(0.05, float((entry or {}).get("timing_scale") or 1.0))
+        delay = max(100, int(COG_BLANK_MS * scale))
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._cognitive_after_blank)
+        self.action_timer.start(delay)
+
+    def _cognitive_after_blank(self):
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._cognitive_after_blank)
+            return
+        self._label_phase = "action"
+        self._apply_label_phase()
+
+    def _begin_rotation_spin(self, entry):
+        """Fast pass-image rotation around each field's circle, then stop on target."""
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        # No session cue while spinning — player waits for the sudden stop
+        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
+
+        rotation_fields = [
+            f for f in (entry.get("rotation_fields") or [])
+            if f in set(self._active_fields())
+        ]
+        spin_arcs = dict(entry.get("spin_arcs") or {})
+        stop = dict(entry.get("field_screens") or {})
+        self._spin_fields = []
+        self._spin_arcs = {}
+        self._spin_index = {}
+        self._spin_steps_left = {}
+        self._spin_stop = {}
+        self._spin_images = dict(entry.get("screen_images") or {})
+        # Fallback image for spin frames
+        self._spin_pass_image = None
+        if self._spin_images:
+            self._spin_pass_image = next(iter(self._spin_images.values()))
+        for fid in rotation_fields:
+            arc = [int(s) for s in (spin_arcs.get(fid) or _rotation_arc_for_field(fid))]
+            if not arc:
+                continue
+            targets = [int(s) for s in (stop.get(fid) or [])]
+            target = targets[0] if targets else int(arc[0])
+            if target not in arc:
+                arc = list(arc) + [target]
+            start_i = random.randrange(len(arc))
+            # Land on target after ≥ ROTATION_MIN_LAPS full circles
+            try:
+                target_i = arc.index(target)
+            except ValueError:
+                target_i = 0
+            steps = ROTATION_MIN_LAPS * len(arc) + ((target_i - start_i) % len(arc))
+            if steps < len(arc):
+                steps += len(arc)
+            self._spin_fields.append(fid)
+            self._spin_arcs[fid] = arc
+            self._spin_index[fid] = start_i
+            self._spin_steps_left[fid] = int(steps)
+            self._spin_stop[fid] = target
+        if not self._spin_fields:
+            self._label_phase = "action"
+            self._apply_label_phase()
+            return
+        logger.info(
+            "Rotation spin start fields=%s stops=%s step=%sms",
+            self._spin_fields,
+            self._spin_stop,
+            ROTATION_STEP_MS,
+        )
+        self._tick_rotation_spin()
+
+    def _tick_rotation_spin(self):
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self._label_phase != "spin":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._tick_rotation_spin)
+            return
+
+        # Show current spin frame (one screen per rotating field); no cue yet
+        frame_images = {}
+        for fid in self._spin_fields:
+            arc = self._spin_arcs.get(fid) or []
+            if not arc:
+                continue
+            idx = int(self._spin_index.get(fid, 0)) % len(arc)
+            # Prefer exact stop screen once steps are exhausted
+            if int(self._spin_steps_left.get(fid, 0)) <= 0:
+                sid = int(self._spin_stop.get(fid, arc[idx]))
+            else:
+                sid = int(arc[idx])
+            img = self._spin_images.get(sid) or self._spin_pass_image
+            if img:
+                frame_images[sid] = img
+
+        if self.image_canvas:
+            if frame_images:
+                self.image_canvas.set_screen_images(frame_images)
+            else:
+                self.image_canvas.clear()
+
+        if all(int(self._spin_steps_left.get(f, 0)) <= 0 for f in self._spin_fields):
+            # Sudden stop on this frame → session hold (cue + On time)
+            logger.info("Rotation stop → hold on %s", self._spin_stop)
+            self._label_phase = "action"
+            self._apply_label_phase()
+            return
+
+        for fid in self._spin_fields:
+            arc = self._spin_arcs.get(fid) or []
+            if not arc:
+                continue
+            idx = int(self._spin_index.get(fid, 0)) % len(arc)
+            left = int(self._spin_steps_left.get(fid, 0))
+            self._spin_index[fid] = (idx + 1) % len(arc)
+            self._spin_steps_left[fid] = max(0, left - 1)
+
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._tick_rotation_spin)
+        self.action_timer.start(max(20, int(ROTATION_STEP_MS)))
 
     def _finish_label_action(self):
         if self.display_phase != "action" or self._action_phase != "label":
@@ -1403,17 +2867,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         self._action_phase = "idle"
 
-        # Between labeled actions: go straight to next gap_N (no waiting rings).
-        # Waiting animation is only for pre-start "starting" and post-playlist results.
+        # Within a test: next action. End of test: per-video results.
         next_idx = self.current_video_index + 1
-        if (
+        cur = self.video_files[self.current_video_index] if self.video_files else {}
+        cur_test = int(cur.get("test_num") or 0) if isinstance(cur, dict) else 0
+        next_entry = (
+            self.video_files[next_idx]
+            if next_idx < len(self.video_files) and isinstance(self.video_files[next_idx], dict)
+            else None
+        )
+        same_test = (
             self._label_mode
-            and next_idx < len(self.video_files)
-            and isinstance(self.video_files[next_idx], dict)
-            and self.video_files[next_idx].get("kind") == "labeled_action"
-        ):
+            and next_entry is not None
+            and next_entry.get("kind") == "labeled_action"
+            and int(next_entry.get("test_num") or -1) == cur_test
+        )
+        if same_test:
             logger.info(
-                "Labeled action done — next gap/action (skip waiting overlay between actions)"
+                "Labeled action done — next in test %s (skip waiting overlay)",
+                cur_test,
             )
             self.video_end_called = False
             self.waiting_for_results = False
@@ -1425,6 +2897,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._load_video(self.current_video_index)
             return
 
+        # End of test set → per-video results, then resume at next_idx (or final)
+        self._post_results_index = next_idx if next_idx < len(self.video_files) else None
         self._on_video_ended()
 
     def _apply_flash_phase(self):
@@ -1444,6 +2918,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
             )
             self._action_phase = "idle"
+            self._post_results_index = self.current_video_index + 1
+            if self._post_results_index >= len(self.video_files):
+                self._post_results_index = None
             self._on_video_ended()
             return
 
@@ -1489,7 +2966,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas.clear()
 
         if screens:
-            _write_image_action_cue(True, self._field_screens_map(screens), seq=self._flash_seq)
+            _write_image_action_cue(
+                True,
+                self._field_screens_map(screens),
+                seq=self._flash_seq,
+                on_sec=max(0.1, float(delay) / 1000.0),
+            )
         else:
             # Keep cue file present but inactive so realtime ends the PASS session
             _write_image_action_cue(False, {}, seq=self._flash_seq)
@@ -1547,9 +3029,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_canvas:
             self.image_canvas.clear()
             self.image_canvas.hide()
+        active = self._active_fields()
         if self.waiting_overlay is None:
-            self.waiting_overlay = WaitingOverlay(self.videoframe)
+            self.waiting_overlay = WaitingOverlay(self.videoframe, active_fields=active)
             self.videoframe.installEventFilter(self)
+        else:
+            self.waiting_overlay.set_active_fields(active)
         # Empty status keeps the same "Processing" / "Results" rings as per-video wait.
         self.waiting_overlay.set_status_text(status_text or "")
         self.waiting_overlay.setGeometry(0, 0, self.videoframe.width(), self.videoframe.height())
@@ -1569,8 +3054,108 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.waiting_overlay.setGeometry(0, 0, self.videoframe.width(), self.videoframe.height())
         return super().eventFilter(obj, event)
 
+    def _apply_run_phase(self, phase_index, fatal=False):
+        """Load playlist for the current phase (single field or dual A+B)."""
+        if phase_index < 0 or phase_index >= len(self._run_phases):
+            return False
+        phase = self._run_phases[phase_index]
+        self._phase_index = int(phase_index)
+        self._phase_active = list(phase.get("active") or [])
+        self._phase_subdirectory = str(phase.get("subdirectory") or "").strip()
+        self._phase_mode_id = str(phase.get("mode_id") or self._phase_subdirectory or "").strip()
+        self._phase_field_modes = dict(phase.get("field_modes") or {})
+        self._phase_field_directories = dict(phase.get("field_directories") or {})
+        self._phase_dual_independent = bool(phase.get("dual_independent"))
+        self.video_directory = phase.get("directory") or self._level_root
+        _write_players_fields_active(self._phase_active)
+        logger.info(
+            "Starting phase %s/%s: %s → %s (active=%s mode=%s dual=%s)",
+            phase_index + 1,
+            len(self._run_phases),
+            phase.get("label"),
+            self.video_directory,
+            self._phase_active,
+            self._phase_mode_id,
+            self._phase_dual_independent,
+        )
+
+        if self.image_based:
+            self.video_files = self._build_image_action_playlist()
+            if not self.video_files:
+                msg = (
+                    f"No labeled actions for {phase.get('label')} in:\n{self.video_directory}"
+                )
+                self._update_status_file("error", 0, 0, msg)
+                if fatal:
+                    QtWidgets.QMessageBox.critical(None, "Error", msg)
+                    self._auto_close(1000)
+                    sys.exit(1)
+                logger.error(msg)
+                return False
+            logger.info(
+                "Phase playlist: %s step(s) / %s test(s) for %s (label_mode=%s)",
+                len(self.video_files),
+                LABEL_TEST_COUNT if self._label_mode else 1,
+                self._phase_active,
+                self._label_mode,
+            )
+        else:
+            self.video_files = self._get_video_files(self.video_directory)
+            if not self.video_files:
+                msg = f"No video files in:\n{self.video_directory}"
+                self._update_status_file("error", 0, 0, msg)
+                if fatal:
+                    QtWidgets.QMessageBox.critical(None, "Error", msg)
+                    self._auto_close(1000)
+                    sys.exit(1)
+                return False
+
+        self._update_status_file(
+            "playing", 0, len(self.video_files),
+            f"Starting {phase.get('label') or 'phase'}",
+        )
+        self.video_count = len(self.video_files)
+        if self.image_based and self._label_mode:
+            self.total_videos = LABEL_TEST_COUNT
+        else:
+            self.total_videos = self.video_count
+        self._post_results_index = None
+        self._set_start_time = None
+        self.current_video_index = 0
+        self.video_end_called = False
+        self.waiting_for_results = False
+        self.playlist_finished = False
+        return True
+
+    def _advance_to_next_field_phase(self):
+        """After one field's final conclusion → next field, or close."""
+        next_idx = self._phase_index + 1
+        if next_idx >= len(self._run_phases):
+            logger.info("All field phases complete.")
+            if not self._is_closing:
+                self._status_completed = True
+                self._update_status_file(
+                    "completed", self.total_videos, self.total_videos,
+                    "All fields completed",
+                )
+                self._auto_close(self.auto_close_delay)
+            return
+        if not self._apply_run_phase(next_idx, fatal=False):
+            # Skip broken phase
+            self._phase_index = next_idx
+            self._advance_to_next_field_phase()
+            return
+        self._prestart_done = False
+        self.is_first_video = True
+        if self.image_based:
+            self._begin_prestart_waiting()
+        else:
+            self._load_video(0)
+
     def _active_fields(self):
-        path = "C:/Users/siama/Documents/simust_player/players_fields.json"
+        if getattr(self, "_phase_active", None):
+            return list(self._phase_active)
+        path = PLAYERS_FIELDS_FILE
         try:
             import simust_fields
             return sorted(simust_fields.load_active_fields(path))
@@ -1655,10 +3240,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 response = requests.post(backend_url, json=payload, timeout=90)
                 if response.status_code == 200:
                     data = response.json()
+                    if data.get("status") == "error":
+                        logger.error(
+                            "Per-video results error for test %s: %s",
+                            video_num, data.get("message") or data,
+                        )
                     candidate = data.get("video_path") or ""
                     if candidate and os.path.exists(candidate):
                         video_path = candidate
-                        logger.info("Results video for video %s generated.", video_num)
+                        logger.info("Results video for test %s generated.", video_num)
                     else:
                         logger.error("Per-video results missing file: %s", data)
                 else:
@@ -1701,11 +3291,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.hide()
         self._update_status_file(
             "playing_results",
-            self.current_video_index + 1,
+            self._current_test_num(),
             self.total_videos,
             "Playing per-video results...",
         )
-        logger.info("Playing per-video results for 20s: %s", video_path)
+        logger.info(
+            "Playing per-video results for test %s/%s: %s",
+            self._current_test_num(), self.total_videos, video_path,
+        )
         self._play_local_clip(video_path, rate=1.0)
         self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
 
@@ -1730,8 +3323,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._do_continue()
 
     def _do_continue(self):
-        self.current_video_index += 1
-        if self.current_video_index < len(self.video_files):
+        """After per-video results: next test's first action, or final summary."""
+        if getattr(self, "_post_results_index", None) is not None:
+            next_idx = int(self._post_results_index)
+            self._post_results_index = None
+        else:
+            next_idx = self.current_video_index + 1
+        self._set_start_time = None
+        if next_idx < len(self.video_files):
+            self.current_video_index = next_idx
             self.display_phase = "action"
             self._load_video(self.current_video_index)
         else:
@@ -1782,13 +3382,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.error("Final summary request failed: %s", e)
             self.final_summary_done.emit("")
 
-    def _force_close_with_completion(self):
-        """Fallback: close player and set status to completed."""
-        if not self._is_closing:
-            self._status_completed = True
-            self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed (timeout)")
-            self.close()
-
     def _on_final_summary_done(self, video_path):
         if self.operator_paused:
             QTimer.singleShot(200, lambda: self._on_final_summary_done(video_path))
@@ -1802,41 +3395,79 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._hide_waiting_overlay()
         if video_path and os.path.exists(video_path):
             self.display_phase = "final"
-            # Set status to "playing_final" – not "completed" yet
-            self._update_status_file("playing_final", self.total_videos, self.total_videos, "Playing final summary...")
-            logger.info(f"Playing final summary video: {video_path}")
+            phase = (
+                self._run_phases[self._phase_index]
+                if 0 <= self._phase_index < len(self._run_phases)
+                else {}
+            )
+            self._update_status_file(
+                "playing_final", self.total_videos, self.total_videos,
+                f"Playing final — {phase.get('label') or 'field'}...",
+            )
+            logger.info(
+                "Playing final summary for %s: %s",
+                phase.get("label"), video_path,
+            )
             if self.image_canvas:
                 self.image_canvas.hide()
             self._play_local_clip(video_path, rate=1.0)
 
-            self.completion_label.setText("Final summary playing...")
+            self.completion_label.setText(
+                f"Final — {phase.get('label') or 'field'}..."
+            )
             self.completion_label.adjustSize()
             self.completion_label.move((self.video_width - self.completion_label.width()) // 2,
                                        (self.video_height - self.completion_label.height()) // 2)
             self.completion_label.show()
 
-            # Indicate that we are in final video mode
             self.playlist_finished = True
             self._final_play_started_at = time.time()
             self.check_timer.start()
 
-            # Fallback: close after 60 seconds (in case the video never ends)
             if self._force_close_timer:
                 self._force_close_timer.stop()
             self._force_close_timer = QtCore.QTimer(singleShot=True)
-            self._force_close_timer.timeout.connect(self._force_close_with_completion)
+            self._force_close_timer.timeout.connect(self._on_field_final_finished)
             self._force_close_timer.start(60000)
         else:
-            self._update_status_file("error", self.total_videos, self.total_videos, "Final summary failed to generate")
-            self.completion_label.setText("Final summary failed to generate.")
-            self.completion_label.adjustSize()
-            self.completion_label.move((self.video_width - self.completion_label.width()) // 2,
-                                       (self.video_height - self.completion_label.height()) // 2)
-            self.completion_label.show()
-            self._auto_close(5000)
+            logger.warning("Final summary missing for phase — advancing")
+            self._on_field_final_finished()
 
-        self._stop_camera_only()
-        # Do not set status to "completed" here – it will be set when video ends
+    def _on_field_final_finished(self):
+        """One field's conclusion done → next field phase, or stop camera + close."""
+        if self._force_close_timer:
+            try:
+                self._force_close_timer.stop()
+            except Exception:
+                pass
+            self._force_close_timer = None
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        self.playlist_finished = False
+        self.display_phase = "action"
+        self.completion_label.hide()
+        self.waiting_for_results = False
+        more = self._phase_index + 1 < len(self._run_phases)
+        if more:
+            logger.info("Field phase done — starting next field")
+            self._advance_to_next_field_phase()
+            return
+        # All fields finished
+        if not self._realtime_stopped:
+            self._stop_camera_only()
+        if not self._is_closing:
+            self._status_completed = True
+            self._update_status_file(
+                "completed", self.total_videos, self.total_videos,
+                "All fields completed",
+            )
+            self._auto_close(self.auto_close_delay)
+
+    def _force_close_with_completion(self):
+        """Fallback when final clip never ends."""
+        self._on_field_final_finished()
 
     def _stop_camera_only(self):
         if self._realtime_stopped:
@@ -1898,13 +3529,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.clear()
             self.image_canvas.hide()
         self._show_waiting_overlay()
-        video_num = self.current_video_index + 1
-        logger.info("Action set %s finished; 5s wait then 20s per-video results", video_num)
+        video_num = self._current_test_num()
+        logger.info(
+            "Test %s/%s finished; 5s wait then 20s per-video results",
+            video_num, self.total_videos,
+        )
         try:
             self.player.stop()
         except Exception:
             pass
-        start_time = self.video_start_time
+        start_time = self._set_start_time or self.video_start_time
         end_time = time.time()
         thread = threading.Thread(
             target=self._do_per_video_request,
@@ -2092,10 +3726,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 stopped_after_play = state == vlc.State.Stopped and play_time > 800
                 near_end = length > 1000 and play_time >= max(0, length - 400)
                 if ended or stopped_after_play or near_end:
-                    logger.info("Final video finished – updating status and closing.")
-                    self._status_completed = True
-                    self._update_status_file("completed", self.total_videos, self.total_videos, "Playback completed")
-                    self.close()
+                    logger.info("Final video finished for this field phase.")
+                    self._on_field_final_finished()
                 return
 
             # Image-based actions end via action_timer, not VLC state

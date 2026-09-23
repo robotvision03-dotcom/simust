@@ -129,11 +129,24 @@ def _read_teammate_on_gap():
 
 
 def _on_hold_frames(on_sec=None):
-    """UI On box → display frames at IMAGE_CUE_FPS (1.0s → 30) plus hold extra."""
+    """UI On box → display frames at IMAGE_CUE_FPS (1.5s → 45 frames).
+
+    Session length equals On exactly (no extra frames in the reported duration).
+    """
     if on_sec is None:
         on_sec, _ = _read_teammate_on_gap()
-    base = max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
-    return base + int(IMAGE_CUE_HOLD_EXTRA_FRAMES)
+    return max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
+
+
+def _cue_on_sec(cue=None):
+    """Effective On seconds from cue file, else teammate_flash_timing.json."""
+    if isinstance(cue, dict) and cue.get("on_sec") is not None:
+        try:
+            return max(0.1, min(9.9, float(cue.get("on_sec"))))
+        except (TypeError, ValueError):
+            pass
+    on_sec, _ = _read_teammate_on_gap()
+    return on_sec
 
 DETECTION_CONF = 0.12  # lower to keep blurred / distant balls (GOAL motion blur)
 MAX_PLAYERS = 2
@@ -194,8 +207,8 @@ except Exception:
         (1269, 245), (1266, 286), (1105, 323), (717, 302), (654, 285),
     ]
     POLYGON_POINTS = POLYGON_POINTS_A
-    FIELD_A_SCREENS = {"1", "2", "3", "4", "12", "13", "14"}
-    FIELD_B_SCREENS = {"8", "9", "10", "11", "5", "6", "7"}
+    FIELD_A_SCREENS = {"2", "3", "4", "12", "13", "14"}
+    FIELD_B_SCREENS = {"5", "6", "7", "9", "10", "11"}
     QR_ROI_A = (0, 0, 1920, 540)
     QR_ROI_B = (1920, 0, 3840, 540)
 
@@ -484,9 +497,16 @@ def analyze_goal_with_context(action_id, screens, track, full_track, session_dur
         min_dist_display, t_hit, winning_screen, best_proj_t = evidence
         display_time = f"{t_hit:.3f}"
         display_duration = f"{session_duration:.3f}"
+    elif session_duration and float(session_duration) > 0:
+        # Wrong: Session Duration = On; ET = full session (negative point)
+        display_duration = f"{float(session_duration):.3f}"
+        display_time = f"{float(session_duration):.3f}"
 
     aep = get_aep_orientation(screens, winning_screen)
     finishing_time_val = float(display_time) if display_time != "-" else 0.0
+    if session_duration and float(session_duration) > 0 and finishing_time_val > float(session_duration):
+        finishing_time_val = float(session_duration)
+        display_time = f"{finishing_time_val:.3f}"
     ae = compute_action_efficiency("GOAL", result, finishing_time_val, movement)
     return {
         "Action ID": action_id,
@@ -1855,6 +1875,24 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             action_end_time = None
 
     positions = get_positions_from_data(data, key, SCALE)
+
+    def _planned_on_from_block():
+        for k in ("on_sec", "planned_on_sec", "session_on_sec"):
+            raw = action_data.get(k)
+            if raw is None or raw == "" or raw == "-":
+                continue
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if val > 0:
+                return val
+        if not CAMERA_QR_ENABLED:
+            return float(_cue_on_sec())
+        return None
+
+    planned_on = _planned_on_from_block()
+
     if not positions:
         return {
             'Action ID': action_id,
@@ -1863,8 +1901,8 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             'Result': 'Wrong',
             'Winning Screen': 'N/A',
             'Min Distance (px)': None,
-            'Time of Min (s)': '-',
-            'Session Duration (s)': '-',
+            'Time of Min (s)': f"{planned_on:.3f}" if planned_on else '-',
+            'Session Duration (s)': f"{planned_on:.3f}" if planned_on else '-',
             'Movement (px)': 0,
             'Direction': 'NONE',
             'AEP': 'N/A',
@@ -1881,10 +1919,18 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
     else:
         track = filter_static_ball_positions(positions) or positions
 
-    session_duration = track[-1][0] if track else 0
+    track_duration = track[-1][0] if track else 0
     wall_session = None
     if action_end_time is not None and session_start_time is not None:
         wall_session = (action_end_time - session_start_time).total_seconds()
+    # Image-cue: Session Duration = teammate On time (e.g. 1.5s), NOT last track t
+    # (track often ends ~0.7s because keypoints start after a fixed delay).
+    if planned_on is not None:
+        session_duration = float(planned_on)
+    elif wall_session and wall_session > 0:
+        session_duration = float(wall_session)
+    else:
+        session_duration = float(track_duration) if track_duration else 0.0
     short_tempo = is_short_tempo_action(
         action_index, all_data, action_end_time, wall_session=wall_session
     )
@@ -1965,8 +2011,11 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                 display_duration = f"{session_duration:.3f}"
                 min_dist_display = best_eff_dist
             else:
+                # Entered goal area but did not complete return → Miss
                 result = 'Miss'
                 winning_screen = best_screen
+                display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
+                display_duration = f"{session_duration:.3f}"
                 min_dist_display = best_eff_dist
 
             # Short tempo: a weak in-session graze should lose to a clear BETWEEN/peek Late.
@@ -2007,10 +2056,28 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                     best_proj_t = late_proj
 
         if result == 'Wrong':
-            display_time = '-'
-            display_duration = '-'
-            winning_screen = 'N/A'
-            min_dist_display = None
+            # Wrong: keep goal-entry / session when known — high ET is a negative point
+            if display_time == '-' and session_duration and float(session_duration) > 0:
+                display_time = f"{float(session_duration):.3f}"
+            if display_duration == '-' and session_duration and float(session_duration) > 0:
+                display_duration = f"{float(session_duration):.3f}"
+            winning_screen = winning_screen if winning_screen not in (None, '') else 'N/A'
+            min_dist_display = min_dist_display
+
+        # Goal-entry ET must not exceed Session Duration (On)
+        if (
+            display_time != '-'
+            and session_duration
+            and float(session_duration) > 0
+        ):
+            try:
+                et_val = float(display_time)
+                if et_val > float(session_duration):
+                    display_time = f"{float(session_duration):.3f}"
+            except (TypeError, ValueError):
+                pass
+        if display_duration == '-' and session_duration and float(session_duration) > 0:
+            display_duration = f"{float(session_duration):.3f}"
 
         aep = get_aep_orientation(screens, winning_screen)
         finishing_time_val = float(display_time) if display_time != '-' else 0.0
@@ -2031,6 +2098,7 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             'AE': ae
         }
 
+    sd = f"{float(session_duration):.3f}" if session_duration and float(session_duration) > 0 else '-'
     return {
         'Action ID': action_id,
         'Action': action_type,
@@ -2038,8 +2106,8 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
         'Result': 'Wrong',
         'Winning Screen': 'N/A',
         'Min Distance (px)': None,
-        'Time of Min (s)': '-',
-        'Session Duration (s)': '-',
+        'Time of Min (s)': sd,
+        'Session Duration (s)': sd,
         'Movement (px)': 0,
         'Direction': 'NONE',
         'AEP': 'N/A',
@@ -3070,6 +3138,7 @@ class FieldRuntime:
         self.analysis_timer = None
         self._recent_between_gap = None
         self._last_session_duration = None
+        self._planned_on_sec = None
         self.analysis_started_at = 0
         self._paused_analysis_remaining = None
 
@@ -3094,6 +3163,7 @@ class FieldRuntime:
         self.analysis_timer = None
         self._recent_between_gap = None
         self._last_session_duration = None
+        self._planned_on_sec = None
         self.stats = {"sessions_completed": 0, "action_counts": {}, "results": []}
         self.qr_state = {
             "last_raw_data": None,
@@ -3290,6 +3360,40 @@ class SimustRealtimeCamera:
         self.active_fields = set(active)
         return self.active_fields
 
+    def _sync_active_fields_for_phase(self):
+        """Re-read players_fields active list (Field A phase → Field B phase).
+
+        Activates recording folders for newly live fields; ends sessions on fields
+        that are no longer in the current phase.
+        """
+        prev = set(self.active_fields or ())
+        active = set(self._refresh_active_fields())
+        if active == prev:
+            return
+        print(f"[FIELDS] Phase active {sorted(prev)} → {sorted(active)}")
+        now_ts = time.time()
+        now_str = get_current_time_ms()
+        with self.session_lock:
+            for fid in sorted(prev - active):
+                ch = self.channels.get(fid)
+                if ch is None:
+                    continue
+                if ch.session_active:
+                    self._end_session_locked(now_str, now_ts, ch)
+                ch.pending_start = None
+                ch.pending_end = False
+                ch.active_goal_lines = {}
+            for fid in sorted(active - prev):
+                ch = self.channels.get(fid)
+                if ch is None:
+                    continue
+                if self.recording_dir and not ch.recording_subdir:
+                    ch.reset_for_recording(self.recording_dir)
+                    print(f"[FIELDS] Activated recording for Field {fid}")
+        self._sync_aliases_from_channel(
+            self.channels.get("A" if "A" in active else ("B" if "B" in active else "A"))
+        )
+
     def _field_is_active(self, fid):
         return (normalize_field(fid) or fid) in self.active_fields
 
@@ -3380,6 +3484,8 @@ class SimustRealtimeCamera:
                 print(f"  Field {fid} → inactive (no player selected)")
 
     def _sync_aliases_from_channel(self, ch):
+        if ch is None:
+            return
         self.session_active = ch.session_active
         self.between_sessions_active = ch.between_sessions_active
         self.current_action = ch.current_action
@@ -3753,7 +3859,7 @@ class SimustRealtimeCamera:
                 ch.block_counter = self._parse_block_num(peer.current_block_id)
 
     def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp, ch,
-                               paired_session_start=None, paired_offset_str=None):
+                               paired_session_start=None, paired_offset_str=None, on_sec=None):
         offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, _start_offset_seconds())
         with self.session_lock:
             ch.pending_start = {
@@ -3766,6 +3872,11 @@ class SimustRealtimeCamera:
                 "detected_timestamp": detected_timestamp,
                 "field": ch.field_id,
             }
+            if on_sec is not None:
+                try:
+                    ch.pending_start["on_sec"] = max(0.1, min(9.9, float(on_sec)))
+                except (TypeError, ValueError):
+                    pass
             if paired_session_start is not None:
                 ch.pending_start["paired_session_start"] = float(paired_session_start)
                 # Start as soon as check_pending runs (catch-up)
@@ -4031,8 +4142,23 @@ class SimustRealtimeCamera:
 
             self._flush_pending_analysis_locked(ch)
 
+            # Wall clock often equals On − keypoint delay (~0.72s when On=1.5).
+            # Reported session length is always the planned On box value.
+            planned = getattr(ch, "_planned_on_sec", None)
+            if planned is None and ch.current_qr_block:
+                for k in ("on_sec", "planned_on_sec"):
+                    raw = ch.current_qr_block.get(k)
+                    if raw is not None and raw != "" and raw != "-":
+                        try:
+                            planned = float(raw)
+                            break
+                        except (TypeError, ValueError):
+                            pass
             duration = current_timestamp - ch.session_start_timestamp
-            ch._last_session_duration = float(duration)
+            if planned is not None and float(planned) > 0:
+                ch._last_session_duration = float(planned)
+            else:
+                ch._last_session_duration = float(duration)
             ch.pending_analysis = {
                 'action_data': ch.current_qr_block,
                 'screens': ch.current_screens,
@@ -4047,7 +4173,11 @@ class SimustRealtimeCamera:
             session_fps_avg = ch.session_fps_sum / ch.session_frame_count if ch.session_frame_count > 0 else 0
 
             print(f"{'-'*50}")
-            print(f"[{ch.label}] SESSION END - Frames: {ch.session_frame_count} | Duration: {duration:.2f}s | Avg FPS: {session_fps_avg:.1f}")
+            print(
+                f"[{ch.label}] SESSION END - Frames: {ch.session_frame_count} | "
+                f"Wall: {duration:.2f}s | Session Duration (On): "
+                f"{ch._last_session_duration:.2f}s | Avg FPS: {session_fps_avg:.1f}"
+            )
             print(f"End: {offset_end_time_str}")
             print(
                 f"Analysis scheduled "
@@ -4070,6 +4200,7 @@ class SimustRealtimeCamera:
         ch.keypoint_frames_shown = 0
         ch.keypoint_clear_armed = False
         ch.keypoint_hold_until = 0.0
+        ch._planned_on_sec = None
 
         ch.between_sessions_active = True
         ch.between_session_data = []
@@ -4103,7 +4234,16 @@ class SimustRealtimeCamera:
         ch.current_block_id = p["block_id"]
         ch.active_goal_lines = p["goal_lines"]
         ch.session_active = True
-        ch.session_start_timestamp = current_timestamp
+        # t=0 is cue ON (teammate image appear), not keypoint paint delay.
+        # Otherwise Session Duration ≈ On − delay (~0.72s when On=1.5).
+        try:
+            detected_ts = float(p.get("detected_timestamp") or 0)
+        except (TypeError, ValueError):
+            detected_ts = 0.0
+        if detected_ts > 0:
+            ch.session_start_timestamp = detected_ts
+        else:
+            ch.session_start_timestamp = current_timestamp
         ch.session_frame_count = 0
         ch.session_fps_sum = 0
         ch.session_data = []
@@ -4124,21 +4264,32 @@ class SimustRealtimeCamera:
             if sim is not None:
                 sim.start_action(ch.current_action, ch.current_screens)
 
-        # Image-cue mode: stay ON for exactly On-box frames @ 30 FPS (1.0s → 30 frames),
-        # then wait 21f before clear. Do not use wall-clock alone (slow loops showed ~22f).
+        # Image-cue mode: On box = session length (e.g. 1.5s). Hold until cue_ON + On.
         if not CAMERA_QR_ENABLED:
-            on_sec, gap_sec = _read_teammate_on_gap()
-            hold_frames = _on_hold_frames(on_sec)
+            on_sec = p.get("on_sec")
+            if on_sec is None:
+                on_sec = _cue_on_sec()
+            try:
+                on_sec = max(0.1, min(9.9, float(on_sec)))
+            except (TypeError, ValueError):
+                on_sec, _ = _read_teammate_on_gap()
+            ch._planned_on_sec = float(on_sec)
+            ch.current_qr_block["on_sec"] = float(on_sec)
+            ch.current_qr_block["planned_on_sec"] = float(on_sec)
+            # End of On window from cue detection (matches player flash + force_end).
+            hold_until = float(ch.session_start_timestamp) + float(on_sec)
+            remaining = max(0.05, hold_until - float(current_timestamp))
+            hold_frames = max(1, int(round(remaining * IMAGE_CUE_FPS)))
             ch.keypoint_hold_frames = hold_frames
             ch.keypoint_frames_shown = 0
             ch.keypoint_clear_armed = False
-            ch.keypoint_hold_until = float(current_timestamp) + (hold_frames / IMAGE_CUE_FPS)
+            ch.keypoint_hold_until = hold_until
             ch.pending_end = False
             ch.pending_end_time = 0
             print(
-                f"[{ch.label}] Keypoints hold {hold_frames} frames AND "
-                f"{hold_frames / IMAGE_CUE_FPS:.2f}s (On={on_sec}s @ {IMAGE_CUE_FPS:.0f} FPS), then "
-                f"+{_end_offset_frames()}f clear | Gap box={gap_sec}s"
+                f"[{ch.label}] Keypoints until On ends: {remaining:.2f}s left "
+                f"({hold_frames}f @ {IMAGE_CUE_FPS:.0f} FPS) | "
+                f"Session Duration = On {on_sec:.2f}s (t=0 at cue ON)"
             )
 
         print(f"\n{'='*50}")
@@ -4172,10 +4323,7 @@ class SimustRealtimeCamera:
         return frame
 
     def _tick_keypoint_hold(self, ch, current_timestamp=None):
-        """Hold keypoints for On box: both wall time AND frame count @ 30 FPS.
-
-        On=1.0s → must stay ≥1.0s and ≥30 painted/session frames, then +21f clear.
-        """
+        """Hold keypoints until cue_ON + On (Session Duration), then clear."""
         if CAMERA_QR_ENABLED or ch is None:
             return
         if not ch.session_active or not ch.active_goal_lines:
@@ -4188,18 +4336,21 @@ class SimustRealtimeCamera:
         now = float(current_timestamp if current_timestamp is not None else time.time())
         ch.keypoint_frames_shown = int(getattr(ch, "keypoint_frames_shown", 0) or 0) + 1
         hold_until = float(getattr(ch, "keypoint_hold_until", 0) or 0)
-        if ch.keypoint_frames_shown < hold:
-            return
-        if hold_until and now < hold_until:
+        if hold_until:
+            if now < hold_until:
+                return
+        elif ch.keypoint_frames_shown < hold:
             return
         ch.keypoint_clear_armed = True
         ch.pending_end = True
-        ch.pending_end_time = now + _end_offset_seconds()
-        ch.pending_end_time_str = add_offset_to_time(get_current_time_ms(), _end_offset_seconds())
+        # Clear as soon as On ends (no extra end-offset that eats Gap).
+        ch.pending_end_time = now
+        ch.pending_end_time_str = get_current_time_ms()
         elapsed = now - float(ch.session_start_timestamp or now)
+        planned = getattr(ch, "_planned_on_sec", None) or elapsed
         print(
-            f"[{ch.label}] Keypoint hold done: {ch.keypoint_frames_shown}/{hold} frames, "
-            f"{elapsed:.2f}s elapsed (On box) — clear in {_end_offset_frames()}f"
+            f"[{ch.label}] Keypoint On window done: {ch.keypoint_frames_shown}/{hold} frames, "
+            f"{elapsed:.2f}s elapsed | Session Duration={float(planned):.2f}s — clear now"
         )
 
     def draw_results_overlay(self, frame):
@@ -4466,6 +4617,7 @@ class SimustRealtimeCamera:
             "screens": screens,
             "keypoints": [],
             "bbox": None,
+            "on_sec": _cue_on_sec(cue),
         }
 
     def _force_end_image_cue_sessions(self, current_time_str, current_timestamp):
@@ -4496,6 +4648,14 @@ class SimustRealtimeCamera:
 
     def process_qr_detection(self, frame, current_time_str, current_timestamp):
         """Drive sessions from image_action_cue.json (camera QR decode disabled)."""
+        # Pick up Field A → Field B phase switches from players_fields.json
+        last = float(getattr(self, "_last_active_fields_sync", 0) or 0)
+        if (current_timestamp - last) >= 0.5:
+            self._last_active_fields_sync = float(current_timestamp)
+            try:
+                self._sync_active_fields_for_phase()
+            except Exception as exc:
+                print(f"[FIELDS] sync error: {exc}")
         # Pass 1: cue file only when CAMERA_QR_ENABLED is False
         detected = {}
         image_cue = self._read_image_action_cue()
@@ -4653,6 +4813,7 @@ class SimustRealtimeCamera:
                 block_id, current_time_str, current_timestamp, ch,
                 paired_session_start=paired_start,
                 paired_offset_str=paired_offset,
+                on_sec=info.get("on_sec"),
             )
 
             bbox = info["bbox"]
