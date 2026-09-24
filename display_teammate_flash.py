@@ -25,7 +25,8 @@ IMAGE_PATH = os.path.join(ROOT, "teamate.png")
 SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
 # Coach / integrated-video canvas (smart_simust_player, waiting, results)
-VIDEO_WIDTH = 3712
+# 14 × 254px LED cabinets (middle A/B slots off but kept in layout)
+VIDEO_WIDTH = 3556
 VIDEO_HEIGHT = 512
 
 ON_MS = 1200

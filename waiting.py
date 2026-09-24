@@ -257,7 +257,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
 
-        self.video_width = 3712
+        self.video_width = 3556
         self.video_height = 512
         self.setFixedSize(self.video_width, self.video_height)
 

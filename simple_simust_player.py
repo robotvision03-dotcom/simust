@@ -124,7 +124,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.video_path = video_path
         self.loop = loop
         self.player_speed = player_speed
-        self.video_width = 3712
+        self.video_width = 3556
         self.video_height = 512
         
         # FIX: Use the same SIMUST_PLAYER_DIRECTORY as backend
@@ -144,7 +144,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
             '--quiet', 
             '--no-video-title-show', 
             '--intf', 'dummy',
-            '--aspect-ratio', '3712:512',
+            '--aspect-ratio', '3556:512',
             '--no-audio',  # Disable audio to improve performance
             '--network-caching=300',
             '--file-caching=300'
@@ -282,9 +282,9 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.repaint()
 
         try:
-            self.player.video_set_aspect_ratio("3712:512")
+            self.player.video_set_aspect_ratio("3556:512")
             self.player.video_set_scale(1.0)
-            self.player.video_set_crop_geometry("0:0:3712:512")
+            self.player.video_set_crop_geometry("0:0:3556:512")
         except:
             pass
 

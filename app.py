@@ -2066,7 +2066,13 @@ async def start_realtime_playback(req: Request):
             )
         logger.info(f"Smart player launched with level: {level_id}, subdir: {subdirectory or 'None'}, speed: {player_speed}x on Screen 2")
 
-        # Also store the current level in a file for the player (optional)
+        # Also store the current level for the player (level intro video selection)
+        try:
+            os.makedirs(os.path.dirname("C:/Users/siama/Documents/simust_player/current_level.txt"), exist_ok=True)
+            with open("C:/Users/siama/Documents/simust_player/current_level.txt", "w", encoding="utf-8") as f:
+                f.write(str(level_id))
+        except Exception as e:
+            logger.warning(f"Could not write current_level.txt: {e}")
         if player_id:
             try:
                 user_progress_file = os.path.join(PLAYER_REPORTS_DIR, player_id, "progress.json")

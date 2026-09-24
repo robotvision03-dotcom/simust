@@ -135,6 +135,27 @@ logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
 
 WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
+# Level intro clip played before every test (replaces "starting" ring animation).
+LEVEL_INTRO_MS = 4000
+LEVEL_INTRO_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+# Key → candidate filenames (elite file is currently misspelled "eite.mp4").
+LEVEL_INTRO_FILES = {
+    "foundation": ("foundation.mp4",),
+    "entry": ("entry.mp4",),
+    "activated": ("activated.mp4",),
+    "high-performance": ("high-performance.mp4",),
+    "elite": ("eite.mp4", "elite.mp4"),
+    "world-class": ("world-class.mp4",),
+}
+_LEVEL_INTRO_PATH_RULES = (
+    (re.compile(r"L00-Foundation|Foundation-Challenge", re.I), "foundation"),
+    (re.compile(r"L01-Entry", re.I), "entry"),
+    (re.compile(r"L02-Activated", re.I), "activated"),
+    (re.compile(r"L03-HighPerformance|High[-_ ]?Performance", re.I), "high-performance"),
+    (re.compile(r"L04-Elite", re.I), "elite"),
+    (re.compile(r"L05-WorldClass|World[-_ ]?Class", re.I), "world-class"),
+)
+CURRENT_LEVEL_FILE = "C:/Users/siama/Documents/simust_player/current_level.txt"
 
 # Image-based player: labeled assets in the foundation folder (e.g. SF-30N).
 # Filenames: 1_pass_14_3.png, filler_3.png, gap_1.png
@@ -144,10 +165,10 @@ FLASH_OFF_MS = 500
 FLASH_REPEAT = 5  # legacy teammate-flash fallback only
 # Same clock as image-cue keypoint offsets in simust_realtime (1.0s = 30 frames).
 DISPLAY_FPS = 30.0
-# 5 tests; foundation SF-*N always uses 10 actions per test.
-LABEL_TEST_COUNT = 5
+# 1 test × 3 actions for Foundation (SF / sum / extras) — short lab runs.
+LABEL_TEST_COUNT = 1
 LABEL_TIMING_DECAY = 0.90
-LABEL_ACTIONS_PER_TEST = 10
+LABEL_ACTIONS_PER_TEST = 3
 # Foundation SF degree → screens-between on the field arc (30° per step).
 # SF-30N: adjacent (e.g. 2,3); SF-60N: +1 between; SF-110N: +2; SF-180N: +3.
 FOUNDATION_SF_GAPS = {
@@ -160,6 +181,51 @@ FOUNDATION_SF_GAPS = {
 FOUNDATION_ARC_A = [2, 3, 4, 12, 13, 14]
 FOUNDATION_ARC_B = [11, 10, 9, 7, 6, 5]
 DISABLED_DISPLAY_SCREENS = {1, 8}
+# New arena indices (1–7 per field) → hardware screen ids used by the display.
+# Field A: 12→1, 13→2, 14→3, 2→4, 3→5, 4→6, 1→7
+# Field B: 5→1, 6→2, 7→3, 9→4, 10→5, 11→6, 8→7
+ARENA_A_TO_HW = {1: 12, 2: 13, 3: 14, 4: 2, 5: 3, 6: 4, 7: 1}
+ARENA_B_TO_HW = {1: 5, 2: 6, 3: 7, 4: 9, 5: 10, 6: 11, 7: 8}
+# Scripted SF pairs use NEW arena indices (A, B). On=3.0s, Gap=0.5s, fixed (no speed scale).
+SF_SCRIPTED_ON_MS = 3000
+SF_SCRIPTED_GAP_MS = 500
+SF110N_GAP_MS = SF_SCRIPTED_GAP_MS  # alias
+
+_SF30_T1 = [(1, 1), (2, 2)] * 5
+_SF30_T2 = [(3, 3), (2, 2)] * 5
+_SF60_T1 = [(1, 1), (3, 3)] * 5
+_SF60_T2 = [(6, 6), (4, 4)] * 5
+
+SF30N_SCRIPT = {
+    1: {"on_ms": SF_SCRIPTED_ON_MS, "pairs": list(_SF30_T1)[:LABEL_ACTIONS_PER_TEST]},
+}
+SF60N_SCRIPT = {
+    1: {"on_ms": SF_SCRIPTED_ON_MS, "pairs": list(_SF60_T1)[:LABEL_ACTIONS_PER_TEST]},
+}
+SF110N_SCRIPT = {
+    1: {
+        "on_ms": SF_SCRIPTED_ON_MS,
+        "pairs": [
+            (5, 5), (3, 3), (6, 6), (3, 3), (1, 1),
+            (3, 3), (5, 5), (2, 2), (5, 5), (2, 2),
+        ][:LABEL_ACTIONS_PER_TEST],
+    },
+}
+SF180N_SCRIPT = {
+    1: {
+        "on_ms": SF_SCRIPTED_ON_MS,
+        "pairs": [
+            (1, 1), (3, 3), (4, 4), (3, 3), (5, 5),
+            (3, 3), (5, 5), (2, 2), (5, 5), (2, 2),
+        ][:LABEL_ACTIONS_PER_TEST],
+    },
+}
+SF_SCRIPTED_PLAYLISTS = {
+    "SF-30N": SF30N_SCRIPT,
+    "SF-60N": SF60N_SCRIPT,
+    "SF-110N": SF110N_SCRIPT,
+    "SF-180N": SF180N_SCRIPT,
+}
 FOUNDATION_MATH_MODES = ("sum", "sub", "multiply", "divide")
 try:
     from simust_cognitive import (
@@ -624,6 +690,74 @@ def _active_field_screens(active_fields):
     return screens
 
 
+def _level_intro_key_from_id(level_id: str) -> Optional[str]:
+    """Map L00-Foundation / Foundation / high-performance → intro key."""
+    raw = str(level_id or "").strip()
+    if not raw:
+        return None
+    main = raw.split("/")[0].strip()
+    low = main.lower().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "l00-foundation": "foundation",
+        "foundation": "foundation",
+        "l01-entry": "entry",
+        "entry": "entry",
+        "l02-activated": "activated",
+        "activated": "activated",
+        "l03-highperformance": "high-performance",
+        "l03-high-performance": "high-performance",
+        "high-performance": "high-performance",
+        "highperformance": "high-performance",
+        "l04-elite": "elite",
+        "elite": "elite",
+        "eite": "elite",
+        "l05-worldclass": "world-class",
+        "l05-world-class": "world-class",
+        "world-class": "world-class",
+        "worldclass": "world-class",
+    }
+    if low in aliases:
+        return aliases[low]
+    for pat, key in _LEVEL_INTRO_PATH_RULES:
+        if pat.search(main):
+            return key
+    return None
+
+
+def _detect_level_intro_key(directory: str = None) -> Optional[str]:
+    """Resolve level intro key from current_level.txt or the play directory path."""
+    try:
+        if os.path.isfile(CURRENT_LEVEL_FILE):
+            with open(CURRENT_LEVEL_FILE, "r", encoding="utf-8") as f:
+                key = _level_intro_key_from_id(f.read().strip())
+                if key:
+                    return key
+    except Exception:
+        pass
+    path = str(directory or "")
+    for pat, key in _LEVEL_INTRO_PATH_RULES:
+        if pat.search(path):
+            return key
+    return None
+
+
+def _find_level_intro_video(directory: str = None) -> Optional[str]:
+    """Return absolute path to static/<level>.mp4 for the current level."""
+    key = _detect_level_intro_key(directory)
+    if not key:
+        return None
+    names = LEVEL_INTRO_FILES.get(key) or ()
+    for name in names:
+        hit = os.path.join(LEVEL_INTRO_STATIC_DIR, name)
+        if os.path.isfile(hit):
+            return hit
+    # Last resort: exact key.mp4 in static/
+    hit = os.path.join(LEVEL_INTRO_STATIC_DIR, f"{key}.mp4")
+    if os.path.isfile(hit):
+        return hit
+    return None
+
+
 def _scan_label_assets(directory):
     """Parse SF-30N-style labeled images from a foundation subdirectory."""
     actions = {}
@@ -737,6 +871,127 @@ def _find_foundation_pass_image(directory) -> Optional[str]:
         if _ACTION_FILE_RE.match(os.path.splitext(os.path.basename(path))[0]):
             return path
     return images[0]
+
+
+def _find_pass_video(directory) -> Optional[str]:
+    """Prefer pass.mp4 in this folder, then sibling Foundation folders / files/."""
+    if not directory:
+        return None
+    cand = os.path.join(directory, "pass.mp4")
+    if os.path.isfile(cand):
+        return cand
+    root = _foundation_challenge_root(directory)
+    for name in ("pass.mp4",):
+        for folder in (
+            os.path.join(root, "files"),
+            os.path.join(root, "SF-110N"),
+            root,
+        ):
+            hit = os.path.join(folder, name)
+            if os.path.isfile(hit):
+                return hit
+    # Walk siblings once
+    if root and os.path.isdir(root):
+        try:
+            for sub in sorted(os.listdir(root)):
+                hit = os.path.join(root, sub, "pass.mp4")
+                if os.path.isfile(hit):
+                    return hit
+        except Exception:
+            pass
+    return None
+
+
+def _build_scripted_sf_playlist(
+    sf_id: str,
+    script: dict,
+    active_fields,
+    directory,
+    gaps: dict = None,
+) -> List[dict]:
+    """Fixed screen order + fixed On/Gap; show pass image on lit screens (no video)."""
+    active = set(active_fields or [])
+    if not active or not script:
+        return []
+    gaps = gaps or {}
+    # Prefer the pass image inside this SF folder (png/jpg/jpeg), then siblings.
+    pass_image = _find_foundation_pass_image(directory) or _find_any_foundation_pass_image(
+        directory
+    )
+    if not pass_image:
+        return []
+    n_tests = len(script)
+    gap_ms = SF_SCRIPTED_GAP_MS
+    playlist = []
+    for test_num in sorted(script.keys()):
+        spec = script[test_num]
+        on_ms = int(spec.get("on_ms") or SF_SCRIPTED_ON_MS)
+        pairs = list(spec.get("pairs") or [])
+        for action_in_set, pair in enumerate(pairs, start=1):
+            # Scripts use new arena indices; convert to hardware screen ids.
+            a_arena, b_arena = int(pair[0]), int(pair[1])
+            a_sid = int(ARENA_A_TO_HW.get(a_arena, a_arena))
+            b_sid = int(ARENA_B_TO_HW.get(b_arena, b_arena))
+            field_screens = {}
+            lit = []
+            if "A" in active and a_sid not in DISABLED_DISPLAY_SCREENS:
+                field_screens["A"] = [a_sid]
+                lit.append(a_sid)
+            if "B" in active and b_sid not in DISABLED_DISPLAY_SCREENS:
+                field_screens["B"] = [b_sid]
+                lit.append(b_sid)
+            if not lit:
+                continue
+            screen_images = {int(sid): pass_image for sid in lit}
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": len(pairs),
+                "is_last_in_set": action_in_set == len(pairs),
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "screen_video": None,
+                "arena_pair": (a_arena, b_arena),
+                "parts": [{
+                    "screens": list(lit),
+                    "path": pass_image,
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": screen_images,
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"{sf_id} T{test_num}/{n_tests} a{action_in_set}/{len(pairs)} "
+                    f"arena_{a_arena}_{b_arena} hw_{'_'.join(str(s) for s in lit)} "
+                    f"on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": f"image://{sf_id}/test{test_num}/{action_in_set}",
+                "foundation_sf": sf_id,
+            })
+    return playlist
+
+
+def _build_sf110n_playlist(active_fields, directory, gaps: dict = None) -> List[dict]:
+    return _build_scripted_sf_playlist(
+        "SF-110N", SF110N_SCRIPT, active_fields, directory, gaps=gaps
+    )
+
+
+def _build_sf180n_playlist(active_fields, directory, gaps: dict = None) -> List[dict]:
+    return _build_scripted_sf_playlist(
+        "SF-180N", SF180N_SCRIPT, active_fields, directory, gaps=gaps
+    )
 
 
 def _find_any_foundation_pass_image(directory) -> Optional[str]:
@@ -1335,7 +1590,7 @@ def _clear_image_action_cue(force_end=False):
 
 
 class ImageActionCanvas(QtWidgets.QWidget):
-    """3712×512 coach band: per-slice labeled action / filler / gap images."""
+    """3712×512 coach band: per-slice labeled action / filler / gap images or pass.mp4."""
 
     # Drawn at 85% of the slice (15% smaller than full-tile cover)
     IMAGE_SCALE = 0.85
@@ -1348,14 +1603,20 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._screen_pixmaps = {}  # screen_id -> QPixmap
         self._pixmap_cache = {}  # path -> QPixmap
         self._fallback = QtGui.QPixmap(image_path) if os.path.isfile(image_path) else QtGui.QPixmap()
+        self._video_cap = None
+        self._video_timer = None
+        self._video_frame = None  # latest QPixmap from pass.mp4
+        self._video_screens = set()
 
     def clear(self):
+        self._stop_screen_video()
         self.active_screens = set()
         self._screen_pixmaps = {}
         self.update()
 
     def set_pass_screens(self, screen_ids):
         """Legacy: same fallback image on each lit screen."""
+        self._stop_screen_video()
         self.active_screens = {int(sid) for sid in screen_ids}
         self._screen_pixmaps = {}
         for sid in self.active_screens:
@@ -1365,6 +1626,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
 
     def set_screen_images(self, screen_to_path):
         """Map screen id → image path (action, filler, or gap)."""
+        self._stop_screen_video()
         self._screen_pixmaps = {}
         self.active_screens = set()
         for sid, path in (screen_to_path or {}).items():
@@ -1374,6 +1636,81 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self._screen_pixmaps[int(sid)] = pix
             self.active_screens.add(int(sid))
         self.update()
+
+    def set_screen_video(self, screen_ids, video_path):
+        """Play the same pass.mp4 (looping) on each listed screen tile."""
+        self._stop_screen_video()
+        screens = {int(s) for s in (screen_ids or []) if int(s) not in DISABLED_DISPLAY_SCREENS}
+        self._video_screens = screens
+        self.active_screens = set(screens)
+        self._screen_pixmaps = {}
+        if not screens or not video_path or not os.path.isfile(video_path):
+            self.update()
+            return
+        try:
+            import cv2
+        except Exception as exc:
+            logger.warning("OpenCV unavailable for pass.mp4: %s — falling back to still", exc)
+            # Fall back: first frame unavailable → try sibling/ co-located png
+            still = os.path.splitext(video_path)[0] + ".png"
+            if os.path.isfile(still):
+                self.set_screen_images({sid: still for sid in screens})
+            return
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.warning("Could not open pass video: %s", video_path)
+            still = os.path.splitext(video_path)[0] + ".png"
+            if os.path.isfile(still):
+                self.set_screen_images({sid: still for sid in screens})
+            return
+        self._video_cap = cap
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+        interval = max(20, int(round(1000.0 / fps)))
+        self._tick_screen_video()  # first frame
+        self._video_timer = QtCore.QTimer(self)
+        self._video_timer.timeout.connect(self._tick_screen_video)
+        self._video_timer.start(interval)
+
+    def _stop_screen_video(self):
+        if self._video_timer is not None:
+            try:
+                self._video_timer.stop()
+                self._video_timer.deleteLater()
+            except Exception:
+                pass
+            self._video_timer = None
+        if self._video_cap is not None:
+            try:
+                self._video_cap.release()
+            except Exception:
+                pass
+            self._video_cap = None
+        self._video_frame = None
+        self._video_screens = set()
+
+    def _tick_screen_video(self):
+        if self._video_cap is None:
+            return
+        try:
+            import cv2
+            ok, frame = self._video_cap.read()
+            if not ok or frame is None:
+                # Loop
+                self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok, frame = self._video_cap.read()
+            if not ok or frame is None:
+                return
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            qimg = QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format_RGB888).copy()
+            self._video_frame = QtGui.QPixmap.fromImage(qimg)
+            self._screen_pixmaps = {
+                int(sid): self._video_frame for sid in self._video_screens
+            }
+            self.active_screens = set(self._video_screens)
+            self.update()
+        except Exception as exc:
+            logger.warning("pass.mp4 frame tick failed: %s", exc)
 
     def _load_pixmap(self, path):
         if not path:
@@ -1890,11 +2227,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elif sys.platform == "darwin":
             self.player.set_nsobject(int(self.videoframe.winId()))
 
-        # Pre-start waiting ("starting") then first action, or start immediately for video mode
-        if self.image_based:
-            self._begin_prestart_waiting()
-        else:
-            self._load_video(0)
+        # Level intro clip before each test (replaces "starting" ring animation)
+        self._begin_level_intro(0)
 
         self.speed_monitor_timer.start()
         self._show_playlist_status()
@@ -2178,6 +2512,50 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     break
         if not sf_id:
             sf_id = _foundation_sf_id(self.video_directory)
+
+        # SF-110N / SF-180N: fixed screen script + pass.mp4 + fixed On/Gap
+        scripted_id = None
+        hint_u = str(mode_hint or "").upper()
+        if sf_id in SF_SCRIPTED_PLAYLISTS:
+            scripted_id = sf_id
+        elif hint_u in SF_SCRIPTED_PLAYLISTS:
+            scripted_id = hint_u
+        if scripted_id:
+            script = SF_SCRIPTED_PLAYLISTS[scripted_id]
+            playlist = _build_scripted_sf_playlist(
+                scripted_id, script, active, self.video_directory, gaps=gaps
+            )
+            if playlist:
+                self._label_mode = True
+                on_list = [
+                    f"{int(script[t]['on_ms']) / 1000:g}"
+                    for t in sorted(script.keys())
+                ]
+                logger.info(
+                    "Foundation %s scripted playlist: %s steps "
+                    "(tests=%s on=%ss gap=0.5s image=%s) from %s",
+                    scripted_id,
+                    len(playlist),
+                    len(script),
+                    "/".join(on_list),
+                    os.path.basename(
+                        (playlist[0].get("screen_images") or {}).get(
+                            next(iter(playlist[0].get("screen_images") or {}), None)
+                        )
+                        or playlist[0].get("parts", [{}])[0].get("path")
+                        or "?"
+                    ),
+                    self.video_directory,
+                )
+                return playlist
+            logger.error(
+                "%s scripted playlist empty under %s (need pass image in folder)",
+                scripted_id,
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+
         pass_image = _find_any_foundation_pass_image(self.video_directory) if sf_id else None
         if sf_id and pass_image:
             self._label_mode = True
@@ -2313,35 +2691,97 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "path": "image://PASS/flash",
         }]
 
-    def _begin_prestart_waiting(self):
-        """Show waiting rings with 'starting' once, only before the first action."""
-        if self._prestart_done:
-            self._load_video(0)
+    def _begin_level_intro(self, next_index=0):
+        """Play static/<level>.mp4 for 4s on active field A/B screens before a test."""
+        self._level_intro_next_index = int(next_index)
+        intro = _find_level_intro_video(self.video_directory or self._level_root)
+        self._hide_waiting_overlay()
+        if not intro:
+            logger.warning(
+                "No level intro video found for %s — starting test immediately",
+                self.video_directory or self._level_root,
+            )
+            self._after_level_intro()
             return
-        self.display_phase = "prestart"
-        if self.image_canvas:
-            self.image_canvas.clear()
-            self.image_canvas.hide()
-        self._update_status_file("starting", 0, self.total_videos, "Starting...")
-        self._show_waiting_overlay("starting")
-        logger.info("Pre-start waiting animation (%sms) — ring text: starting (once)", WAIT_ANIMATION_MS)
+
+        active = self._active_fields()
+        lit = _active_field_screens(active)
+        self.display_phase = "level_intro"
+        self._update_status_file(
+            "starting",
+            max(0, self._current_test_num() - 1),
+            self.total_videos,
+            f"Level intro: {os.path.basename(intro)}",
+        )
+        logger.info(
+            "Level intro %sms on fields %s screens %s: %s (then index %s)",
+            LEVEL_INTRO_MS, active, lit, intro, next_index,
+        )
+
+        played = False
+        if self.image_canvas and lit:
+            # Foundation / image mode: tile the clip onto active field screens
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+            self.image_canvas.set_screen_video(lit, intro)
+            played = True
+        else:
+            # Video playlist mode: full coach-band VLC
+            if self.image_canvas:
+                self.image_canvas.clear()
+                self.image_canvas.hide()
+            try:
+                self._play_local_clip(intro, rate=1.0)
+                played = True
+            except Exception as exc:
+                logger.error("Level intro VLC playback failed: %s", exc)
+
+        if not played:
+            self._after_level_intro()
+            return
+
         if self.play_delay_timer:
             self.play_delay_timer.stop()
         self.play_delay_timer = QtCore.QTimer(singleShot=True)
-        self.play_delay_timer.timeout.connect(self._after_prestart_waiting)
-        self.play_delay_timer.start(WAIT_ANIMATION_MS)
+        self.play_delay_timer.timeout.connect(self._after_level_intro)
+        self.play_delay_timer.start(LEVEL_INTRO_MS)
 
-    def _after_prestart_waiting(self):
+    def _after_level_intro(self):
         if self.operator_paused:
-            QTimer.singleShot(200, self._after_prestart_waiting)
+            QTimer.singleShot(200, self._after_level_intro)
             return
+        if self.play_delay_timer:
+            try:
+                self.play_delay_timer.stop()
+            except Exception:
+                pass
+            self.play_delay_timer = None
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        if self.image_canvas:
+            self.image_canvas.clear()
         self._prestart_done = True
         self.is_first_video = False
         self._hide_waiting_overlay()
+        idx = int(getattr(self, "_level_intro_next_index", 0) or 0)
+        self.display_phase = "action"
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
-        self._load_video(0)
+        self._load_video(idx)
+
+    def _begin_prestart_waiting(self):
+        """Backward-compatible alias → level intro video."""
+        self._begin_level_intro(0)
+
+    def _after_prestart_waiting(self):
+        self._after_level_intro()
 
     def _get_video_files(self, directory):
         """
@@ -2375,8 +2815,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return videos
 
     def _flash_delay_ms(self, on=True):
-        """On/Gap ms from frontend, scaled by current test (−10% each set)."""
+        """On/Gap ms from frontend (scaled), or fixed per-entry on_ms/gap_ms (SF scripts)."""
         speed = max(0.25, float(self.player_speed or 1.0))
+        try:
+            entry = self.video_files[self.current_video_index]
+            if isinstance(entry, dict):
+                fixed = bool(entry.get("fixed_timing"))
+                div = 1.0 if fixed else speed
+                if on and entry.get("on_ms") is not None:
+                    return max(80, int(float(entry["on_ms"]) / div))
+                if (not on) and entry.get("gap_ms") is not None:
+                    return max(80, int(float(entry["gap_ms"]) / div))
+        except Exception:
+            pass
         on_ms, gap_ms = _read_flash_timing_ms()
         base = on_ms if on else gap_ms
         scale = 1.0
@@ -2642,8 +3093,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if fid in active:
                     field_screens.setdefault(fid, []).append(int(sid))
 
+        # Lit screens for display + cue (prefer explicit field_screens)
+        lit_screens = []
+        for sids in field_screens.values():
+            lit_screens.extend(int(s) for s in sids)
+        if not lit_screens:
+            lit_screens = list(action_screens)
+
+        video_path = entry.get("screen_video")
         if self.image_canvas:
-            self.image_canvas.set_screen_images(screen_images)
+            if video_path and os.path.isfile(str(video_path)):
+                self.image_canvas.set_screen_video(lit_screens, str(video_path))
+            else:
+                self.image_canvas.set_screen_images(screen_images)
 
         self._flash_seq += 1
         delay = self._flash_delay_ms(on=True)
@@ -2862,12 +3324,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         if self.image_canvas:
             self.image_canvas.clear()
-        _write_image_action_cue(
-            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
-        )
-        self._action_phase = "idle"
-
-        # Within a test: next action. End of test: per-video results.
+        # Within a test, only clear the cue (force_end=False). force_end is for
+        # playlist/test end so realtime can flush; mid-test force_end confused sync.
         next_idx = self.current_video_index + 1
         cur = self.video_files[self.current_video_index] if self.video_files else {}
         cur_test = int(cur.get("test_num") or 0) if isinstance(cur, dict) else 0
@@ -2882,6 +3340,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             and next_entry.get("kind") == "labeled_action"
             and int(next_entry.get("test_num") or -1) == cur_test
         )
+        _write_image_action_cue(
+            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=not same_test
+        )
+        self._action_phase = "idle"
+
+        # Within a test: next action. End of test: per-video results.
         if same_test:
             logger.info(
                 "Labeled action done — next in test %s (skip waiting overlay)",
@@ -3116,7 +3580,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         self.video_count = len(self.video_files)
         if self.image_based and self._label_mode:
-            self.total_videos = LABEL_TEST_COUNT
+            # Prefer highest test_num in playlist (SF-110N = 4; others = 5)
+            max_test = 0
+            for e in (self.video_files or []):
+                if isinstance(e, dict) and e.get("test_num"):
+                    try:
+                        max_test = max(max_test, int(e["test_num"]))
+                    except (TypeError, ValueError):
+                        pass
+            self.total_videos = max_test or LABEL_TEST_COUNT
         else:
             self.total_videos = self.video_count
         self._post_results_index = None
@@ -3147,10 +3619,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         self._prestart_done = False
         self.is_first_video = True
-        if self.image_based:
-            self._begin_prestart_waiting()
-        else:
-            self._load_video(0)
+        self._begin_level_intro(0)
 
     def _active_fields(self):
         if getattr(self, "_phase_active", None):
@@ -3323,7 +3792,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._do_continue()
 
     def _do_continue(self):
-        """After per-video results: next test's first action, or final summary."""
+        """After per-video results: level intro, then next test's first action (or final)."""
         if getattr(self, "_post_results_index", None) is not None:
             next_idx = int(self._post_results_index)
             self._post_results_index = None
@@ -3332,8 +3801,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._set_start_time = None
         if next_idx < len(self.video_files):
             self.current_video_index = next_idx
-            self.display_phase = "action"
-            self._load_video(self.current_video_index)
+            self._begin_level_intro(next_idx)
         else:
             self._show_final_summary()
 
@@ -3586,7 +4054,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
         self.setFixedSize(self.video_width, self.video_height)
         self.videoframe.raise_()
-        if self.image_canvas and self.image_based and self.display_phase == "action":
+        if self.image_canvas and self.image_based and self.display_phase in (
+            "action", "level_intro"
+        ):
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
             self.image_canvas.show()
             self.image_canvas.raise_()
@@ -3707,7 +4177,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            if getattr(self, "display_phase", "action") in ("wait_per_video", "wait_final", "per_video_results"):
+            if getattr(self, "display_phase", "action") in (
+                "wait_per_video", "wait_final", "per_video_results", "level_intro", "prestart"
+            ):
                 return
             state = self.player.get_state()
 

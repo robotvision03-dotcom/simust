@@ -18,7 +18,7 @@ from PyQt5.QtGui import QImage, QPixmap
 
 
 # ================== RTSP URL ==================
-RTSP_RIGHT = "rtsp://admin:majidAram2@192.168.2.11:554/Streaming/Channels/101/"
+RTSP_RIGHT = "rtsp://admin:majidAram2@192.168.2.12:554/Streaming/Channels/101/"
 
 
 class RTSPViewer(QtWidgets.QWidget):

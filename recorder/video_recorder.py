@@ -1,4 +1,4 @@
-﻿# recorder/video_recorder.py
+# recorder/video_recorder.py
 
 import ctypes
 import multiprocessing
@@ -205,8 +205,16 @@ class VideoRecorder:
         self._camera_address = camera_address
         self.config = config
         self._timeout = timeout
-        self._fps = config.get("fps", 25.0) if config else 25.0
+        self._fps = float(config.get("fps", settings.SAVE_FPS) if config else settings.SAVE_FPS)
         self.is_screen_record = config.get("screen_record", False) if config else False
+        self._save_width = int(
+            (config or {}).get("save_width")
+            or getattr(settings, "SAVE_WIDTH", 1280)
+        )
+        self._save_height = int(
+            (config or {}).get("save_height")
+            or getattr(settings, "SAVE_HEIGHT", 720)
+        )
         self._cancellation_pending = None
         self._main_process = None
         self._video_capture = None
@@ -358,10 +366,17 @@ class VideoRecorder:
 
             fps = self._fps
             fourcc = cv2.VideoWriter_fourcc(*settings.VIDEOS_FOURCC)
-            w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            video_writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
+            src_w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            src_h = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            out_w = int(self._save_width or src_w)
+            out_h = int(self._save_height or src_h)
+            video_writer = cv2.VideoWriter(video_path, fourcc, fps, (out_w, out_h))
             self._video_writer = video_writer
+            self._out_size = (out_w, out_h)
+            logger.info(
+                "Camera %s save: %sx%s → %sx%s @ %.0f FPS",
+                self._camera_name, src_w, src_h, out_w, out_h, fps,
+            )
 
             q = queue.Queue(maxsize=settings.FRAMES_QUEUE_SIZE * 8)
 
@@ -420,13 +435,18 @@ class VideoRecorder:
                 self._start_barrier.wait(timeout=15)
 
             fourcc = cv2.VideoWriter_fourcc(*settings.VIDEOS_FOURCC)
-            fps = 25.0
-            writer = cv2.VideoWriter(video_path, fourcc, fps, (w * 2, h))
+            fps = float(getattr(settings, "SAVE_FPS", 30.0))
+            out_w = int(getattr(settings, "SAVE_WIDTH", 1280)) * 2
+            out_h = int(getattr(settings, "SAVE_HEIGHT", 720))
+            writer = cv2.VideoWriter(video_path, fourcc, fps, (out_w, out_h))
 
             if not writer.isOpened():
                 raise RuntimeError("Cannot open VideoWriter")
 
-            print(f"Started stitched recording → {os.path.basename(video_path)}")
+            print(
+                f"Started stitched recording {out_w}x{out_h} @ {fps:.0f} FPS "
+                f"→ {os.path.basename(video_path)}"
+            )
 
             while not (self._stop_event.is_set() or self._cancellation_pending.value):
                 ret1, frame1 = cap1.read()
@@ -436,6 +456,12 @@ class VideoRecorder:
                     print("One camera dropped frame or disconnected → stopping")
                     break
 
+                # Downscale each half then stitch (smaller file @ 30 FPS)
+                half_w = out_w // 2
+                if frame1.shape[1] != half_w or frame1.shape[0] != out_h:
+                    frame1 = cv2.resize(frame1, (half_w, out_h), interpolation=cv2.INTER_AREA)
+                if frame8.shape[1] != half_w or frame8.shape[0] != out_h:
+                    frame8 = cv2.resize(frame8, (half_w, out_h), interpolation=cv2.INTER_AREA)
                 stitched = cv2.hconcat([frame1, frame8])
                 writer.write(stitched)
 
@@ -779,6 +805,11 @@ class VideoRecorder:
                     timestamps.append(ts_str)
                 # ───────────────────────────────────────────────────────
 
+                out_size = getattr(self, "_out_size", None)
+                if out_size and frame is not None:
+                    h, w = frame.shape[:2]
+                    if (w, h) != out_size:
+                        frame = cv2.resize(frame, out_size, interpolation=cv2.INTER_AREA)
                 writer.write(frame)
             except queue.Empty:
                 pass
