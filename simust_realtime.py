@@ -4196,10 +4196,10 @@ class SimustRealtimeCamera:
         action_key = ch.current_action
         ch.stats["action_counts"][action_key] = ch.stats["action_counts"].get(action_key, 0) + 1
         ch.session_active = False
-        ch.kp_appear_frames_left = None
         ch.kp_clear_frames_left = None
-        ch._pending_cue_info = None
-        ch._frame_sync_cue_raw = None
+        # Do not clear kp_appear_frames_left / _pending_cue_info / _frame_sync_cue_raw.
+        # The next pass arms its 17f delay while this hold is still running.
+        # Wiping that countdown here restarted it late, so S2 slipped 8f and S3 16f.
         if self.simulation_enabled:
             sim = self.simulators.get(ch.field_id)
             if sim is not None:
@@ -4432,18 +4432,11 @@ class SimustRealtimeCamera:
             field_on = bool(hit and hit.get("raw") and hit.get("screens"))
             cue_raw = hit.get("raw") if field_on else None
 
-            # New cue starts its own 17f delay immediately. Do not wait out the
-            # previous hold — that wait stacked (~8f, then ~16f) on S2 and S3.
+            # New cue arms its own 17f delay immediately, but the current 60f hold
+            # keeps running. Ending it here cut every action to ~2.6s (next pass
+            # arrives during the tail of the 3s hold).
             just_armed = False
             if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
-                if ch.session_active:
-                    ch.kp_clear_frames_left = None
-                    with self.session_lock:
-                        if ch.session_active:
-                            self._end_session_locked(
-                                current_time_str, current_timestamp, ch
-                            )
-                    print(f"[{ch.label}] cut over → new cue ON")
                 on_sec = 3.0
                 hold_frames = int(IMAGE_CUE_HOLD_FRAMES)
                 ch._frame_sync_cue_raw = cue_raw
@@ -4456,23 +4449,25 @@ class SimustRealtimeCamera:
                     "hold_frames": hold_frames,
                 }
                 ch.kp_appear_frames_left = shift
-                ch.kp_clear_frames_left = None
                 just_armed = True
                 print(
                     f"[{ch.label}] cue ON → keypoints in {shift}f, "
                     f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
                 )
 
-            # --- Appear countdown (not cancelled by cue false) ---
-            if (
-                not just_armed
-                and ch.kp_appear_frames_left is not None
-                and not ch.session_active
-            ):
+            # --- Appear countdown runs even while the previous hold is still up ---
+            if not just_armed and ch.kp_appear_frames_left is not None:
                 if ch.kp_appear_frames_left <= 1:
                     info = ch._pending_cue_info or {}
                     ch.kp_appear_frames_left = None
                     ch._pending_cue_info = None
+                    if ch.session_active:
+                        ch.kp_clear_frames_left = None
+                        with self.session_lock:
+                            if ch.session_active:
+                                self._end_session_locked(
+                                    current_time_str, current_timestamp, ch
+                                )
                     self.shared_action_index = max(
                         int(getattr(self, "shared_action_index", 0) or 0) + 1,
                         max(
