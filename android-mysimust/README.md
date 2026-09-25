@@ -10,7 +10,7 @@ Player phone/tablet app for the public My SIMUST portal (`/login`, `/dashboard`,
 ## Version
 
 - Package: `com.simust.mysimust` (never change after Play publish)
-- Version: **1.2** (versionCode **3**)
+- Version: **1.3.6** (versionCode **10**)
 - Targets Android 16 (API 36), minSdk 24
 - Privacy: https://my.simust.com/privacy
 

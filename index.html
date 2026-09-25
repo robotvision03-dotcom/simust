@@ -675,9 +675,9 @@
             if (id.indexOf('Foundation') !== -1) return 'Foundation';
             if (id.indexOf('Entry') !== -1) return 'Entry';
             if (id.indexOf('Activated') !== -1) return 'Activated';
-            if (id.indexOf('High Performance') !== -1) return 'High Performance';
+            if (id.indexOf('HighPerformance') !== -1 || id.indexOf('High Performance') !== -1) return 'High Performance';
             if (id.indexOf('Elite') !== -1) return 'Elite';
-            if (id.indexOf('World Class') !== -1) return 'World Class';
+            if (id.indexOf('WorldClass') !== -1 || id.indexOf('World Class') !== -1) return 'World Class';
             return 'Other';
         };
 
@@ -741,20 +741,11 @@
         // Subdirectories for Foundation — locked until paid 30-minute credits unlock them
         var LEVEL_SUBDIRS = {
             'L00-Foundation': [
-                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N',
-                'digit', 'random', 'rotation', 'sum', 'sub', 'multiply', 'divide',
-                'sequence', 'compound', 'color_rule', 'go_nogo', 'stroop',
-                'spatial', 'memory', 'move_memory', 'tracking', 'tactical',
-                'flex', 'dual_rule', 'peripheral', 'emotion', 'symbols'
+                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'
             ]
         };
         var FOUNDATION_PLAYLISTS = LEVEL_SUBDIRS['L00-Foundation'].slice();
-        var FOUNDATION_EXTRA_PLAYLISTS = [
-            'digit', 'random', 'rotation', 'sum', 'sub', 'multiply', 'divide',
-            'sequence', 'compound', 'color_rule', 'go_nogo', 'stroop',
-            'spatial', 'memory', 'move_memory', 'tracking', 'tactical',
-            'flex', 'dual_rule', 'peripheral', 'emotion', 'symbols'
-        ];
+        var FOUNDATION_EXTRA_PLAYLISTS = [];
 
         // =====================================================================
         // LOGIN COMPONENT
@@ -1909,8 +1900,8 @@
             }
             aetPercent = Number(aetPercent) || 0;
 
-            var rightScreens = ['2', '3', '4', '9', '10', '11'];
-            var leftScreens = ['5', '6', '7', '12', '13', '14'];
+            var rightScreens = ['4', '5', '6'];
+            var leftScreens = ['1', '2', '3'];
             var rightGoals = 0,
                 leftGoals = 0;
             var goalsByScreen = stats.goals_by_screen || {};
@@ -2710,6 +2701,9 @@
             var selectedLevelState = useState("");
             var selectedLevel = selectedLevelState[0];
             var setSelectedLevel = selectedLevelState[1];
+            var selectedLevelBState = useState("");
+            var selectedLevelB = selectedLevelBState[0];
+            var setSelectedLevelB = selectedLevelBState[1];
             // NEW: selected subdirectory state
             var selectedSubdirectoryState = useState("");
             var selectedSubdirectory = selectedSubdirectoryState[0];
@@ -3174,6 +3168,43 @@
                 softPreserveSharedLevel(unlocked, playlists);
             };
 
+            var applyLevelDefaultsB = function(unlocked, playlists, current) {
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
+                if (defaultFoundation) {
+                    setSelectedLevelB("L00-Foundation");
+                    setSelectedSubdirectoryB(playlists[playlists.length - 1] || "");
+                } else if (highest) {
+                    setSelectedLevelB(highest);
+                    setSelectedSubdirectoryB("");
+                } else if (current && unlocked.indexOf(current) !== -1) {
+                    setSelectedLevelB(current);
+                    setSelectedSubdirectoryB("");
+                } else if (unlocked.length > 0) {
+                    setSelectedLevelB(unlocked[0]);
+                    setSelectedSubdirectoryB("");
+                } else {
+                    setSelectedLevelB("L00-Foundation");
+                    setSelectedSubdirectoryB("");
+                }
+            };
+
+            var softPreserveLevelB = function(unlocked, playlists) {
+                var highest = getHighestUnlockedLevel(allLevels, unlocked);
+                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
+                setSelectedLevelB(function(prev) {
+                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
+                    if (defaultFoundation) return "L00-Foundation";
+                    if (highest) return highest;
+                    if (unlocked.length > 0) return unlocked[0];
+                    return prev || "L00-Foundation";
+                });
+                setSelectedSubdirectoryB(function(prev) {
+                    if (prev && playlists.indexOf(prev) !== -1) return prev;
+                    return prev || "";
+                });
+            };
+
             var updateProgressForPlayerB = function(player, options) {
                 if (!player) return;
                 options = options || {};
@@ -3192,17 +3223,10 @@
                 setSessionCreditsB(credits);
                 setEligibleLevelsB(eligible);
 
-                // Drive shared session level only when Field A is empty (B-only play).
-                if (!selectedPlayerIdRef.current) {
-                    if (preferDefaults) {
-                        applySharedLevelDefaults(unlocked, playlists, current);
-                    } else {
-                        softPreserveSharedLevel(unlocked, playlists);
-                    }
-                }
-                // Field B keeps its own playlist choice (e.g. random while A is SF-30N)
-                if (preferDefaults && playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1) {
-                    setSelectedSubdirectoryB(playlists[playlists.length - 1] || "");
+                if (preferDefaults) {
+                    applyLevelDefaultsB(unlocked, playlists, current);
+                } else {
+                    softPreserveLevelB(unlocked, playlists);
                 }
             };
 
@@ -3922,21 +3946,21 @@
 
                 if (isFoundation) {
                     if (subdirectory !== 'SF-180N') {
-                        showToast("SF-30N → SF-110N open by booking only. Score gate starts at SF-180N.", 'info');
+                        showToast("SF-30N, SF-60N and SF-110N open by booking only. Score starts at SF-180N.", 'info');
                         return;
                     }
-                    if (ae >= thresholdAE && acc >= thresholdACC) {
-                        showToast("SF-180N passed. Entry is eligible — book 30 minutes to open the next level.", 'success');
+                    if (ae >= 60 && acc >= 70) {
+                        showToast("SF-180N passed. Entry is eligible — book 30 minutes to open it.", 'success');
                     } else {
-                        showToast("Need ≥70% AE and ACC on SF-180N before Entry can unlock with a booking.", 'info');
+                        showToast("SF-180N needs ≥70% accuracy and ≥60% efficiency before Entry can unlock.", 'info');
                     }
                     return;
                 }
 
-                if (ae >= thresholdAE && acc >= thresholdACC) {
-                    showToast("Score passed. Next level is eligible — book 30 minutes to open it.", 'success');
+                if (ae >= 70 && acc >= 80) {
+                    showToast("Score passed. Next series is eligible — book 30 minutes to open it.", 'success');
                 } else {
-                    showToast("Performance: AE=" + ae.toFixed(1) + "%, ACC=" + acc.toFixed(1) + "%. Need ≥70% both, then book 30 minutes.", 'info');
+                    showToast("Performance: efficiency=" + ae.toFixed(1) + "%, accuracy=" + acc.toFixed(1) + "%. Need ≥70% efficiency and ≥80% accuracy, then book 30 minutes.", 'info');
                 }
             };
 
@@ -3949,7 +3973,7 @@
                     return Promise.resolve(null);
                 }
 
-                var buildSessionData = function(report, results) {
+                var buildSessionData = function(report, results, levelId, subdirectoryId) {
                     var goalsByScreen = {};
                     (results || []).forEach(function(a) {
                         if (a.result === 'Correct' && a.winning_screen && a.winning_screen !== 'N/A') {
@@ -3959,8 +3983,8 @@
                     });
                     var directory = (report && report.directory) || currentDirectory || '';
                     return {
-                        level: selectedLevel || 'Unknown',
-                        subdirectory: selectedSubdirectory || '',
+                        level: levelId || 'Unknown',
+                        subdirectory: subdirectoryId || '',
                         total_duration_minutes: 0,
                         video_count: 0,
                         directory: directory,
@@ -3998,13 +4022,13 @@
                 if (playerA && reportData && reportData.actions && reportData.actions.length > 0) {
                     saves.push(saveSessionToPlayerFolder(
                         playerA.id, playerA.name, playerA.surname, playerA.playerId,
-                        buildSessionData(reportData, analysisResults)
+                        buildSessionData(reportData, analysisResults, selectedLevel, selectedSubdirectory)
                     ));
                 }
                 if (playerB && reportDataB && reportDataB.actions && reportDataB.actions.length > 0) {
                     saves.push(saveSessionToPlayerFolder(
                         playerB.id, playerB.name, playerB.surname, playerB.playerId,
-                        buildSessionData(reportDataB, analysisResultsB)
+                        buildSessionData(reportDataB, analysisResultsB, selectedLevelB, selectedSubdirectoryB)
                     ));
                 }
                 if (!saves.length) {
@@ -4019,11 +4043,20 @@
                         if (updatedA) updateProgressForPlayer(updatedA);
                         var updatedB = getSelectedPlayerB();
                         if (updatedB) updateProgressForPlayerB(updatedB);
-                        var stats = (reportData && reportData.statistics) ||
-                            (reportDataB && reportDataB.statistics) || {};
-                        var currentLevelId = selectedLevel;
-                        var subdir = selectedSubdirectory;
-                        checkAndUnlockNextLevel(stats, currentLevelId, subdir);
+                        if (playerA) {
+                            checkAndUnlockNextLevel(
+                                (reportData && reportData.statistics) || {},
+                                selectedLevel,
+                                selectedSubdirectory
+                            );
+                        }
+                        if (playerB) {
+                            checkAndUnlockNextLevel(
+                                (reportDataB && reportDataB.statistics) || {},
+                                selectedLevelB,
+                                selectedSubdirectoryB
+                            );
+                        }
                     });
                 });
             };
@@ -4037,8 +4070,15 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                if (!selectedLevel) {
-                    setError("Please select a training level");
+                var levelA = playerA ? (selectedLevel || "") : "";
+                var levelB = playerB ? (selectedLevelB || "") : "";
+                if (playerA && !levelA) {
+                    setError("Please select a training level for Field A");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+                if (playerB && !levelB) {
+                    setError("Please select a training level for Field B");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
@@ -4047,30 +4087,29 @@
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (!useAdminTest && playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
+                if (!useAdminTest && playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, levelA, selectedSubdirectory)) {
                     setError("Field A: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectoryB || selectedSubdirectory)) {
+                if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, levelB, selectedSubdirectoryB)) {
                     setError("Field B: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
 
-                var hasSubdirs = levelNeedsSubdirectory(selectedLevel);
                 if (window.SIMUST_PUBLIC && labOnline === false) {
                     setError("The training lab is offline. Realtime Play cannot start until the lab PC is connected.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
-                if (hasSubdirs && playerA && !selectedSubdirectory) {
-                    setError("Please select a playlist for Field A (e.g. SF-30N or random).");
+                if (playerA && levelNeedsSubdirectory(levelA) && !selectedSubdirectory) {
+                    setError("Please select a playlist for Field A (e.g. SF-30N).");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                if (hasSubdirs && playerB && !selectedSubdirectoryB) {
-                    setError("Please select a playlist for Field B (e.g. SF-30N or random).");
+                if (playerB && levelNeedsSubdirectory(levelB) && !selectedSubdirectoryB) {
+                    setError("Please select a playlist for Field B (e.g. SF-30N).");
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
@@ -4090,7 +4129,7 @@
 
                 var primary = playerA || playerB;
                 var payload = {
-                    level: selectedLevel,
+                    level: levelA || levelB,
                     speed: 1.0,
                     player_id: primary.id,
                     player_name: primary.name,
@@ -4109,6 +4148,7 @@
                         player_name: playerA.name,
                         player_surname: playerA.surname,
                         field: "A",
+                        level: levelA,
                         subdirectory: selectedSubdirectory || ""
                     });
                 }
@@ -4118,14 +4158,15 @@
                         player_name: playerB.name,
                         player_surname: playerB.surname,
                         field: "B",
-                        subdirectory: selectedSubdirectoryB || selectedSubdirectory || ""
+                        level: levelB,
+                        subdirectory: selectedSubdirectoryB || ""
                     });
                     payload.player_b_id = playerB.id;
                 }
                 // Primary subdirectory (first phase) for legacy backends
                 var primarySub = playerA
                     ? (selectedSubdirectory || "")
-                    : (selectedSubdirectoryB || selectedSubdirectory || "");
+                    : (selectedSubdirectoryB || "");
                 if (primarySub) {
                     payload.subdirectory = primarySub;
                 }
@@ -4137,16 +4178,17 @@
                 axios.post("/start-realtime-playback", payload).then(function() {
                     var dualMsg;
                     if (playerA && playerB) {
-                        dualMsg = "Field A: " + playerA.name +
+                        dualMsg = "Field A: " + playerA.name + " " + (levelA || "") +
                             (selectedSubdirectory ? " [" + selectedSubdirectory + "]" : "") +
-                            " + Field B: " + playerB.name +
-                            (selectedSubdirectoryB ? " [" + selectedSubdirectoryB + "]" : "") +
-                            " (together)";
+                            " + Field B: " + playerB.name + " " + (levelB || "") +
+                            (selectedSubdirectoryB ? " [" + selectedSubdirectoryB + "]" : "");
                     } else if (playerA) {
-                        dualMsg = playerA.name + ' ' + playerA.surname + " (Field A only" +
+                        dualMsg = playerA.name + ' ' + playerA.surname + " (Field A only, " +
+                            (levelA || "") +
                             (selectedSubdirectory ? ", " + selectedSubdirectory : "") + ")";
                     } else {
-                        dualMsg = playerB.name + ' ' + playerB.surname + " (Field B only" +
+                        dualMsg = playerB.name + ' ' + playerB.surname + " (Field B only, " +
+                            (levelB || "") +
                             (selectedSubdirectoryB ? ", " + selectedSubdirectoryB : "") + ")";
                     }
                     showToast((window.SIMUST_PUBLIC
@@ -4166,8 +4208,8 @@
                         if (hostSyncTick % 6 === 0) {
                             axios.post("/sync-live-to-host", {
                                 player_id: primary.id,
-                                level: selectedLevel,
-                                subdirectory: selectedSubdirectory || "",
+                                level: levelA || levelB,
+                                subdirectory: (playerA ? selectedSubdirectory : selectedSubdirectoryB) || "",
                                 simulation: !!simulationEnabledRef.current
                             }).catch(function() {});
                         }
@@ -4572,19 +4614,28 @@
                 }
             }, [selectedPlayerBId, players, allLevels]);
 
-            // Reset subdirectory when level changes
+            // Reset each field's playlist when that field's level changes.
             useEffect(function() {
                 if (selectedLevel) {
                     var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
                     if (!isFoundation || !LEVEL_SUBDIRS['L00-Foundation']) {
                         setSelectedSubdirectory("");
-                        setSelectedSubdirectoryB("");
                     }
                 } else {
                     setSelectedSubdirectory("");
-                    setSelectedSubdirectoryB("");
                 }
             }, [selectedLevel]);
+
+            useEffect(function() {
+                if (selectedLevelB) {
+                    var isFoundationB = selectedLevelB.toLowerCase().indexOf('foundation') !== -1 || selectedLevelB === 'L00-Foundation';
+                    if (!isFoundationB || !LEVEL_SUBDIRS['L00-Foundation']) {
+                        setSelectedSubdirectoryB("");
+                    }
+                } else {
+                    setSelectedSubdirectoryB("");
+                }
+            }, [selectedLevelB]);
 
             var isAdmin = role === 'admin';
             var isOperatorStaff = isAdmin || role === 'coach' || role === 'manager';
@@ -4596,12 +4647,14 @@
 
             var realtimeEligible = (function() {
                 if (!selectedPlayerId && !selectedPlayerBId) return false;
-                if (!selectedLevel || realtimeRunning) return false;
+                if (realtimeRunning) return false;
+                if (selectedPlayerId && !selectedLevel) return false;
+                if (selectedPlayerBId && !selectedLevelB) return false;
                 if (adminTestPlay) return true;
                 if (selectedPlayerId && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
                     return false;
                 }
-                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevel, selectedSubdirectoryB || selectedSubdirectory)) {
+                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevelB, selectedSubdirectoryB)) {
                     return false;
                 }
                 return true;
@@ -4843,10 +4896,10 @@
                             onUnlockLevel: handleUnlockLevelB,
                             onLockLevel: handleLockLevelB,
                             onLevelChange: function(level) {
-                                setSelectedLevel(level);
+                                setSelectedLevelB(level);
                                 setSelectedSubdirectoryB("");
                             },
-                            selectedLevel: selectedLevel,
+                            selectedLevel: selectedLevelB,
                             selectedSubdirectory: selectedSubdirectoryB,
                             onSubdirectoryChange: setSelectedSubdirectoryB,
                             t: t,
@@ -4854,7 +4907,7 @@
                             hideAddPlayer: true
                         }),
                         React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
-                            "Field A and Field B play together. Each field can use its own challenge (e.g. A=SF-30N, B=random); both halves stay lit on the same timeline."),
+                            "Field A and Field B are independent. One player can run Foundation while the other selects and runs Entry or any other unlocked level."),
                         (selectedPlayerId || selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",

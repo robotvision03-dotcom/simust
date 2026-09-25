@@ -4,8 +4,9 @@ Rules:
 - Unpaid players cannot play (no unlocked playlists / levels).
 - Each paid 30 minutes = 1 session credit.
 - Credits unlock the next eligible item; previous unlocks stay open.
-- Foundation SF-30N → SF-60N → SF-110N → SF-180N: payment only (no score gate).
-- After SF-180N: need min score to become eligible for Entry, then pay to open it.
+- Foundation SF-30N → SF-60N → SF-110N: payment only (no score gate).
+- SF-180N: 70% accuracy and 60% efficiency to become eligible for Entry, then pay to open it.
+- Each later series: 80% accuracy and 70% efficiency, then pay to open the next series.
 - Later challenges: score makes next eligible; pay opens it.
 """
 

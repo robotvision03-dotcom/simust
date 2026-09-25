@@ -706,69 +706,69 @@ def require_active_booking_for_play(player_id: str, field: str = "A", now: Optio
 PROGRESSION = {
     "L00-Foundation": {
         "display": "Foundation",
-        # Thresholds for SF-180N: need 70% AE and 70% ACC to unlock Entry
+        # SF-180N only: 70% accuracy and 60% efficiency to open Entry.
         "threshold_acc": 70,
-        "threshold_ae": 70,
+        "threshold_ae": 60,
         "themes": {"Foundation": ["Foundation"]}
     },
     "L01-Entry": {
         "display": "Entry",
         "threshold_acc": 80,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
-            "A-T1": ["C1","C2","C3","C4","C5"],
-            "A-T2": ["C1","C2","C3","C4","C5"],
-            "A-T3": ["C1","C2","C3","C4","C5"],
-            "A-T4": ["C1","C2","C3","C4","C5"],
-            "A-T5": ["C1","C2","C3","C4","C5"]
+            "A-T1": [],
+            "A-T2": [],
+            "A-T3": [],
+            "A-T4": [],
+            "A-T5": []
         }
     },
     "L02-Activated": {
         "display": "Activated",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        "threshold_acc": 80,
+        "threshold_ae": 70,
         "themes": {
-            "A-T1": ["C1","C2","C3","C4","C5"],
-            "A-T2": ["C1","C2","C3","C4","C5"],
-            "A-T3": ["C1","C2","C3","C4","C5"],
-            "A-T4": ["C1","C2","C3","C4","C5"],
-            "A-T5": ["C1","C2","C3","C4","C5"]
+            "A-T1": [],
+            "A-T2": [],
+            "A-T3": [],
+            "A-T4": [],
+            "A-T5": []
         }
     },
     "L03-HighPerformance": {
         "display": "High Performance",
-        "threshold_acc": 90,
-        "threshold_ae": 85,
+        "threshold_acc": 80,
+        "threshold_ae": 70,
         "themes": {
-            "A-T1": ["C1","C2","C3","C4","C5"],
-            "A-T2": ["C1","C2","C3","C4","C5"],
-            "A-T3": ["C1","C2","C3","C4","C5"],
-            "A-T4": ["C1","C2","C3","C4","C5"],
-            "A-T5": ["C1","C2","C3","C4","C5"]
+            "A-T1": [],
+            "A-T2": [],
+            "A-T3": [],
+            "A-T4": [],
+            "A-T5": []
         }
     },
     "L04-Elite": {
         "display": "Elite",
-        "threshold_acc": 95,
-        "threshold_ae": 90,
+        "threshold_acc": 80,
+        "threshold_ae": 70,
         "themes": {
-            "A-T1": ["C1","C2","C3","C4","C5"],
-            "A-T2": ["C1","C2","C3","C4","C5"],
-            "A-T3": ["C1","C2","C3","C4","C5"],
-            "A-T4": ["C1","C2","C3","C4","C5"],
-            "A-T5": ["C1","C2","C3","C4","C5"]
+            "A-T1": [],
+            "A-T2": [],
+            "A-T3": [],
+            "A-T4": [],
+            "A-T5": []
         }
     },
     "L05-WorldClass": {
         "display": "World Class",
-        "threshold_acc": 98,
-        "threshold_ae": 95,
+        "threshold_acc": 80,
+        "threshold_ae": 70,
         "themes": {
-            "A-T1": ["C1","C2","C3","C4","C5"],
-            "A-T2": ["C1","C2","C3","C4","C5"],
-            "A-T3": ["C1","C2","C3","C4","C5"],
-            "A-T4": ["C1","C2","C3","C4","C5"],
-            "A-T5": ["C1","C2","C3","C4","C5"]
+            "A-T1": [],
+            "A-T2": [],
+            "A-T3": [],
+            "A-T4": [],
+            "A-T5": []
         }
     }
 }
@@ -785,6 +785,9 @@ def get_all_level_ids():
             ids.append("L00-Foundation")
         else:
             for theme, challenges in config["themes"].items():
+                if not challenges:
+                    ids.append(f"{main_id}/{theme}")
+                    continue
                 for ch in challenges:
                     # e.g., A.T1.C1
                     challenge_name = f"A.{theme[2:]}.{ch}" if theme.startswith("A-") else f"{theme}.{ch}"
@@ -1641,11 +1644,6 @@ async def app_config():
         "player_path": "/login",
         "foundation_subdirs": [
             "SF-30N", "SF-60N", "SF-110N", "SF-180N",
-            "digit", "random", "rotation",
-            "sum", "sub", "multiply", "divide",
-            "sequence", "compound", "color_rule", "go_nogo", "stroop",
-            "spatial", "memory", "move_memory", "tracking", "tactical",
-            "flex", "dual_rule", "peripheral", "emotion", "symbols",
         ],
         "levels": levels,
         "worldwide": True,
@@ -1793,7 +1791,10 @@ async def get_levels():
             # For challenge levels, append theme/challenge
             if level_id != "L00-Foundation":
                 parts = level_id.split('/')
-                display += f" {parts[1]} {parts[2]}"
+                if len(parts) >= 3:
+                    display += f" {parts[1]} {parts[2]}"
+                elif len(parts) == 2:
+                    display += f" {parts[1]}"
             levels_info.append({
                 "id": level_id,
                 "display": display,
@@ -1844,18 +1845,13 @@ async def start_realtime_playback(req: Request):
     _realtime_session_started_at = time.time()
     try:
         data = await req.json()
-        level_id = data.get("level")  # e.g., "L00-Foundation" or "L01-Entry/A-T1/A.T1.C1"
+        level_id = data.get("level")  # e.g., "L00-Foundation" or "L01-Entry/A-T1"
         player_speed = data.get("speed", 1.0)
         player_id = data.get("player_id")
         player_name = data.get("player_name")
         player_surname = data.get("player_surname", "")
         player_player_id = data.get("player_player_id", player_id)
         subdirectory = data.get("subdirectory")  # optional, e.g., "SF-30N"
-
-        if not level_id:
-            raise HTTPException(400, "No level selected")
-        if level_id not in ALL_LEVELS:
-            raise HTTPException(400, f"Invalid level: {level_id}")
 
         # --- Paid session unlock gate (every selected field player) ---
         players_payload = data.get("players") or []
@@ -1892,53 +1888,81 @@ async def start_realtime_playback(req: Request):
                 raise HTTPException(401, "Admin password is not correct")
             admin_test_override = True
 
-        for pid, fid, _entry in play_slots:
+        resolved_slots = []
+        for pid, fid, entry in play_slots:
             if pid not in users:
                 raise HTTPException(404, f"Player not found: {pid}")
+            slot_level = str((entry or {}).get("level") or level_id or "").strip()
+            if not slot_level:
+                raise HTTPException(400, f"No level selected for Field {fid}")
+            if slot_level not in ALL_LEVELS:
+                raise HTTPException(400, f"Invalid level: {slot_level}")
             progress = simust_progress.ensure_progress(users[pid])
             users[pid]["progress"] = progress
-            entry_sub = str((_entry or {}).get("subdirectory") or subdirectory or "").strip()
+            entry_sub = str((entry or {}).get("subdirectory") or "").strip()
+            if not entry_sub and slot_level == (level_id or ""):
+                entry_sub = str(subdirectory or "").strip()
             if not admin_test_override:
-                ok, reason = simust_progress.can_play(progress, level_id, entry_sub or subdirectory)
+                ok, reason = simust_progress.can_play(progress, slot_level, entry_sub)
                 if not ok:
                     raise HTTPException(403, f"{pid}: {reason}")
                 # Scheduled booking window: only during start <= now < end on this field
                 require_active_booking_for_play(pid, fid)
+            resolved_slots.append((pid, fid, entry, slot_level, entry_sub))
         save_users(users)
+        if not level_id and resolved_slots:
+            level_id = resolved_slots[0][3]
 
-        level_path = get_level_path(level_id)
-
-        # ---- If subdirectory is provided, append it to the path ----
-        # Foundation: launch at level root so the player can run Field A / Field B
-        # as separate phases (e.g. A=SF-30N then B=random), each with its own tests.
-        launch_path = level_path
-        if subdirectory and level_id != "L00-Foundation":
-            launch_path = os.path.join(level_path, subdirectory)
-            if not os.path.isdir(launch_path):
-                raise HTTPException(400, f"Subdirectory not found: {launch_path}")
-        elif subdirectory and level_id == "L00-Foundation":
-            # Validate every selected field's subdirectory exists
-            subs_to_check = set()
-            for _pid, _fid, entry in play_slots:
-                sub = str((entry or {}).get("subdirectory") or subdirectory or "").strip()
+        def _resolve_slot_dir(slot_level: str, sub: str) -> str:
+            base = get_level_path(slot_level)
+            if slot_level == "L00-Foundation":
                 if sub:
-                    subs_to_check.add(sub)
-            if not subs_to_check and subdirectory:
-                subs_to_check.add(subdirectory)
-            for sub in subs_to_check:
-                cand = os.path.join(level_path, sub)
-                if not os.path.isdir(cand):
-                    raise HTTPException(400, f"Subdirectory not found: {cand}")
+                    cand = os.path.join(base, sub)
+                    if not os.path.isdir(cand):
+                        raise HTTPException(400, f"Subdirectory not found: {cand}")
+                    return cand
+                if not os.path.exists(base):
+                    os.makedirs(base, exist_ok=True)
+                return base
+            launch = os.path.join(base, sub) if sub else base
+            if os.path.isdir(launch):
+                return launch
+            parent = os.path.dirname(launch)
+            if os.path.isdir(parent) and re.search(r"L0[1-5]-", launch, re.I):
+                logger.info("Challenge folder missing, using series folder %s", parent)
+                return parent
+            raise HTTPException(400, f"Level directory not found: {launch}")
+
+        field_dirs = {}
+        for _pid, fid, _entry, slot_level, entry_sub in resolved_slots:
+            field_dirs[fid] = _resolve_slot_dir(slot_level, entry_sub)
+        slot_levels = {fid: slot_level for _pid, fid, _entry, slot_level, _sub in resolved_slots}
+        levels_differ = len(set(slot_levels.values())) > 1
+
+        # Same level keeps the previous launch folder (Foundation stays at the
+        # level root so each field's playlist is chosen from its subdirectory).
+        if not levels_differ:
+            level_path = get_level_path(level_id)
             launch_path = level_path
-
-        # For Foundation, we may need to create a dummy path if it doesn't exist
-        if level_id == "L00-Foundation" and not subdirectory:
-            if not os.path.exists(level_path):
-                os.makedirs(level_path, exist_ok=True)
-
-        if not os.path.isdir(launch_path):
-            raise HTTPException(400, f"Level directory not found: {launch_path}")
-        level_path = launch_path
+            if subdirectory and level_id != "L00-Foundation":
+                launch_path = os.path.join(level_path, subdirectory)
+                if not os.path.isdir(launch_path):
+                    raise HTTPException(400, f"Subdirectory not found: {launch_path}")
+            elif level_id == "L00-Foundation":
+                if not os.path.exists(level_path):
+                    os.makedirs(level_path, exist_ok=True)
+                launch_path = level_path
+            if not os.path.isdir(launch_path):
+                parent = os.path.dirname(launch_path)
+                if os.path.isdir(parent) and re.search(r"L0[1-5]-", launch_path, re.I):
+                    logger.info("Challenge folder missing, using series folder %s", parent)
+                    launch_path = parent
+                else:
+                    raise HTTPException(400, f"Level directory not found: {launch_path}")
+            level_path = launch_path
+        else:
+            level_path = field_dirs.get("A") or field_dirs.get("B")
+            launch_path = level_path
 
         write_visualization_setting(bool(data.get("visualization_enabled", False)))
         write_simulation_setting(bool(data.get("simulation_enabled", False)))
@@ -1965,16 +1989,18 @@ async def start_realtime_playback(req: Request):
                     "field": data.get("field") or "A",
                 }]
             field_map = {"A": None, "B": None}
+            resolved_by_field = {fid: (slot_level, entry_sub) for _pid, fid, _entry, slot_level, entry_sub in resolved_slots}
             for entry in players_payload:
                 fid = _reservation_field_id(entry)
-                entry_sub = str((entry or {}).get("subdirectory") or subdirectory or "").strip()
+                slot_level, entry_sub = resolved_by_field.get(fid, (level_id, str(subdirectory or "").strip()))
                 field_map[fid] = {
                     "player_id": (entry or {}).get("player_id") or "",
                     "player_name": (entry or {}).get("player_name") or "",
                     "player_surname": (entry or {}).get("player_surname") or "",
                     "field": fid,
                     "subdirectory": entry_sub,
-                    "level": level_id,
+                    "level": slot_level,
+                    "directory": field_dirs.get(fid) or "",
                 }
             active_list = [
                 fid for fid in ("A", "B")
@@ -1990,6 +2016,7 @@ async def start_realtime_playback(req: Request):
                     "players": players_payload,
                     "active": phase_active,
                     "level": level_id,
+                    "levels": slot_levels,
                     "separate_fields": False,
                 }, f, indent=2)
         except Exception as e:
@@ -2313,6 +2340,24 @@ async def video_results(req: Request):
         logger.error(f"/video-results failed: {e}")
         raise HTTPException(500, f"Failed to load video results: {str(e)}")
 
+# Hardware screen ids → names 1–6 on each field.
+_ARENA_NAME_BY_HW = {
+    "A": {"12": "1", "13": "2", "14": "3", "2": "4", "3": "5", "4": "6"},
+    "B": {"5": "1", "6": "2", "7": "3", "9": "4", "10": "5", "11": "6"},
+}
+
+
+def _display_screen_name(field_id: str, raw) -> str:
+    text = str(raw or "").strip()
+    if not text or text.upper() in ("N/A", "NONE", "-"):
+        return text or "N/A"
+    digits = re.sub(r"[^0-9]", "", text)
+    if not digits:
+        return text
+    fid = "B" if str(field_id or "A").upper().startswith("B") else "A"
+    return _ARENA_NAME_BY_HW[fid].get(digits, text)
+
+
 def _format_realtime_field_report(folder: str) -> Optional[dict]:
     results_json_path = os.path.join(folder, "results.json")
     if not os.path.exists(results_json_path):
@@ -2321,15 +2366,24 @@ def _format_realtime_field_report(folder: str) -> Optional[dict]:
         results_data = json.load(f)
     formatted_results = []
     ae_values = []
+    folder_field = ""
+    base = os.path.basename(os.path.normpath(folder))
+    if base.lower().startswith("field_") and len(base) > 6:
+        folder_field = base[6].upper()
     for entry in results_data:
         ae_val = entry.get("ae", 0.0)
+        fid = str(entry.get("field") or folder_field or "A")
+        raw_screens = entry.get("screens", [])
+        if isinstance(raw_screens, str):
+            raw_screens = [s.strip() for s in raw_screens.split(",") if s.strip()]
+        named_screens = [_display_screen_name(fid, s) for s in (raw_screens or [])]
         formatted_results.append({
             "id": entry.get("id", ""),
             "action": entry.get("action", ""),
-            "screens": entry.get("screens", []),
+            "screens": named_screens,
             "field": entry.get("field", ""),
             "result": entry.get("result", "N/A"),
-            "winning_screen": entry.get("winning_screen", "N/A"),
+            "winning_screen": _display_screen_name(fid, entry.get("winning_screen", "N/A")),
             "min_distance": entry.get("min_dist", "-"),
             "time_of_min": entry.get("finishing_time", "-"),
             "session_duration": entry.get("session_duration", "-"),
