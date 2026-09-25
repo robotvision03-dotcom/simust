@@ -1631,6 +1631,8 @@ async def app_config():
             parts = level_id.split("/")
             if len(parts) >= 3:
                 display += f" {parts[1]} {parts[2]}"
+            elif len(parts) == 2:
+                display += f" {parts[1]}"
         levels.append({
             "id": level_id,
             "display": display,
