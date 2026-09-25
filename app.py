@@ -976,9 +976,9 @@ def write_teammate_flash_timing(on_sec, gap_sec):
         "gap_sec": gap_s,
         "on_ms": int(round(on_s * 1000)),
         "gap_ms": int(round(gap_s * 1000)),
-        "display_fps": 30.0,
-        "on_frames": int(round(on_s * 30.0)),
-        "gap_frames": int(round(gap_s * 30.0)),
+        "display_fps": 20.0,
+        "on_frames": int(round(on_s * 20.0)),
+        "gap_frames": int(round(gap_s * 20.0)),
         "timestamp": time.time(),
     }
     tmp_file = path + ".tmp"

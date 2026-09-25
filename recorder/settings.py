@@ -6,10 +6,10 @@ VIDEOS_FOURCC = "mp4v"
 DIRECTORY_NAME_PATTERN = "%Y-%m-%d_%H-%M-%S"
 TIMEOUT = 5
 
-# Downscale camera saves (full RTSP resolution is huge at 30 FPS).
+# Downscale camera saves. Capture peaks near 25 FPS, so save at 20.
 SAVE_WIDTH = 1280
 SAVE_HEIGHT = 720
-SAVE_FPS = 30.0
+SAVE_FPS = 20.0
 
 CAMERAS = {
     "qr-camera": {
@@ -21,8 +21,8 @@ CAMERAS = {
         "height": 1080,
         "save_width": 1280,
         "save_height": 720,
-        "framerate": 30.0,
-        "fps": 30.0,
+        "framerate": 20.0,
+        "fps": 20.0,
         "enabled": False,
         # QR detection settings
         "qr_roi": {
@@ -36,13 +36,13 @@ CAMERAS = {
     },
     "camera-1": {
         "address": "rtsp://admin:majidAram2@192.168.2.1:554/Streaming/Channels/101/",
-        "fps": 30.0,
+        "fps": 20.0,
         "save_width": SAVE_WIDTH,
         "save_height": SAVE_HEIGHT,
     },
     "camera-8": {
         "address": "rtsp://admin:majidAram2@192.168.2.8:554/Streaming/Channels/101/",
-        "fps": 30.0,
+        "fps": 20.0,
         "save_width": SAVE_WIDTH,
         "save_height": SAVE_HEIGHT,
     }

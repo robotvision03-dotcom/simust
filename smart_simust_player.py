@@ -163,8 +163,8 @@ IMAGE_BASED_ACTIONS = True
 FLASH_ON_MS = 1200
 FLASH_OFF_MS = 500
 FLASH_REPEAT = 5  # legacy teammate-flash fallback only
-# Same clock as image-cue keypoint offsets in simust_realtime (1.0s = 30 frames).
-DISPLAY_FPS = 30.0
+# Same clock as image-cue keypoints and the saved video (1.0s = 20 frames).
+DISPLAY_FPS = 20.0
 # 1 test × 3 actions for Foundation (SF / sum / extras) — short lab runs.
 LABEL_TEST_COUNT = 1
 LABEL_TIMING_DECAY = 0.90
@@ -262,6 +262,7 @@ _FOUNDATION_EXTRA_RE = re.compile(
 TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
 SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
+STOP_SAVE_FILE = "C:/Users/siama/Documents/simust_player/stop_save.txt"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
 PLAYERS_FIELDS_FILE = "C:/Users/siama/Documents/simust_player/players_fields.json"
 # Rotation mode: fast pass-image spin around the field arc, then hold on one screen.
@@ -2871,7 +2872,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _load_video(self, index):
         self._hide_waiting_overlay()
         self._stop_action_timer()
-        _clear_image_action_cue(force_end=True)
         if not (0 <= index < len(self.video_files)):
             return
         self.player.stop()
@@ -3035,8 +3035,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     # No gap image → black (nothing displayed)
                     self.image_canvas.clear()
 
-            # No keypoints during gap (cue inactive)
-            _write_image_action_cue(False, {}, seq=self._flash_seq, action=action_name)
+            # Gap does not send cue false. Keypoints clear from the cue-ON countdown.
             delay = self._flash_delay_ms(on=False)
             logger.info(
                 "Gap BEFORE action %s (%s) screens %s for %sms [scale=%.2f]",
@@ -3106,10 +3105,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas.set_screen_video(lit_screens, str(video_path))
             else:
                 self.image_canvas.set_screen_images(screen_images)
+            # Paint now. The old timer started before the second monitor showed
+            # the image, so Kinovea measured ~2.6s of a 3.0s hold.
+            self.image_canvas.repaint()
+            QtWidgets.QApplication.processEvents()
 
         self._flash_seq += 1
         delay = self._flash_delay_ms(on=True)
         on_sec = max(0.1, float(delay) / 1000.0)
+        self._pass_shown_at = time.perf_counter()
+        self._pass_on_ms = int(delay)
         _write_image_action_cue(
             True,
             field_screens,
@@ -3130,6 +3135,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         self._stop_action_timer()
         self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
         self.action_timer.timeout.connect(self._finish_label_action)
         self.action_timer.start(delay)
 
@@ -3158,7 +3164,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
-        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
         encode = {
             int(s): p for s, p in (entry.get("encode_images") or {}).items()
             if _field_for_screen(s) in set(self._active_fields())
@@ -3187,7 +3192,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         if self.image_canvas:
             self.image_canvas.clear()
-        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
         entry = self.video_files[self.current_video_index] if self.video_files else {}
         scale = max(0.05, float((entry or {}).get("timing_scale") or 1.0))
         delay = max(100, int(COG_BLANK_MS * scale))
@@ -3211,8 +3215,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
-        # No session cue while spinning — player waits for the sudden stop
-        _write_image_action_cue(False, {}, seq=self._flash_seq, action="PASS")
 
         rotation_fields = [
             f for f in (entry.get("rotation_fields") or [])
@@ -3322,10 +3324,28 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             QTimer.singleShot(200, self._finish_label_action)
             return
+        # Keep the pass image up until a full 3s after it was painted.
+        shown = getattr(self, "_pass_shown_at", None)
+        need_ms = int(getattr(self, "_pass_on_ms", 0) or 0)
+        if shown is not None and need_ms > 0:
+            remain = int(need_ms - (time.perf_counter() - shown) * 1000.0)
+            if remain > 40:
+                self._stop_action_timer()
+                self.action_timer = QtCore.QTimer(singleShot=True)
+                self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
+                self.action_timer.timeout.connect(self._finish_label_action)
+                self.action_timer.start(remain)
+                return
+            self._pass_shown_at = None
+            logger.info(
+                "Pass image held %.3fs (target %.3fs)",
+                (time.perf_counter() - shown),
+                need_ms / 1000.0,
+            )
         if self.image_canvas:
             self.image_canvas.clear()
-        # Within a test, only clear the cue (force_end=False). force_end is for
-        # playlist/test end so realtime can flush; mid-test force_end confused sync.
+        # Pass image goes off here. Keypoints clear themselves after the cue-ON
+        # countdown (3s / 90 frames). Do not send cue false.
         next_idx = self.current_video_index + 1
         cur = self.video_files[self.current_video_index] if self.video_files else {}
         cur_test = int(cur.get("test_num") or 0) if isinstance(cur, dict) else 0
@@ -3339,9 +3359,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             and next_entry is not None
             and next_entry.get("kind") == "labeled_action"
             and int(next_entry.get("test_num") or -1) == cur_test
-        )
-        _write_image_action_cue(
-            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=not same_test
         )
         self._action_phase = "idle"
 
@@ -3377,10 +3394,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.info("PASS flash done — %s cycles complete.", FLASH_REPEAT)
             if self.image_canvas:
                 self.image_canvas.clear()
-            # Force-clear last-action keypoints (cue OFF alone does not end sessions)
-            _write_image_action_cue(
-                False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
-            )
             self._action_phase = "idle"
             self._post_results_index = self.current_video_index + 1
             if self._post_results_index >= len(self.video_files):
@@ -3436,9 +3449,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 seq=self._flash_seq,
                 on_sec=max(0.1, float(delay) / 1000.0),
             )
-        else:
-            # Keep cue file present but inactive so realtime ends the PASS session
-            _write_image_action_cue(False, {}, seq=self._flash_seq)
 
         self._stop_action_timer()
         self.action_timer = QtCore.QTimer(singleShot=True)
@@ -3987,11 +3997,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.video_end_called = True
         self.waiting_for_results = True
         self.display_phase = "wait_per_video"
+        try:
+            with open(STOP_SAVE_FILE, "w", encoding="utf-8") as f:
+                f.write("1")
+            logger.info("Last pass image finished — asked realtime to stop video save")
+        except Exception as exc:
+            logger.warning("Could not signal video stop: %s", exc)
         self.check_timer.stop()
         self._stop_action_timer()
-        _write_image_action_cue(
-            False, {}, seq=getattr(self, "_flash_seq", 0), force_end=True
-        )
         self._wait_started = time.time()
         if self.image_canvas:
             self.image_canvas.clear()
