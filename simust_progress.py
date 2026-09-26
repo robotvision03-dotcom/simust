@@ -4,8 +4,9 @@ Rules:
 - Unpaid players cannot play (no unlocked playlists / levels).
 - Each paid 30 minutes = 1 session credit.
 - Credits unlock the next eligible item; previous unlocks stay open.
-- Foundation SF-30N → SF-60N → SF-110N → SF-180N: payment only (no score gate).
-- After SF-180N: need min score to become eligible for Entry, then pay to open it.
+- Foundation SF-30N → SF-60N → SF-110N: payment only (no score gate).
+- SF-180N: 70% accuracy and 60% efficiency to become eligible for Entry, then pay to open it.
+- Each later series: 80% accuracy and 70% efficiency, then pay to open the next series.
 - Later challenges: score makes next eligible; pay opens it.
 """
 
@@ -14,6 +15,19 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 FOUNDATION_PLAYLISTS = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
+# Extra Foundation modes (not in the paid SF unlock chain)
+FOUNDATION_MATH_PLAYLISTS = ["sum", "sub", "multiply", "divide"]
+FOUNDATION_COGNITIVE_PLAYLISTS = [
+    "sequence", "compound", "color_rule", "go_nogo", "stroop",
+    "spatial", "memory", "move_memory", "tracking", "tactical",
+    "flex", "dual_rule", "peripheral", "emotion", "symbols",
+]
+FOUNDATION_EXTRA_PLAYLISTS = (
+    ["digit", "random", "rotation"]
+    + FOUNDATION_MATH_PLAYLISTS
+    + FOUNDATION_COGNITIVE_PLAYLISTS
+)
+FOUNDATION_ALL_PLAYLISTS = FOUNDATION_PLAYLISTS + FOUNDATION_EXTRA_PLAYLISTS
 FOUNDATION_LEVEL = "L00-Foundation"
 SESSION_MINUTES = 30
 
@@ -221,7 +235,12 @@ def can_play(
     if level_id == FOUNDATION_LEVEL:
         sub = (subdirectory or "").strip()
         if not sub:
-            return False, "Select a Foundation playlist (SF-30N … SF-180N)"
+            return False, "Select a Foundation playlist (SF / digit / math / cognitive)"
+        # Extra modes: open once any SF playlist is unlocked
+        if sub.lower() in {p.lower() for p in FOUNDATION_EXTRA_PLAYLISTS}:
+            if not unlocked_playlists:
+                return False, f"{sub} opens after any Foundation SF playlist is unlocked"
+            return True, ""
         if sub not in unlocked_playlists:
             return False, f"{sub} is locked — book and pay a 30-minute session to unlock"
         return True, ""
@@ -318,5 +337,5 @@ def public_progress_view(progress: Dict[str, Any], all_levels: List[str]) -> Dic
         "next_unlock": (
             {"kind": nxt[0], "id": nxt[1]} if nxt else None
         ),
-        "foundation_playlists": list(FOUNDATION_PLAYLISTS),
+        "foundation_playlists": list(FOUNDATION_ALL_PLAYLISTS),
     }

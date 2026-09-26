@@ -1,7 +1,8 @@
 """Dual Field A / Field B geometry and booking helpers for SIMUST.
 
-Field A (left): screens 1,2,3,4,12,13,14 — QR ROI (0,0,1920,540) as x1,y1,x2,y2
-Field B (right): screens 8,9,10,11,5,6,7 — QR ROI (1920,0,3840,540) as x1,y1,x2,y2
+Field A (left): screens 2,3,4,12,13,14 — screen 1 does not exist (not used)
+Field B (right): screens 5,6,7,9,10,11 — screen 8 does not exist (not used)
+QR ROI (0,0,1920,540) / (1920,0,3840,540) as x1,y1,x2,y2
 """
 
 from __future__ import annotations
@@ -60,8 +61,10 @@ POLYGON_POINTS_B: List[Tuple[int, int]] = [
 # Back-compat alias used by existing code
 POLYGON_POINTS = POLYGON_POINTS_A
 
-FIELD_A_SCREENS: Set[str] = {"1", "2", "3", "4", "12", "13", "14"}
-FIELD_B_SCREENS: Set[str] = {"8", "9", "10", "11", "5", "6", "7"}
+# Physical coach-band displays only (1 and 8 do not exist)
+FIELD_A_SCREENS: Set[str] = {"2", "3", "4", "12", "13", "14"}
+FIELD_B_SCREENS: Set[str] = {"5", "6", "7", "9", "10", "11"}
+DISABLED_DISPLAY_SCREENS: Set[str] = {"1", "8"}
 
 # QR on the dual-monitor player surface (full 3840×1080 grab)
 # detect_qr_in_roi expects (x1, y1, x2, y2) — NOT (x, y, w, h).
@@ -177,6 +180,7 @@ def load_active_fields(players_fields_path: Optional[str] = None) -> Set[str]:
     """Which arena halves have a booked/selected player for this realtime run.
 
     Reads ``players_fields.json`` written by ``/start-realtime-playback``.
+    Prefer explicit ``active`` list (phase override for sequential Field A then B).
     Returns ``{"A"}``, ``{"B"}``, or ``{"A","B"}``. If the file is missing or
     empty, defaults to both fields (legacy dual behaviour).
     """
@@ -192,6 +196,16 @@ def load_active_fields(players_fields_path: Optional[str] = None) -> Set[str]:
         return set(FIELD_IDS)
 
     active: Set[str] = set()
+    # Explicit phase list wins (player writes this when running Field A / B separately)
+    raw_active = payload.get("active") if isinstance(payload, dict) else None
+    if isinstance(raw_active, (list, tuple)):
+        for item in raw_active:
+            fid = normalize_field(item)
+            if fid:
+                active.add(fid)
+        if active:
+            return active
+
     fields = payload.get("fields") if isinstance(payload, dict) else None
     if isinstance(fields, dict):
         for fid in FIELD_IDS:

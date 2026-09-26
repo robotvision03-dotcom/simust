@@ -1,19 +1,18 @@
 #!/bin/bash
 # Update My SIMUST on the Hetzner VPS from git, then restart the service.
 #
-# Run on the VPS as root:
-#   sudo bash /opt/simust/deploy/update-vps.sh
+# Run on the VPS as root. sudo drops exported variables, so pass the branch
+# as an argument (default: main):
+#   sudo bash /opt/simust/deploy/update-vps.sh simust_development_entry
 #
-# Or from your PC (with SSH key):
-#   ssh root@157.180.47.98 'bash /opt/simust/deploy/update-vps.sh'
+# This also works with the script already on the server:
+#   sudo env SIMUST_REPO_BRANCH=simust_development_entry bash /opt/simust/deploy/update-vps.sh
 #
-# Env overrides:
-#   SIMUST_REPO_BRANCH=main   (default: main)
-#   SIMUST_APP_DIR=/opt/simust
+# SIMUST_APP_DIR=/opt/simust
 set -euo pipefail
 
 APP_DIR="${SIMUST_APP_DIR:-/opt/simust}"
-BRANCH="${SIMUST_REPO_BRANCH:-main}"
+BRANCH="${1:-${SIMUST_REPO_BRANCH:-main}}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run as root: sudo bash deploy/update-vps.sh"
