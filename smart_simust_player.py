@@ -1021,9 +1021,8 @@ def _detect_level_intro_key(directory: str = None) -> Optional[str]:
     return None
 
 
-def _find_level_intro_video(directory: str = None) -> Optional[str]:
-    """Return absolute path to static/<level>.mp4 for the current level."""
-    key = _detect_level_intro_key(directory)
+def _intro_video_for_key(key: Optional[str]) -> Optional[str]:
+    """Return static/<level>.mp4 for an intro key such as entry or foundation."""
     if not key:
         return None
     names = LEVEL_INTRO_FILES.get(key) or ()
@@ -1031,11 +1030,15 @@ def _find_level_intro_video(directory: str = None) -> Optional[str]:
         hit = os.path.join(LEVEL_INTRO_STATIC_DIR, name)
         if os.path.isfile(hit):
             return hit
-    # Last resort: exact key.mp4 in static/
     hit = os.path.join(LEVEL_INTRO_STATIC_DIR, f"{key}.mp4")
     if os.path.isfile(hit):
         return hit
     return None
+
+
+def _find_level_intro_video(directory: str = None) -> Optional[str]:
+    """Return absolute path to static/<level>.mp4 for the current level."""
+    return _intro_video_for_key(_detect_level_intro_key(directory))
 
 
 def _scan_label_assets(directory):
@@ -1927,6 +1930,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_timer = None
         self._video_frame = None  # latest QPixmap from pass.mp4
         self._video_screens = set()
+        self._video_groups = []  # [{cap, screens, path}]
+        self._video_fill = False
 
     def clear(self):
         self._stop_screen_video()
@@ -1959,34 +1964,67 @@ class ImageActionCanvas(QtWidgets.QWidget):
 
     def set_screen_video(self, screen_ids, video_path):
         """Play the same pass.mp4 (looping) on each listed screen tile."""
+        self.set_screen_videos({int(s): video_path for s in (screen_ids or [])})
+
+    def set_screen_videos(self, screen_to_path, fill=False):
+        """Play a full video on each screen. Screens that share a path share one decoder."""
         self._stop_screen_video()
-        screens = {int(s) for s in (screen_ids or []) if int(s) not in DISABLED_DISPLAY_SCREENS}
-        self._video_screens = screens
-        self.active_screens = set(screens)
+        self._video_fill = bool(fill)
+        groups = {}
+        for sid, path in (screen_to_path or {}).items():
+            try:
+                sid = int(sid)
+            except (TypeError, ValueError):
+                continue
+            if sid in DISABLED_DISPLAY_SCREENS:
+                continue
+            path = str(path or "")
+            if not path or not os.path.isfile(path):
+                continue
+            groups.setdefault(os.path.abspath(path), set()).add(sid)
         self._screen_pixmaps = {}
-        if not screens or not video_path or not os.path.isfile(video_path):
+        self.active_screens = set()
+        if not groups:
             self.update()
             return
         try:
             import cv2
         except Exception as exc:
-            logger.warning("OpenCV unavailable for pass.mp4: %s — falling back to still", exc)
-            # Fall back: first frame unavailable → try sibling/ co-located png
-            still = os.path.splitext(video_path)[0] + ".png"
-            if os.path.isfile(still):
-                self.set_screen_images({sid: still for sid in screens})
+            logger.warning("OpenCV unavailable for screen video: %s — falling back to still", exc)
+            stills = {}
+            for path, screens in groups.items():
+                still = os.path.splitext(path)[0] + ".png"
+                if os.path.isfile(still):
+                    for sid in screens:
+                        stills[sid] = still
+            if stills:
+                self.set_screen_images(stills)
             return
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.warning("Could not open pass video: %s", video_path)
-            still = os.path.splitext(video_path)[0] + ".png"
-            if os.path.isfile(still):
-                self.set_screen_images({sid: still for sid in screens})
+        fps = 25.0
+        opened = []
+        stills = {}
+        for path, screens in groups.items():
+            cap = cv2.VideoCapture(path)
+            if not cap.isOpened():
+                logger.warning("Could not open screen video: %s", path)
+                still = os.path.splitext(path)[0] + ".png"
+                if os.path.isfile(still):
+                    for sid in screens:
+                        stills[sid] = still
+                continue
+            rate = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+            fps = max(fps, rate)
+            opened.append({"cap": cap, "screens": set(screens), "path": path})
+        if not opened:
+            if stills:
+                self.set_screen_images(stills)
+            else:
+                self.update()
             return
-        self._video_cap = cap
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+        self._video_groups = opened
+        self._video_screens = {sid for group in opened for sid in group["screens"]}
+        self._tick_screen_video()
         interval = max(20, int(round(1000.0 / fps)))
-        self._tick_screen_video()  # first frame
         self._video_timer = QtCore.QTimer(self)
         self._video_timer.timeout.connect(self._tick_screen_video)
         self._video_timer.start(interval)
@@ -2005,32 +2043,50 @@ class ImageActionCanvas(QtWidgets.QWidget):
             except Exception:
                 pass
             self._video_cap = None
+        for group in list(getattr(self, "_video_groups", None) or []):
+            try:
+                group["cap"].release()
+            except Exception:
+                pass
+        self._video_groups = []
+        self._video_fill = False
         self._video_frame = None
         self._video_screens = set()
 
     def _tick_screen_video(self):
-        if self._video_cap is None:
+        groups = list(getattr(self, "_video_groups", None) or [])
+        if not groups:
             return
         try:
             import cv2
-            ok, frame = self._video_cap.read()
-            if not ok or frame is None:
-                # Loop
-                self._video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ok, frame = self._video_cap.read()
-            if not ok or frame is None:
+            pixmaps = {}
+            screens = set()
+            for group in groups:
+                cap = group["cap"]
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w = rgb.shape[:2]
+                qimg = QtGui.QImage(
+                    rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format_RGB888
+                ).copy()
+                pix = QtGui.QPixmap.fromImage(qimg)
+                for sid in group["screens"]:
+                    pixmaps[int(sid)] = pix
+                    screens.add(int(sid))
+            if not pixmaps:
                 return
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w = rgb.shape[:2]
-            qimg = QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format_RGB888).copy()
-            self._video_frame = QtGui.QPixmap.fromImage(qimg)
-            self._screen_pixmaps = {
-                int(sid): self._video_frame for sid in self._video_screens
-            }
-            self.active_screens = set(self._video_screens)
+            self._video_frame = next(iter(pixmaps.values()))
+            self._screen_pixmaps = pixmaps
+            self._video_screens = set(screens)
+            self.active_screens = set(screens)
             self.update()
         except Exception as exc:
-            logger.warning("pass.mp4 frame tick failed: %s", exc)
+            logger.warning("screen video frame tick failed: %s", exc)
 
     def _load_pixmap(self, path):
         if not path:
@@ -2067,14 +2123,22 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 continue
             painter.setClipRect(tile)
             if not pix.isNull():
-                target_w = max(1, int(round(tile.width() * self.IMAGE_SCALE)))
-                target_h = max(1, int(round(tile.height() * self.IMAGE_SCALE)))
-                scaled = pix.scaled(
-                    target_w,
-                    target_h,
-                    QtCore.Qt.KeepAspectRatio,
-                    QtCore.Qt.SmoothTransformation,
-                )
+                if getattr(self, "_video_fill", False):
+                    scaled = pix.scaled(
+                        tile.width(),
+                        tile.height(),
+                        QtCore.Qt.KeepAspectRatioByExpanding,
+                        QtCore.Qt.SmoothTransformation,
+                    )
+                else:
+                    target_w = max(1, int(round(tile.width() * self.IMAGE_SCALE)))
+                    target_h = max(1, int(round(tile.height() * self.IMAGE_SCALE)))
+                    scaled = pix.scaled(
+                        target_w,
+                        target_h,
+                        QtCore.Qt.KeepAspectRatio,
+                        QtCore.Qt.SmoothTransformation,
+                    )
                 px = tile.x() + (tile.width() - scaled.width()) // 2
                 py = tile.y() + (tile.height() - scaled.height()) // 2
                 painter.drawPixmap(px, py, scaled)
@@ -3094,46 +3158,81 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "path": "image://PASS/flash",
         }]
 
+    def _intro_video_for_field(self, fid: str) -> Optional[str]:
+        """Intro clip for one field. Uses that field's level when A and B differ."""
+        fid = str(fid or "").upper()
+        level = str((getattr(self, "_phase_field_levels", None) or {}).get(fid) or "").strip()
+        if level:
+            hit = _intro_video_for_key(_level_intro_key_from_id(level))
+            if hit:
+                return hit
+        directory = str((getattr(self, "_phase_field_directories", None) or {}).get(fid) or "").strip()
+        if directory:
+            for pat, key in _LEVEL_INTRO_PATH_RULES:
+                if pat.search(directory):
+                    hit = _intro_video_for_key(key)
+                    if hit:
+                        return hit
+        return _find_level_intro_video(directory or self.video_directory or self._level_root)
+
     def _begin_level_intro(self, next_index=0):
-        """Play static/<level>.mp4 for 4s on active field A/B screens before a test."""
+        """Play the level clip on every screen of each active field before a test."""
         self._level_intro_next_index = int(next_index)
-        intro = _find_level_intro_video(self.video_directory or self._level_root)
         self._hide_waiting_overlay()
-        if not intro:
+        active = self._active_fields()
+        screen_to_video = {}
+        by_field = {}
+        for fid in active:
+            intro = self._intro_video_for_field(fid)
+            by_field[fid] = intro
+            if not intro:
+                continue
+            for sid in _field_all_screens(fid):
+                screen_to_video[int(sid)] = intro
+        if not screen_to_video:
             logger.warning(
-                "No level intro video found for %s — starting test immediately",
-                self.video_directory or self._level_root,
+                "No level intro video found for fields %s — starting test immediately",
+                active,
             )
             self._after_level_intro()
             return
 
-        active = self._active_fields()
-        lit = _active_field_screens(active)
+        names = {
+            fid: (os.path.basename(path) if path else "missing")
+            for fid, path in by_field.items()
+        }
         self.display_phase = "level_intro"
         self._update_status_file(
             "starting",
             max(0, self._current_test_num() - 1),
             self.total_videos,
-            f"Level intro: {os.path.basename(intro)}",
+            "Level intro: " + ", ".join(f"{fid}={name}" for fid, name in names.items()),
         )
         logger.info(
-            "Level intro %sms on fields %s screens %s: %s (then index %s)",
-            LEVEL_INTRO_MS, active, lit, intro, next_index,
+            "Level intro %sms on fields %s screens %s clips %s (then index %s)",
+            LEVEL_INTRO_MS, active, sorted(screen_to_video), names, next_index,
         )
 
         played = False
-        if self.image_canvas:
-            self.image_canvas.clear()
-            self.image_canvas.hide()
         try:
             self.player.stop()
         except Exception:
             pass
-        try:
-            self._play_local_clip(intro, rate=1.0)
-            played = True
-        except Exception as exc:
-            logger.error("Level intro playback failed: %s", exc)
+        if self.image_canvas:
+            self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+            self.image_canvas.set_screen_videos(screen_to_video, fill=True)
+            played = bool(self.image_canvas.active_screens)
+            if played and len(set(screen_to_video.values())) == 1:
+                self._play_intro_audio(next(iter(screen_to_video.values())))
+        if not played:
+            intro = next(iter(screen_to_video.values()))
+            try:
+                self._play_local_clip(intro, rate=1.0)
+                played = True
+            except Exception as exc:
+                logger.error("Level intro playback failed: %s", exc)
 
         if not played:
             self._after_level_intro()
@@ -4072,6 +4171,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elapsed_ms = int((time.time() - getattr(self, "_wait_started", time.time())) * 1000)
         return max(0, WAIT_ANIMATION_MS - elapsed_ms)
 
+    def _play_intro_audio(self, video_path):
+        """Play the intro soundtrack while each screen shows its own picture."""
+        try:
+            self.player.stop()
+            media = self.instance.media_new(os.path.abspath(video_path))
+            media.add_option(":no-video")
+            self.player.set_media(media)
+            self.player.audio_set_volume(100)
+            self.player.play()
+        except Exception as exc:
+            logger.warning("Level intro audio failed: %s", exc)
+
     def _play_local_clip(self, video_path, rate=1.0):
         if self.image_canvas:
             self.image_canvas.hide()
@@ -4470,7 +4581,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
         self.setFixedSize(self.video_width, self.video_height)
         self.videoframe.raise_()
-        if self.image_canvas and self.image_based and self.display_phase == "action":
+        if self.image_canvas and self.image_based and self.display_phase in ("action", "level_intro"):
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
             self.image_canvas.show()
             self.image_canvas.raise_()
