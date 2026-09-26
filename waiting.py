@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 standalone_waiting_animation.py – Professional Waiting Overlay with Bouncing Balls
-Displays an animated waiting screen on the second monitor (top‑left, 3712x512).
+Displays an animated waiting screen on the second monitor (top-left, 3840x512).
 Features:
-- 14 slices (matching the final video layout)
+- 14 frames across screen 2. Field A is the left half, Field B the right half.
+- Screens 1 and 8 are empty places and stay dark.
 - Spinning gold rings with "Processing" / "Results" text on dark semi‑transparent backgrounds
 - Slice numbers clearly shown above each ring
 - 2–3 colorful bouncing balls per slice for a lively, busy look
@@ -14,11 +15,29 @@ Press Esc to close.
 import sys
 import random
 try:
-    from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
+    from simust_display_layout import (
+        CHART_CENTER_Y,
+        RING_RADIUS,
+        RING_THICKNESS,
+        COACH_BAND_WIDTH,
+        COACH_BAND_HEIGHT,
+        DISPLAY_SLICE_ORDER,
+        screen_content_offset,
+        screen_content_offset_y,
+    )
 except ImportError:
     CHART_CENTER_Y = 140
     RING_RADIUS = 63
     RING_THICKNESS = 15
+    COACH_BAND_WIDTH = 3840
+    COACH_BAND_HEIGHT = 512
+    DISPLAY_SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+    def screen_content_offset(screen_id):
+        return 0
+
+    def screen_content_offset_y(screen_id):
+        return 0
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
@@ -70,27 +89,9 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.timer.start(30)  # ~33 FPS
 
         # Slice layout
-        self.slice_order = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        self.slice_order = list(DISPLAY_SLICE_ORDER)
         self.num_slices = len(self.slice_order)
         self.radius = RING_RADIUS
-
-        # Offsets per tile index (for slice numbers 2 and 3)
-        # index 4 -> slice number 2, offset +25px
-        # index 5 -> slice number 3, offset +20px
-        self.content_offset = {
-            0: -5,   # tile 0 (slice 12) – shift left 10px
-            1: -15,   # tile 1 (slice 13) – shift left 20px
-            2: -20,   # tile 2 (slice 14) – shift left 25px
-            4: 20,    # tile 4 (slice 2)  – shift right 25px
-            5: 15,    # tile 5 (slice 3)  – shift right 20px
-            6: 5,    # tile 6 (slice 4)  – shift right 10px
-            7: -5,   # tile 7 (slice 5)  – shift left 10px
-            8: -15,   # tile 8 (slice 6)  – shift left 20px
-            9: -20,   # tile 9 (slice 7)  – shift left 25px
-            11: 20,   # tile 11 (slice 9) – shift right 25px
-            12: 15,   # tile 12 (slice 10) – shift right 20px
-            13: 5    # tile 13 (slice 11) – shift right 10px
-        }
 
         # Balls per slice – will be created on first paint
         self.balls_by_slice = None
@@ -108,9 +109,11 @@ class WaitingOverlay(QtWidgets.QWidget):
             tile_width = w / self.num_slices
             padding = 12
             for i in range(self.num_slices):
-                offset_x = self.content_offset.get(i, 0)
+                slice_num = self.slice_order[i]
+                offset_x = screen_content_offset(slice_num)
+                offset_y = screen_content_offset_y(slice_num)
                 x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding
+                y0 = padding + offset_y
                 width = int(tile_width) - 2 * padding
                 height = h - 2 * padding
                 for ball in self.balls_by_slice[i]:
@@ -147,12 +150,17 @@ class WaitingOverlay(QtWidgets.QWidget):
                 QColor(255, 100, 100)
             ]
             for i in range(self.num_slices):
+                slice_num = self.slice_order[i]
+                if int(slice_num) in (1, 8):
+                    self.balls_by_slice.append([])
+                    continue
                 num_balls = random.randint(2, 3)
                 slice_balls = []
                 padding = 12
-                offset_x = self.content_offset.get(i, 0)
+                offset_x = screen_content_offset(slice_num)
+                offset_y = screen_content_offset_y(slice_num)
                 x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding
+                y0 = padding + offset_y
                 width = int(tile_width) - 2 * padding
                 height = h - 2 * padding
                 for _ in range(num_balls):
@@ -167,11 +175,13 @@ class WaitingOverlay(QtWidgets.QWidget):
                 self.balls_by_slice.append(slice_balls)
 
         for i, slice_num in enumerate(self.slice_order):
-            offset_x = self.content_offset.get(i, 0)
+            if int(slice_num) in (1, 8):
+                continue
+            offset_x = screen_content_offset(slice_num)
 
             # Exact center of this tile (shifted for tiles with offset)
             cx = int((i + 0.5) * tile_width) + offset_x
-            cy = CHART_CENTER_Y
+            cy = CHART_CENTER_Y + screen_content_offset_y(slice_num)
 
             # ---- Slice number (centered above the ring) ----
             painter.setPen(QColor(0, 255, 255))
@@ -257,8 +267,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
 
-        self.video_width = 3556
-        self.video_height = 512
+        self.video_width = COACH_BAND_WIDTH
+        self.video_height = COACH_BAND_HEIGHT
         self.setFixedSize(self.video_width, self.video_height)
 
         app = QtWidgets.QApplication.instance()

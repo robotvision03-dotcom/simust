@@ -30,15 +30,65 @@ try:
 except ImportError:
     vlc = None
 try:
-    from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
+    from simust_display_layout import (
+        CHART_CENTER_Y,
+        RING_RADIUS,
+        RING_THICKNESS,
+        COACH_BAND_WIDTH,
+        COACH_BAND_HEIGHT,
+        DISPLAY_SLICE_ORDER,
+        slice_x_span,
+        content_x_box,
+        screen_content_offset,
+        screen_content_offset_y,
+    )
 except ImportError:
     CHART_CENTER_Y = 140
     RING_RADIUS = 63
     RING_THICKNESS = 15
+    COACH_BAND_WIDTH = 3840
+    COACH_BAND_HEIGHT = 512
+    DISPLAY_SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+    def slice_x_span(index, width=None, count=None):
+        width = COACH_BAND_WIDTH if width is None else int(width)
+        count = len(DISPLAY_SLICE_ORDER) if count is None else max(1, int(count))
+        x0 = (int(index) * width) // count
+        x1 = ((int(index) + 1) * width) // count
+        return x0, max(x0 + 1, x1)
+
+    def content_x_box(index, screen_id, width=None, count=None):
+        width = COACH_BAND_WIDTH if width is None else int(width)
+        count = len(DISPLAY_SLICE_ORDER) if count is None else max(1, int(count))
+        x0, x1 = slice_x_span(index, width, count)
+        rect_w = max(8, int((x1 - x0) * 0.92))
+        center = (x0 + x1) // 2
+        return center - rect_w // 2, center + rect_w // 2, rect_w
+
+    def screen_content_offset(screen_id):
+        return 0
+
+    def screen_content_offset_y(screen_id):
+        return 0
 try:
     import simust_fields
 except ImportError:
     simust_fields = None
+
+
+def _sid(value):
+    """Screen name A1–A6 or B1–B6. Old cabinet numbers are accepted too."""
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if len(text) >= 2 and text[0] in ("A", "B") and text[1:].isdigit():
+        number = int(text[1:])
+        if 1 <= number <= 6:
+            return f"{text[0]}{number}"
+        return None
+    if simust_fields is not None:
+        return simust_fields.canonical_screen(value)
+    return None
 
 
 class _NullVlcPlayer:
@@ -177,15 +227,19 @@ FOUNDATION_SF_GAPS = {
     "SF-110N": 2,
     "SF-180N": 3,
 }
-# Working arcs (adjacent = ~30°). Screens 1 and 8 do not exist.
-FOUNDATION_ARC_A = [2, 3, 4, 12, 13, 14]
-FOUNDATION_ARC_B = [11, 10, 9, 7, 6, 5]
-DISABLED_DISPLAY_SCREENS = {1, 8}
-# New arena indices (1–7 per field) → hardware screen ids used by the display.
-# Field A: 12→1, 13→2, 14→3, 2→4, 3→5, 4→6, 1→7
-# Field B: 5→1, 6→2, 7→3, 9→4, 10→5, 11→6, 8→7
-ARENA_A_TO_HW = {1: 12, 2: 13, 3: 14, 4: 2, 5: 3, 6: 4, 7: 1}
-ARENA_B_TO_HW = {1: 5, 2: 6, 3: 7, 4: 9, 5: 10, 6: 11, 7: 8}
+# Working arcs. Each field is screens 1–6: A4→A5→A6→A1→A2→A3 and B6→B5→B4→B3→B2→B1.
+FOUNDATION_ARC_A = ["A4", "A5", "A6", "A1", "A2", "A3"]
+FOUNDATION_ARC_B = ["B6", "B5", "B4", "B3", "B2", "B1"]
+DISABLED_DISPLAY_SCREENS = set()
+# Arena index 1–6 is the screen name on that field. Index 7 does not exist.
+def _screen_name(fid: str, number) -> Optional[str]:
+    try:
+        n = int(number)
+    except (TypeError, ValueError):
+        return None
+    if n < 1 or n > 6:
+        return None
+    return f"{str(fid).upper()[:1]}{n}"
 # Scripted SF: 3 tests × 10 actions. On=3.0s, Gap=0.5s, fixed (no speed scale).
 SF_SCRIPTED_ON_MS = 3000
 SF_SCRIPTED_GAP_MS = 500
@@ -232,6 +286,28 @@ ENTRY_GAP_START_MS = 1000
 ENTRY_ON_MIN_MS = 1800
 ENTRY_GAP_MIN_MS = 500
 ENTRY_TIMING_DECAY = 0.90
+# Activated A-T1..A-T5: same 5 tests × 6 screens as Entry.
+# Tests 1, 2, 4 and 5 use this order on screens 1–6. Test 3 shuffles these numbers.
+# Every set repeats the numbers. Set 1 uses Entry A-T1 timing; each later set is 10% faster.
+ACTIVATED_TEST_NUMBERS = {
+    1: ["10", "30", "50", "60", "40", "20"],
+    2: ["08", "06", "01", "11", "7", "3"],
+    3: ["22", "16", "12", "17", "21", "13"],
+    4: ["25", "05", "18", "07", "13", "23"],
+    5: ["20", "15", "11", "17", "19", "13"],
+}
+# High Performance: six numbers drawn from 1..100. Lowest is passed and cleared,
+# then the next lowest, for all 5 tests. One background color per test, shared
+# by every screen, and a different color on the next test.
+HP_NUMBER_MIN = 1
+HP_NUMBER_MAX = 100
+HP_TEST_BG = {
+    1: (21, 101, 192),
+    2: (46, 125, 50),
+    3: (239, 108, 0),
+    4: (106, 27, 154),
+    5: (183, 28, 28),
+}
 SF_SCRIPTED_PLAYLISTS = {
     "SF-30N": SF30N_SCRIPT,
     "SF-60N": SF60N_SCRIPT,
@@ -272,14 +348,14 @@ _FOUNDATION_EXTRA_RE = re.compile(
     re.IGNORECASE,
 )
 TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
-SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
 IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
 STOP_SAVE_FILE = "C:/Users/siama/Documents/simust_player/stop_save.txt"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
 PLAYERS_FIELDS_FILE = "C:/Users/siama/Documents/simust_player/players_fields.json"
 # Rotation mode: fast pass-image spin around the field arc, then hold on one screen.
-ROTATION_ARC_A = list(FOUNDATION_ARC_A)  # 2→3→4→12→13→14→…
-ROTATION_ARC_B = list(FOUNDATION_ARC_B)  # 11→10→9→7→6→5→…
+ROTATION_ARC_A = list(FOUNDATION_ARC_A)  # A4→A5→A6→A1→A2→A3
+ROTATION_ARC_B = list(FOUNDATION_ARC_B)  # B6→B5→B4→B3→B2→B1
 ROTATION_STEP_MS = 45
 ROTATION_MIN_LAPS = 2
 # Math modes: equations on every field screen; exactly 2 correct targets per field.
@@ -477,15 +553,40 @@ def _mode_slot_factory(mode_id: str, active_fields):
     return _sf_slot
 
 
-def _entry_series_num(*paths) -> Optional[int]:
-    """A-T1..A-T5 (also A.T1.C1) → series 1..5. Time reduction uses this index."""
+def _band_series_num(*paths, band: str) -> Optional[int]:
+    """A-T1..A-T5 inside a level band → series 1..5. Timing uses this index."""
     blob = " ".join(str(p or "") for p in paths)
-    if not re.search(r"L01-Entry", blob, re.I):
+    if not re.search(band, blob, re.I):
         return None
     match = re.search(r"A[-.]T([1-5])", blob, re.I)
     if not match:
         return None
     return int(match.group(1))
+
+
+def _entry_series_num(*paths) -> Optional[int]:
+    """A-T1..A-T5 (also A.T1.C1) → series 1..5. Time reduction uses this index."""
+    return _band_series_num(*paths, band=r"L01-Entry")
+
+
+def _activated_series_num(*paths) -> Optional[int]:
+    return _band_series_num(*paths, band=r"L02-Activated")
+
+
+def _high_performance_series_num(*paths) -> Optional[int]:
+    return _band_series_num(*paths, band=r"L03-HighPerformance|High[-_ ]?Performance")
+
+
+def _level_context_bits(level_root, video_directory, field_levels, active) -> List[str]:
+    """Paths and selected level ids, so A-T timing still works if the folder was flattened."""
+    bits = [str(level_root or ""), str(video_directory or "")]
+    levels = field_levels or {}
+    chosen = [str(levels.get(fid) or "") for fid in (active or [])]
+    if any(chosen):
+        bits.extend(chosen)
+    else:
+        bits.extend(str(value or "") for value in levels.values())
+    return bits
 
 
 def _entry_series_timing_ms(series_num: int) -> Tuple[int, int]:
@@ -522,6 +623,123 @@ def _entry_test_layout(test_num: int) -> Tuple[dict, List[int]]:
     return placement, goals
 
 
+def _activated_test_layout(test_num: int) -> dict:
+    """Screen 1–6 → display number. Test 3 shuffles; the other tests stay in order."""
+    numbers = list(ACTIVATED_TEST_NUMBERS[int(test_num)])
+    if int(test_num) == 3:
+        random.shuffle(numbers)
+    return {screen: numbers[screen - 1] for screen in range(1, 7)}
+
+
+def _high_performance_test_layout(test_num: int) -> Tuple[dict, Tuple[int, int, int]]:
+    """Six different numbers from 1 to 100, and that test's shared background."""
+    picked = random.sample(range(HP_NUMBER_MIN, HP_NUMBER_MAX + 1), ENTRY_ACTIONS_PER_TEST)
+    placement = {screen: str(picked[screen - 1]) for screen in range(1, 7)}
+    bg = HP_TEST_BG[int(test_num)]
+    return placement, bg
+
+
+def _lowest_first_screens(placement: dict) -> List[int]:
+    """Pass order: smallest number first. Ties keep the lower screen number."""
+    return sorted(placement, key=lambda screen: (int(placement[screen]), int(screen)))
+
+
+def _build_number_band_playlist(
+    series_num: int,
+    active_fields,
+    layout_for_test,
+    label_prefix: str,
+    bg_for_test=None,
+) -> List[dict]:
+    """5 tests × 6 passes. The lowest remaining number is the pass, then that screen clears.
+
+    Field B repeats the same numbers on its own screens. Timing follows Entry:
+    set 1 is 3.0s / 1.0s, and each later set is 10% faster.
+    """
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active:
+        return []
+    on_ms, gap_ms = _entry_series_timing_ms(series_num)
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        laid = layout_for_test(test_num)
+        if isinstance(laid, tuple):
+            placement, bg = laid
+        else:
+            placement = laid
+            bg = bg_for_test(test_num) if bg_for_test else None
+        order = _lowest_first_screens(placement)
+        rendered = {}
+        for screen, text in placement.items():
+            png = _render_entry_digit_image(str(text), bg=bg)
+            if png:
+                rendered[screen] = png
+        for action_in_set, goal_screen in enumerate(order, start=1):
+            still_up = set(order[action_in_set - 1:])
+            images = {}
+            for screen in still_up:
+                png = rendered.get(screen)
+                if not png:
+                    continue
+                for fid in active:
+                    sid = _hw_screen_for_field(fid, (screen, screen))
+                    if sid is not None:
+                        images[sid] = png
+            field_screens = {}
+            for fid in active:
+                sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
+                if sid is not None:
+                    field_screens[fid] = [sid]
+            if not field_screens or not images:
+                continue
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": ENTRY_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == ENTRY_ACTIONS_PER_TEST,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "entry_digits": True,
+                "arena_pair": (goal_screen, goal_screen),
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "label": (
+                    f"{label_prefix} A-T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{ENTRY_ACTIONS_PER_TEST} "
+                    f"goal screen {goal_screen} number {placement.get(goal_screen)} "
+                    f"on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": f"image://{label_prefix}/A-T{series_num}/test{test_num}/{action_in_set}",
+            })
+    return playlist
+
+
+def _build_activated_playlist(series_num: int, active_fields) -> List[dict]:
+    return _build_number_band_playlist(
+        series_num,
+        active_fields,
+        _activated_test_layout,
+        "Activated",
+    )
+
+
+def _build_high_performance_playlist(series_num: int, active_fields) -> List[dict]:
+    return _build_number_band_playlist(
+        series_num,
+        active_fields,
+        _high_performance_test_layout,
+        "HighPerformance",
+    )
+
+
 def _script_for_mode(mode_id: str):
     key = str(mode_id or "").strip().upper()
     for name, script in SF_SCRIPTED_PLAYLISTS.items():
@@ -530,16 +748,12 @@ def _script_for_mode(mode_id: str):
     return None
 
 
-def _hw_screen_for_field(fid: str, pair) -> Optional[int]:
-    """Arena pair (A index, B index) → this field's hardware screen."""
+def _hw_screen_for_field(fid: str, pair) -> Optional[str]:
+    """Arena pair (A index, B index) → this field's screen name, A1–A6 or B1–B6."""
     a_arena, b_arena = int(pair[0]), int(pair[1])
     if str(fid).upper() == "A":
-        sid = int(ARENA_A_TO_HW.get(a_arena, a_arena))
-    else:
-        sid = int(ARENA_B_TO_HW.get(b_arena, b_arena))
-    if sid in DISABLED_DISPLAY_SCREENS:
-        return None
-    return sid
+        return _screen_name("A", a_arena)
+    return _screen_name("B", b_arena)
 
 
 def _build_entry_playlist(series_num: int, active_fields) -> List[dict]:
@@ -565,7 +779,7 @@ def _build_entry_playlist(series_num: int, active_fields) -> List[dict]:
                 for fid in active:
                     sid = _hw_screen_for_field(fid, (screen, screen))
                     if sid is not None:
-                        images[int(sid)] = png
+                        images[sid] = png
             field_screens = {}
             for fid in active:
                 sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
@@ -728,7 +942,7 @@ def _build_dual_field_playlist(
                     if sid is None or not img:
                         continue
                     field_screens[fid] = [sid]
-                    screen_images[int(sid)] = img
+                    screen_images[_sid(sid)] = img
                     mode_bits.append(f"{fid}:{(field_modes or {}).get(fid) or '?'}")
                 if not screen_images:
                     continue
@@ -880,7 +1094,7 @@ def _build_dual_field_playlist(
 # Gap images (gap_N) appear on these slices BEFORE action N
 # (gap_1 before action 1; gap_2 between action 1 and 2; …).
 # Missing gap_/filler_ → black (nothing displayed on those slices).
-GAP_SCREENS = (2, 14, 7, 9)
+GAP_SCREENS = ("A4", "A3", "B3", "B4")
 PASS_FLASH_STEPS = (
     {"A": 4, "B": 11},
     {"A": 3, "B": 10},
@@ -1213,10 +1427,10 @@ def _build_scripted_sf_playlist(
         gap_ms = int(spec.get("gap_ms") or SF_SCRIPTED_GAP_MS)
         pairs = list(spec.get("pairs") or [])
         for action_in_set, pair in enumerate(pairs, start=1):
-            # Scripts use new arena indices; convert to hardware screen ids.
+            # Scripts use arena indices 1–6, which are the screen names on each field.
             a_arena, b_arena = int(pair[0]), int(pair[1])
-            a_sid = int(ARENA_A_TO_HW.get(a_arena, a_arena))
-            b_sid = int(ARENA_B_TO_HW.get(b_arena, b_arena))
+            a_sid = _screen_name("A", a_arena)
+            b_sid = _screen_name("B", b_arena)
             field_screens = {}
             lit = []
             if "A" in active and a_sid not in DISABLED_DISPLAY_SCREENS:
@@ -1227,7 +1441,7 @@ def _build_scripted_sf_playlist(
                 lit.append(b_sid)
             if not lit:
                 continue
-            screen_images = {int(sid): pass_image for sid in lit}
+            screen_images = {sid: pass_image for sid in lit}
             playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
@@ -1403,9 +1617,9 @@ def _random_field_slot(active_fields) -> dict:
     active = set(active_fields or [])
     slot = {}
     if "A" in active:
-        slot["A"] = [int(random.choice(FOUNDATION_ARC_A))]
+        slot["A"] = [random.choice(FOUNDATION_ARC_A)]
     if "B" in active:
-        slot["B"] = [int(random.choice(FOUNDATION_ARC_B))]
+        slot["B"] = [random.choice(FOUNDATION_ARC_B)]
     return slot
 
 
@@ -1418,9 +1632,9 @@ def _rotation_field_slot(active_fields) -> dict:
     active = set(active_fields or [])
     slot = {}
     if "A" in active:
-        slot["A"] = [int(random.choice(ROTATION_ARC_A))]
+        slot["A"] = [random.choice(ROTATION_ARC_A)]
     if "B" in active:
-        slot["B"] = [int(random.choice(ROTATION_ARC_B))]
+        slot["B"] = [random.choice(ROTATION_ARC_B)]
     return slot
 
 
@@ -1551,8 +1765,13 @@ def _render_math_equation_image(eq_text: str) -> Optional[str]:
     return path
 
 
-def _render_entry_digit_image(digit: str) -> Optional[str]:
-    """Red digit, 3× the equation size, centered like a results ring label."""
+def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
+    """Digit centered on the screen. One third of the previous 216pt size.
+
+    bg is an (r, g, b) fill shared by every screen of a High Performance test.
+    The digit is white on that fill so it stays readable. Entry and Activated
+    use the same red digit.
+    """
     text = str(digit or "").strip()
     if not text:
         return None
@@ -1560,7 +1779,12 @@ def _render_entry_digit_image(digit: str) -> Optional[str]:
         os.makedirs(MATH_EQ_CACHE_DIR, exist_ok=True)
     except Exception:
         return None
-    path = os.path.join(MATH_EQ_CACHE_DIR, f"digit_red3_{text}.png")
+    if bg:
+        r, g, b = (int(bg[0]), int(bg[1]), int(bg[2]))
+        path = os.path.join(MATH_EQ_CACHE_DIR, f"digit72_bg_{r}_{g}_{b}_{text}.png")
+    else:
+        r = g = b = None
+        path = os.path.join(MATH_EQ_CACHE_DIR, f"digit72_red_{text}.png")
     if os.path.isfile(path):
         return path
     try:
@@ -1571,13 +1795,18 @@ def _render_entry_digit_image(digit: str) -> Optional[str]:
         return None
     w, h = 512, 512
     img = QImage(w, h, QImage.Format_ARGB32)
-    img.fill(QColor(0, 0, 0, 0))
+    if bg:
+        img.fill(QColor(r, g, b, 255))
+        pen = QColor(255, 255, 255)
+    else:
+        img.fill(QColor(0, 0, 0, 0))
+        pen = QColor(255, 0, 0)
     painter = QPainter(img)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
-    font = QFont("Segoe UI", 216, QFont.Bold)
+    font = QFont("Segoe UI", 72, QFont.Bold)
     painter.setFont(font)
-    painter.setPen(QColor(255, 0, 0))
+    painter.setPen(pen)
     painter.drawText(
         QtCore.QRect(0, 0, w, h),
         _Qt.AlignCenter,
@@ -1913,7 +2142,7 @@ def _clear_image_action_cue(force_end=False):
 
 
 class ImageActionCanvas(QtWidgets.QWidget):
-    """3712×512 coach band: per-slice labeled action / filler / gap images or pass.mp4."""
+    """3840×512 coach band on screen 2. Fourteen frames, Field A left, Field B right."""
 
     # Drawn at 85% of the slice (15% smaller than full-tile cover)
     IMAGE_SCALE = 0.85
@@ -1921,7 +2150,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None, image_path=TEAMATE_IMAGE):
         super().__init__(parent)
         self.setStyleSheet("background-color: black;")
-        self.setFixedSize(3712, 512)
+        self.setFixedSize(COACH_BAND_WIDTH, COACH_BAND_HEIGHT)
         self.active_screens = set()
         self._screen_pixmaps = {}  # screen_id -> QPixmap
         self._pixmap_cache = {}  # path -> QPixmap
@@ -1942,11 +2171,11 @@ class ImageActionCanvas(QtWidgets.QWidget):
     def set_pass_screens(self, screen_ids):
         """Legacy: same fallback image on each lit screen."""
         self._stop_screen_video()
-        self.active_screens = {int(sid) for sid in screen_ids}
+        self.active_screens = {_sid(sid) for sid in screen_ids if _sid(sid)}
         self._screen_pixmaps = {}
         for sid in self.active_screens:
             if not self._fallback.isNull():
-                self._screen_pixmaps[int(sid)] = self._fallback
+                self._screen_pixmaps[sid] = self._fallback
         self.update()
 
     def set_screen_images(self, screen_to_path):
@@ -1958,13 +2187,16 @@ class ImageActionCanvas(QtWidgets.QWidget):
             pix = self._load_pixmap(path)
             if pix is None or pix.isNull():
                 continue
-            self._screen_pixmaps[int(sid)] = pix
-            self.active_screens.add(int(sid))
+            key = _sid(sid)
+            if not key:
+                continue
+            self._screen_pixmaps[key] = pix
+            self.active_screens.add(key)
         self.update()
 
     def set_screen_video(self, screen_ids, video_path):
         """Play the same pass.mp4 (looping) on each listed screen tile."""
-        self.set_screen_videos({int(s): video_path for s in (screen_ids or [])})
+        self.set_screen_videos({_sid(s): video_path for s in (screen_ids or []) if _sid(s)})
 
     def set_screen_videos(self, screen_to_path, fill=False):
         """Play a full video on each screen. Screens that share a path share one decoder."""
@@ -1972,11 +2204,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_fill = bool(fill)
         groups = {}
         for sid, path in (screen_to_path or {}).items():
-            try:
-                sid = int(sid)
-            except (TypeError, ValueError):
-                continue
-            if sid in DISABLED_DISPLAY_SCREENS:
+            key = _sid(sid)
+            if not key or key not in SLICE_ORDER:
                 continue
             path = str(path or "")
             if not path or not os.path.isfile(path):
@@ -2104,11 +2333,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
 
     def _tile_rect(self, screen_id: int) -> QtCore.QRect:
         i = SLICE_ORDER.index(int(screen_id))
-        n = len(SLICE_ORDER)
-        tile_w = 3712 / float(n)
-        x0 = int(round(i * tile_w))
-        x1 = int(round((i + 1) * tile_w))
-        return QtCore.QRect(x0, 0, max(1, x1 - x0), 512)
+        x0, x1 = slice_x_span(i, COACH_BAND_WIDTH, len(SLICE_ORDER))
+        return QtCore.QRect(x0, 0, x1 - x0, COACH_BAND_HEIGHT)
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -2118,29 +2344,22 @@ class ImageActionCanvas(QtWidgets.QWidget):
             return
         for sid, pix in self._screen_pixmaps.items():
             try:
-                tile = self._tile_rect(sid)
+                index = SLICE_ORDER.index(int(sid))
             except ValueError:
                 continue
-            painter.setClipRect(tile)
+            left, _right, rect_w = content_x_box(index, sid, self.width(), len(SLICE_ORDER))
+            dy = screen_content_offset_y(sid)
+            placed = QtCore.QRect(left, 0, rect_w, self.height())
+            painter.setClipRect(placed)
             if not pix.isNull():
-                if getattr(self, "_video_fill", False):
-                    scaled = pix.scaled(
-                        tile.width(),
-                        tile.height(),
-                        QtCore.Qt.KeepAspectRatioByExpanding,
-                        QtCore.Qt.SmoothTransformation,
-                    )
-                else:
-                    target_w = max(1, int(round(tile.width() * self.IMAGE_SCALE)))
-                    target_h = max(1, int(round(tile.height() * self.IMAGE_SCALE)))
-                    scaled = pix.scaled(
-                        target_w,
-                        target_h,
-                        QtCore.Qt.KeepAspectRatio,
-                        QtCore.Qt.SmoothTransformation,
-                    )
-                px = tile.x() + (tile.width() - scaled.width()) // 2
-                py = tile.y() + (tile.height() - scaled.height()) // 2
+                scaled = pix.scaled(
+                    rect_w,
+                    self.height(),
+                    QtCore.Qt.KeepAspectRatioByExpanding,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                px = left + (rect_w - scaled.width()) // 2
+                py = (self.height() - scaled.height()) // 2 + dy
                 painter.drawPixmap(px, py, scaled)
             painter.setClipping(False)
         painter.end()
@@ -2202,7 +2421,7 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.timer.start(30)
 
         # Slice order must match the results video
-        self.slice_order = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        self.slice_order = list(DISPLAY_SLICE_ORDER)
         self.num_slices = len(self.slice_order)
         self.ring_radius = RING_RADIUS
         self.active_fields = {"A", "B"}
@@ -2211,22 +2430,6 @@ class WaitingOverlay(QtWidgets.QWidget):
 
         # Balls per slice (will be created on first paint)
         self.balls_by_slice = None
-
-        # --- CONTENT OFFSETS PER TILE INDEX ---
-        self.content_offset = {
-            0: -5,   # tile 0 (slice 12) – shift left
-            1: -15,  # tile 1 (slice 13) – shift left
-            2: -20,  # tile 2 (slice 14) – shift left
-            4: 20,   # tile 4 (slice 2)  – shift right
-            5: 15,   # tile 5 (slice 3)  – shift right
-            6: 5,    # tile 6 (slice 4)  – shift right
-            7: -5,   # tile 7 (slice 5)  – shift left
-            8: -15,  # tile 8 (slice 6)  – shift left
-            9: -20,  # tile 9 (slice 7)  – shift left
-            11: 20,  # tile 11 (slice 9) – shift right
-            12: 15,  # tile 12 (slice 10) – shift right
-            13: 5    # tile 13 (slice 11) – shift right
-        }
 
         # Audio player (optional)
         self.audio_player = QMediaPlayer()
@@ -2271,9 +2474,10 @@ class WaitingOverlay(QtWidgets.QWidget):
             for i, slice_num in enumerate(self.slice_order):
                 if int(slice_num) not in self.active_slice_nums:
                     continue
-                offset_x = self.content_offset.get(i, 0)
+                offset_x = screen_content_offset(slice_num)
+                offset_y = screen_content_offset_y(slice_num)
                 x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding
+                y0 = padding + offset_y
                 width = int(tile_width) - 2 * padding
                 height = h - 2 * padding
                 for ball in self.balls_by_slice[i]:
@@ -2319,9 +2523,10 @@ class WaitingOverlay(QtWidgets.QWidget):
                 num_balls = random.randint(2, 3)
                 slice_balls = []
                 padding = 12
-                offset_x = self.content_offset.get(i, 0)
+                offset_x = screen_content_offset(slice_num)
+                offset_y = screen_content_offset_y(slice_num)
                 x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding
+                y0 = padding + offset_y
                 width = int(tile_width) - 2 * padding
                 height = h - 2 * padding
                 for _ in range(num_balls):
@@ -2339,9 +2544,9 @@ class WaitingOverlay(QtWidgets.QWidget):
         for i, slice_num in enumerate(self.slice_order):
             if int(slice_num) not in self.active_slice_nums:
                 continue
-            offset_x = self.content_offset.get(i, 0)
+            offset_x = screen_content_offset(slice_num)
             cx = int((i + 0.5) * tile_width) + offset_x
-            cy = CHART_CENTER_Y
+            cy = CHART_CENTER_Y + screen_content_offset_y(slice_num)
 
             # Ring
             radius = min(self.ring_radius, int(tile_width // 2))
@@ -2446,8 +2651,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.video_directory = video_directory
         self.player_speed = player_speed
         self.screen_index = screen_index
-        self.video_width = 3712
-        self.video_height = 512
+        self.video_width = COACH_BAND_WIDTH
+        self.video_height = COACH_BAND_HEIGHT
         self.playlist_finished = False
         self.status_file = status_file or "C:/Users/siama/Documents/simust_player/playback_status.json"
         self.auto_close_delay = 3000
@@ -2525,10 +2730,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # VLC used for per-video / final results (action phase is teammate flash when image_based)
         vlc_args = [
             '--quiet', '--no-video-title-show', '--intf', 'dummy',
-            '--aspect-ratio', '3712:512',
+            '--aspect-ratio', f'{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}',
             '--network-caching=300', '--file-caching=300', '--no-xlib',
             '--no-video-on-top', '--no-video-deco',
-            '--scale=1', '--zoom=1', '--crop=0:0:3712:512'
+            '--scale=1', '--zoom=1', f'--crop=0:0:{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}'
         ]
         self.instance = vlc.Instance(vlc_args)
         self.player = self.instance.media_player_new()
@@ -2784,7 +2989,49 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._label_mode = False
             return []
 
-        series_num = _entry_series_num(getattr(self, "_level_root", ""), self.video_directory)
+        level_bits = _level_context_bits(
+            getattr(self, "_level_root", ""),
+            self.video_directory,
+            getattr(self, "_phase_field_levels", None),
+            active,
+        )
+        hp_num = _high_performance_series_num(*level_bits)
+        if hp_num:
+            playlist = _build_high_performance_playlist(hp_num, active)
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "High Performance A-T%s playlist: %s tests x %s actions, on=%sms gap=%sms",
+                    hp_num,
+                    ENTRY_TEST_COUNT,
+                    ENTRY_ACTIONS_PER_TEST,
+                    playlist[0].get("on_ms"),
+                    playlist[0].get("gap_ms"),
+                )
+                return playlist
+            logger.error("High Performance A-T%s playlist empty", hp_num)
+            self._label_mode = False
+            return []
+
+        activated_num = _activated_series_num(*level_bits)
+        if activated_num:
+            playlist = _build_activated_playlist(activated_num, active)
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "Activated A-T%s playlist: %s tests x %s actions, on=%sms gap=%sms",
+                    activated_num,
+                    ENTRY_TEST_COUNT,
+                    ENTRY_ACTIONS_PER_TEST,
+                    playlist[0].get("on_ms"),
+                    playlist[0].get("gap_ms"),
+                )
+                return playlist
+            logger.error("Activated A-T%s playlist empty", activated_num)
+            self._label_mode = False
+            return []
+
+        series_num = _entry_series_num(*level_bits)
         if series_num:
             playlist = _build_entry_playlist(series_num, active)
             if playlist:
@@ -3488,9 +3735,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         logger.info("Starting playback now.")
         self.player.set_time(0)
-        self.player.video_set_aspect_ratio("3712:512")
+        self.player.video_set_aspect_ratio(f"{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
         self.player.video_set_scale(1.0)
-        self.player.video_set_crop_geometry("0:0:3712:512")
+        self.player.video_set_crop_geometry(f"0:0:{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
         self.player.play()
         self._update_progress_display()
         self.check_timer.start()
@@ -4200,9 +4447,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.player.stop()
         self.media = self.instance.media_new(os.path.abspath(video_path))
         self.player.set_media(self.media)
-        self.player.video_set_aspect_ratio("3712:512")
+        self.player.video_set_aspect_ratio(f"{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
         self.player.video_set_scale(1.0)
-        self.player.video_set_crop_geometry("0:0:3712:512")
+        self.player.video_set_crop_geometry(f"0:0:{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
         try:
             self.player.set_rate(rate)
         except Exception:
@@ -4597,9 +4844,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.repaint()
         self.repaint()
         try:
-            self.player.video_set_aspect_ratio("3712:512")
+            self.player.video_set_aspect_ratio(f"{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
             self.player.video_set_scale(1.0)
-            self.player.video_set_crop_geometry("0:0:3712:512")
+            self.player.video_set_crop_geometry(f"0:0:{COACH_BAND_WIDTH}:{COACH_BAND_HEIGHT}")
         except:
             pass
 

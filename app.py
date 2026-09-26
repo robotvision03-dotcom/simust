@@ -63,7 +63,20 @@ import simust_homography
 import simust_progress
 import simust_push
 import simust_remote
-from simust_display_layout import CHART_CENTER_Y, RING_RADIUS, RING_THICKNESS
+from simust_display_layout import (
+    CHART_CENTER_Y,
+    RING_RADIUS,
+    RING_THICKNESS,
+    COACH_BAND_WIDTH,
+    COACH_BAND_HEIGHT,
+    DISPLAY_SLICE_ORDER,
+    slice_x_span,
+    slice_span_for_ids,
+    content_width,
+    content_x_box,
+    screen_content_offset,
+    screen_content_offset_y,
+)
 
 if PUBLIC_MODE:
     cv2 = None
@@ -2899,20 +2912,19 @@ def get_slice_video_for_accuracy(accuracy: float) -> str:
         return "PRO_CI_UPTO_50%_V01.mp4"
 
 
-# Arena results strip tile order (matches waiting / Screen 2 layout)
-RESULTS_SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+# Fourteen frames across the 3840 projection. Screens 1 and 8 are empty places.
+RESULTS_SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
 # PRO_CI coach clips are authored for Field A integration panels
 COACH_CLIP_SOURCE_SLICES = (14, 1, 2)
 
 
-def coach_integration_x_ranges(width: int = 3712, field_id: str = "A"):
+def coach_integration_x_ranges(width: int = COACH_BAND_WIDTH, field_id: str = "A"):
     """Pixel x-ranges for cropping/placing the coach animation on the 14-slice strip.
 
     Source (authored): slices 14, 1, 2.
     Field A destination: same (14, 1, 2).
     Field B destination: slices 7..9 (integration 7 and 9, with 8 between for continuous video).
     """
-    tile_w = max(1, int(width) // len(RESULTS_SLICE_ORDER))
     try:
         import simust_fields
         fid = simust_fields.normalize_field(field_id) or "A"
@@ -2922,23 +2934,16 @@ def coach_integration_x_ranges(width: int = 3712, field_id: str = "A"):
         integration = (7, 9) if fid == "B" else (14, 1, 2)
 
     def span_for_slices(slice_ids):
-        idxs = []
-        for sid in slice_ids:
-            try:
-                idxs.append(RESULTS_SLICE_ORDER.index(int(sid)))
-            except (ValueError, TypeError):
-                continue
-        if not idxs:
-            return 0, tile_w
-        i0, i1 = min(idxs), max(idxs) + 1
-        return i0 * tile_w, i1 * tile_w
+        return slice_span_for_ids(slice_ids, RESULTS_SLICE_ORDER, width)
 
     src_x0, src_x1 = span_for_slices(COACH_CLIP_SOURCE_SLICES)
     if fid == "B":
-        # Map onto Field B integration: screens 7 and 9 (span 7,8,9 = 3 tiles, same width as source)
+        # Map onto Field B integration: screens 7 and 9 (span 7, 8, 9, same width as source)
         dst_x0, dst_x1 = span_for_slices((7, 8, 9))
     else:
         dst_x0, dst_x1 = span_for_slices(integration or COACH_CLIP_SOURCE_SLICES)
+    tile_w = max(1, (slice_x_span(0, width, len(RESULTS_SLICE_ORDER))[1]
+                     - slice_x_span(0, width, len(RESULTS_SLICE_ORDER))[0]))
     return {
         "field": fid,
         "tile_w": tile_w,
@@ -2949,6 +2954,70 @@ def coach_integration_x_ranges(width: int = 3712, field_id: str = "A"):
         "src_w": max(1, int(src_x1) - int(src_x0)),
         "dst_w": max(1, int(dst_x1) - int(dst_x0)),
     }
+
+
+def shift_results_band(frame):
+    """Move each screen's pixels by the saved calibration. Empty frames stay black."""
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return frame
+    height, width = frame.shape[:2]
+    out = np.zeros_like(frame)
+    count = len(RESULTS_SLICE_ORDER)
+    for index, sid in enumerate(RESULTS_SLICE_ORDER):
+        try:
+            sid = int(sid)
+        except (TypeError, ValueError):
+            continue
+        if sid in (1, 8):
+            continue
+        x0, x1 = slice_x_span(index, width, count)
+        src = frame[:, x0:x1]
+        if src.size == 0:
+            continue
+        left, _right, rect_w = content_x_box(index, sid, width, count)
+        dest_y = screen_content_offset_y(sid)
+        fitted = cv2.resize(src, (rect_w, height), interpolation=cv2.INTER_AREA)
+        sh, sw = fitted.shape[:2]
+        sx0 = 0 if left >= 0 else -left
+        sy0 = 0 if dest_y >= 0 else -dest_y
+        dx0 = max(0, left)
+        dy0 = max(0, dest_y)
+        copy_w = min(sw - sx0, width - dx0)
+        copy_h = min(sh - sy0, height - dy0)
+        if copy_w <= 0 or copy_h <= 0:
+            continue
+        out[dy0:dy0 + copy_h, dx0:dx0 + copy_w] = fitted[sy0:sy0 + copy_h, sx0:sx0 + copy_w]
+    return out
+
+
+def _offset_video_filter(src_label, width, height):
+    """ffmpeg graph that shifts each screen of [src_label] by the saved calibration."""
+    real = []
+    for index, sid in enumerate(RESULTS_SLICE_ORDER):
+        try:
+            sid = int(sid)
+        except (TypeError, ValueError):
+            continue
+        if sid in (1, 8):
+            continue
+        real.append((index, sid))
+    if not real:
+        return "", src_label
+    split_outs = "".join(f"[os{n}]" for n in range(len(real)))
+    parts = [f"[{src_label}]split={len(real)}{split_outs}"]
+    parts.append(f"color=c=0x0a0c12:s={width}x{height}[oc0]")
+    prev = "oc0"
+    count = len(RESULTS_SLICE_ORDER)
+    for n, (index, sid) in enumerate(real):
+        x0, x1 = slice_x_span(index, width, count)
+        sw = max(1, x1 - x0)
+        left, _right, rect_w = content_x_box(index, sid, width, count)
+        dest_y = screen_content_offset_y(sid)
+        nxt = f"oc{n + 1}"
+        parts.append(f"[os{n}]crop={sw}:{height}:{x0}:0,scale={rect_w}:{height}:flags=fast_bilinear[ocrop{n}]")
+        parts.append(f"[{prev}][ocrop{n}]overlay=x={left}:y={dest_y}:format=auto[{nxt}]")
+        prev = nxt
+    return ";".join(parts), prev
 
 
 def remap_coach_frame_to_field(frame, width: int, height: int, field_id: str):
@@ -3576,7 +3645,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 ring_panels.append(panel)
 
         # ---- Probe coach/slice clip (metadata only; never decode every frame into RAM) ----
-        width, height = 3712, 512
+        width, height = COACH_BAND_WIDTH, COACH_BAND_HEIGHT
         use_slice_video = False
         has_slice_audio = False
         output_fps = 2
@@ -3688,7 +3757,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         slice_numbers = list(RESULTS_SLICE_ORDER)
         num_tiles = len(slice_numbers)
-        tile_width = width // num_tiles
+
+        def _slice_box(index):
+            x0, x1 = slice_x_span(index, width, num_tiles)
+            return x0, x1 - x0
         coach_geom = coach_integration_x_ranges(width, field_id)
         remap_coach_to_b = (str(field_id or "").upper() == "B")
         if remap_coach_to_b:
@@ -3832,17 +3904,6 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         while len(advice_lines) < 3:
             advice_lines.append("")
 
-        content_offset = {
-            0: -6,   # tile 0 (slice 12) – shift left 6px
-            1: -17,  # tile 1 (slice 13) – shift left 17px
-            5: 17,   # tile 5 (slice 3)  – shift right 17px
-            6: 6,    # tile 6 (slice 4)  – shift right 6px
-            7: -6,   # tile 7 (slice 5)  – same as slice 12
-            8: -17,  # tile 8 (slice 6)  – same as slice 13
-            12: 19,  # tile 12 (slice 10) – shift right 19px
-            13: 7,   # tile 13 (slice 11) – shift right 7px
-        }
-
         def render_overlay_once(base_bgr):
             img = base_bgr
             by_slice = {}
@@ -3852,34 +3913,38 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 by_slice[int(panel["slice_acc"])] = ("acc", panel)
                 by_slice[int(panel["slice_disp"])] = ("disp", panel)
             for i, num in enumerate(slice_numbers):
-                x_offset = i * tile_width
-                offset_x = content_offset.get(i, 0)
+                x_offset, tile_width = _slice_box(i)
+                offset_x = screen_content_offset(num)
+                offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
-                rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+                center_y = CHART_CENTER_Y + offset_y
+                rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
                     continue
                 kind, panel = hit
                 if kind == "aet":
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["aet_percent"] or 0), 100)
-                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Execution Time")
+                    draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["aet_percent"] or 0), 100)
+                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Execution Time")
                 elif kind == "ae":
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["avg_ae"] or 0), 100)
-                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Efficiency")
+                    draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["avg_ae"] or 0), 100)
+                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Efficiency")
                 elif kind == "acc":
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["aac"] or 0), 100)
-                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Accuracy")
+                    draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["aac"] or 0), 100)
+                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Accuracy")
                 elif kind == "disp":
-                    draw_ring_chart(img, center_x, CHART_CENTER_Y, RING_RADIUS, float(panel["economy_percent"] or 0), 100)
-                    draw_label_rectangle(img, center_x, tile_width, rect_y, "Displacement")
+                    draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["economy_percent"] or 0), 100)
+                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Displacement")
 
             pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
             for i, num in enumerate(slice_numbers):
-                x_offset = i * tile_width
-                offset_x = content_offset.get(i, 0)
+                x_offset, tile_width = _slice_box(i)
+                offset_x = screen_content_offset(num)
+                offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
-                rect_y = CHART_CENTER_Y + RING_RADIUS + LABEL_VERTICAL_GAP
+                center_y = CHART_CENTER_Y + offset_y
+                rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
                     continue
@@ -3892,20 +3957,20 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     if sd and sd != "-":
                         lines.append(str(sd))
                     draw_text_inside_ring_on_pil(
-                        draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, lines
+                        draw, center_x, center_y + RING_TEXT_Y_OFFSET, lines
                     )
                     draw_metric_label(draw, "Execution Time", center_x, rect_y)
                 elif kind == "ae":
                     ed = panel.get("ae_display") or "-"
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [ed if ed != "-" else "-"])
+                    draw_text_inside_ring_on_pil(draw, center_x, center_y + RING_TEXT_Y_OFFSET, [ed if ed != "-" else "-"])
                     draw_metric_label(draw, "Efficiency", center_x, rect_y)
                 elif kind == "acc":
                     aac_v = float(panel.get("aac") or 0)
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{aac_v:.0f}%" if aac_v > 0 else "-"])
+                    draw_text_inside_ring_on_pil(draw, center_x, center_y + RING_TEXT_Y_OFFSET, [f"{aac_v:.0f}%" if aac_v > 0 else "-"])
                     draw_metric_label(draw, "Accuracy", center_x, rect_y)
                 elif kind == "disp":
                     ds = int(panel.get("distance_shown") or 0)
-                    draw_text_inside_ring_on_pil(draw, center_x, CHART_CENTER_Y + RING_TEXT_Y_OFFSET, [f"{ds}m" if ds > 0 else "-"])
+                    draw_text_inside_ring_on_pil(draw, center_x, center_y + RING_TEXT_Y_OFFSET, [f"{ds}m" if ds > 0 else "-"])
                     draw_metric_label(draw, "Displacement", center_x, rect_y)
 
             footer = "SIMUST RESULTS – Analysis Complete"
@@ -3933,6 +3998,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
             if base.shape[1] != width or base.shape[0] != height:
                 base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
+            base = shift_results_band(base)
             out_img = base
             out_img[overlay_mask] = overlay[overlay_mask]
             return out_img
@@ -3959,17 +4025,21 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 # PRO_CI clips show coach on Field A tiles 14/1/2 — move that band to B tiles 7/9.
                 sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
                 dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
+                shift_vf, shift_label = _offset_video_filter("bg2", width, height)
                 vf = (
                     f"color=c=0x0a0c12:s={width}x{height}[bg];"
                     f"[0:v]scale={width}:{height}:flags=fast_bilinear,"
                     f"crop={sw}:{height}:{sx0}:0,scale={dw}:{height}:flags=fast_bilinear[ci];"
                     f"[bg][ci]overlay=x={dx0}:y=0[bg2];"
-                    f"[bg2][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                    f"{shift_vf};"
+                    f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
                 )
             else:
+                shift_vf, shift_label = _offset_video_filter("bg", width, height)
                 vf = (
                     f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
-                    f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                    f"{shift_vf};"
+                    f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
                 )
             if use_slice_video and is_final and slice_video_path and os.path.exists(slice_video_path):
                 cmd = [
@@ -3996,17 +4066,21 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 if remap_coach_to_b:
                     sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
                     dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
+                    shift_vf, shift_label = _offset_video_filter("bg2", width, height)
                     per_vf = (
                         f"color=c=0x0a0c12:s={width}x{height}[bg];"
                         f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear,"
                         f"crop={sw}:{height}:{sx0}:0,scale={dw}:{height}:flags=fast_bilinear[ci];"
                         f"[bg][ci]overlay=x={dx0}:y=0[bg2];"
-                        f"[bg2][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                        f"{shift_vf};"
+                        f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
                     )
                 else:
+                    shift_vf, shift_label = _offset_video_filter("bg", width, height)
                     per_vf = (
                         f"[0:v]fps=2,scale={width}:{height}:flags=fast_bilinear[bg];"
-                        f"[bg][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                        f"{shift_vf};"
+                        f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
                     )
                 cmd = [
                     ffmpeg_exe, "-y",

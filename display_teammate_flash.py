@@ -6,7 +6,7 @@ Sequence (x5):
   screens 3 + 10  → 1.2s on
   black           → 0.5s off
 
-Placement matches coach / integrated video: fixed 3712×512 band at the
+Placement matches coach / integrated video: fixed 3840×512 band at the
 top-left of Screen 2 (same as smart_simust_player / waiting.py).
 Escape closes early.
 """
@@ -18,16 +18,53 @@ import sys
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+try:
+    from simust_display_layout import (
+        screen_content_offset,
+        screen_content_offset_y,
+        COACH_BAND_WIDTH,
+        COACH_BAND_HEIGHT,
+        DISPLAY_SLICE_ORDER,
+        slice_x_span,
+        content_x_box,
+    )
+except ImportError:
+    def screen_content_offset(screen_id):
+        return {12: -6, 13: -17, 3: 8, 4: 6, 5: -6, 6: -17, 10: 19, 11: 7}.get(
+            int(screen_id), 0
+        )
+
+    def screen_content_offset_y(screen_id):
+        return 0
+
+    COACH_BAND_WIDTH = 3840
+    COACH_BAND_HEIGHT = 512
+    DISPLAY_SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+    def slice_x_span(index, width=None, count=None):
+        width = COACH_BAND_WIDTH if width is None else int(width)
+        count = len(DISPLAY_SLICE_ORDER) if count is None else max(1, int(count))
+        x0 = (int(index) * width) // count
+        x1 = ((int(index) + 1) * width) // count
+        return x0, max(x0 + 1, x1)
+
+    def content_x_box(index, screen_id, width=None, count=None):
+        width = COACH_BAND_WIDTH if width is None else int(width)
+        count = len(DISPLAY_SLICE_ORDER) if count is None else max(1, int(count))
+        x0, x1 = slice_x_span(index, width, count)
+        rect_w = max(8, int((x1 - x0) * 0.92))
+        center = (x0 + x1) // 2
+        return center - rect_w // 2, center + rect_w // 2, rect_w
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 IMAGE_PATH = os.path.join(ROOT, "teamate.png")
 
 # Same order as waiting / results strip
-SLICE_ORDER = [12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
 
-# Coach / integrated-video canvas (smart_simust_player, waiting, results)
-# 14 × 254px LED cabinets (middle A/B slots off but kept in layout)
-VIDEO_WIDTH = 3556
-VIDEO_HEIGHT = 512
+# Coach band on screen 2: 14 frames, 3840×512. Screens 1 and 8 are empty.
+VIDEO_WIDTH = COACH_BAND_WIDTH
+VIDEO_HEIGHT = COACH_BAND_HEIGHT
 
 ON_MS = 1200
 OFF_MS = 500
@@ -74,7 +111,7 @@ class TeammateFlashWindow(QtWidgets.QWidget):
         QtCore.QTimer.singleShot(100, self._start)
 
     def _position_on_screen(self):
-        """Top-left of Screen 2 at 3712×512 — same as coach animation video."""
+        """Top-left of Screen 2 at 3840×512 — same as coach animation video."""
         app = QtWidgets.QApplication.instance()
         screens = app.screens()
         if not screens:
@@ -134,22 +171,20 @@ class TeammateFlashWindow(QtWidgets.QWidget):
             return
 
         n = len(SLICE_ORDER)
-        tile_w = VIDEO_WIDTH / float(n)
-
         for sid in self.active_screens:
             i = tile_index(sid)
-            x0 = int(round(i * tile_w))
-            x1 = int(round((i + 1) * tile_w))
-            tile = QtCore.QRect(x0, 0, max(1, x1 - x0), VIDEO_HEIGHT)
-            # Fill the slice like coach video content (cover + center crop).
+            left, _right, rect_w = content_x_box(i, sid, VIDEO_WIDTH, n)
+            dy = screen_content_offset_y(sid)
+            placed = QtCore.QRect(left, 0, rect_w, VIDEO_HEIGHT)
             scaled = self.pixmap.scaled(
-                tile.size(),
+                rect_w,
+                VIDEO_HEIGHT,
                 QtCore.Qt.KeepAspectRatioByExpanding,
                 QtCore.Qt.SmoothTransformation,
             )
-            px = tile.x() + (tile.width() - scaled.width()) // 2
-            py = tile.y() + (tile.height() - scaled.height()) // 2
-            painter.setClipRect(tile)
+            px = left + (rect_w - scaled.width()) // 2
+            py = (VIDEO_HEIGHT - scaled.height()) // 2 + dy
+            painter.setClipRect(placed)
             painter.drawPixmap(px, py, scaled)
             painter.setClipping(False)
         painter.end()

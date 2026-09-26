@@ -1,7 +1,7 @@
 """
-simple_simust_player.py - Video in top 512px only (new resolution: 3712x512)
+simple_simust_player.py - Video in top 512px only (resolution: 3840x512)
 Lower part shows desktop (transparent)
-Video is full-width (3712px) and exactly 512px height at the very top.
+Video is full-width (3840px) and exactly 512px height at the very top.
 Includes real-time speed control via GUI or file monitoring.
 """
 
@@ -124,7 +124,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.video_path = video_path
         self.loop = loop
         self.player_speed = player_speed
-        self.video_width = 3556
+        self.video_width = 3840
         self.video_height = 512
         
         # FIX: Use the same SIMUST_PLAYER_DIRECTORY as backend
@@ -144,7 +144,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
             '--quiet', 
             '--no-video-title-show', 
             '--intf', 'dummy',
-            '--aspect-ratio', '3556:512',
+            '--aspect-ratio', '3840:512',
             '--no-audio',  # Disable audio to improve performance
             '--network-caching=300',
             '--file-caching=300'
@@ -157,7 +157,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setStyleSheet("background-color: transparent;")
 
-        # Video frame - ONLY top 512px, full width 3712px
+        # Video frame - ONLY top 512px, full width 3840px
         self.videoframe = QtWidgets.QFrame(self)
         self.videoframe.setStyleSheet("background-color: black; border: none;")
 
@@ -282,9 +282,9 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.repaint()
 
         try:
-            self.player.video_set_aspect_ratio("3556:512")
+            self.player.video_set_aspect_ratio("3840:512")
             self.player.video_set_scale(1.0)
-            self.player.video_set_crop_geometry("0:0:3556:512")
+            self.player.video_set_crop_geometry("0:0:3840:512")
         except:
             pass
 

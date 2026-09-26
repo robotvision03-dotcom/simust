@@ -1,7 +1,6 @@
 """Dual Field A / Field B geometry and booking helpers for SIMUST.
 
-Field A (left): screens 2,3,4,12,13,14 — screen 1 does not exist (not used)
-Field B (right): screens 5,6,7,9,10,11 — screen 8 does not exist (not used)
+Field A (left): screens A1–A6. Field B (right): screens B1–B6.
 QR ROI (0,0,1920,540) / (1920,0,3840,540) as x1,y1,x2,y2
 """
 
@@ -61,10 +60,14 @@ POLYGON_POINTS_B: List[Tuple[int, int]] = [
 # Back-compat alias used by existing code
 POLYGON_POINTS = POLYGON_POINTS_A
 
-# Physical coach-band displays only (1 and 8 do not exist)
-FIELD_A_SCREENS: Set[str] = {"2", "3", "4", "12", "13", "14"}
-FIELD_B_SCREENS: Set[str] = {"5", "6", "7", "9", "10", "11"}
-DISABLED_DISPLAY_SCREENS: Set[str] = {"1", "8"}
+# Each field uses screens 1–6. A1 is the old cabinet 12, B1 the old cabinet 5.
+FIELD_A_SCREENS: Set[str] = {"A1", "A2", "A3", "A4", "A5", "A6"}
+FIELD_B_SCREENS: Set[str] = {"B1", "B2", "B3", "B4", "B5", "B6"}
+DISABLED_DISPLAY_SCREENS: Set[str] = set()
+LEGACY_HW_TO_SCREEN = {
+    "12": "A1", "13": "A2", "14": "A3", "2": "A4", "3": "A5", "4": "A6",
+    "5": "B1", "6": "B2", "7": "B3", "9": "B4", "10": "B5", "11": "B6",
+}
 
 # QR on the dual-monitor player surface (full 3840×1080 grab)
 # detect_qr_in_roi expects (x1, y1, x2, y2) — NOT (x, y, w, h).
@@ -91,17 +94,36 @@ def normalize_field(value) -> Optional[str]:
     return None
 
 
-def field_for_screens(screens: Sequence[str]) -> Optional[str]:
-    """Infer field from QR screen list (majority / first known)."""
-    cleaned = []
-    for s in screens or []:
-        digits = "".join(ch for ch in str(s) if ch.isdigit())
-        if digits:
-            cleaned.append(digits)
-    if not cleaned:
+def canonical_screen(raw) -> Optional[str]:
+    """Screen name A1–A6 or B1–B6. Old cabinet numbers still map to these names."""
+    text = str(raw or "").strip().upper()
+    if text in FIELD_A_SCREENS or text in FIELD_B_SCREENS:
+        return text
+    if len(text) >= 2 and text[0] in ("A", "B") and text[1:].isdigit():
+        name = text[0] + str(int(text[1:]))
+        if name in FIELD_A_SCREENS or name in FIELD_B_SCREENS:
+            return name
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
         return None
-    a = sum(1 for s in cleaned if s in FIELD_A_SCREENS)
-    b = sum(1 for s in cleaned if s in FIELD_B_SCREENS)
+    try:
+        digits = str(int(digits))
+    except ValueError:
+        return None
+    return LEGACY_HW_TO_SCREEN.get(digits)
+
+
+def field_for_screens(screens: Sequence[str]) -> Optional[str]:
+    """Infer field from a screen list (new names or old cabinet numbers)."""
+    names = []
+    for raw in screens or []:
+        name = canonical_screen(raw)
+        if name:
+            names.append(name)
+    if not names:
+        return None
+    a = sum(1 for s in names if s in FIELD_A_SCREENS)
+    b = sum(1 for s in names if s in FIELD_B_SCREENS)
     if a and not b:
         return "A"
     if b and not a:
@@ -145,12 +167,11 @@ def field_config(field_id: str) -> Dict:
             "sim_ball_home": SIM_BALL_HOME_B,
             "overlay_side": "right",
             "results_slices": {
-                "aet": 5,
-                "accuracy": 6,
-                "efficiency": 10,
-                "displacement": 11,
-                # Coach PRO_CI clip is remapped from A(14,1,2) onto screens 7 and 9
-                "integration": (7, 9),
+                "aet": "B1",
+                "accuracy": "B2",
+                "efficiency": "B5",
+                "displacement": "B6",
+                "integration": ("B3", "B4"),
             },
         }
     return {
@@ -164,11 +185,11 @@ def field_config(field_id: str) -> Dict:
         "sim_ball_home": SIM_BALL_HOME_A,
         "overlay_side": "left",
         "results_slices": {
-            "aet": 12,
-            "accuracy": 13,
-            "efficiency": 3,
-            "displacement": 4,
-            "integration": (14, 1, 2),
+            "aet": "A1",
+            "accuracy": "A2",
+            "efficiency": "A5",
+            "displacement": "A6",
+            "integration": ("A3", "A4"),
         },
     }
 

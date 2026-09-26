@@ -19,7 +19,7 @@ class ResultsVideoWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.video_path = video_path
         self.screen_index = screen_index
-        self.video_width = 3556
+        self.video_width = 3840
         self.video_height = 512
         self.playlist_finished = False
         self._is_closing = False
@@ -28,7 +28,7 @@ class ResultsVideoWindow(QtWidgets.QMainWindow):
             '--quiet',
             '--no-video-title-show',
             '--intf', 'dummy',
-            '--aspect-ratio', '3556:512',
+            '--aspect-ratio', '3840:512',
             '--network-caching=300',
             '--file-caching=300',
             '--no-xlib'
@@ -93,9 +93,9 @@ class ResultsVideoWindow(QtWidgets.QMainWindow):
         self.videoframe.repaint()
         self.repaint()
         try:
-            self.player.video_set_aspect_ratio("3556:512")
+            self.player.video_set_aspect_ratio("3840:512")
             self.player.video_set_scale(1.0)
-            self.player.video_set_crop_geometry("0:0:3556:512")
+            self.player.video_set_crop_geometry("0:0:3840:512")
         except Exception as e:
             print(f"VLC settings error: {e}")
 

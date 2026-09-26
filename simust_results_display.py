@@ -1,6 +1,6 @@
 """
 simust_results_display.py - Displays recognition results on Screen 2
-Shows results in the same 3712x512 format as the video player
+Shows results in the same 3840x512 format as the video player
 """
 
 import sys
@@ -23,7 +23,7 @@ class ResultsDisplayWindow(QtWidgets.QMainWindow):
         self.report_path = report_path
         self.screen_index = screen_index
         self.auto_close_delay = auto_close_delay
-        self.video_width = 3556
+        self.video_width = 3840
         self.video_height = 512
         
         # Check if we have a valid report

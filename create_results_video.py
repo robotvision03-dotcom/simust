@@ -17,7 +17,7 @@ def create_results_video(report_path, output_path):
             report = json.load(f)
         
         # Video dimensions (same as smart player)
-        width = 3556
+        width = 3840
         height = 512
         fps = 5  # 5 frames per second, show for 5 seconds = 25 frames
         
