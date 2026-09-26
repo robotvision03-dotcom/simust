@@ -1920,8 +1920,17 @@ async def start_realtime_playback(req: Request):
             if slot_level == "L00-Foundation":
                 if sub:
                     cand = os.path.join(base, sub)
+                    extra = {
+                        name.lower()
+                        for name in simust_progress.FOUNDATION_EXTRA_PLAYLISTS
+                    }
                     if not os.path.isdir(cand):
-                        raise HTTPException(400, f"Subdirectory not found: {cand}")
+                        # digit/random/rotation/math have no image pack on disk.
+                        # The player builds them and borrows a pass image from SF folders.
+                        if sub.lower() in extra:
+                            os.makedirs(cand, exist_ok=True)
+                        else:
+                            raise HTTPException(400, f"Subdirectory not found: {cand}")
                     return cand
                 if not os.path.exists(base):
                     os.makedirs(base, exist_ok=True)
