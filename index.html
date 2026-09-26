@@ -4192,8 +4192,9 @@
                             (selectedSubdirectoryB ? ", " + selectedSubdirectoryB : "") + ")";
                     }
                     showToast((window.SIMUST_PUBLIC
-                        ? "Sent to the lab over the internet: "
-                        : (useAdminTest ? "Admin test play started — " : "Realtime playback started — ")) + dualMsg, 'success');
+                        ? "Queued for the lab. Waiting until the training PC starts: "
+                        : (useAdminTest ? "Admin test play started — " : "Realtime playback started — ")) + dualMsg,
+                        window.SIMUST_PUBLIC ? 'info' : 'success');
 
                     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
                     if (realtimeMonitorInterval.current) clearTimeout(realtimeMonitorInterval.current);
@@ -4273,22 +4274,40 @@
                             var state = statusRes.data && statusRes.data.state ? statusRes.data.state : '';
                             if (window.SIMUST_PUBLIC && !sawActivePlayback) {
                                 axios.get('/remote/status').then(function(st) {
-                                    var err = st.data && st.data.last_remote_error;
-                                    var act = st.data && st.data.last_remote_action;
-                                    var errAt = st.data && st.data.last_remote_error_at;
-                                    var errMs = 0;
-                                    if (errAt) {
-                                        errMs = Date.parse(String(errAt).replace(' ', 'T')) || 0;
-                                    }
-                                    // Ignore stale errors from a previous start attempt.
+                                    if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
+                                    var data = st.data || {};
+                                    var err = data.last_remote_error;
+                                    var act = data.last_remote_action;
+                                    var errAt = data.last_remote_error_at;
+                                    var okAt = data.last_remote_ok_at;
+                                    var errMs = errAt ? (Date.parse(String(errAt).replace(' ', 'T')) || 0) : 0;
+                                    var okMs = okAt ? (Date.parse(String(okAt).replace(' ', 'T')) || 0) : 0;
                                     if (err && act === 'start-realtime-playback' && errMs >= waitStartedAt - 1000) {
                                         failLabStart("Lab failed to start Realtime Play: " + err);
+                                        return;
                                     }
-                                }).catch(function() {});
-                                if (Date.now() - waitStartedAt > 28000) {
-                                    failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
-                                    return;
-                                }
+                                    if (act === 'start-realtime-playback' && okMs >= waitStartedAt - 1000 &&
+                                        (state === 'playing' || state === 'loading' || state === 'starting')) {
+                                        sawActivePlayback = true;
+                                        showToast("Lab started Realtime Play.", 'success');
+                                        realtimeMonitorInterval.current = setTimeout(checkStatus, 600);
+                                        return;
+                                    }
+                                    if (Date.now() - waitStartedAt > 28000) {
+                                        failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
+                                        return;
+                                    }
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
+                                }).catch(function() {
+                                    if (Date.now() - waitStartedAt > 28000) {
+                                        failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
+                                        return;
+                                    }
+                                    if (realtimeRunningRef.current && !sessionSavedRef.current) {
+                                        realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
+                                    }
+                                });
+                                return;
                             }
                             if (state === "aborted") {
                                 sessionAbortedRef.current = true;
