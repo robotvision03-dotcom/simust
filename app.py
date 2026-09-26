@@ -1889,6 +1889,16 @@ async def start_realtime_playback(req: Request):
             if not _verify_admin_password(users, admin_password):
                 raise HTTPException(401, "Admin password is not correct")
             admin_test_override = True
+        remote_actor = str(data.get("_remote_actor") or "").strip()
+        remote_staff = False
+        if data.get("_remote") and remote_actor:
+            remote_role = str((users.get(remote_actor) or {}).get("role") or "").strip().lower()
+            remote_staff = remote_role in RESERVATION_STAFF_ROLES
+        if remote_staff:
+            logger.info(
+                "Remote operator %s is staff; starting without a live booking window",
+                remote_actor,
+            )
 
         resolved_slots = []
         for pid, fid, entry in play_slots:
@@ -1908,8 +1918,11 @@ async def start_realtime_playback(req: Request):
                 ok, reason = simust_progress.can_play(progress, slot_level, entry_sub)
                 if not ok:
                     raise HTTPException(403, f"{pid}: {reason}")
-                # Scheduled booking window: only during start <= now < end on this field
-                require_active_booking_for_play(pid, fid)
+                # Players still need a live booking. A coach, manager, or admin
+                # on the remote operator can start Field A, Field B, or both
+                # outside that window.
+                if not remote_staff:
+                    require_active_booking_for_play(pid, fid)
             resolved_slots.append((pid, fid, entry, slot_level, entry_sub))
         save_users(users)
         if not level_id and resolved_slots:
@@ -5633,6 +5646,7 @@ def _run_queued_operator_command(command: dict) -> None:
         logger.warning("Skip unknown remote operator action %s", action)
         return
     payload["_remote"] = True
+    payload["_remote_actor"] = str(command.get("actor") or "")
     payload["_queued_at"] = command.get("created_at")
     if command.get("created_ts") is not None:
         payload["_queued_ts"] = command.get("created_ts")

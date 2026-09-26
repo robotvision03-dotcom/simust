@@ -2706,6 +2706,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         chosen = [level for level in chosen if level]
         return len(active) >= 2 and len(set(chosen)) > 1
 
+    def _field_modes_differ(self):
+        modes = getattr(self, "_phase_field_modes", None) or {}
+        active = list(self._active_fields())
+        chosen = [str(modes.get(fid) or "").strip().lower() for fid in active]
+        chosen = [mode for mode in chosen if mode]
+        return len(active) >= 2 and len(set(chosen)) > 1
+
     def _build_one_field_playlist(self, fid):
         """Playlist for one half, using that field's own level folder."""
         if getattr(self, "_one_field_build", False):
@@ -2753,7 +2760,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not active:
             return []
 
-        if not getattr(self, "_one_field_build", False) and self._field_levels_differ():
+        if not getattr(self, "_one_field_build", False) and (
+            self._field_levels_differ() or self._field_modes_differ()
+        ):
             parts = {}
             for fid in ("A", "B"):
                 if fid not in active:
