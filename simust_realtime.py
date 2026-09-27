@@ -359,16 +359,12 @@ GOAL_PROBE_ZONES = (
     "wide_a",
     "wide_b",
 )
-# Live GOAL aims: in-band finishes vs out-of-band misses. Never only the midpoint.
+# Displayed goal circle is this fraction of the old accept distance.
+GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90
+# Live GOAL aims that finish inside that circle, vs shots that miss it.
 GOAL_AIM_IN = (
     "line_center",
-    "post_a",
-    "post_b",
-    "upper_center_40",
     "outside_20",
-    "outside_40",
-    "wide_a",
-    "wide_b",
 )
 GOAL_AIM_OUT = (
     "upper_center_90",
@@ -397,8 +393,43 @@ def normalize_screen_id(screen):
     return digits + suffix
 
 
+# New field names occupy the old cabinets. A1 is not old cabinet 1.
+_NEW_SCREEN_TO_CABINET = {
+    "A1": "12", "A2": "13", "A3": "14", "A4": "2", "A5": "3", "A6": "4",
+    "B1": "5", "B2": "6", "B3": "7", "B4": "9", "B5": "10", "B6": "11",
+}
+
+
+def _split_side_suffix(screen):
+    raw = str(screen or "").strip().upper()
+    if raw.endswith("L") or raw.endswith("R"):
+        return raw[:-1], raw[-1]
+    return raw, ""
+
+
+def display_screen_id(screen):
+    """Name to show. A1 stays A1. Old cabinet 12 stays 12."""
+    body, suffix = _split_side_suffix(screen)
+    if body in _NEW_SCREEN_TO_CABINET:
+        return body + suffix
+    return normalize_screen_id(screen)
+
+
+def geometry_screen_id(screen):
+    """Cabinet whose saved line and threshold this screen uses.
+
+    A1 is drawn on cabinet 12. A bare 12 is still cabinet 12. A bare 1
+    stays the old goal-mouth line and is not treated as A1.
+    """
+    body, suffix = _split_side_suffix(screen)
+    cabinet = _NEW_SCREEN_TO_CABINET.get(body)
+    if cabinet:
+        return cabinet + suffix
+    return normalize_screen_id(screen)
+
+
 def screen_base_id(screen):
-    return normalize_screen_id(screen).rstrip("LR")
+    return geometry_screen_id(screen).rstrip("LR")
 
 
 def goal_send_origin(screens):
@@ -468,6 +499,39 @@ def goal_probe_xy(p0, p1, name, height=SUGGESTED_GOAL_HEIGHT_PX):
         "wide_b": add(p1, along[0], along[1], 28.0),
     }
     return table.get(name, mid)
+
+
+def region_border_points(p0, p1, depth, home):
+    """Points on the acceptance border: dist == depth, plus the post-slack ends.
+
+    The home-side normal points toward ``home``. ``border_out`` sits just past
+    the band and must not count as a finish.
+    """
+    x0, y0 = float(p0[0]), float(p0[1])
+    x1, y1 = float(p1[0]), float(p1[1])
+    dx, dy = x1 - x0, y1 - y0
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    nx, ny = -dy / length, dx / length
+    mid = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    hx, hy = float(home[0]), float(home[1])
+    if (hx - mid[0]) * nx + (hy - mid[1]) * ny < 0:
+        nx, ny = -nx, -ny
+    d = float(depth)
+    slack = GOAL_POST_SLACK * length
+
+    def pt(along, side):
+        return (x0 + ux * along + nx * side, y0 + uy * along + ny * side)
+
+    return (
+        ("border_near", pt(length * 0.50, d)),
+        ("border_far", pt(length * 0.50, -d)),
+        ("border_post_a", pt(0.0, d)),
+        ("border_post_b", pt(length, d)),
+        ("border_slack_a", pt(-slack, 0.0)),
+        ("border_slack_b", pt(length + slack, 0.0)),
+        ("border_out", pt(length * 0.50, d + 12.0)),
+    )
 
 
 def analyze_goal_with_context(action_id, screens, track, full_track, session_duration,
@@ -969,15 +1033,23 @@ def get_effective_distance(point, p0, p1):
     return eff_dist, proj_t
 
 def get_screen_info(screen, goal_lines):
-    screen_str = normalize_screen_id(screen)
-    base_screen = screen_base_id(screen)
-    if screen_str in goal_lines:
-        line = goal_lines[screen_str]
-    elif base_screen in goal_lines:
-        line = goal_lines[base_screen]
-    elif str(screen) in goal_lines:
-        line = goal_lines[str(screen)]
-    else:
+    keys = []
+    for key in (
+        str(screen or "").strip(),
+        str(screen or "").strip().upper(),
+        display_screen_id(screen),
+        geometry_screen_id(screen),
+        normalize_screen_id(screen),
+        screen_base_id(screen),
+    ):
+        if key and key not in keys:
+            keys.append(key)
+    line = None
+    for key in keys:
+        if key in goal_lines:
+            line = goal_lines[key]
+            break
+    if line is None:
         return None, None
     return line['p0'], line['p1']
 
@@ -1094,6 +1166,7 @@ def find_min_distance_to_screens(positions, screens, goal_lines, require_movemen
     return best_screen, best_dist, best_time, best_proj_t
 
 def get_threshold_for_screen(screen: str, action_type: str) -> float:
+    screen = geometry_screen_id(screen)
     if action_type == 'PRESS':
         if screen in PRESS_SCREEN_THRESHOLDS:
             return PRESS_SCREEN_THRESHOLDS[screen]
@@ -1548,13 +1621,25 @@ def arrival_depth_for(screen, action_type, session_duration=None):
     return float(max(finish, threshold))
 
 
+def goal_circle_radius(depth):
+    """Radius of the goal circle drawn on the goal-line midpoint."""
+    return max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
+
+
+def goal_circle_center(p0, p1):
+    return (
+        (float(p0[0]) + float(p1[0])) / 2.0,
+        (float(p0[1]) + float(p1[1])) / 2.0,
+    )
+
+
 def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
-    """Goal mouth including posts. Cameras face screens 1 / 7 / 8."""
-    dist, proj_t, d_left, d_right = compute_projection(point, p0, p1)
-    if dist <= depth and (-GOAL_POST_SLACK) <= proj_t <= (1.0 + GOAL_POST_SLACK):
-        return True
-    post_r = min(float(depth), float(post_radius))
-    return d_left <= post_r or d_right <= post_r
+    """True when the point is inside the displayed goal circle.
+
+    Correct and Miss both require this. A ball outside the circle is not a finish.
+    """
+    cx, cy = goal_circle_center(p0, p1)
+    return math.hypot(float(point[0]) - cx, float(point[1]) - cy) <= goal_circle_radius(depth)
 
 
 def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_POST_RADIUS):
@@ -2246,6 +2331,7 @@ class ArenaSimulator:
         self.aim_in_index = 0
         self.aim_out_index = 0
         self.aim_name = ""
+        self.border_index = 0
 
     def start_action(self, action, screens):
         self.action = (action or "").upper()
@@ -2282,6 +2368,10 @@ class ArenaSimulator:
             self.wrong_xy = (origin[0] - 80.0, origin[1] + 10.0)
             self.late_finish_xy = self._closest_screen_mid(origin)
             self.late_finish_roll_xy = self._along_line_from(self.late_finish_xy, 28.0)
+        if self.action == "PRESS" and self.line_p0 and self.line_p1:
+            # Recorded PRESS point is the body center, above the anchor.
+            cx, cy = goal_circle_center(self.line_p0, self.line_p1)
+            self.late_finish_xy = (cx, cy + 29.0)
         self.probe_name = ""
         self.aim_name = ""
         self.travel_s = 0.70
@@ -2333,10 +2423,25 @@ class ArenaSimulator:
             )
             return
         self.intended = self._next_outcome(self.action)
+        screen = self.screens[0] if self.screens else ""
+        depth = arrival_depth_for(screen, self.action) if screen else float(FINISH_DIST)
+        # Land just inside the drawn border so a moving frame is still accepted.
+        name, xy = self._next_region_border(max(8.0, depth - 12.0))
+        self.aim_name = name
+        tracked = xy
+        if self.action == "PRESS":
+            # Recorded player point is the body center, above the anchor.
+            xy = (xy[0], xy[1] + 29.0)
+        self.target_xy = xy
+        dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
+        now_in = in_goal_area(
+            tracked, self.line_p0, self.line_p1, depth, post_radius=post_radius_for(self.action)
+        )
         print(
             f"  [SIM] {self.action} -> {self.screens} intended={self.intended.upper()} "
-            f"start={self.start_xy} target={self.target_xy} "
-            f"late_hold={self.late_hold_xy} wrong={self.wrong_xy}"
+            f"border={name} target={tuple(round(v, 1) for v in tracked)} "
+            f"dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'} "
+            f"depth={depth:.0f}"
         )
 
     def end_action(self):
@@ -2356,6 +2461,25 @@ class ArenaSimulator:
             self.late_phase = False
             self.hold_finish = False
             self.action = None
+
+    def _next_region_border(self, depth):
+        """Next acceptance-border point that still counts as inside the band."""
+        if not self.line_p0 or not self.line_p1:
+            return "line_center", self.target_xy
+        points = region_border_points(self.line_p0, self.line_p1, depth, self.BALL_HOME)
+        post_r = post_radius_for(self.action)
+        inside = []
+        for name, xy in points:
+            if name == "border_out":
+                continue
+            clipped = self._clip(xy[0], xy[1])
+            if in_goal_area(clipped, self.line_p0, self.line_p1, depth, post_radius=post_r):
+                inside.append((name, clipped))
+        if not inside:
+            return "line_center", self.target_xy
+        name, xy = inside[self.border_index % len(inside)]
+        self.border_index += 1
+        return name, xy
 
     def _next_outcome(self, action):
         if action == "GOAL":
@@ -2860,8 +2984,21 @@ class ArenaSimulator:
                 f"ARENA SIM  {self.action} {self.intended.upper()}  r={self.last_ball_radius:.0f} "
                 f"blur={self.last_blur:.0f} {det}"
             )
-        elif self.active or self.late_phase:
-            label = f"ARENA SIM  {self.intended.upper()}"
+        elif self.active or self.late_phase or self.hold_finish:
+            if self.aim_name and self.line_p0 and self.line_p1:
+                dist, proj_t, _, _ = compute_projection(self.last_ball, self.line_p0, self.line_p1)
+                screen = self.screens[0] if self.screens else ""
+                depth = arrival_depth_for(screen, self.action or "PASS") if screen else float(FINISH_DIST)
+                now_in = in_goal_area(
+                    self.last_ball, self.line_p0, self.line_p1, depth,
+                    post_radius=post_radius_for(self.action or "PASS"),
+                )
+                label = (
+                    f"ARENA SIM  {self.action} {self.aim_name}  {self.intended.upper()}  "
+                    f"dist={dist:.0f} band={'IN' if now_in else 'OUT'}"
+                )
+            else:
+                label = f"ARENA SIM  {self.intended.upper()}"
         else:
             label = "ARENA SIMULATION"
         cv2.putText(frame, label, (12, frame.shape[0] - 12),
@@ -3264,14 +3401,23 @@ class FieldRuntime:
         self.between_session_end_time = ""
 
     def screens_belong(self, screens):
-        cleaned = []
-        for s in screens or []:
-            digits = "".join(ch for ch in str(s) if ch.isdigit())
-            if digits:
-                cleaned.append(digits)
-        if not cleaned:
-            return True
-        return any(s in self.allowed_screens for s in cleaned)
+        allowed = {str(s) for s in (self.allowed_screens or [])}
+        cabinets = {geometry_screen_id(s) for s in allowed}
+        saw = False
+        for raw in screens or []:
+            text = str(raw).strip()
+            if not text:
+                continue
+            saw = True
+            if text in allowed or text.upper() in allowed:
+                return True
+            if geometry_screen_id(text) in cabinets:
+                return True
+            if simust_fields is not None:
+                name = simust_fields.canonical_screen(text)
+                if name and name in allowed:
+                    return True
+        return not saw
 
 
 # ============================================================================
@@ -3332,6 +3478,7 @@ class SimustRealtimeCamera:
         self.block_counter = 0
         self.frame_counter = 0
         self.shared_action_index = 0  # keeps Field A / Field B action numbers aligned
+        self._shared_cue_raw = None
 
         self.video_index = 1
         self.last_video_index = 1
@@ -3548,6 +3695,7 @@ class SimustRealtimeCamera:
                 }
 
         self.shared_action_index = 0
+        self._shared_cue_raw = None
         # Keep top-level aliases pointing at Field A for legacy helpers
         primary = "A" if "A" in active else ("B" if "B" in active else "A")
         self._sync_aliases_from_channel(self.channels[primary])
@@ -3776,31 +3924,34 @@ class SimustRealtimeCamera:
         candidates = []
         for src in (screens or [], keypoints or []):
             for screen in src:
-                nid = normalize_screen_id(screen)
+                nid = display_screen_id(screen)
                 if nid and nid not in candidates:
                     candidates.append(nid)
         # PRESS may use QR keypoints instead of the software line — but still
         # draw software lines for goal-mouth screens (1/7/8) so area 7 is visible.
         use_keypoints_only = action_u == "PRESS" and keypoints
         for screen_str in candidates:
-            base = screen_base_id(screen_str)
-            if use_keypoints_only and base not in GOAL_MOUTH_SCREENS and screen_str not in GOAL_MOUTH_SCREENS:
+            geom = geometry_screen_id(screen_str)
+            base = geom.rstrip("LR")
+            if use_keypoints_only and base not in GOAL_MOUTH_SCREENS and geom not in GOAL_MOUTH_SCREENS:
                 continue
-            if screen_str in GOAL_LINES:
-                lines[screen_str] = GOAL_LINES[screen_str]
+            if geom in GOAL_LINES:
+                lines[screen_str] = GOAL_LINES[geom]
             elif base in GOAL_LINES:
-                lines[base] = GOAL_LINES[base]
+                lines[screen_str] = GOAL_LINES[base]
         # GOAL / TARGET / PASS always need software lines for listed screens
         if action_u in ("GOAL", "TARGET", "PASS"):
             for screen_str in candidates:
-                base = screen_base_id(screen_str)
-                if base in GOAL_LINES and base not in lines and screen_str not in lines:
-                    lines[base] = GOAL_LINES[base]
+                geom = geometry_screen_id(screen_str)
+                base = geom.rstrip("LR")
+                if screen_str not in lines and base in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[base]
         # Always expose mouth geometry when any mouth id is present
         for screen_str in candidates:
-            base = screen_base_id(screen_str)
+            geom = geometry_screen_id(screen_str)
+            base = geom.rstrip("LR")
             if base in GOAL_MOUTH_SCREENS and base in GOAL_LINES:
-                lines[base] = GOAL_LINES[base]
+                lines[screen_str] = GOAL_LINES[base]
         return lines
 
     def _peer_channel(self, ch):
@@ -4390,26 +4541,50 @@ class SimustRealtimeCamera:
 
     # ---- Drawing and UI methods ----
     def draw_goal_lines(self, frame, ch=None):
+        """While keypoints are up, fill a circle on the goal line."""
         channels = [ch] if ch is not None else [
             c for fid, c in self.channels.items() if self._field_is_active(fid)
         ]
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
-        now = time.time()
+        overlay = frame.copy()
+        drew_band = False
+        line_marks = []
         for channel in channels:
             if not channel.session_active or not channel.active_goal_lines:
                 continue
+            action = str(channel.current_action or "PASS").upper()
             for screen_name, line_data in channel.active_goal_lines.items():
                 x1, y1 = line_data['p0']
                 x2, y2 = line_data['p1']
-                p0 = (int(x1 * sx), int(y1 * sy))
-                p1 = (int(x2 * sx), int(y2 * sy))
-                cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
-                cv2.circle(frame, p0, 5, (0, 0, 255), -1)
-                cv2.circle(frame, p1, 5, (0, 0, 255), -1)
-                cv2.putText(frame, f"GOAL {screen_name}", ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                depth = arrival_depth_for(str(screen_name), action)
+                cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
+                cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
+                radius = max(4, int(round(goal_circle_radius(depth) * min(sx, sy))))
+                cv2.circle(overlay, (cx, cy), radius, (0, 180, 0), -1)
+                drew_band = True
+                line_marks.append((
+                    action,
+                    screen_name,
+                    (int(x1 * sx), int(y1 * sy)),
+                    (int(x2 * sx), int(y2 * sy)),
+                ))
+        if drew_band:
+            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+        for action, screen_name, p0, p1 in line_marks:
+            cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
+            cv2.circle(frame, p0, 5, (0, 0, 255), -1)
+            cv2.circle(frame, p1, 5, (0, 0, 255), -1)
+            cv2.putText(
+                frame,
+                f"{action} {screen_name}",
+                ((p0[0] + p1[0]) // 2 - 40, p0[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 255),
+                1,
+            )
         return frame
 
     def _tick_image_cue_frame_sync(self, current_time_str, current_timestamp):
@@ -4437,15 +4612,16 @@ class SimustRealtimeCamera:
             # arrives during the tail of the 3s hold).
             just_armed = False
             if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
-                on_sec = 3.0
-                hold_frames = int(IMAGE_CUE_HOLD_FRAMES)
+                on_sec = _cue_on_sec(cue)
+                hold_frames = _on_hold_frames(on_sec)
                 ch._frame_sync_cue_raw = cue_raw
                 ch._pending_cue_info = {
                     "action": hit["action"],
                     "screens": list(hit["screens"]),
                     "keypoints": list(hit.get("keypoints") or []),
-                    "on_sec": 3.0,
+                    "on_sec": on_sec,
                     "raw": cue_raw,
+                    "seq": (cue or {}).get("seq", 0),
                     "hold_frames": hold_frames,
                 }
                 ch.kp_appear_frames_left = shift
@@ -4468,18 +4644,17 @@ class SimustRealtimeCamera:
                                 self._end_session_locked(
                                     current_time_str, current_timestamp, ch
                                 )
-                    self.shared_action_index = max(
-                        int(getattr(self, "shared_action_index", 0) or 0) + 1,
-                        max(
-                            (
-                                c.block_counter
-                                for f, c in self.channels.items()
-                                if self._field_is_active(f)
-                            ),
-                            default=0,
-                        )
-                        + 1,
-                    )
+                    # One S-number per pass. Field raw includes the screen
+                    # (A=12, B=5), so keying on raw counted A as S1 and B as S2
+                    # and the overlay showed only the odds: S1, S3, S5.
+                    cue_key = f"SEQ|{info.get('seq')}|{info.get('action') or 'PASS'}"
+                    if cue_key and getattr(self, "_shared_cue_raw", None) == cue_key:
+                        pass
+                    else:
+                        self._shared_cue_raw = cue_key
+                        self.shared_action_index = int(
+                            getattr(self, "shared_action_index", 0) or 0
+                        ) + 1
                     ch.block_counter = int(self.shared_action_index)
                     block_id = f"S{ch.block_counter}"
                     self.schedule_session_start(

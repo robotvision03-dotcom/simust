@@ -1309,6 +1309,11 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     if abort:
         realtime_aborted = True
         write_playback_status("aborted", "Operator stopped. Session discarded.")
+    try:
+        import simust_instagram_live
+        simust_instagram_live.stop_live()
+    except Exception:
+        logger.info("Instagram live was not running")
     force_kill_smart_player()
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
@@ -1836,6 +1841,11 @@ def playback_status_snapshot() -> dict:
             status = {"state": "unknown", "message": "Could not read status"}
     paused = read_pause_setting()
     status["paused"] = paused
+    try:
+        import simust_instagram_live
+        status["instagram_live"] = simust_instagram_live.status()
+    except Exception:
+        status["instagram_live"] = {"on": False, "error": ""}
     if paused and status.get("state") not in ("aborted", "completed", "idle"):
         status["state"] = "paused"
         status["message"] = status.get("message") or "Paused — press Play to continue"
@@ -2198,6 +2208,30 @@ async def pause_realtime(req: Request):
     return {"status": "success", "paused": paused}
 
 
+@app.post("/instagram-live")
+async def instagram_live(req: Request):
+    """During a test, push Field A camera 1 to Instagram live. Lab PC only."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Instagram live runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    data = data or {}
+    turn_on = bool(data.get("on"))
+    import simust_instagram_live
+    if not turn_on:
+        live = simust_instagram_live.stop_live()
+        return {"status": "success", "instagram_live": live}
+    if not _realtime_is_running():
+        raise HTTPException(409, "Start a test first, then press Insta")
+    try:
+        live = simust_instagram_live.start_live()
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+    return {"status": "success", "instagram_live": live}
+
+
 @app.post("/sync-live-to-host")
 async def sync_live_to_host(req: Request):
     """Lab only: push the current realtime snapshot + player account to My SIMUST."""
@@ -2388,6 +2422,9 @@ def _display_screen_name(field_id: str, raw) -> str:
     text = str(raw or "").strip()
     if not text or text.upper() in ("N/A", "NONE", "-"):
         return text or "N/A"
+    upper = text.upper()
+    if len(upper) >= 2 and upper[0] in ("A", "B") and upper[1:].isdigit():
+        return str(int(upper[1:]))
     digits = re.sub(r"[^0-9]", "", text)
     if not digits:
         return text
@@ -2912,18 +2949,18 @@ def get_slice_video_for_accuracy(accuracy: float) -> str:
         return "PRO_CI_UPTO_50%_V01.mp4"
 
 
-# Fourteen frames across the 3840 projection. Screens 1 and 8 are empty places.
+# Fourteen frames across the 3840 projection. Empty places sit between 3 and 4.
 RESULTS_SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
-# PRO_CI coach clips are authored for Field A integration panels
-COACH_CLIP_SOURCE_SLICES = (14, 1, 2)
+# PRO_CI coach clips cover Field A integration: A3, the empty place, and A4.
+COACH_CLIP_SOURCE_SLICES = ("A3", "A4")
 
 
 def coach_integration_x_ranges(width: int = COACH_BAND_WIDTH, field_id: str = "A"):
     """Pixel x-ranges for cropping/placing the coach animation on the 14-slice strip.
 
-    Source (authored): slices 14, 1, 2.
-    Field A destination: same (14, 1, 2).
-    Field B destination: slices 7..9 (integration 7 and 9, with 8 between for continuous video).
+    Source (authored): A3 and A4, including the empty place between them.
+    Field A destination: the same span.
+    Field B destination: B3 and B4, including the empty place between them.
     """
     try:
         import simust_fields
@@ -2931,15 +2968,14 @@ def coach_integration_x_ranges(width: int = COACH_BAND_WIDTH, field_id: str = "A
         integration = (simust_fields.field_config(fid).get("results_slices") or {}).get("integration")
     except Exception:
         fid = "B" if str(field_id or "").upper().startswith("B") else "A"
-        integration = (7, 9) if fid == "B" else (14, 1, 2)
+        integration = ("B3", "B4") if fid == "B" else ("A3", "A4")
 
     def span_for_slices(slice_ids):
         return slice_span_for_ids(slice_ids, RESULTS_SLICE_ORDER, width)
 
     src_x0, src_x1 = span_for_slices(COACH_CLIP_SOURCE_SLICES)
     if fid == "B":
-        # Map onto Field B integration: screens 7 and 9 (span 7, 8, 9, same width as source)
-        dst_x0, dst_x1 = span_for_slices((7, 8, 9))
+        dst_x0, dst_x1 = span_for_slices(("B3", "B4"))
     else:
         dst_x0, dst_x1 = span_for_slices(integration or COACH_CLIP_SOURCE_SLICES)
     tile_w = max(1, (slice_x_span(0, width, len(RESULTS_SLICE_ORDER))[1]
@@ -2964,11 +3000,7 @@ def shift_results_band(frame):
     out = np.zeros_like(frame)
     count = len(RESULTS_SLICE_ORDER)
     for index, sid in enumerate(RESULTS_SLICE_ORDER):
-        try:
-            sid = int(sid)
-        except (TypeError, ValueError):
-            continue
-        if sid in (1, 8):
+        if sid is None:
             continue
         x0, x1 = slice_x_span(index, width, count)
         src = frame[:, x0:x1]
@@ -2994,11 +3026,7 @@ def _offset_video_filter(src_label, width, height):
     """ffmpeg graph that shifts each screen of [src_label] by the saved calibration."""
     real = []
     for index, sid in enumerate(RESULTS_SLICE_ORDER):
-        try:
-            sid = int(sid)
-        except (TypeError, ValueError):
-            continue
-        if sid in (1, 8):
+        if sid is None:
             continue
         real.append((index, sid))
     if not real:
@@ -3477,9 +3505,9 @@ def build_results_ring_panel(metrics, field="A"):
     except Exception:
         fid = "B" if str(field).upper().startswith("B") else "A"
         slices = (
-            {"aet": 5, "accuracy": 6, "efficiency": 10, "displacement": 11}
+            {"aet": "B1", "accuracy": "B2", "efficiency": "B5", "displacement": "B6"}
             if fid == "B"
-            else {"aet": 12, "accuracy": 13, "efficiency": 3, "displacement": 4}
+            else {"aet": "A1", "accuracy": "A2", "efficiency": "A5", "displacement": "A6"}
         )
     total_distance = float(metrics.get("total_distance") or 0.0)
     if metrics.get("distance_m_display") is not None:
@@ -3491,10 +3519,10 @@ def build_results_ring_panel(metrics, field="A"):
         distance_shown = distance_m_display(total_distance)
     economy_percent = min(100.0, (total_distance / 77.0) * 100) if total_distance > 0 else 0.0
     return {
-        "slice_aet": int(slices.get("aet") or 12),
-        "slice_acc": int(slices.get("accuracy") or 13),
-        "slice_ae": int(slices.get("efficiency") or 3),
-        "slice_disp": int(slices.get("displacement") or 4),
+        "slice_aet": slices.get("aet") or "A1",
+        "slice_acc": slices.get("accuracy") or "A2",
+        "slice_ae": slices.get("efficiency") or "A5",
+        "slice_disp": slices.get("displacement") or "A6",
         "aet_percent": float(metrics.get("aet_percent") or 0.0),
         "aet_display": metrics.get("aet_display") or "-",
         "aet_session_display": metrics.get("aet_session_display"),
@@ -3538,14 +3566,14 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                         break
             slices = simust_fields.field_config(field_id).get("results_slices") or {}
         except Exception:
-            slices = {"aet": 12, "accuracy": 13, "efficiency": 3, "displacement": 4}
+            slices = {"aet": "A1", "accuracy": "A2", "efficiency": "A5", "displacement": "A6"}
             if field and str(field).upper().startswith("B"):
                 field_id = "B"
-                slices = {"aet": 5, "accuracy": 6, "efficiency": 10, "displacement": 11}
-        slice_aet = int(slices.get("aet") or 12)
-        slice_acc = int(slices.get("accuracy") or 13)
-        slice_ae = int(slices.get("efficiency") or 3)
-        slice_disp = int(slices.get("displacement") or 4)
+                slices = {"aet": "B1", "accuracy": "B2", "efficiency": "B5", "displacement": "B6"}
+        slice_aet = slices.get("aet") or "A1"
+        slice_acc = slices.get("accuracy") or "A2"
+        slice_ae = slices.get("efficiency") or "A5"
+        slice_disp = slices.get("displacement") or "A6"
 
         if is_final:
             metrics = aggregate_final_section_metrics(results_list, session_folder=session_folder)
@@ -3765,7 +3793,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         remap_coach_to_b = (str(field_id or "").upper() == "B")
         if remap_coach_to_b:
             logger.info(
-                "Field B coach integration: crop slices 14/1/2 (x=%s..%s) → slices 7/9 (x=%s..%s)",
+                "Field B coach integration: crop A3–A4 (x=%s..%s) → B3–B4 (x=%s..%s)",
                 coach_geom["src_x0"], coach_geom["src_x1"],
                 coach_geom["dst_x0"], coach_geom["dst_x1"],
             )
@@ -3908,10 +3936,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             img = base_bgr
             by_slice = {}
             for panel in ring_panels:
-                by_slice[int(panel["slice_aet"])] = ("aet", panel)
-                by_slice[int(panel["slice_ae"])] = ("ae", panel)
-                by_slice[int(panel["slice_acc"])] = ("acc", panel)
-                by_slice[int(panel["slice_disp"])] = ("disp", panel)
+                by_slice[panel["slice_aet"]] = ("aet", panel)
+                by_slice[panel["slice_ae"]] = ("ae", panel)
+                by_slice[panel["slice_acc"]] = ("acc", panel)
+                by_slice[panel["slice_disp"]] = ("disp", panel)
             for i, num in enumerate(slice_numbers):
                 x_offset, tile_width = _slice_box(i)
                 offset_x = screen_content_offset(num)
@@ -5587,6 +5615,7 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "homography-save",
     "homography-reset",
     "homography-test",
+    "instagram-live",
 }
 
 
@@ -5659,6 +5688,8 @@ def _lab_local_request(method: str, path: str, payload: Optional[dict] = None) -
     path_name = path.lstrip("/")
     if path_name.startswith("start-realtime"):
         timeout = 40
+    elif path_name.startswith("instagram-live"):
+        timeout = 90
     elif path_name.startswith("homography"):
         timeout = 25
     req = urllib.request.Request(

@@ -46,6 +46,8 @@
         .btn-realtime:disabled { background: #1a2d4a; color: #8fa0b6; }
         .btn-danger { background: var(--red); color: white; }
         .btn-pause { background: linear-gradient(105deg, #f59e0b, #d97706); color: #07111f; }
+        .btn-insta { background: linear-gradient(105deg, #f56040, #833ab4); color: white; }
+        .btn-insta-on { background: linear-gradient(105deg, #25d366, #128c4b); color: #07111f; }
         .btn-resume { background: linear-gradient(105deg, #276ce5, #1d5bc4); color: white; }
         .btn-results { background: linear-gradient(105deg, var(--blue), #1d5bc4); color: white; }
         .btn-logout { background: transparent; color: #a8c6ff; border: 1px solid var(--line); padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer; transition: 0.2s; }
@@ -426,6 +428,7 @@
                 'start-realtime-playback': true,
                 'stop-realtime': true,
                 'pause-realtime': true,
+                'instagram-live': true,
                 'set-simulation': true,
                 'set-visualization': true,
                 'lab-upsert-player': true,
@@ -2717,6 +2720,9 @@
             var realtimePausedState = useState(false);
             var realtimePaused = realtimePausedState[0];
             var setRealtimePaused = realtimePausedState[1];
+            var instagramLiveState = useState(false);
+            var instagramLive = instagramLiveState[0];
+            var setInstagramLive = instagramLiveState[1];
             var adminTestPlayState = useState(false);
             var adminTestPlay = adminTestPlayState[0];
             var setAdminTestPlay = adminTestPlayState[1];
@@ -4238,6 +4244,8 @@
                             clearTimeout(realtimeMonitorInterval.current);
                             realtimeMonitorInterval.current = null;
                         }
+                        setInstagramLive(false);
+                        axios.post("/instagram-live", { on: false }).catch(function() {});
                         if (!sessionSavedRef.current) {
                             sessionSavedRef.current = true;
                             showToast("Playback finished, saving session…", 'info');
@@ -4331,6 +4339,9 @@
                             if (state === "playing" || state === "loading") {
                                 sawActivePlayback = true;
                             }
+                            if (statusRes.data && statusRes.data.instagram_live) {
+                                setInstagramLive(!!statusRes.data.instagram_live.on);
+                            }
                             // Training finished — release Play as soon as final summary starts
                             // (do not wait up to ~60s for playing_final to become completed).
                             if (state === "playing_final") {
@@ -4370,6 +4381,32 @@
                 });
             };
 
+            var setInstagramOff = function() {
+                if (!instagramLive) return;
+                setInstagramLive(false);
+                axios.post("/instagram-live", { on: false }).catch(function() {});
+            };
+
+            var toggleInstagramLive = function() {
+                if (!realtimeRunningRef.current && !realtimeRunning) return;
+                var next = !instagramLive;
+                setInstagramLive(next);
+                axios.post("/instagram-live", { on: next }).then(function(res) {
+                    var live = res.data && res.data.instagram_live;
+                    var on = !!(live && live.on);
+                    setInstagramLive(on);
+                    showToast(on
+                        ? "Instagram live is on. Field A camera 1."
+                        : "Instagram live ended.", on ? 'success' : 'info');
+                }).catch(function(e) {
+                    setInstagramLive(false);
+                    var detail = (e.response && e.response.data && e.response.data.detail)
+                        ? e.response.data.detail
+                        : (e.message || "Instagram live failed");
+                    showToast(detail, 'error');
+                });
+            };
+
             var togglePausePlayback = function() {
                 if (!realtimeRunningRef.current && !realtimeRunning) return;
                 var next = !realtimePausedRef.current;
@@ -4405,6 +4442,7 @@
                         showToast("Session saved", 'success');
                     });
                 }
+                setInstagramOff();
                 if (realtimeRunningRef.current || realtimeRunning) {
                     var stopPayload = abort
                         ? { abort: true, discard: true, operator_stop: true }
@@ -5103,7 +5141,15 @@
                                 disabled: !realtimeRunning,
                                 className: "btn-primary btn-danger px-6 py-2 font-bold" +
                                     (!realtimeRunning ? " opacity-50" : "")
-                            }, t("stop"))
+                            }, t("stop")),
+                            React.createElement('button', {
+                                onClick: toggleInstagramLive,
+                                disabled: !realtimeRunning,
+                                title: "Go live on Instagram with Field A camera 1",
+                                className: "btn-primary px-6 py-2 font-bold" +
+                                    (instagramLive ? " btn-insta-on" : " btn-insta") +
+                                    (!realtimeRunning ? " opacity-50" : "")
+                            }, instagramLive ? "Insta ON" : "Insta")
                         ),
                         savingSession ?
                         React.createElement('div', { className: "mb-4 p-2 bg-blue-600/20 rounded-xl text-center" },

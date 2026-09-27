@@ -24,6 +24,7 @@ try:
         DISPLAY_SLICE_ORDER,
         screen_content_offset,
         screen_content_offset_y,
+        screen_number,
     )
 except ImportError:
     CHART_CENTER_Y = 140
@@ -38,6 +39,9 @@ except ImportError:
 
     def screen_content_offset_y(screen_id):
         return 0
+
+    def screen_number(screen_id):
+        return str(screen_id)
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
@@ -151,7 +155,7 @@ class WaitingOverlay(QtWidgets.QWidget):
             ]
             for i in range(self.num_slices):
                 slice_num = self.slice_order[i]
-                if int(slice_num) in (1, 8):
+                if slice_num is None:
                     self.balls_by_slice.append([])
                     continue
                 num_balls = random.randint(2, 3)
@@ -175,7 +179,7 @@ class WaitingOverlay(QtWidgets.QWidget):
                 self.balls_by_slice.append(slice_balls)
 
         for i, slice_num in enumerate(self.slice_order):
-            if int(slice_num) in (1, 8):
+            if slice_num is None:
                 continue
             offset_x = screen_content_offset(slice_num)
 
@@ -187,7 +191,7 @@ class WaitingOverlay(QtWidgets.QWidget):
             painter.setPen(QColor(0, 255, 255))
             font = QFont("Segoe UI", 18, QFont.Bold)
             painter.setFont(font)
-            num_text = str(slice_num)
+            num_text = screen_number(slice_num)
             metrics = painter.fontMetrics()
             tw = metrics.width(num_text)
             th = metrics.height()

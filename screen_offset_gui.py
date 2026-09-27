@@ -34,6 +34,7 @@ from simust_display_layout import (
     CONTENT_WIDTH_RATIO,
     screen_content_offset,
     screen_content_offset_y,
+    screen_number,
 )
 
 SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
@@ -211,18 +212,18 @@ class CameraView(QtWidgets.QWidget):
 
 # One color per screen so a rectangle that slides into the next frame is obvious.
 FRAME_COLORS = {
-    12: QColor(0, 188, 212),
-    13: QColor(255, 152, 0),
-    14: QColor(129, 199, 132),
-    2: QColor(186, 104, 200),
-    3: QColor(255, 112, 67),
-    4: QColor(121, 134, 203),
-    5: QColor(255, 214, 0),
-    6: QColor(77, 182, 172),
-    7: QColor(240, 98, 146),
-    9: QColor(149, 117, 205),
-    10: QColor(255, 167, 38),
-    11: QColor(66, 165, 245),
+    "A1": QColor(0, 188, 212),
+    "A2": QColor(255, 152, 0),
+    "A3": QColor(129, 199, 132),
+    "A4": QColor(186, 104, 200),
+    "A5": QColor(255, 112, 67),
+    "A6": QColor(121, 134, 203),
+    "B1": QColor(255, 214, 0),
+    "B2": QColor(77, 182, 172),
+    "B3": QColor(240, 98, 146),
+    "B4": QColor(149, 117, 205),
+    "B5": QColor(255, 167, 38),
+    "B6": QColor(66, 165, 245),
 }
 
 
@@ -310,7 +311,7 @@ class WallStrip(QtWidgets.QWidget):
             painter.drawRect(frame)
             painter.setPen(QColor(255, 255, 255))
             painter.setFont(QFont("Segoe UI", max(10, int(18 * scale)), QFont.Bold))
-            painter.drawText(frame.adjusted(0, 0, 0, -frame.height() // 5), Qt.AlignCenter, str(sid))
+            painter.drawText(frame.adjusted(0, 0, 0, -frame.height() // 5), Qt.AlignCenter, screen_number(sid))
             painter.setFont(QFont("Segoe UI", max(8, int(11 * scale))))
             offset_label = f"{self.model.dx.get(sid, 0):+d}, {self.model.dy.get(sid, 0):+d}"
             painter.drawText(
@@ -325,14 +326,14 @@ class OffsetModel(QtCore.QObject):
 
     def __init__(self):
         super().__init__()
-        self.dx = {sid: screen_content_offset(sid) for sid in SLICE_ORDER if sid not in EMPTY_FRAMES}
-        self.dy = {sid: screen_content_offset_y(sid) for sid in SLICE_ORDER if sid not in EMPTY_FRAMES}
+        self.dx = {sid: screen_content_offset(sid) for sid in SLICE_ORDER if sid is not None and sid not in EMPTY_FRAMES}
+        self.dy = {sid: screen_content_offset_y(sid) for sid in SLICE_ORDER if sid is not None and sid not in EMPTY_FRAMES}
         self.selected = None
 
     def select(self, screen_id):
-        screen_id = int(screen_id)
-        if screen_id in EMPTY_FRAMES:
+        if screen_id is None or screen_id in EMPTY_FRAMES:
             return
+        screen_id = str(screen_id)
         self.selected = None if self.selected == screen_id else screen_id
         self.changed.emit()
 
@@ -353,11 +354,11 @@ def format_offset_block(dx, dy):
     def body(values):
         lines = []
         for sid in SLICE_ORDER:
-            if sid in EMPTY_FRAMES:
+            if sid is None or sid in EMPTY_FRAMES:
                 continue
             value = int(values.get(sid, 0))
             if value:
-                lines.append(f"    {sid}: {value},")
+                lines.append(f'    "{sid}": {value},')
         inner = "\n".join(lines)
         if inner:
             return "{\n" + inner + "\n}"
@@ -374,9 +375,9 @@ def format_offset_block(dx, dy):
 def format_readable(dx, dy):
     lines = ["screen   x     y"]
     for sid in SLICE_ORDER:
-        if sid in EMPTY_FRAMES:
+        if sid is None or sid in EMPTY_FRAMES:
             continue
-        lines.append(f"{sid:>6}  {int(dx.get(sid, 0)):+4d}  {int(dy.get(sid, 0)):+4d}")
+        lines.append(f"{screen_number(sid):>6}  {int(dx.get(sid, 0)):+4d}  {int(dy.get(sid, 0)):+4d}")
     return "\n".join(lines)
 
 
@@ -436,13 +437,13 @@ class ControlWindow(QtWidgets.QWidget):
         self.screen_buttons = {}
         button_row = QtWidgets.QHBoxLayout()
         for sid in WALL_LAYOUT:
-            if sid in EMPTY_FRAMES:
+            if sid is None or sid in EMPTY_FRAMES:
                 empty = QtWidgets.QLabel("empty")
                 empty.setAlignment(Qt.AlignCenter)
                 empty.setStyleSheet("color: #888; background: #222; padding: 6px;")
                 button_row.addWidget(empty)
                 continue
-            button = QtWidgets.QPushButton(str(sid))
+            button = QtWidgets.QPushButton(screen_number(sid))
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, screen_id=sid: self.model.select(screen_id))
             self.screen_buttons[sid] = button

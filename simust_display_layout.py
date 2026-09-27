@@ -69,10 +69,12 @@ def slice_span_for_ids(slice_ids, order=None, width=None):
     count = max(1, len(order))
     indexes = []
     for sid in slice_ids:
-        try:
-            indexes.append(order.index(int(sid)))
-        except (TypeError, ValueError):
+        if sid is None:
             continue
+        key = sid if sid in order else str(sid)
+        if key not in order:
+            continue
+        indexes.append(order.index(key))
     if not indexes:
         return slice_x_span(0, width, count)
     x0, _x1 = slice_x_span(min(indexes), width, count)
@@ -118,8 +120,8 @@ def _reload_offsets_if_changed():
         dy_text = block.split("SCREEN_CONTENT_OFFSET_Y = ", 1)[1].strip()
         dx = ast.literal_eval(dx_text)
         dy = ast.literal_eval(dy_text)
-        SCREEN_CONTENT_OFFSET = {int(k): int(v) for k, v in dx.items()}
-        SCREEN_CONTENT_OFFSET_Y = {int(k): int(v) for k, v in dy.items()}
+        SCREEN_CONTENT_OFFSET = {str(k): int(v) for k, v in dx.items()}
+        SCREEN_CONTENT_OFFSET_Y = {str(k): int(v) for k, v in dy.items()}
     except Exception:
         pass
     _OFFSETS_MTIME = mtime

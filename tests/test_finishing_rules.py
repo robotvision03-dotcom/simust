@@ -105,7 +105,8 @@ class FinishingRuleTests(unittest.TestCase):
         self.assertEqual(row["actual"], "Correct", msg=row)
         screen = "3"
         start = (314.0, 110.0)
-        dest = (83.0, 142.0)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_circle_center(p0, p1)
         session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
         for row_frame in session:
             row_frame["p"] = row_frame["b"]
@@ -174,23 +175,20 @@ class FinishingRuleTests(unittest.TestCase):
         result = _analyze("PASS", [screen], session, after=after)
         self.assertEqual(result.get("Result"), "Correct", msg=result)
 
-    def test_goal_posts_and_center_count_as_correct(self):
+    def test_goal_center_circle_counts_posts_do_not(self):
         for screen in ("8", "1"):
             line = rt.GOAL_LINES[screen]
             start = _outside_start(screen)
-            spots = {
-                "center": ((line["p0"][0] + line["p1"][0]) / 2.0, (line["p0"][1] + line["p1"][1]) / 2.0),
-                "post_a": line["p0"],
-                "post_b": line["p1"],
-                "past_a": _beyond_post(line["p0"], line["p1"], 8.0),
-                "past_b": _beyond_post(line["p1"], line["p0"], 8.0),
-            }
-            for label, xy in spots.items():
-                session = _travel(start, xy, arrive_s=0.70, hold_s=2.4)
-                result = _analyze("GOAL", [screen], session)
-                self.assertEqual(result.get("Result"), "Correct", msg=(screen, label, xy, result))
-                depth = rt.arrival_depth_for(screen, "GOAL")
-                self.assertTrue(rt.in_goal_area(xy, line["p0"], line["p1"], depth), msg=(screen, label, xy))
+            depth = rt.arrival_depth_for(screen, "GOAL")
+            center = rt.goal_circle_center(line["p0"], line["p1"])
+            inside = (center[0] + 8.0, center[1])
+            self.assertTrue(rt.in_goal_area(center, line["p0"], line["p1"], depth))
+            self.assertTrue(rt.in_goal_area(inside, line["p0"], line["p1"], depth))
+            for label, xy in (("center", center), ("inside", inside)):
+                result = _analyze("GOAL", [screen], _travel(start, xy, arrive_s=0.70, hold_s=2.4))
+                self.assertEqual(result.get("Result"), "Correct", msg=(screen, label, result))
+            for label, xy in (("post_a", line["p0"]), ("post_b", line["p1"])):
+                self.assertFalse(rt.in_goal_area(xy, line["p0"], line["p1"], depth), msg=(screen, label))
 
     def test_goal_upper_net_outside_band_is_wrong(self):
         """Points far above the line fail dist + proj_t. No rectangle scoring."""
@@ -262,8 +260,8 @@ class FinishingRuleTests(unittest.TestCase):
             else:
                 seen_out.append(sim.aim_name)
         self.assertGreaterEqual(len(set(targets)), 5)
-        self.assertTrue({"post_a", "post_b"} & set(seen_in))
-        self.assertIn("upper_center_40", seen_in)
+        self.assertIn("line_center", seen_in)
+        self.assertIn("outside_20", seen_in)
         self.assertTrue({"upper_center_90", "upper_corner_a", "upper_corner_b"} & set(seen_out))
         self.assertNotEqual(seen_in[:4], ["line_center"] * len(seen_in[:4]))
 
@@ -427,7 +425,7 @@ class FinishingRuleTests(unittest.TestCase):
         screen = "3"
         start = (314.0, 110.0)
         p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
-        dest = (83.0, 142.0)
+        dest = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
         depth = rt.arrival_depth_for(screen, "PRESS")
         self.assertTrue(
             rt.in_goal_area(dest, p0, p1, depth, post_radius=rt.PRESS_POST_RADIUS),
@@ -534,18 +532,18 @@ class FinishingRuleTests(unittest.TestCase):
         start = rt.ArenaSimulator.BALL_HOME
         session = _travel(start, start, arrive_s=0.20, hold_s=3.0)
         p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
-        dest = ((p0[0] + p1[0]) / 2.0 - 50.0, (p0[1] + p1[1]) / 2.0)
+        dest = ((p0[0] + p1[0]) / 2.0 + 12.0, (p0[1] + p1[1]) / 2.0)
         after = _travel(start, dest, arrive_s=0.50, hold_s=0.50)
         result = _analyze("PASS", [screen], session, after=after)
         self.assertEqual(result.get("Result"), "Late", msg=result)
-        self.assertGreater(result.get("Min Distance (px)") or 0, 30)
+        self.assertTrue(rt.in_goal_area(dest, p0, p1, rt.arrival_depth_for(screen, "PASS")))
 
     def test_pass_post_graze_then_return_is_correct(self):
         """S4/S24: 35–45px from a keypoint still counts as arrival if the ball comes back."""
         screen = "3"
         start = rt.ArenaSimulator.BALL_HOME
-        p0 = rt.GOAL_LINES[screen]["p0"]
-        dest = (p0[0] + 28.0, p0[1] - 28.0)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_circle_center(p0, p1)
         depth = rt.arrival_depth_for(screen, "PASS")
         self.assertTrue(rt.in_goal_area(dest, rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"], depth, post_radius=rt.PASS_POST_RADIUS))
         session = _travel(start, dest, arrive_s=0.70, hold_s=0.15, back=start, back_s=0.80)
@@ -556,8 +554,8 @@ class FinishingRuleTests(unittest.TestCase):
         """S19: enter the graze band and never return to the player → Miss."""
         screen = "14"
         start = rt.ArenaSimulator.BALL_HOME
-        p0 = rt.GOAL_LINES[screen]["p0"]
-        dest = (p0[0] - 20.0, p0[1] - 25.0)
+        p0, p1 = rt.GOAL_LINES[screen]["p0"], rt.GOAL_LINES[screen]["p1"]
+        dest = rt.goal_circle_center(p0, p1)
         session = _travel(start, dest, arrive_s=0.80, hold_s=2.2)
         result = _analyze("PASS", [screen], session)
         self.assertEqual(result.get("Result"), "Miss", msg=result)

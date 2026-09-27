@@ -156,6 +156,34 @@ def test_screen_7_is_goal_mouth_line_and_send():
     assert abs(sim.start_xy[0] - goal_send_origin(["7"])[0]) < 1.0
 
 
+def test_new_screen_names_use_their_cabinet_lines():
+    """A1 is cabinet 12, not the old goal-mouth screen 1."""
+    from simust_realtime import (
+        GOAL_LINES,
+        SimustRealtimeCamera,
+        geometry_screen_id,
+        get_screen_info,
+    )
+
+    assert geometry_screen_id("A1") == "12"
+    assert geometry_screen_id("B1") == "5"
+    assert geometry_screen_id("B3") == "7"
+    assert geometry_screen_id("1") == "1"
+    assert geometry_screen_id("12") == "12"
+
+    cam = object.__new__(SimustRealtimeCamera)
+    lines = SimustRealtimeCamera.get_goal_lines(cam, ["A1", "B6"], "PASS", [])
+    assert "A1" in lines and "1" not in lines and "12" not in lines
+    assert lines["A1"]["p0"] == GOAL_LINES["12"]["p0"]
+    assert lines["A1"]["p1"] == GOAL_LINES["12"]["p1"]
+    assert lines["B6"]["p0"] == GOAL_LINES["11"]["p0"]
+    p0, p1 = get_screen_info("A1", GOAL_LINES)
+    assert (p0, p1) == (GOAL_LINES["12"]["p0"], GOAL_LINES["12"]["p1"])
+    mouth0, _mouth1 = get_screen_info("1", GOAL_LINES)
+    assert mouth0 == GOAL_LINES["1"]["p0"]
+    assert mouth0 != p0
+
+
 def test_late_field_b_joins_peer_block_without_bump():
     """Late QR on B must reuse A's S{n} instead of allocating S{n+1}."""
     import threading

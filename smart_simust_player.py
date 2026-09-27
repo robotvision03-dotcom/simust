@@ -91,6 +91,38 @@ def _sid(value):
     return None
 
 
+def _screen_sort_key(screen_id):
+    """Sort A1..A6 then B1..B6. Unknown ids stay last."""
+    name = _sid(screen_id) or ""
+    if len(name) >= 2 and name[0] in ("A", "B") and name[1:].isdigit():
+        return (0 if name[0] == "A" else 1, int(name[1:]))
+    return (2, 0)
+
+
+def _named_screens(values):
+    """Canonical screen names. Empty gaps and unknown ids are dropped."""
+    names = []
+    for value in values or []:
+        name = _sid(value)
+        if name and name not in names and name not in DISABLED_DISPLAY_SCREENS:
+            names.append(name)
+    return names
+
+
+def _named_image_map(mapping, active=None):
+    """Screen-name → image. Legacy cabinet numbers are renamed; A1 is never int()'d."""
+    out = {}
+    allowed = None if active is None else set(active or [])
+    for raw, path in (mapping or {}).items():
+        name = _sid(raw)
+        if not name or name in DISABLED_DISPLAY_SCREENS:
+            continue
+        if allowed is not None and _field_for_screen(name) not in allowed:
+            continue
+        out[name] = path
+    return out
+
+
 class _NullVlcPlayer:
     """No-op stand-in so image-based mode never loads/plays videos via VLC."""
 
@@ -1007,12 +1039,12 @@ def _build_dual_field_playlist(
                         continue
                     if not probe:
                         continue
-                    field_screens[fid] = list(correct or [])
-                    screen_images.update({int(k): v for k, v in probe.items() if v})
+                    field_screens[fid] = _named_screens(correct or [])
+                    screen_images.update(_named_image_map({k: v for k, v in probe.items() if v}))
                     mode_bits.append(f"{fid}:{mode_low}")
                     continue
                 slot = factories[fid](action_in_set, test_num) or {}
-                sids = [int(s) for s in (slot.get(fid) or [])]
+                sids = _named_screens(slot.get(fid) or [])
                 if not sids:
                     continue
                 img = images.get(fid)
@@ -1020,7 +1052,7 @@ def _build_dual_field_playlist(
                     continue
                 field_screens[fid] = sids
                 for s in sids:
-                    screen_images[int(s)] = img
+                    screen_images[s] = img
                 mode_bits.append(f"{fid}:{(field_modes or {}).get(fid) or '?'}")
             if not screen_images:
                 continue
@@ -1036,11 +1068,12 @@ def _build_dual_field_playlist(
                 fid for fid in active
                 if str((field_modes or {}).get(fid) or "").strip().lower() in FOUNDATION_COGNITIVE_MODES
             ]
-            lit = "_".join(str(s) for s in sorted(screen_images.keys())
-                           if any(int(s) in (field_screens.get(f) or []) for f in field_screens))
+            lit = "_".join(str(s) for s in sorted(screen_images.keys(), key=_screen_sort_key)
+                           if any(s in (field_screens.get(f) or []) for f in field_screens))
             # Prefer listing only correct/target screens in label
             target_ids = sorted(
-                int(s) for sids in field_screens.values() for s in sids
+                (s for sids in field_screens.values() for s in sids),
+                key=_screen_sort_key,
             )
             lit = "_".join(str(s) for s in target_ids) if target_ids else lit
             entry = {
@@ -1096,8 +1129,8 @@ def _build_dual_field_playlist(
 # Missing gap_/filler_ → black (nothing displayed on those slices).
 GAP_SCREENS = ("A4", "A3", "B3", "B4")
 PASS_FLASH_STEPS = (
-    {"A": 4, "B": 11},
-    {"A": 3, "B": 10},
+    {"A": "A6", "B": "B6"},
+    {"A": "A5", "B": "B5"},
 )
 _ACTION_FILE_RE = re.compile(
     r"^(\d+)[_-]([A-Za-z]+)[_-](\d+)[_-](\d+)$", re.IGNORECASE
@@ -1153,34 +1186,31 @@ def _screens_for_active_fields(step, active_fields):
     for fid in ("A", "B"):
         if fid not in active:
             continue
-        sid = step.get(fid)
-        if sid is not None:
-            screens.append(int(sid))
+        name = _sid(step.get(fid))
+        if name:
+            screens.append(name)
     return screens
 
 
 def _field_for_screen(screen_id):
-    sid = str(int(screen_id))
-    if simust_fields is not None:
-        return simust_fields.field_for_screens([sid]) or "A"
-    if sid in {"2", "3", "4", "12", "13", "14"}:
+    """Field A or B from a screen name. A1 stays a name; it is not cast to int."""
+    name = _sid(screen_id)
+    if name and name[0] == "B":
+        return "B"
+    if name and name[0] == "A":
         return "A"
-    return "B"
+    if simust_fields is not None:
+        return simust_fields.field_for_screens([screen_id]) or "A"
+    return "A"
 
 
 def _active_field_screens(active_fields):
-    """All existing coach-band screens for currently active fields (never 1 or 8)."""
+    """All coach-band screens for the active fields, named A1–A6 and B1–B6."""
     screens = []
-    for fid in sorted(active_fields or []):
-        if simust_fields is not None:
-            for s in sorted(simust_fields.screens_for_field(fid), key=lambda x: int(x)):
-                if int(s) in DISABLED_DISPLAY_SCREENS:
-                    continue
-                screens.append(int(s))
-        elif fid == "A":
-            screens.extend([2, 3, 4, 12, 13, 14])
-        elif fid == "B":
-            screens.extend([5, 6, 7, 9, 10, 11])
+    for fid in ("A", "B"):
+        if fid not in set(active_fields or []):
+            continue
+        screens.extend(_field_all_screens(fid))
     return screens
 
 
@@ -1280,12 +1310,13 @@ def _scan_label_assets(directory):
         if m:
             num = int(m.group(1))
             action = m.group(2).upper()
-            s1, s2 = int(m.group(3)), int(m.group(4))
-            screens = [s1, s2]
-            field = _field_for_screen(s1)
-            f2 = _field_for_screen(s2)
-            if f2 != field and simust_fields is not None:
-                field = simust_fields.field_for_screens([str(s1), str(s2)]) or field
+            # Filename digits are legacy cabinet numbers (14, 3, …), not A1 names.
+            screens = _named_screens((int(m.group(3)), int(m.group(4))))
+            if not screens:
+                continue
+            field = _field_for_screen(screens[0])
+            if len(screens) > 1 and _field_for_screen(screens[1]) != field and simust_fields is not None:
+                field = simust_fields.field_for_screens(screens) or field
             bucket = actions.setdefault(num, {"action": action, "parts": []})
             if not bucket.get("action"):
                 bucket["action"] = action
@@ -1544,7 +1575,7 @@ def _find_digit_images(directory) -> List[str]:
     return digit_named or other
 
 
-def _pairs_for_degree_gap(arc: List[int], gap: int) -> List[Tuple[int, int]]:
+def _pairs_for_degree_gap(arc, gap: int):
     """Pairs on arc with exactly `gap` screens between (includes wrap-around)."""
     n = len(arc or [])
     if n < 2:
@@ -1556,8 +1587,8 @@ def _pairs_for_degree_gap(arc: List[int], gap: int) -> List[Tuple[int, int]]:
         j = (i + span) % n
         if i == j:
             continue
-        a, b = int(arc[i]), int(arc[j])
-        key = (min(a, b), max(a, b))
+        a, b = arc[i], arc[j]
+        key = tuple(sorted((str(a), str(b))))
         if key in seen:
             continue
         seen.add(key)
@@ -1638,23 +1669,15 @@ def _rotation_field_slot(active_fields) -> dict:
     return slot
 
 
-def _field_all_screens(fid: str) -> List[int]:
-    """Every existing coach-band screen belonging to Field A or B (never 1 or 8)."""
-    fid = str(fid).upper()
+def _field_all_screens(fid: str) -> List[str]:
+    """Every coach-band screen on Field A or Field B, named A1–A6 or B1–B6."""
+    fid = str(fid).upper()[:1]
+    names = []
     if simust_fields is not None:
-        try:
-            return sorted(
-                (
-                    int(s) for s in simust_fields.screens_for_field(fid)
-                    if int(s) not in DISABLED_DISPLAY_SCREENS
-                ),
-                key=lambda x: int(x),
-            )
-        except Exception:
-            pass
-    if fid == "A":
-        return [2, 3, 4, 12, 13, 14]
-    return [5, 6, 7, 9, 10, 11]
+        names = _named_screens(simust_fields.screens_for_field(fid))
+    if not names:
+        names = [f"{fid}{n}" for n in range(1, 7)]
+    return sorted(names, key=_screen_sort_key)
 
 
 def _math_correct_slot(active_fields, count: int = None) -> dict:
@@ -1671,7 +1694,7 @@ def _math_correct_slot(active_fields, count: int = None) -> dict:
         k = min(n, len(pool))
         picked = random.sample(pool, k)
         random.shuffle(picked)
-        slot[fid] = [int(s) for s in picked]
+        slot[fid] = _named_screens(picked)
     return slot
 
 
@@ -1826,11 +1849,11 @@ def _math_screen_layout(op: str, fid: str) -> Tuple[List[int], dict]:
         return [], {}
     k = min(MATH_CORRECT_PER_FIELD, len(screens))
     correct = random.sample(screens, k)
-    correct_set = set(int(s) for s in correct)
+    correct_set = set(_named_screens(correct))
     screen_images = {}
     used_texts = set()
     for sid in screens:
-        if int(sid) in correct_set:
+        if sid in correct_set:
             text, _, _, _ = _math_correct_equation(op)
             # Avoid duplicate identical correct texts when possible
             tries = 0
@@ -1846,11 +1869,11 @@ def _math_screen_layout(op: str, fid: str) -> Tuple[List[int], dict]:
         used_texts.add(text)
         path = _render_math_equation_image(text)
         if path:
-            screen_images[int(sid)] = path
+            screen_images[sid] = path
     if len(screen_images) < k:
         return [], {}
     # Only keep correct targets that actually have images
-    correct_out = [int(s) for s in correct if int(s) in screen_images]
+    correct_out = [s for s in correct if s in screen_images]
     if len(correct_out) < k:
         return [], {}
     return correct_out, screen_images
@@ -1884,7 +1907,8 @@ def _build_math_playlist(
             if not field_screens or not screen_images:
                 continue
             lit = "_".join(str(s) for s in sorted(
-                sid for sids in field_screens.values() for sid in sids
+                (sid for sids in field_screens.values() for sid in sids),
+                key=_screen_sort_key,
             ))
             playlist.append({
                 "kind": "labeled_action",
@@ -1948,15 +1972,15 @@ def _build_rotation_playlist(
             field_screens = {}
             screen_images = {}
             for fid in active:
-                sids = [int(s) for s in (slot.get(fid) or [])]
+                sids = _named_screens(slot.get(fid) or [])
                 if not sids:
                     continue
                 field_screens[fid] = sids
                 for s in sids:
-                    screen_images[int(s)] = pass_image
+                    screen_images[s] = pass_image
             if not screen_images:
                 continue
-            lit = "_".join(str(s) for s in sorted(screen_images.keys()))
+            lit = "_".join(str(s) for s in sorted(screen_images.keys(), key=_screen_sort_key))
             playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
@@ -2017,12 +2041,12 @@ def _build_foundation_timed_playlist(
             for fid, sids in slot.items():
                 if fid not in set(active_fields or []):
                     continue
-                field_screens[fid] = [int(s) for s in sids]
-                for s in sids:
-                    screen_images[int(s)] = image_path
+                field_screens[fid] = _named_screens(sids)
+                for s in field_screens[fid]:
+                    screen_images[s] = image_path
             if not screen_images:
                 continue
-            lit = "_".join(str(s) for s in sorted(screen_images.keys()))
+            lit = "_".join(str(s) for s in sorted(screen_images.keys(), key=_screen_sort_key))
             playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
@@ -2071,11 +2095,11 @@ def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
         return {}
 
     free_by_field = {"A": [], "B": []}
-    action_set = {int(s) for s in action_screens}
+    action_set = set(_named_screens(action_screens))
     for sid in _active_field_screens(active_fields):
-        if int(sid) in action_set:
+        if sid in action_set:
             continue
-        free_by_field[_field_for_screen(sid)].append(int(sid))
+        free_by_field[_field_for_screen(sid)].append(sid)
 
     active = [f for f in ("A", "B") if f in set(active_fields or []) and free_by_field[f]]
     if not active:
@@ -2144,8 +2168,8 @@ def _clear_image_action_cue(force_end=False):
 class ImageActionCanvas(QtWidgets.QWidget):
     """3840×512 coach band on screen 2. Fourteen frames, Field A left, Field B right."""
 
-    # Drawn at 85% of the slice (15% smaller than full-tile cover)
-    IMAGE_SCALE = 0.85
+    # Pass pictures are 10% smaller than the calibrator rectangle. Digits stay full size.
+    PASS_IMAGE_SCALE = 0.90
 
     def __init__(self, parent=None, image_path=TEAMATE_IMAGE):
         super().__init__(parent)
@@ -2161,16 +2185,19 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_screens = set()
         self._video_groups = []  # [{cap, screens, path}]
         self._video_fill = False
+        self._content_scale = 1.0
 
     def clear(self):
         self._stop_screen_video()
         self.active_screens = set()
         self._screen_pixmaps = {}
+        self._content_scale = 1.0
         self.update()
 
     def set_pass_screens(self, screen_ids):
         """Legacy: same fallback image on each lit screen."""
         self._stop_screen_video()
+        self._content_scale = self.PASS_IMAGE_SCALE
         self.active_screens = {_sid(sid) for sid in screen_ids if _sid(sid)}
         self._screen_pixmaps = {}
         for sid in self.active_screens:
@@ -2178,9 +2205,10 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 self._screen_pixmaps[sid] = self._fallback
         self.update()
 
-    def set_screen_images(self, screen_to_path):
+    def set_screen_images(self, screen_to_path, scale=1.0):
         """Map screen id → image path (action, filler, or gap)."""
         self._stop_screen_video()
+        self._content_scale = float(scale or 1.0)
         self._screen_pixmaps = {}
         self.active_screens = set()
         for sid, path in (screen_to_path or {}).items():
@@ -2194,14 +2222,20 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self.active_screens.add(key)
         self.update()
 
-    def set_screen_video(self, screen_ids, video_path):
+    def set_screen_video(self, screen_ids, video_path, scale=None):
         """Play the same pass.mp4 (looping) on each listed screen tile."""
-        self.set_screen_videos({_sid(s): video_path for s in (screen_ids or []) if _sid(s)})
+        self.set_screen_videos(
+            {_sid(s): video_path for s in (screen_ids or []) if _sid(s)},
+            scale=self.PASS_IMAGE_SCALE if scale is None else scale,
+        )
 
-    def set_screen_videos(self, screen_to_path, fill=False):
+    def set_screen_videos(self, screen_to_path, fill=False, scale=None):
         """Play a full video on each screen. Screens that share a path share one decoder."""
         self._stop_screen_video()
         self._video_fill = bool(fill)
+        if scale is None:
+            scale = 1.0 if fill else self.PASS_IMAGE_SCALE
+        self._content_scale = float(scale)
         groups = {}
         for sid, path in (screen_to_path or {}).items():
             key = _sid(sid)
@@ -2210,7 +2244,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             path = str(path or "")
             if not path or not os.path.isfile(path):
                 continue
-            groups.setdefault(os.path.abspath(path), set()).add(sid)
+            groups.setdefault(os.path.abspath(path), set()).add(key)
         self._screen_pixmaps = {}
         self.active_screens = set()
         if not groups:
@@ -2227,7 +2261,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     for sid in screens:
                         stills[sid] = still
             if stills:
-                self.set_screen_images(stills)
+                self.set_screen_images(stills, scale=self._content_scale)
             return
         fps = 25.0
         opened = []
@@ -2246,7 +2280,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             opened.append({"cap": cap, "screens": set(screens), "path": path})
         if not opened:
             if stills:
-                self.set_screen_images(stills)
+                self.set_screen_images(stills, scale=self._content_scale)
             else:
                 self.update()
             return
@@ -2305,8 +2339,11 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 ).copy()
                 pix = QtGui.QPixmap.fromImage(qimg)
                 for sid in group["screens"]:
-                    pixmaps[int(sid)] = pix
-                    screens.add(int(sid))
+                    name = _sid(sid)
+                    if not name:
+                        continue
+                    pixmaps[name] = pix
+                    screens.add(name)
             if not pixmaps:
                 return
             self._video_frame = next(iter(pixmaps.values()))
@@ -2331,8 +2368,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._pixmap_cache[key] = pix
         return pix
 
-    def _tile_rect(self, screen_id: int) -> QtCore.QRect:
-        i = SLICE_ORDER.index(int(screen_id))
+    def _tile_rect(self, screen_id) -> QtCore.QRect:
+        name = _sid(screen_id)
+        i = SLICE_ORDER.index(name)
         x0, x1 = slice_x_span(i, COACH_BAND_WIDTH, len(SLICE_ORDER))
         return QtCore.QRect(x0, 0, x1 - x0, COACH_BAND_HEIGHT)
 
@@ -2343,18 +2381,21 @@ class ImageActionCanvas(QtWidgets.QWidget):
             painter.end()
             return
         for sid, pix in self._screen_pixmaps.items():
-            try:
-                index = SLICE_ORDER.index(int(sid))
-            except ValueError:
+            name = _sid(sid)
+            if not name or name not in SLICE_ORDER:
                 continue
-            left, _right, rect_w = content_x_box(index, sid, self.width(), len(SLICE_ORDER))
-            dy = screen_content_offset_y(sid)
+            index = SLICE_ORDER.index(name)
+            left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
+            dy = screen_content_offset_y(name)
             placed = QtCore.QRect(left, 0, rect_w, self.height())
             painter.setClipRect(placed)
             if not pix.isNull():
+                scale = 1.0 if self._video_fill else float(self._content_scale or 1.0)
+                draw_w = max(1, int(round(rect_w * scale)))
+                draw_h = max(1, int(round(self.height() * scale)))
                 scaled = pix.scaled(
-                    rect_w,
-                    self.height(),
+                    draw_w,
+                    draw_h,
                     QtCore.Qt.KeepAspectRatioByExpanding,
                     QtCore.Qt.SmoothTransformation,
                 )
@@ -2472,7 +2513,7 @@ class WaitingOverlay(QtWidgets.QWidget):
             tile_width = w / self.num_slices
             padding = 12
             for i, slice_num in enumerate(self.slice_order):
-                if int(slice_num) not in self.active_slice_nums:
+                if slice_num is None or slice_num not in self.active_slice_nums:
                     continue
                 offset_x = screen_content_offset(slice_num)
                 offset_y = screen_content_offset_y(slice_num)
@@ -2500,8 +2541,8 @@ class WaitingOverlay(QtWidgets.QWidget):
         # Draw tile boundaries only across the active half
         painter.setPen(QPen(QColor(80, 80, 100, 80), 1))
         for i in range(1, self.num_slices):
-            left_num = int(self.slice_order[i - 1])
-            right_num = int(self.slice_order[i])
+            left_num = self.slice_order[i - 1]
+            right_num = self.slice_order[i]
             if left_num not in self.active_slice_nums and right_num not in self.active_slice_nums:
                 continue
             x_line = int(i * tile_width)
@@ -2517,7 +2558,7 @@ class WaitingOverlay(QtWidgets.QWidget):
                 QColor(255, 100, 100)
             ]
             for i, slice_num in enumerate(self.slice_order):
-                if int(slice_num) not in self.active_slice_nums:
+                if slice_num is None or slice_num not in self.active_slice_nums:
                     self.balls_by_slice.append([])
                     continue
                 num_balls = random.randint(2, 3)
@@ -2542,7 +2583,7 @@ class WaitingOverlay(QtWidgets.QWidget):
 
         # Draw each active slice only
         for i, slice_num in enumerate(self.slice_order):
-            if int(slice_num) not in self.active_slice_nums:
+            if slice_num is None or slice_num not in self.active_slice_nums:
                 continue
             offset_x = screen_content_offset(slice_num)
             cx = int((i + 0.5) * tile_width) + offset_x
@@ -3338,9 +3379,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     parts.append(part)
                     field_screens.setdefault(field, [])
                     for s in part["screens"]:
-                        if int(s) not in field_screens[field]:
-                            field_screens[field].append(int(s))
-                        screen_images[int(s)] = part["path"]
+                        name = _sid(s)
+                        if not name or name in DISABLED_DISPLAY_SCREENS:
+                            continue
+                        if name not in field_screens[field]:
+                            field_screens[field].append(name)
+                        screen_images[name] = part["path"]
                 if not parts:
                     continue
                 action_name = str(info.get("action") or "PASS").upper()
@@ -3444,7 +3488,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if not intro:
                 continue
             for sid in _field_all_screens(fid):
-                screen_to_video[int(sid)] = intro
+                screen_to_video[sid] = intro
         if not screen_to_video:
             logger.warning(
                 "No level intro video found for fields %s — starting test immediately",
@@ -3615,7 +3659,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             fid = _field_for_screen(sid)
             if fid not in active:
                 continue
-            out.setdefault(fid, []).append(int(sid))
+            name = _sid(sid)
+            if not name:
+                continue
+            out.setdefault(fid, []).append(name)
         return out
 
     def _load_video(self, index):
@@ -3773,14 +3820,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             gap_images = {}
             held = entry.get("gap_screen_images") if entry.get("entry_digits") else None
             if held:
-                gap_images = {
-                    int(s): p for s, p in dict(held).items()
-                    if _field_for_screen(s) in active and int(s) not in DISABLED_DISPLAY_SCREENS
-                }
+                gap_images = _named_image_map(held, active)
             elif gap_path:
                 for sid in GAP_SCREENS:
                     if _field_for_screen(sid) in active:
-                        gap_images[int(sid)] = gap_path
+                        gap_images[sid] = gap_path
             if self.image_canvas:
                 if gap_images:
                     self.image_canvas.set_screen_images(gap_images)
@@ -3810,11 +3854,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.show()
             self.image_canvas.raise_()
 
-        screen_images = dict(entry.get("screen_images") or {})
-        screen_images = {
-            int(s): p for s, p in screen_images.items()
-            if _field_for_screen(s) in active and int(s) not in DISABLED_DISPLAY_SCREENS
-        }
+        screen_images = _named_image_map(entry.get("screen_images") or {}, active)
         action_screens = list(screen_images.keys())
         # Math modes already fill every field screen with equations — never overlay fillers.
         fillers = {}
@@ -3823,8 +3863,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 action_num, action_screens, active, self._asset_fillers or {}
             )
         for sid, path in fillers.items():
-            if int(sid) not in screen_images:
-                screen_images[int(sid)] = path
+            name = _sid(sid)
+            if name and name not in screen_images:
+                screen_images[name] = path
 
         # Cue only correct/target screens (math: 2 true equations per field).
         # Display may show equations on every screen via screen_images.
@@ -3835,29 +3876,31 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 fid_u = str(fid).upper()
                 if fid_u not in active:
                     continue
-                field_screens[fid_u] = [
-                    int(s) for s in (sids or [])
-                    if int(s) not in DISABLED_DISPLAY_SCREENS
-                ]
+                field_screens[fid_u] = _named_screens(sids or [])
         if not field_screens:
             for sid in action_screens:
                 fid = _field_for_screen(sid)
                 if fid in active:
-                    field_screens.setdefault(fid, []).append(int(sid))
+                    field_screens.setdefault(fid, []).append(sid)
 
         # Lit screens for display + cue (prefer explicit field_screens)
         lit_screens = []
         for sids in field_screens.values():
-            lit_screens.extend(int(s) for s in sids)
+            lit_screens.extend(sids)
         if not lit_screens:
             lit_screens = list(action_screens)
 
         video_path = entry.get("screen_video")
+        pass_scale = 1.0
+        if not (entry.get("entry_digits") or entry.get("math_op")):
+            pass_scale = (
+                self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.90
+            )
         if self.image_canvas:
             if video_path and os.path.isfile(str(video_path)):
-                self.image_canvas.set_screen_video(lit_screens, str(video_path))
+                self.image_canvas.set_screen_video(lit_screens, str(video_path), scale=pass_scale)
             else:
-                self.image_canvas.set_screen_images(screen_images)
+                self.image_canvas.set_screen_images(screen_images, scale=pass_scale)
             # Paint now. The old timer started before the second monitor showed
             # the image, so Kinovea measured ~2.6s of a 3.0s hold.
             self.image_canvas.repaint()
@@ -3917,10 +3960,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
-        encode = {
-            int(s): p for s, p in (entry.get("encode_images") or {}).items()
-            if _field_for_screen(s) in set(self._active_fields())
-        }
+        encode = _named_image_map(
+            entry.get("encode_images") or {},
+            set(self._active_fields()),
+        )
         if self.image_canvas:
             if encode:
                 self.image_canvas.set_screen_images(encode)
@@ -3986,11 +4029,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self._spin_images:
             self._spin_pass_image = next(iter(self._spin_images.values()))
         for fid in rotation_fields:
-            arc = [int(s) for s in (spin_arcs.get(fid) or _rotation_arc_for_field(fid))]
+            arc = _named_screens(spin_arcs.get(fid) or _rotation_arc_for_field(fid))
             if not arc:
                 continue
-            targets = [int(s) for s in (stop.get(fid) or [])]
-            target = targets[0] if targets else int(arc[0])
+            targets = _named_screens(stop.get(fid) or [])
+            target = targets[0] if targets else arc[0]
             if target not in arc:
                 arc = list(arc) + [target]
             start_i = random.randrange(len(arc))
@@ -4046,7 +4089,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         if self.image_canvas:
             if frame_images:
-                self.image_canvas.set_screen_images(frame_images)
+                self.image_canvas.set_screen_images(
+                    frame_images, scale=self.image_canvas.PASS_IMAGE_SCALE
+                )
             else:
                 self.image_canvas.clear()
 

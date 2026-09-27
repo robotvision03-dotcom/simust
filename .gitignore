@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.*
 lab.env
+instagram_session.json
 *.log
 users.json
 simust_reports/

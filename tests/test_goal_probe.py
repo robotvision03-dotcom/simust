@@ -37,9 +37,8 @@ class GoalProbeCatalogTests(unittest.TestCase):
         self.assertFalse(rt.in_goal_area(far, p0, p1, depth))
 
     def test_live_aim_lists_cover_corners_and_upper(self):
-        self.assertIn("post_a", rt.GOAL_AIM_IN)
-        self.assertIn("post_b", rt.GOAL_AIM_IN)
-        self.assertIn("upper_center_40", rt.GOAL_AIM_IN)
+        self.assertIn("line_center", rt.GOAL_AIM_IN)
+        self.assertIn("outside_20", rt.GOAL_AIM_IN)
         self.assertIn("upper_center_90", rt.GOAL_AIM_OUT)
         self.assertIn("upper_corner_a", rt.GOAL_AIM_OUT)
         p0, p1 = rt.GOAL_LINES["8"]["p0"], rt.GOAL_LINES["8"]["p1"]

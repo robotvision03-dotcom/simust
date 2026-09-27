@@ -26,6 +26,7 @@ ALLOWED_ACTIONS = {
     "homography-save",
     "homography-reset",
     "homography-test",
+    "instagram-live",
 }
 
 GET_STATUS_KEYS = {

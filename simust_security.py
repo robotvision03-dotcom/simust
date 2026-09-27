@@ -53,6 +53,7 @@ LAB_ONLY_PREFIXES = (
     "/start-realtime",
     "/stop-realtime",
     "/pause-realtime",
+    "/instagram-live",
     "/set-visualization",
     "/set-simulation",
     "/results",

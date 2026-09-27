@@ -23,16 +23,16 @@ class ActivatedPlaylistTests(unittest.TestCase):
         self.assertEqual(len(playlist), 30)
         first = playlist[0]
         self.assertEqual(first["test_num"], 1)
-        self.assertEqual(first["field_screens"]["A"], [12])
-        self.assertEqual(first["field_screens"]["B"], [5])
-        self.assertIn("img:10:", first["screen_images"][12])
-        self.assertEqual(first["screen_images"][12], first["screen_images"][5])
+        self.assertEqual(first["field_screens"]["A"], ["A1"])
+        self.assertEqual(first["field_screens"]["B"], ["B1"])
+        self.assertIn("img:10:", first["screen_images"]["A1"])
+        self.assertEqual(first["screen_images"]["A1"], first["screen_images"]["B1"])
         self.assertEqual(len(first["screen_images"]), 12)
         second = playlist[1]
         shown = {path.split(":")[1] for path in second["screen_images"].values()}
         self.assertNotIn("10", shown)
         self.assertIn("20", shown)
-        self.assertEqual(second["field_screens"]["A"], [4])
+        self.assertEqual(second["field_screens"]["A"], ["A6"])
 
     def test_test2_order_uses_numeric_value_not_text(self):
         playlist = player._build_activated_playlist(1, ["A"])
@@ -60,20 +60,20 @@ class ActivatedPlaylistTests(unittest.TestCase):
             for path in step["screen_images"].values():
                 shown.add(path.split(":")[1])
         self.assertEqual(shown, {"22", "16", "12", "17", "21", "13"})
-        self.assertEqual(test3[0]["field_screens"]["A"], [2])
+        self.assertEqual(test3[0]["field_screens"]["A"], ["A4"])
 
     def test_later_sets_repeat_numbers_and_get_faster(self):
         first = player._build_activated_playlist(1, ["A"])
         second = player._build_activated_playlist(2, ["A"])
         fifth = player._build_activated_playlist(5, ["B"])
         self.assertEqual(
-            first[0]["screen_images"][12].split(":")[1],
-            second[0]["screen_images"][12].split(":")[1],
+            first[0]["screen_images"]["A1"].split(":")[1],
+            second[0]["screen_images"]["A1"].split(":")[1],
         )
         self.assertLess(second[0]["on_ms"], first[0]["on_ms"])
         self.assertLess(fifth[0]["on_ms"], second[0]["on_ms"])
         self.assertAlmostEqual(second[0]["on_ms"] / first[0]["on_ms"], 0.9, delta=0.02)
-        self.assertEqual(fifth[0]["field_screens"]["B"], [5])
+        self.assertEqual(fifth[0]["field_screens"]["B"], ["B1"])
         self.assertNotIn("A", fifth[0]["field_screens"])
 
     def test_high_performance_clears_lowest_and_changes_color_each_test(self):
@@ -87,10 +87,10 @@ class ActivatedPlaylistTests(unittest.TestCase):
         finally:
             player.random.sample = original
         self.assertEqual(len(playlist), 30)
-        self.assertIn("img:1:", playlist[0]["screen_images"][12])
-        self.assertEqual(playlist[0]["screen_images"][12], playlist[0]["screen_images"][5])
-        color_1 = playlist[0]["screen_images"][12].rsplit(":", 1)[-1]
-        color_2 = playlist[6]["screen_images"][12].rsplit(":", 1)[-1]
+        self.assertIn("img:1:", playlist[0]["screen_images"]["A1"])
+        self.assertEqual(playlist[0]["screen_images"]["A1"], playlist[0]["screen_images"]["B1"])
+        color_1 = playlist[0]["screen_images"]["A1"].rsplit(":", 1)[-1]
+        color_2 = playlist[6]["screen_images"]["A1"].rsplit(":", 1)[-1]
         self.assertNotEqual(color_1, color_2)
         colors = {step["screen_images"][next(iter(step["screen_images"]))].rsplit(":", 1)[-1]
                   for step in playlist if step["action_in_set"] == 1}

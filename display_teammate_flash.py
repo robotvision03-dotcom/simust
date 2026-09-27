@@ -72,8 +72,8 @@ REPEAT = 5
 DEFAULT_SCREEN_INDEX = 1  # lab arena wall (DISPLAY2)
 
 
-def tile_index(screen_id: int) -> int:
-    return SLICE_ORDER.index(int(screen_id))
+def tile_index(screen_id) -> int:
+    return SLICE_ORDER.index(str(screen_id))
 
 
 class TeammateFlashWindow(QtWidgets.QWidget):
@@ -137,17 +137,17 @@ class TeammateFlashWindow(QtWidgets.QWidget):
             return
 
         if self.phase == 0:
-            self.active_screens = {4, 11}
+            self.active_screens = {"A6", "B6"}
             delay = ON_MS
-            print(f"Cycle {self.cycle + 1}/{REPEAT}: ON screens 4 & 11 ({ON_MS} ms)")
+            print(f"Cycle {self.cycle + 1}/{REPEAT}: ON screens A6 & B6 ({ON_MS} ms)")
         elif self.phase == 1:
             self.active_screens = set()
             delay = OFF_MS
             print(f"Cycle {self.cycle + 1}/{REPEAT}: OFF ({OFF_MS} ms)")
         elif self.phase == 2:
-            self.active_screens = {3, 10}
+            self.active_screens = {"A5", "B5"}
             delay = ON_MS
-            print(f"Cycle {self.cycle + 1}/{REPEAT}: ON screens 3 & 10 ({ON_MS} ms)")
+            print(f"Cycle {self.cycle + 1}/{REPEAT}: ON screens A5 & B5 ({ON_MS} ms)")
         else:
             self.active_screens = set()
             delay = OFF_MS
