@@ -37,7 +37,8 @@ CONTENT_WIDTH_RATIO = 0.92
 SCREEN_CONTENT_OFFSET = {
     "A1": -10,
     "A2": -27,
-    "A3": -40,
+    "A3": -46,
+    "A4": -14,
     "A5": -34,
     "A6": -52,
     "B1": -72,

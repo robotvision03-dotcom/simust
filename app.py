@@ -3022,8 +3022,12 @@ def shift_results_band(frame):
     return out
 
 
-def _offset_video_filter(src_label, width, height):
-    """ffmpeg graph that shifts each screen of [src_label] by the saved calibration."""
+def _offset_video_filter(src_label, width, height, keep_span=None):
+    """ffmpeg graph that shifts each screen of [src_label] by the saved calibration.
+
+    keep_span is the final-results coach picture (screens 3 and 4, including
+    the empty cabinet between them). That span stays where the clip authored it.
+    """
     real = []
     for index, sid in enumerate(RESULTS_SLICE_ORDER):
         if sid is None:
@@ -3045,6 +3049,12 @@ def _offset_video_filter(src_label, width, height):
         parts.append(f"[os{n}]crop={sw}:{height}:{x0}:0,scale={rect_w}:{height}:flags=fast_bilinear[ocrop{n}]")
         parts.append(f"[{prev}][ocrop{n}]overlay=x={left}:y={dest_y}:format=auto[{nxt}]")
         prev = nxt
+    if keep_span:
+        x0, x1 = int(keep_span[0]), int(keep_span[1])
+        span_w = max(1, x1 - x0)
+        parts.append(f"[{src_label}]crop={span_w}:{height}:{x0}:0[okeepsrc]")
+        parts.append(f"[{prev}][okeepsrc]overlay=x={x0}:y=0:format=auto[okeep]")
+        prev = "okeep"
     return ";".join(parts), prev
 
 
@@ -3549,7 +3559,7 @@ def prepare_field_section_metrics(results_rows, fdir, video_index=None, is_final
 # ---------- generate_results_video_from_results ----------
 def generate_results_video_from_results(results_list, output_path, duration_seconds=5, is_final=False,
                                         slice_video_path=None, session_folder=None, video_index=None,
-                                        field=None, extra_ring_panels=None):
+                                        field=None, extra_ring_panels=None, native_background=False):
     try:
         field_id = "A"
         try:
@@ -3648,8 +3658,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             else:
                 slice_video_path = None
         else:
-            # Per-video stays rings-only (no coach clip) for both fields
-            slice_video_path = None
+            # Per-video rings stay on screens 1, 2, 5 and 6.
+            # A wrong-action reel passed in is the picture on screens 3 and 4.
+            if not native_background:
+                slice_video_path = None
 
         REFERENCE_DISTANCE_METERS = 77.0
         economy_percent = min(100.0, (total_distance / REFERENCE_DISTANCE_METERS) * 100) if total_distance > 0 else 0
@@ -3775,7 +3787,36 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             output_fps = 2
             video_duration = float(duration_seconds) if duration_seconds and duration_seconds > 0 else 20.0
             total_frames = max(1, int(round(video_duration * output_fps)))
-            if slice_video_path and os.path.exists(slice_video_path):
+            if native_background and slice_video_path and os.path.exists(slice_video_path):
+                vid_info, _audio = probe_media(slice_video_path)
+                output_fps = 20.0
+                if vid_info and vid_info.get("r_frame_rate"):
+                    fps_str = str(vid_info["r_frame_rate"])
+                    if "/" in fps_str:
+                        num, den = fps_str.split("/", 1)
+                        try:
+                            output_fps = float(num) / float(den) if float(den) else 20.0
+                        except (TypeError, ValueError):
+                            output_fps = 20.0
+                    else:
+                        try:
+                            output_fps = float(fps_str)
+                        except (TypeError, ValueError):
+                            output_fps = 20.0
+                if vid_info and vid_info.get("duration"):
+                    try:
+                        video_duration = float(vid_info["duration"])
+                    except (TypeError, ValueError):
+                        pass
+                if output_fps <= 1:
+                    output_fps = 20.0
+                total_frames = max(1, int(round(video_duration * output_fps)))
+                use_slice_video = True
+                logger.info(
+                    "Per-video wrong slices on screens 3 and 4 (%.2fs @ %.2f FPS)",
+                    video_duration, output_fps,
+                )
+            elif slice_video_path and os.path.exists(slice_video_path):
                 use_slice_video = True
                 logger.info("Per-video will sample coach clip via ffmpeg/stream (%.0fs @ 2 FPS)", video_duration)
             else:
@@ -4026,7 +4067,13 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
             if base.shape[1] != width or base.shape[0] != height:
                 base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
+            authored = base
             base = shift_results_band(base)
+            if is_final:
+                x0 = max(0, int(coach_geom["dst_x0"]))
+                x1 = min(width, int(coach_geom["dst_x1"]))
+                if x1 > x0:
+                    base[:, x0:x1] = authored[:, x0:x1]
             out_img = base
             out_img[overlay_mask] = overlay[overlay_mask]
             return out_img
@@ -4053,7 +4100,9 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 # PRO_CI clips show coach on Field A tiles 14/1/2 — move that band to B tiles 7/9.
                 sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
                 dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
-                shift_vf, shift_label = _offset_video_filter("bg2", width, height)
+                shift_vf, shift_label = _offset_video_filter(
+                    "bg2", width, height, keep_span=(dx0, dx0 + dw),
+                )
                 vf = (
                     f"color=c=0x0a0c12:s={width}x{height}[bg];"
                     f"[0:v]scale={width}:{height}:flags=fast_bilinear,"
@@ -4063,7 +4112,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
                 )
             else:
-                shift_vf, shift_label = _offset_video_filter("bg", width, height)
+                shift_vf, shift_label = _offset_video_filter(
+                    "bg", width, height,
+                    keep_span=(coach_geom["dst_x0"], coach_geom["dst_x1"]),
+                )
                 vf = (
                     f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
                     f"{shift_vf};"
@@ -4091,7 +4143,14 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 ]
                 encoded = run_ffmpeg(cmd, timeout=180)
             elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
-                if remap_coach_to_b:
+                if native_background:
+                    shift_vf, shift_label = _offset_video_filter("bg", width, height)
+                    per_vf = (
+                        f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
+                        f"{shift_vf};"
+                        f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
+                    )
+                elif remap_coach_to_b:
                     sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
                     dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
                     shift_vf, shift_label = _offset_video_filter("bg2", width, height)
@@ -4401,16 +4460,28 @@ async def create_video_results(req: Request):
             ",".join(sorted(panels.keys())),
             video_path,
         )
+        wrong_reel = None
+        try:
+            import simust_wrong_clips
+            wrong_reel = simust_wrong_clips.build_wrong_results_background(
+                session_root,
+                [(fid, fdir, rows) for fid, fdir, rows, _path in field_jobs],
+                video_index,
+            )
+        except Exception as exc:
+            logger.warning("Wrong-action slices were not built: %s", exc)
+            wrong_reel = None
         success = generate_results_video_from_results(
             primary_rows,
             video_path,
-            duration_seconds=20,
+            duration_seconds=(wrong_reel or {}).get("duration") or 20,
             is_final=False,
-            slice_video_path=None,
+            slice_video_path=(wrong_reel or {}).get("path"),
             session_folder=primary_dir,
             video_index=video_index,
             field=primary_fid,
             extra_ring_panels=extra,
+            native_background=bool(wrong_reel),
         )
         if not success or not os.path.exists(video_path):
             return {"status": "error", "message": "Per-video generation failed"}
