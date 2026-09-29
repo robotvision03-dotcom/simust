@@ -219,6 +219,7 @@ WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
 # Level intro clip played before every test (replaces "starting" ring animation).
 LEVEL_INTRO_MS = 4000
+LEVEL_CARD_MS = 5000
 LEVEL_INTRO_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # Key → candidate filenames (elite file is currently misspelled "eite.mp4").
 LEVEL_INTRO_FILES = {
@@ -340,6 +341,49 @@ HP_TEST_BG = {
     4: (106, 27, 154),
     5: (183, 28, 28),
 }
+# Elite and World Class: Field A and Field B are one field, screens 1–12.
+# Each test places 12 of these 22 numbers. The lowest remaining number is the pass.
+ELITE_NUMBER_POOL = (
+    "01", "03", "05", "07", "08", "10", "11", "12", "13", "15",
+    "16", "17", "18", "19", "20", "21", "22", "23", "25", "30",
+    "40", "50",
+)
+ELITE_ACTIONS_PER_TEST = 12
+ELITE_ON_START_MS = 4500
+ELITE_ON_MIN_MS = 2500
+ELITE_GAP_MS = 500
+ELITE_ZERO_COLOR = (255, 152, 0)
+# Background changes every test. The digit color changes with it and stays readable.
+ELITE_TEST_BG = {
+    1: (8, 24, 90),
+    2: (0, 55, 28),
+    3: (48, 8, 72),
+    4: (90, 8, 12),
+    5: (0, 48, 52),
+}
+ELITE_DIGIT_ON_BG = {
+    1: (255, 235, 59),
+    2: (255, 255, 255),
+    3: (0, 229, 255),
+    4: (187, 222, 251),
+    5: (178, 255, 89),
+}
+WORLD_DIGIT_COLORS = (
+    (255, 255, 255),
+    (255, 235, 59),
+    (0, 229, 255),
+    (255, 64, 129),
+    (178, 255, 89),
+    (255, 152, 0),
+    (224, 64, 251),
+    (129, 212, 250),
+    (255, 241, 118),
+    (128, 222, 234),
+    (244, 143, 177),
+    (255, 112, 67),
+    (179, 157, 219),
+    (174, 213, 129),
+)
 SF_SCRIPTED_PLAYLISTS = {
     "SF-30N": SF30N_SCRIPT,
     "SF-60N": SF60N_SCRIPT,
@@ -609,6 +653,81 @@ def _high_performance_series_num(*paths) -> Optional[int]:
     return _band_series_num(*paths, band=r"L03-HighPerformance|High[-_ ]?Performance")
 
 
+def _elite_series_num(*paths) -> Optional[int]:
+    return _band_series_num(*paths, band=r"L04-Elite")
+
+
+def _world_class_series_num(*paths) -> Optional[int]:
+    return _band_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
+
+
+def _combined_level_band(text) -> Optional[str]:
+    """Elite and World Class use both fields as one. World Class is checked first."""
+    blob = str(text or "")
+    if re.search(r"L05-WorldClass|World[-_ ]?Class", blob, re.I):
+        return "world-class"
+    if re.search(r"L04-Elite", blob, re.I):
+        return "elite"
+    return None
+
+
+COMBINED_PLAY_MESSAGE = (
+    "Elite and World Class need two players, one on Field A and one on Field B, "
+    "both on the same Elite set or both on the same World Class set."
+)
+
+
+def _combined_play_decision(active, field_levels=None, field_directories=None, *extra):
+    """None when this play is not Elite or World Class.
+
+    Otherwise ("play", band, series) or ("block", message).
+    One player cannot start. The two players must share one set.
+    """
+    active = {str(fid).upper() for fid in (active or [])}
+    levels = field_levels or {}
+    dirs = field_directories or {}
+    found = []
+    for fid in ("A", "B"):
+        if fid not in active:
+            continue
+        text = " ".join(str(part or "") for part in (
+            levels.get(fid),
+            dirs.get(fid),
+        ))
+        band = _combined_level_band(text)
+        if not band:
+            continue
+        series = (
+            _world_class_series_num(text)
+            if band == "world-class"
+            else _elite_series_num(text)
+        )
+        found.append((band, series))
+    if not found:
+        blob = " ".join(str(part or "") for part in extra)
+        band = _combined_level_band(blob)
+        if not band:
+            return None
+        series = (
+            _world_class_series_num(blob)
+            if band == "world-class"
+            else _elite_series_num(blob)
+        )
+        found = [(band, series)]
+    bands = {band for band, _series in found}
+    series_nums = {series for _band, series in found}
+    ready = (
+        active == {"A", "B"}
+        and len(found) == 2
+        and len(bands) == 1
+        and len(series_nums) == 1
+        and None not in series_nums
+    )
+    if not ready:
+        return ("block", COMBINED_PLAY_MESSAGE)
+    return ("play", next(iter(bands)), next(iter(series_nums)))
+
+
 def _level_context_bits(level_root, video_directory, field_levels, active) -> List[str]:
     """Paths and selected level ids, so A-T timing still works if the folder was flattened."""
     bits = [str(level_root or ""), str(video_directory or "")]
@@ -770,6 +889,175 @@ def _build_high_performance_playlist(series_num: int, active_fields) -> List[dic
         _high_performance_test_layout,
         "HighPerformance",
     )
+
+
+def _elite_screen_ids() -> List[str]:
+    """Screens 1–12: Field A 1–6, then Field B 1–6."""
+    return [f"A{n}" for n in range(1, 7)] + [f"B{n}" for n in range(1, 7)]
+
+
+def _color_channel(value: float) -> float:
+    value = float(value) / 255.0
+    if value <= 0.04045:
+        return value / 12.92
+    return ((value + 0.055) / 1.055) ** 2.4
+
+
+def _contrast_ratio(fg, bg) -> float:
+    def lum(color):
+        r, g, b = (_color_channel(color[0]), _color_channel(color[1]), _color_channel(color[2]))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    light, dark = lum(fg), lum(bg)
+    if dark > light:
+        light, dark = dark, light
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _colors_are_visible(fg, bg) -> bool:
+    """Digit and background must differ enough to read by eye."""
+    if tuple(int(v) for v in fg[:3]) == tuple(int(v) for v in bg[:3]):
+        return False
+    return _contrast_ratio(fg, bg) >= 4.5
+
+
+def _elite_series_timing_ms(series_num: int) -> Tuple[int, int]:
+    """A-T1 is 4.5s. Each later set of tests is 10% shorter, never under 2.5s. Gap stays 0.5s."""
+    decay = ENTRY_TIMING_DECAY ** (max(1, int(series_num)) - 1)
+    on = max(float(ELITE_ON_MIN_MS), float(ELITE_ON_START_MS) * decay)
+    on_ms, _ = _snap_ms_to_display_fps(on)
+    if on_ms < ELITE_ON_MIN_MS:
+        on_ms, _ = _snap_ms_to_display_fps(ELITE_ON_MIN_MS)
+    gap_ms, _ = _snap_ms_to_display_fps(ELITE_GAP_MS)
+    return on_ms, gap_ms
+
+
+def _elite_alternating_screens() -> List[str]:
+    """Field A screen, then the matching Field B screen, from 1 through 6."""
+    order = []
+    for number in range(1, 7):
+        order.append(f"A{number}")
+        order.append(f"B{number}")
+    return order
+
+
+def _world_ordered_goals(test_num: int) -> List[str]:
+    """Tests 1 and 2: screen 1, then 2, then 3, switching field every action.
+
+    Test 1 starts on Field A. Test 2 starts on Field B, so it is not A then B again.
+    """
+    order = []
+    for number in range(1, 7):
+        if int(test_num) == 2:
+            order.extend((f"B{number}", f"A{number}"))
+        else:
+            order.extend((f"A{number}", f"B{number}"))
+    return order
+
+
+def _ordered_combined_goals(test_num: int, mode: str = "elite") -> List[str]:
+    """Every test follows the test 1 or test 2 line. Nothing is shuffled.
+
+    Odd tests match test 1. Even tests match test 2.
+    World Class test 2 starts on Field B and walks forward (B1, A1, B2, A2, ...).
+    Elite test 2 walks that same alternating line in reverse, so it starts on B6.
+    """
+    pattern = 2 if int(test_num) % 2 == 0 else 1
+    if str(mode) == "world-class":
+        return _world_ordered_goals(pattern)
+    if pattern == 2:
+        return list(reversed(_elite_alternating_screens()))
+    return _elite_alternating_screens()
+
+
+def _elite_test_layout(test_num: int, mode: str = "elite") -> Tuple[dict, Tuple[int, int, int]]:
+    """Place the first 12 pool numbers along the ordered goal line for this test."""
+    order = _ordered_combined_goals(test_num, mode)
+    numbers = list(ELITE_NUMBER_POOL)[:ELITE_ACTIONS_PER_TEST]
+    placement = {order[i]: numbers[i] for i in range(ELITE_ACTIONS_PER_TEST)}
+    bg = ELITE_TEST_BG[int(test_num)]
+    return placement, bg
+
+
+def _world_digit_colors(bg) -> List[Tuple[int, int, int]]:
+    """Twelve colors, each different, each readable on this background."""
+    chosen = []
+    for color in WORLD_DIGIT_COLORS:
+        if not _colors_are_visible(color, bg):
+            continue
+        if color in chosen:
+            continue
+        chosen.append(color)
+        if len(chosen) == ELITE_ACTIONS_PER_TEST:
+            break
+    return chosen
+
+
+def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
+    """12 screens, one field. Lowest number is the pass, then that screen becomes 00.
+
+    Elite: every number on a test shares one color, and 00 is always orange.
+    World Class: every number has its own color, and 00 keeps that color.
+    """
+    world = str(mode) == "world-class"
+    label_prefix = "WorldClass" if world else "Elite"
+    on_ms, gap_ms = _elite_series_timing_ms(series_num)
+    screens = _elite_screen_ids()
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        placement, bg = _elite_test_layout(test_num, "world-class" if world else "elite")
+        shared = ELITE_DIGIT_ON_BG[int(test_num)]
+        if not _colors_are_visible(shared, bg) or not _colors_are_visible(ELITE_ZERO_COLOR, bg):
+            logger.error("Elite colors are not readable on test %s", test_num)
+            return []
+        per_screen = _world_digit_colors(bg) if world else []
+        if world and len(per_screen) < len(screens):
+            logger.error("World Class could not color every screen on test %s", test_num)
+            return []
+        order = _ordered_combined_goals(test_num, "world-class" if world else "elite")
+        number_png = {}
+        zero_png = {}
+        for index, sid in enumerate(screens):
+            fg = per_screen[index] if world else shared
+            zero_fg = fg if world else ELITE_ZERO_COLOR
+            number_png[sid] = _render_band_digit_image(placement[sid], bg, fg)
+            zero_png[sid] = _render_band_digit_image("00", bg, zero_fg)
+        if any(not number_png[sid] or not zero_png[sid] for sid in screens):
+            return []
+        for action_in_set, goal_sid in enumerate(order, start=1):
+            finished = set(order[:action_in_set - 1])
+            images = {}
+            for sid in screens:
+                images[sid] = zero_png[sid] if sid in finished else number_png[sid]
+            fid = "B" if str(goal_sid).startswith("B") else "A"
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": ELITE_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == ELITE_ACTIONS_PER_TEST,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "entry_digits": True,
+                "combined_field": True,
+                "field_screens": {fid: [goal_sid]},
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "label": (
+                    f"{label_prefix} A-T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{ELITE_ACTIONS_PER_TEST} "
+                    f"goal screen {goal_sid} number {placement.get(goal_sid)} "
+                    f"on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": f"image://{label_prefix}/A-T{series_num}/test{test_num}/{action_in_set}",
+            })
+    return playlist
 
 
 def _script_for_mode(mode_id: str):
@@ -1212,6 +1500,83 @@ def _active_field_screens(active_fields):
             continue
         screens.extend(_field_all_screens(fid))
     return screens
+
+
+def _level_display_name(level_id: str, subdirectory: str = "") -> str:
+    """Short name shown before the intro video."""
+    text = f"{level_id or ''} {subdirectory or ''}"
+    if re.search(r"L05-WorldClass|World[-_ ]?Class", text, re.I):
+        return "World Class"
+    if re.search(r"L04-Elite", text, re.I):
+        return "Elite"
+    if re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
+        return "High Performance"
+    if re.search(r"L02-Activated", text, re.I):
+        return "Activated"
+    if re.search(r"L01-Entry", text, re.I):
+        return "Entry"
+    if re.search(r"SF-30N|SF-60N|SF-110N|SF-180N", text, re.I):
+        match = re.search(r"SF-\d+N", text, re.I)
+        return match.group(0).upper() if match else "Foundation"
+    if re.search(r"Foundation", text, re.I):
+        return "Foundation"
+    return str(level_id or "Test").split("/")[-1] or "Test"
+
+
+def _level_card_text(level_id: str, subdirectory: str, entry: dict, playlist: list) -> str:
+    """Three lines: name, on-time, and how many actions are in the test."""
+    name = _level_display_name(level_id, subdirectory)
+    on_ms = 0
+    actions = 0
+    test_num = 1
+    if isinstance(entry, dict):
+        try:
+            on_ms = int(entry.get("on_ms") or 0)
+        except (TypeError, ValueError):
+            on_ms = 0
+        try:
+            actions = int(entry.get("actions_in_set") or 0)
+        except (TypeError, ValueError):
+            actions = 0
+        try:
+            test_num = int(entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            test_num = 1
+    if actions <= 0:
+        actions = sum(
+            1 for item in (playlist or [])
+            if isinstance(item, dict) and int(item.get("test_num") or 0) == test_num
+        )
+    lines = [name]
+    if on_ms > 0:
+        lines.append(f"{on_ms / 1000.0:.2f} S")
+    if actions > 0:
+        lines.append(f"{actions} Actions")
+    return "\n".join(lines)
+
+
+def _level_card_colors(level_id: str, subdirectory: str, entry: dict):
+    """Background is that test's level color. Text uses the digit color on it."""
+    text = f"{level_id or ''} {subdirectory or ''}"
+    test_num = 1
+    if isinstance(entry, dict):
+        try:
+            test_num = int(entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            test_num = 1
+    if test_num not in (1, 2, 3, 4, 5):
+        test_num = 1
+    if re.search(r"L04-Elite|L05-WorldClass|World[-_ ]?Class", text, re.I):
+        return ELITE_TEST_BG[test_num], ELITE_DIGIT_ON_BG[test_num]
+    if re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
+        return HP_TEST_BG[test_num], (255, 255, 255)
+    if re.search(r"L02-Activated", text, re.I):
+        return (0, 55, 28), (255, 255, 255)
+    if re.search(r"L01-Entry", text, re.I):
+        return (183, 28, 28), (255, 255, 255)
+    if re.search(r"Foundation|SF-\d+N", text, re.I):
+        return (21, 101, 192), (255, 255, 255)
+    return (0, 0, 0), (255, 0, 0)
 
 
 def _level_intro_key_from_id(level_id: str) -> Optional[str]:
@@ -1788,6 +2153,44 @@ def _render_math_equation_image(eq_text: str) -> Optional[str]:
     return path
 
 
+def _render_band_digit_image(digit: str, bg, fg) -> Optional[str]:
+    """Digit on a colored screen. fg and bg are (r, g, b) and must stay readable."""
+    text = str(digit or "").strip()
+    if not text or not bg or not fg:
+        return None
+    try:
+        os.makedirs(MATH_EQ_CACHE_DIR, exist_ok=True)
+    except Exception:
+        return None
+    br, bgc, bb = (int(bg[0]), int(bg[1]), int(bg[2]))
+    fr, fg_c, fb = (int(fg[0]), int(fg[1]), int(fg[2]))
+    path = os.path.join(
+        MATH_EQ_CACHE_DIR,
+        f"digit72_fg_{fr}_{fg_c}_{fb}_bg_{br}_{bgc}_{bb}_{text}.png",
+    )
+    if os.path.isfile(path):
+        return path
+    try:
+        from PyQt5.QtGui import QImage
+    except Exception as exc:
+        logger.warning("Cannot render colored digit (no Qt): %s", exc)
+        return None
+    w, h = 512, 512
+    img = QImage(w, h, QImage.Format_ARGB32)
+    img.fill(QColor(br, bgc, bb, 255))
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.TextAntialiasing)
+    font = QFont("Segoe UI", 72, QFont.Bold)
+    painter.setFont(font)
+    painter.setPen(QColor(fr, fg_c, fb))
+    painter.drawText(QtCore.QRect(0, 0, w, h), Qt.AlignCenter, text)
+    painter.end()
+    if not img.save(path, "PNG"):
+        return None
+    return path
+
+
 def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
     """Digit centered on the screen. One third of the previous 216pt size.
 
@@ -2168,8 +2571,9 @@ def _clear_image_action_cue(force_end=False):
 class ImageActionCanvas(QtWidgets.QWidget):
     """3840×512 coach band on screen 2. Fourteen frames, Field A left, Field B right."""
 
-    # Pass pictures are 10% smaller than the calibrator rectangle. Digits stay full size.
-    PASS_IMAGE_SCALE = 0.90
+    # Pass pictures are 10% smaller than the previous size (81% of the calibrator rectangle).
+    # Digits and equations stay full size.
+    PASS_IMAGE_SCALE = 0.81
 
     def __init__(self, parent=None, image_path=TEAMATE_IMAGE):
         super().__init__(parent)
@@ -2186,17 +2590,39 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_groups = []  # [{cap, screens, path}]
         self._video_fill = False
         self._content_scale = 1.0
+        self._summary_lines = []
+        self._summary_screens = None
+        self._summary_bg = (0, 0, 0)
+        self._summary_fg = (255, 255, 255)
 
     def clear(self):
         self._stop_screen_video()
         self.active_screens = set()
         self._screen_pixmaps = {}
         self._content_scale = 1.0
+        self._summary_lines = []
+        self._summary_screens = None
+        self._summary_bg = (0, 0, 0)
+        self._summary_fg = (255, 255, 255)
+        self.update()
+
+    def set_level_summary(self, lines, screen_ids=None, background=None, foreground=None):
+        """Show the test name, time, and action count on each listed screen."""
+        self._stop_screen_video()
+        self.active_screens = set()
+        self._screen_pixmaps = {}
+        self._summary_lines = [str(line) for line in (lines or []) if str(line).strip()]
+        chosen = {_sid(sid) for sid in (screen_ids or []) if _sid(sid)}
+        self._summary_screens = chosen or None
+        self._summary_bg = tuple(int(v) for v in (background or (0, 0, 0))[:3])
+        self._summary_fg = tuple(int(v) for v in (foreground or (255, 255, 255))[:3])
         self.update()
 
     def set_pass_screens(self, screen_ids):
         """Legacy: same fallback image on each lit screen."""
         self._stop_screen_video()
+        self._summary_lines = []
+        self._summary_screens = None
         self._content_scale = self.PASS_IMAGE_SCALE
         self.active_screens = {_sid(sid) for sid in screen_ids if _sid(sid)}
         self._screen_pixmaps = {}
@@ -2208,6 +2634,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
     def set_screen_images(self, screen_to_path, scale=1.0):
         """Map screen id → image path (action, filler, or gap)."""
         self._stop_screen_video()
+        self._summary_lines = []
+        self._summary_screens = None
         self._content_scale = float(scale or 1.0)
         self._screen_pixmaps = {}
         self.active_screens = set()
@@ -2232,6 +2660,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
     def set_screen_videos(self, screen_to_path, fill=False, scale=None):
         """Play a full video on each screen. Screens that share a path share one decoder."""
         self._stop_screen_video()
+        self._summary_lines = []
+        self._summary_screens = None
         self._video_fill = bool(fill)
         if scale is None:
             scale = 1.0 if fill else self.PASS_IMAGE_SCALE
@@ -2374,9 +2804,56 @@ class ImageActionCanvas(QtWidgets.QWidget):
         x0, x1 = slice_x_span(i, COACH_BAND_WIDTH, len(SLICE_ORDER))
         return QtCore.QRect(x0, 0, x1 - x0, COACH_BAND_HEIGHT)
 
+    def _paint_level_summary(self, painter):
+        """Name, time, and action count, centered on every screen."""
+        lines = list(self._summary_lines or [])
+        if not lines:
+            return
+        chosen = getattr(self, "_summary_screens", None)
+        if chosen:
+            matched = [name for name in SLICE_ORDER if name and name in chosen]
+            if not matched:
+                chosen = None
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+        bg = getattr(self, "_summary_bg", (0, 0, 0)) or (0, 0, 0)
+        fg = getattr(self, "_summary_fg", (255, 255, 255)) or (255, 255, 255)
+        painter.setPen(QtGui.QColor(int(fg[0]), int(fg[1]), int(fg[2])))
+        fill = QtGui.QColor(int(bg[0]), int(bg[1]), int(bg[2]))
+        for name in SLICE_ORDER:
+            if not name:
+                continue
+            if chosen is not None and name not in chosen:
+                continue
+            index = SLICE_ORDER.index(name)
+            left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
+            if rect_w < 8:
+                continue
+            rect = QtCore.QRect(left, 0, rect_w, self.height())
+            painter.fillRect(rect, fill)
+            font = QtGui.QFont("Segoe UI", 48, QtGui.QFont.Bold)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            longest = max(lines, key=len)
+            while metrics.width(longest) > rect_w - 12 and font.pointSize() > 18:
+                font.setPointSize(font.pointSize() - 2)
+                painter.setFont(font)
+                metrics = painter.fontMetrics()
+            painter.setClipRect(rect)
+            painter.drawText(
+                rect.adjusted(6, 6, -6, -6),
+                QtCore.Qt.AlignCenter,
+                "\n".join(lines),
+            )
+            painter.setClipping(False)
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtGui.QColor(0, 0, 0))
+        if self._summary_lines:
+            self._paint_level_summary(painter)
+            painter.end()
+            return
         if not self._screen_pixmaps:
             painter.end()
             return
@@ -2818,6 +3295,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.completion_label.setStyleSheet("background-color: rgba(10,12,18,220); color: #ffd700; font-size: 24px; padding: 20px; border-radius: 10px; font-weight: bold;")
         self.completion_label.hide()
 
+        self.level_card_label = QtWidgets.QLabel("", self)
+        self.level_card_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.level_card_label.setStyleSheet(
+            "background-color: rgb(21,101,192); color: white; font-size: 34px; "
+            "padding: 28px 48px; border-radius: 12px; font-weight: bold; "
+            "font-family: 'Segoe UI';"
+        )
+        self.level_card_label.hide()
+
         # Timers
         self.check_timer = QtCore.QTimer()
         self.check_timer.setInterval(500)
@@ -3004,6 +3490,41 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """
         active = set(self._active_fields())
         if not active:
+            return []
+
+        self._playlist_block_reason = ""
+        decision = _combined_play_decision(
+            active,
+            getattr(self, "_phase_field_levels", None),
+            getattr(self, "_phase_field_directories", None),
+            getattr(self, "_level_root", ""),
+            self.video_directory,
+            getattr(self, "_phase_mode_id", ""),
+            getattr(self, "_phase_subdirectory", ""),
+        )
+        if decision:
+            kind = decision[0]
+            if kind != "play":
+                self._playlist_block_reason = decision[1]
+                logger.error(self._playlist_block_reason)
+                self._label_mode = False
+                return []
+            _band, series_num = decision[1], decision[2]
+            playlist = _build_elite_playlist(series_num, _band)
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "%s A-T%s playlist: %s tests x %s actions, on=%sms gap=%sms",
+                    "World Class" if _band == "world-class" else "Elite",
+                    series_num,
+                    ENTRY_TEST_COUNT,
+                    ELITE_ACTIONS_PER_TEST,
+                    playlist[0].get("on_ms"),
+                    playlist[0].get("gap_ms"),
+                )
+                return playlist
+            logger.error("%s A-T%s playlist empty", _band, series_num)
+            self._label_mode = False
             return []
 
         if not getattr(self, "_one_field_build", False) and (
@@ -3476,7 +3997,71 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return _find_level_intro_video(directory or self.video_directory or self._level_root)
 
     def _begin_level_intro(self, next_index=0):
+        """Show the test card for 5 seconds, then play the level clip."""
+        next_index = int(next_index)
+        if getattr(self, "_level_card_shown_for", None) != next_index:
+            self._show_level_card(next_index)
+            return
+        self._play_level_intro(next_index)
+
+    def _show_level_card(self, next_index):
+        self._level_card_shown_for = int(next_index)
+        files = self.video_files or []
+        entry = files[next_index] if 0 <= next_index < len(files) and isinstance(files[next_index], dict) else {}
+        levels = getattr(self, "_phase_field_levels", None) or {}
+        level_id = ""
+        subdirectory = str(getattr(self, "_phase_subdirectory", "") or "")
+        for fid in self._active_fields():
+            if levels.get(fid):
+                level_id = str(levels.get(fid))
+                break
+        if not level_id:
+            level_id = str(getattr(self, "_phase_mode_id", "") or "")
+        text = _level_card_text(level_id, subdirectory, entry, files)
+        background, foreground = _level_card_colors(level_id, subdirectory, entry)
+        if self.image_canvas:
+            screens = []
+            for fid in self._active_fields():
+                screens.extend(_field_all_screens(fid))
+            self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            self.image_canvas.set_level_summary(
+                text.split("\n"), screens, background, foreground,
+            )
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+            self.image_canvas.update()
+            if self.level_card_label:
+                self.level_card_label.hide()
+        else:
+            label = self.level_card_label
+            br, bgc, bb = background
+            fr, fg_c, fb = foreground
+            label.setStyleSheet(
+                f"background-color: rgb({br},{bgc},{bb}); color: rgb({fr},{fg_c},{fb}); "
+                "font-size: 34px; padding: 28px 48px; border-radius: 12px; "
+                "font-weight: bold; font-family: 'Segoe UI';"
+            )
+            label.setText(text)
+            label.adjustSize()
+            label.move(
+                max(0, (self.video_width - label.width()) // 2),
+                max(0, (self.video_height - label.height()) // 2),
+            )
+            label.show()
+            label.raise_()
+        self.display_phase = "level_card"
+        self._update_status_file("starting", 0, self.total_videos or 0, text.replace("\n", " "))
+        logger.info("Level card %sms: %s", LEVEL_CARD_MS, text.replace("\n", " | "))
+        if self.play_delay_timer:
+            self.play_delay_timer.stop()
+        self.play_delay_timer = QtCore.QTimer(singleShot=True)
+        self.play_delay_timer.timeout.connect(lambda idx=next_index: self._play_level_intro(idx))
+        self.play_delay_timer.start(LEVEL_CARD_MS)
+
+    def _play_level_intro(self, next_index=0):
         """Play the level clip on every screen of each active field before a test."""
+        if self.level_card_label:
+            self.level_card_label.hide()
         self._level_intro_next_index = int(next_index)
         self._hide_waiting_overlay()
         active = self._active_fields()
@@ -3894,7 +4479,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         pass_scale = 1.0
         if not (entry.get("entry_digits") or entry.get("math_op")):
             pass_scale = (
-                self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.90
+                self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.81
             )
         if self.image_canvas:
             if video_path and os.path.isfile(str(video_path)):
@@ -4355,7 +4940,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_based:
             self.video_files = self._build_image_action_playlist()
             if not self.video_files:
-                msg = (
+                msg = getattr(self, "_playlist_block_reason", "") or (
                     f"No labeled actions for {phase.get('label')} in:\n{self.video_directory}"
                 )
                 self._update_status_file("error", 0, 0, msg)
@@ -4406,6 +4991,41 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.video_end_called = False
         self.waiting_for_results = False
         self.playlist_finished = False
+        return True
+
+    def _restart_highest_level(self, info):
+        """Play the highest open set again while the reservation still has time."""
+        if not self._run_phases:
+            return False
+        phase = self._run_phases[self._phase_index]
+        level = str((info or {}).get("level") or "").strip()
+        subdirectory = str((info or {}).get("subdirectory") or "").strip()
+        directory = str((info or {}).get("directory") or phase.get("directory") or "").strip()
+        if level:
+            levels = dict(phase.get("field_levels") or {})
+            for fid in phase.get("active") or []:
+                levels[fid] = level
+            phase["field_levels"] = levels
+            phase["subdirectory"] = subdirectory
+            phase["mode_id"] = level
+        if directory:
+            phase["directory"] = directory
+            phase["field_directories"] = {
+                fid: directory for fid in (phase.get("active") or [])
+            }
+        self._level_card_shown_for = None
+        self._after_final = {}
+        logger.info(
+            "Reservation time left — repeating %s %s",
+            level or phase.get("label"),
+            subdirectory,
+        )
+        if not self._apply_run_phase(self._phase_index, fatal=False):
+            return False
+        self._prestart_done = False
+        self.is_first_video = True
+        self.playlist_finished = False
+        self._begin_level_intro(0)
         return True
 
     def _advance_to_next_field_phase(self):
@@ -4662,6 +5282,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
+                    self._after_final = data.get("progress") or {}
                     video_path = data.get("video_path")
                     if video_path and os.path.exists(video_path):
                         self.final_summary_done.emit(video_path)
@@ -4739,6 +5360,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.completion_label.hide()
         self.waiting_for_results = False
         more = self._phase_index + 1 < len(self._run_phases)
+        info = getattr(self, "_after_final", None) or {}
+        try:
+            seconds_left = float(info.get("seconds_left") or 0)
+        except (TypeError, ValueError):
+            seconds_left = 0
+        if info.get("continue_play") and seconds_left > 30 and self._restart_highest_level(info):
+            return
         if more:
             logger.info("Field phase done — starting next field")
             self._advance_to_next_field_phase()
@@ -4882,10 +5510,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
         self.setFixedSize(self.video_width, self.video_height)
         self.videoframe.raise_()
-        if self.image_canvas and self.image_based and self.display_phase in ("action", "level_intro"):
+        if self.image_canvas and self.image_based and self.display_phase in ("action", "level_intro", "level_card"):
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
             self.image_canvas.show()
             self.image_canvas.raise_()
+            if self.display_phase == "level_card":
+                self.image_canvas.update()
+        elif self.display_phase == "level_card" and self.level_card_label and self.level_card_label.isVisible():
+            self.level_card_label.raise_()
         self.videoframe.repaint()
         self.repaint()
         try:

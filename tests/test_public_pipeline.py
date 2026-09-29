@@ -58,20 +58,21 @@ class FoundationProgressTests(unittest.TestCase):
         changed = apply_session_progress(users, "james", "L00-Foundation", "SF-30N", stats)
         self.assertTrue(changed)
         progress = users["james"]["progress"]
-        self.assertEqual(progress["current_level"], "L00-Foundation")
-        self.assertNotIn("L01-Entry", progress["unlocked_levels"])
-        self.assertFalse(progress["challenge_results"]["L00-Foundation"]["passed"])
+        self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
+        self.assertIn("SF-60N", progress["unlocked_playlists"])
+        self.assertNotIn("L01-Entry/A-T1", progress["unlocked_levels"])
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["subdirectory"], "SF-30N")
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["aac"], 90.0)
 
-    def test_sf180n_marks_entry_eligible(self):
+    def test_sf180n_opens_entry(self):
         users = self._player()
-        stats = {"correct": 8, "late": 1, "wrong": 1, "miss": 0, "avg_ae": 82.0}
+        progress = users["james"]["progress"]
+        progress["unlocked_playlists"] = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
+        stats = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
         apply_session_progress(users, "james", "L00-Foundation", "SF-180N", stats)
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["eligible_levels"])
-        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
+        self.assertIn("L01-Entry/A-T1", progress["unlocked_levels"])
 
 
 class SanitizeSessionTests(unittest.TestCase):

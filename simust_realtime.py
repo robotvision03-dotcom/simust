@@ -1621,9 +1621,72 @@ def arrival_depth_for(screen, action_type, session_duration=None):
     return float(max(finish, threshold))
 
 
-def goal_circle_radius(depth):
+def _segment_length(p0, p1):
+    return math.hypot(float(p1[0]) - float(p0[0]), float(p1[1]) - float(p0[1]))
+
+
+def _cabinet_for_line(p0, p1):
+    """Goal-line key whose saved endpoints match this segment."""
+    if p0 is None or p1 is None:
+        return None
+    for key, line in GOAL_LINES.items():
+        a, b = line["p0"], line["p1"]
+        same = (
+            abs(float(a[0]) - float(p0[0])) <= 2.0
+            and abs(float(a[1]) - float(p0[1])) <= 2.0
+            and abs(float(b[0]) - float(p1[0])) <= 2.0
+            and abs(float(b[1]) - float(p1[1])) <= 2.0
+        )
+        flipped = (
+            abs(float(a[0]) - float(p1[0])) <= 2.0
+            and abs(float(a[1]) - float(p1[1])) <= 2.0
+            and abs(float(b[0]) - float(p0[0])) <= 2.0
+            and abs(float(b[1]) - float(p0[1])) <= 2.0
+        )
+        if same or flipped:
+            return str(key)
+    return None
+
+
+# Screen 3 is the visual reference on each field. A farther line is shorter
+# in the camera picture, so its circle is scaled down by that same ratio.
+_FIELD_A_CABINETS = frozenset({"1", "2", "3", "4", "12", "13", "14"})
+_FIELD_B_CABINETS = frozenset({"5", "6", "7", "8", "9", "10", "11"})
+_SCREEN3_CABINET = {"A": "14", "B": "7"}
+
+
+def finish_zone_scale(p0, p1):
+    """Match this screen's circle to screen 3. Farther screens get a smaller circle."""
+    cabinet = _cabinet_for_line(p0, p1)
+    if not cabinet:
+        return 1.0
+    base = cabinet.rstrip("LR")
+    if base in _FIELD_A_CABINETS:
+        field = "A"
+    elif base in _FIELD_B_CABINETS:
+        field = "B"
+    else:
+        return 1.0
+    ref = GOAL_LINES[_SCREEN3_CABINET[field]]
+    ref_len = _segment_length(ref["p0"], ref["p1"])
+    if ref_len < 1.0:
+        return 1.0
+    this_len = _segment_length(p0, p1)
+    if this_len > ref_len * 1.6:
+        y_ref = (float(ref["p0"][1]) + float(ref["p1"][1])) / 2.0
+        y_this = (float(p0[1]) + float(p1[1])) / 2.0
+        if y_ref < 1.0:
+            return 1.0
+        return min(1.0, max(0.35, y_this / y_ref))
+    return min(1.0, max(0.35, this_len / ref_len))
+
+
+def goal_circle_radius(depth, p0=None, p1=None):
     """Radius of the goal circle drawn on the goal-line midpoint."""
-    return max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
+    radius = max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
+    if p0 is not None and p1 is not None:
+        radius *= finish_zone_scale(p0, p1)
+    return max(4.0, radius)
 
 
 def goal_circle_center(p0, p1):
@@ -4355,6 +4418,31 @@ class SimustRealtimeCamera:
         ch.analysis_timer = None
         ch._recent_between_gap = None
         ch._last_session_duration = None
+        self._write_analysis_status()
+
+    def _write_analysis_status(self):
+        """Tell the results page whether the last action is still being scored."""
+        active = False
+        pending = False
+        for ch in self.channels.values():
+            if not self._field_is_active(ch.field_id):
+                continue
+            if ch.session_active:
+                active = True
+            if ch.pending_analysis is not None or ch.analysis_timer is not None:
+                pending = True
+        path = os.path.join(SIMUST_PLAYER_DIRECTORY, "analysis_status.json")
+        try:
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"session_active": active, "pending": pending, "ts": time.time()},
+                    handle,
+                )
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
     def _flush_pending_analysis_locked(self, ch=None):
         """Finish the previous shot before scheduling the next (required for T1.2)."""
@@ -4383,6 +4471,7 @@ class SimustRealtimeCamera:
         ch.analysis_timer = threading.Timer(delay, lambda: self._perform_late_analysis(field_id))
         ch.analysis_timer.daemon = True
         ch.analysis_timer.start()
+        self._write_analysis_status()
 
     def _end_session_locked(self, current_time_str, current_timestamp, ch=None):
         """End the active session. Must be called with self.session_lock held."""
@@ -4616,7 +4705,7 @@ class SimustRealtimeCamera:
                 depth = arrival_depth_for(str(screen_name), action)
                 cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
                 cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
-                radius = max(4, int(round(goal_circle_radius(depth) * min(sx, sy))))
+                radius = max(4, int(round(goal_circle_radius(depth, (x1, y1), (x2, y2)) * min(sx, sy))))
                 cv2.circle(overlay, (cx, cy), radius, (0, 180, 0), -1)
                 drew_band = True
                 line_marks.append((
@@ -5566,6 +5655,9 @@ class SimustRealtimeCamera:
                     self._apply_visualization_setting()
                     self._apply_simulation_setting()
                     last_viz_check = current_timestamp
+                if current_timestamp - getattr(self, "_last_analysis_status_at", 0.0) >= 0.2:
+                    self._write_analysis_status()
+                    self._last_analysis_status_at = current_timestamp
 
                 left, right = self.get_frames()
 

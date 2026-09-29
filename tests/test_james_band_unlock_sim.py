@@ -1,8 +1,9 @@
 """James Band unlock simulator: Foundation → Entry for Field A, B, and A+B.
 
 Creates a full player profile, books 30-minute credits through SF-30N/60N/110N/180N,
-passes SF-180N at the minimum Entry gate (70% accuracy / 60% efficiency), then walks
-Entry A-T1..A-T5 at the minimum series gate (80% accuracy / 70% efficiency).
+passes each Foundation set at 75% accuracy and 70% efficiency, then walks
+Entry A-T1..A-T5 at 85% accuracy and 80% efficiency. A passing score opens the
+next set and it stays open. Booking does not open levels.
 
 There is no SF-90N in the product; Foundation playlists are SF-30N, SF-60N, SF-110N, SF-180N.
 """
@@ -30,11 +31,10 @@ PLAYER_ID = "james_band"
 FOUNDATION_SFS = list(simust_progress.FOUNDATION_PLAYLISTS)  # SF-30N, SF-60N, SF-110N, SF-180N
 ENTRY_SERIES = [f"L01-Entry/A-T{n}" for n in range(1, 6)]
 
-# Minimum passing stats (exact gate values).
-# SF-180N gate: 70% accuracy, 60% AE → 7 correct + 3 wrong of 10 = 70%.
-STATS_SF180_MIN = {"correct": 7, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 60.0}
-# Entry series gate: 80% accuracy, 70% AE → 8 correct + 2 wrong of 10 = 80%.
-STATS_ENTRY_MIN = {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}
+# Foundation gate: 75% accuracy, 70% efficiency → 3 correct + 1 wrong of 4.
+STATS_SF180_MIN = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
+# Entry and later: 85% accuracy, 80% efficiency → 17 correct + 3 wrong of 20.
+STATS_ENTRY_MIN = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0}
 # Non-gating Foundation sessions (30/60/110): payment unlocks next SF.
 STATS_FOUNDATION_PLAY = {"correct": 9, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 85.0}
 
@@ -212,9 +212,9 @@ def format_report(summaries: List[dict]) -> str:
     lines.append("JAMES BAND - FOUNDATION TO ENTRY UNLOCK REPORT")
     lines.append("=" * 60)
     lines.append("Note: Foundation has SF-30N, SF-60N, SF-110N, SF-180N (no SF-90N).")
-    lines.append("Gates: SF-180 opens Entry eligibility at >=70% accuracy and >=60% efficiency.")
-    lines.append("       Each Entry series opens the next at >=80% accuracy and >=70% efficiency.")
-    lines.append("       Next series opens only after that score AND a 30-minute booking.")
+    lines.append("Gates: each Foundation set opens the next at >=75% accuracy and >=70% efficiency.")
+    lines.append("       Entry and later sets open the next at >=85% accuracy and >=80% efficiency.")
+    lines.append("       A passed set stays unlocked. Booking does not open the next set.")
     lines.append("")
     p0 = summaries[0]["player"]
     lines.append(
@@ -297,12 +297,12 @@ class JamesBandUnlockSimTests(unittest.TestCase):
             self.assertIn("L02-Activated/A-T1", summary["unlocked_levels"])
             results = summary["challenge_results"]
             self.assertTrue(results["L00-Foundation"]["passed"])
-            self.assertGreaterEqual(results["L00-Foundation"]["aac"], 70.0)
-            self.assertGreaterEqual(results["L00-Foundation"]["ae"], 60.0)
+            self.assertGreaterEqual(results["L00-Foundation"]["aac"], 75.0)
+            self.assertGreaterEqual(results["L00-Foundation"]["ae"], 70.0)
             for series in ENTRY_SERIES:
                 self.assertTrue(results[series]["passed"], msg=series)
-                self.assertGreaterEqual(results[series]["aac"], 80.0)
-                self.assertGreaterEqual(results[series]["ae"], 70.0)
+                self.assertGreaterEqual(results[series]["aac"], 85.0)
+                self.assertGreaterEqual(results[series]["ae"], 80.0)
 
         report = format_report(summaries)
         out_path = os.path.join(ROOT, "james_band_unlock_report.txt")

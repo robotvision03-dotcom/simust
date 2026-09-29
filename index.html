@@ -698,6 +698,19 @@
             return 0;
         };
 
+        var getHighestFoundationPlaylist = function(playlists) {
+            var order = ["SF-180N", "SF-110N", "SF-60N", "SF-30N"];
+            for (var i = 0; i < order.length; i++) {
+                if ((playlists || []).indexOf(order[i]) !== -1) return order[i];
+            }
+            return (playlists && playlists[0]) || "SF-30N";
+        };
+
+        var isCombinedLevel = function(levelId) {
+            var text = String(levelId || "");
+            return text.indexOf("L04-Elite") !== -1 || text.indexOf("L05-WorldClass") !== -1;
+        };
+
         var sortLevels = function(levels) {
             if (!levels || levels.length === 0) return [];
             return levels.slice().sort(function(a, b) {
@@ -1334,7 +1347,7 @@
             });
 
             // Always show Foundation playlists in PROGRESS (unlock individually if needed)
-            var foundationPlaylists = (LEVEL_SUBDIRS['L00-Foundation'] || FOUNDATION_PLAYLISTS || []).slice();
+            var foundationPlaylists = (LEVEL_SUBDIRS['L00-Foundation'] || FOUNDATION_PLAYLISTS || []).slice().reverse();
             grouped['Foundation'] = foundationPlaylists.map(function(sub) {
                 var isUnlocked = unlockedPlaylists.indexOf(sub) !== -1;
                 // Extra playlists open once any SF playlist is unlocked
@@ -1348,27 +1361,25 @@
                     isUnlocked: isUnlocked,
                     isCompleted: false,
                     isCurrent: current === 'L00-Foundation' && isUnlocked
-                        && unlockedPlaylists.length
-                        && unlockedPlaylists[unlockedPlaylists.length - 1] === sub,
+                        && (props.currentPlaylist || getHighestFoundationPlaylist(unlockedPlaylists)) === sub,
                     isFoundationPlaylist: true
                 };
             });
 
             var categoryKeys = Object.keys(grouped).sort(function(a, b) {
-                return (CATEGORY_ORDER[a] !== undefined ? CATEGORY_ORDER[a] : 999) -
-                    (CATEGORY_ORDER[b] !== undefined ? CATEGORY_ORDER[b] : 999);
+                return (CATEGORY_ORDER[b] !== undefined ? CATEGORY_ORDER[b] : 999) -
+                    (CATEGORY_ORDER[a] !== undefined ? CATEGORY_ORDER[a] : 999);
             });
 
             var displayGrouped = {};
             categoryKeys.forEach(function(cat) {
                 var items = grouped[cat] || [];
                 if (cat === 'Foundation') {
-                    // Always list Foundation playlists so locked ones can be unlocked
                     displayGrouped[cat] = items;
                 } else if (isAdmin) {
-                    displayGrouped[cat] = items;
+                    displayGrouped[cat] = items.slice().reverse();
                 } else {
-                    displayGrouped[cat] = items.filter(function(item) { return item.isUnlocked; });
+                    displayGrouped[cat] = items.filter(function(item) { return item.isUnlocked; }).reverse();
                 }
             });
 
@@ -2714,6 +2725,9 @@
             var selectedSubdirectoryBState = useState("");
             var selectedSubdirectoryB = selectedSubdirectoryBState[0];
             var setSelectedSubdirectoryB = selectedSubdirectoryBState[1];
+            var scoreFieldState = useState("A");
+            var scoreField = scoreFieldState[0];
+            var setScoreField = scoreFieldState[1];
             var realtimeRunningState = useState(false);
             var realtimeRunning = realtimeRunningState[0];
             var setRealtimeRunning = realtimeRunningState[1];
@@ -3096,23 +3110,14 @@
 
             var applySharedLevelDefaults = function(unlocked, playlists, current) {
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
-                if (defaultFoundation) {
-                    setSelectedLevel("L00-Foundation");
-                    setSelectedSubdirectory(playlists[playlists.length - 1] || "");
-                } else if (highest) {
+                if (highest && highest !== "L00-Foundation") {
                     setSelectedLevel(highest);
                     setSelectedSubdirectory("");
-                } else if (current && unlocked.indexOf(current) !== -1) {
-                    setSelectedLevel(current);
-                    setSelectedSubdirectory("");
-                } else if (unlocked.length > 0) {
-                    setSelectedLevel(unlocked[0]);
-                    setSelectedSubdirectory("");
-                } else {
-                    setSelectedLevel("L00-Foundation");
-                    setSelectedSubdirectory("");
+                    return;
                 }
+                var sf = getHighestFoundationPlaylist(playlists);
+                setSelectedLevel("L00-Foundation");
+                setSelectedSubdirectory(sf);
             };
 
             var softPreserveSharedLevel = function(unlocked, playlists) {
@@ -3176,23 +3181,14 @@
 
             var applyLevelDefaultsB = function(unlocked, playlists, current) {
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
-                if (defaultFoundation) {
-                    setSelectedLevelB("L00-Foundation");
-                    setSelectedSubdirectoryB(playlists[playlists.length - 1] || "");
-                } else if (highest) {
+                if (highest && highest !== "L00-Foundation") {
                     setSelectedLevelB(highest);
                     setSelectedSubdirectoryB("");
-                } else if (current && unlocked.indexOf(current) !== -1) {
-                    setSelectedLevelB(current);
-                    setSelectedSubdirectoryB("");
-                } else if (unlocked.length > 0) {
-                    setSelectedLevelB(unlocked[0]);
-                    setSelectedSubdirectoryB("");
-                } else {
-                    setSelectedLevelB("L00-Foundation");
-                    setSelectedSubdirectoryB("");
+                    return;
                 }
+                var sf = getHighestFoundationPlaylist(playlists);
+                setSelectedLevelB("L00-Foundation");
+                setSelectedSubdirectoryB(sf);
             };
 
             var softPreserveLevelB = function(unlocked, playlists) {
@@ -3269,6 +3265,27 @@
             };
 
             var selectPlayerFromSearch = function(player) {
+                var progress = player.progress || {};
+                var level = progress.current_level || "";
+                if (isCombinedLevel(level)) {
+                    selectedPlayerIdRef.current = player.id;
+                    setSelectedPlayerId(player.id);
+                    setSelectedPlayerBId(player.id);
+                    setSelectedLevel(level);
+                    setSelectedLevelB(level);
+                    setSelectedSubdirectory("");
+                    setSelectedSubdirectoryB("");
+                    setScoreField("A");
+                    setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
+                    setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
+                    setShowSearchResults(false);
+                    setFilteredPlayers([]);
+                    updateProgressForPlayer(player, { preferDefaults: true });
+                    updateProgressForPlayerB(player, { preferDefaults: true });
+                    loadPlayerSessionsFromBackend(player.id);
+                    showToast("Elite / World Class uses both fields. Score stays on Field A.", 'success');
+                    return;
+                }
                 if (selectedPlayerBId && player.id === selectedPlayerBId) {
                     showToast("Same player already selected for Field B — pick another for Field A", 'error');
                     return;
@@ -3309,6 +3326,26 @@
             };
 
             var selectPlayerBFromSearch = function(player) {
+                var progress = player.progress || {};
+                var level = progress.current_level || "";
+                if (isCombinedLevel(level)) {
+                    setSelectedPlayerId(player.id);
+                    setSelectedPlayerBId(player.id);
+                    setSelectedLevel(level);
+                    setSelectedLevelB(level);
+                    setSelectedSubdirectory("");
+                    setSelectedSubdirectoryB("");
+                    setScoreField("B");
+                    setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
+                    setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
+                    setShowSearchResultsB(false);
+                    setFilteredPlayersB([]);
+                    updateProgressForPlayer(player, { preferDefaults: true });
+                    updateProgressForPlayerB(player, { preferDefaults: true });
+                    loadPlayerSessionsFromBackendB(player.id);
+                    showToast("Elite / World Class uses both fields. Score stays on Field B.", 'success');
+                    return;
+                }
                 if (selectedPlayerId && player.id === selectedPlayerId) {
                     showToast("Same player already selected for Field A — pick another for Field B", 'error');
                     return;
@@ -4094,12 +4131,12 @@
                     return;
                 }
                 if (!useAdminTest && playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, levelA, selectedSubdirectory)) {
-                    setError("Field A: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
+                    setError("Field A: this level is locked. Pass the previous set, or unlock it with the admin password.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
                 if (!useAdminTest && playerB && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, levelB, selectedSubdirectoryB)) {
-                    setError("Field B: this level/playlist is locked. Book and pay a 30-minute session to unlock.");
+                    setError("Field B: this level is locked. Pass the previous set, or unlock it with the admin password.");
                     setTimeout(function() { setError(""); }, 4000);
                     return;
                 }
@@ -4145,7 +4182,8 @@
                     simulation_enabled: simulationEnabledRef.current,
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
-                    field: playerA ? "A" : "B",
+                    field: scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B"),
+                    score_field: scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B"),
                     players: []
                 };
                 if (playerA) {
@@ -4919,7 +4957,13 @@
                             onLockLevel: handleLockLevel,
                             onLevelChange: function(level) {
                                 setSelectedLevel(level);
-                                setSelectedSubdirectory(""); // reset subdir when level changes
+                                setSelectedSubdirectory("");
+                                if (isCombinedLevel(level) && selectedPlayerId) {
+                                    setSelectedPlayerBId(selectedPlayerId);
+                                    setSelectedLevelB(level);
+                                    setSelectedSubdirectoryB("");
+                                    setScoreField("A");
+                                }
                             },
                             selectedLevel: selectedLevel,
                             selectedSubdirectory: selectedSubdirectory,
@@ -4955,6 +4999,12 @@
                             onLevelChange: function(level) {
                                 setSelectedLevelB(level);
                                 setSelectedSubdirectoryB("");
+                                if (isCombinedLevel(level) && selectedPlayerBId) {
+                                    setSelectedPlayerId(selectedPlayerBId);
+                                    setSelectedLevel(level);
+                                    setSelectedSubdirectory("");
+                                    setScoreField("B");
+                                }
                             },
                             selectedLevel: selectedLevelB,
                             selectedSubdirectory: selectedSubdirectoryB,
@@ -4964,7 +5014,7 @@
                             hideAddPlayer: true
                         }),
                         React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
-                            "Field A and Field B are independent. One player can run Foundation while the other selects and runs Entry or any other unlocked level."),
+                            "Field A and Field B can run different levels. Elite and World Class always use both fields, and the score of the field you booked first unlocks the next set."),
                         (selectedPlayerId || selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",

@@ -1,13 +1,12 @@
-"""Paid 30-minute session unlocks for Foundation playlists and later levels.
+"""Score unlocks for Foundation playlists and later levels.
 
 Rules:
-- Unpaid players cannot play (no unlocked playlists / levels).
-- Each paid 30 minutes = 1 session credit.
-- Credits unlock the next eligible item; previous unlocks stay open.
-- Foundation SF-30N → SF-60N → SF-110N: payment only (no score gate).
-- SF-180N: 70% accuracy and 60% efficiency to become eligible for Entry, then pay to open it.
-- Each later series: 80% accuracy and 70% efficiency, then pay to open the next series.
-- Later challenges: score makes next eligible; pay opens it.
+- A new player starts with Foundation SF-30N unlocked. Everything else stays locked.
+- An admin password can unlock a locked level. A passed level stays unlocked.
+- Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry:
+  75% accuracy and 70% efficiency on the final results.
+- Entry and every later set: 85% accuracy and 80% efficiency on the final results.
+- The next set opens as soon as that score is reached. Booking does not open levels.
 """
 
 from __future__ import annotations
@@ -30,6 +29,10 @@ FOUNDATION_EXTRA_PLAYLISTS = (
 FOUNDATION_ALL_PLAYLISTS = FOUNDATION_PLAYLISTS + FOUNDATION_EXTRA_PLAYLISTS
 FOUNDATION_LEVEL = "L00-Foundation"
 SESSION_MINUTES = 30
+FOUNDATION_SCORE_ACC = 75.0
+FOUNDATION_SCORE_AE = 70.0
+SERIES_SCORE_ACC = 85.0
+SERIES_SCORE_AE = 80.0
 
 
 def slots_from_minutes(duration_minutes: int) -> int:
@@ -43,9 +46,11 @@ def slots_from_minutes(duration_minutes: int) -> int:
 def default_progress() -> Dict[str, Any]:
     return {
         "current_level": FOUNDATION_LEVEL,
-        "unlocked_levels": [],
-        "unlocked_playlists": [],
+        "current_playlist": "SF-30N",
+        "unlocked_levels": [FOUNDATION_LEVEL],
+        "unlocked_playlists": ["SF-30N"],
         "completed_levels": [],
+        "passed_playlists": [],
         "eligible_levels": [],
         "session_credits": 0,
         "challenge_results": {},
@@ -56,25 +61,67 @@ def default_progress() -> Dict[str, Any]:
 def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     progress = user.setdefault("progress", default_progress())
     progress.setdefault("current_level", FOUNDATION_LEVEL)
+    progress.setdefault("current_playlist", "SF-30N")
     progress.setdefault("unlocked_levels", [])
     progress.setdefault("unlocked_playlists", [])
     progress.setdefault("completed_levels", [])
+    progress.setdefault("passed_playlists", [])
     progress.setdefault("eligible_levels", [])
     progress.setdefault("session_credits", 0)
     progress.setdefault("challenge_results", {})
     progress.setdefault("granted_reservation_ids", [])
-    # Migrate older accounts that had Foundation always unlocked with no playlists.
-    if (
-        FOUNDATION_LEVEL in (progress.get("unlocked_levels") or [])
-        and not (progress.get("unlocked_playlists") or [])
-        and int(progress.get("session_credits") or 0) == 0
-        and not (progress.get("granted_reservation_ids") or [])
-    ):
-        # Keep level umbrella only after at least one playlist unlocks via payment.
-        progress["unlocked_levels"] = [
-            lvl for lvl in progress["unlocked_levels"] if lvl != FOUNDATION_LEVEL
-        ]
+    # Every account can start Foundation 30N. Later sets stay locked until a score or an admin unlock.
+    levels = list(progress.get("unlocked_levels") or [])
+    playlists = list(progress.get("unlocked_playlists") or [])
+    if "SF-30N" not in playlists:
+        playlists.insert(0, "SF-30N")
+        progress["unlocked_playlists"] = playlists
+    if FOUNDATION_LEVEL not in levels:
+        levels.append(FOUNDATION_LEVEL)
+        progress["unlocked_levels"] = levels
+    if not progress.get("current_level"):
+        progress["current_level"] = FOUNDATION_LEVEL
+    if progress.get("current_level") == FOUNDATION_LEVEL and not progress.get("current_playlist"):
+        progress["current_playlist"] = highest_foundation_playlist(progress)
     return progress
+
+
+def highest_foundation_playlist(progress: Dict[str, Any]) -> str:
+    """The furthest Foundation set that is open. SF-30N if nothing later is open."""
+    have = set(progress.get("unlocked_playlists") or [])
+    latest = "SF-30N"
+    for name in FOUNDATION_PLAYLISTS:
+        if name in have:
+            latest = name
+    return latest
+
+
+def next_foundation_playlist_after(subdirectory: str) -> Optional[str]:
+    name = str(subdirectory or "").strip()
+    if name not in FOUNDATION_PLAYLISTS:
+        return None
+    index = FOUNDATION_PLAYLISTS.index(name)
+    if index + 1 < len(FOUNDATION_PLAYLISTS):
+        return FOUNDATION_PLAYLISTS[index + 1]
+    return None
+
+
+def score_gate(level_id: str) -> Tuple[float, float]:
+    """Return (accuracy, efficiency) required to open the next set."""
+    main = str(level_id or "").split("/")[0]
+    if main == FOUNDATION_LEVEL:
+        return FOUNDATION_SCORE_ACC, FOUNDATION_SCORE_AE
+    return SERIES_SCORE_ACC, SERIES_SCORE_AE
+
+
+def highest_unlocked_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
+    """Furthest open level. Foundation while only SF sets are open."""
+    unlocked = set(progress.get("unlocked_levels") or [])
+    best = ""
+    for level_id in all_levels or []:
+        if level_id in unlocked and level_id != FOUNDATION_LEVEL:
+            best = level_id
+    return best or FOUNDATION_LEVEL
 
 
 def next_foundation_playlist(unlocked_playlists: List[str]) -> Optional[str]:
@@ -121,31 +168,8 @@ def peek_next_unlock_target(progress: Dict[str, Any], all_levels: List[str]) -> 
 
 
 def unlock_one_with_credit(progress: Dict[str, Any], all_levels: List[str]) -> Optional[str]:
-    """Spend one credit if a next target is available. Returns unlocked label or None."""
-    credits = int(progress.get("session_credits") or 0)
-    if credits <= 0:
-        return None
-    target = peek_next_unlock_target(progress, all_levels)
-    if not target:
-        return None
-    kind, value = target
-    progress["session_credits"] = credits - 1
-    if kind == "playlist":
-        playlists = list(progress.get("unlocked_playlists") or [])
-        _unique_append(playlists, value)
-        progress["unlocked_playlists"] = playlists
-        levels = list(progress.get("unlocked_levels") or [])
-        _unique_append(levels, FOUNDATION_LEVEL)
-        progress["unlocked_levels"] = levels
-        progress["current_level"] = FOUNDATION_LEVEL
-        return f"L00-Foundation/{value}"
-    levels = list(progress.get("unlocked_levels") or [])
-    _unique_append(levels, value)
-    progress["unlocked_levels"] = levels
-    eligible = [e for e in (progress.get("eligible_levels") or []) if e != value]
-    progress["eligible_levels"] = eligible
-    progress["current_level"] = value
-    return value
+    """Booking credits do not open levels. Scores and the admin password do."""
+    return None
 
 
 def consume_credits(progress: Dict[str, Any], all_levels: List[str]) -> List[str]:
@@ -242,10 +266,10 @@ def can_play(
                 return False, f"{sub} opens after any Foundation SF playlist is unlocked"
             return True, ""
         if sub not in unlocked_playlists:
-            return False, f"{sub} is locked — book and pay a 30-minute session to unlock"
+            return False, f"{sub} is locked until the previous set is passed, or an admin unlocks it"
         return True, ""
     if level_id not in unlocked_levels:
-        return False, f"{level_id} is locked — achieve the previous score, then book 30 minutes"
+        return False, f"{level_id} is locked until the previous set is passed, or an admin unlocks it"
     return True, ""
 
 

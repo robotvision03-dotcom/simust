@@ -461,6 +461,7 @@ def _insert_reservation(
     source: str,
     payment_ref: str = "",
     field: str = "A",
+    mirror: bool = False,
 ) -> dict:
     try:
         import simust_fields
@@ -496,7 +497,63 @@ def _insert_reservation(
             created["session_credits"] = unlock.get("session_credits", 0)
     except Exception:
         logger.exception("Session unlock grant failed for reservation %s", created.get("id"))
+    if not mirror:
+        _mirror_combined_field_booking(
+            created,
+            username=username,
+            display_name=display_name,
+            start=start,
+            end=end,
+            duration=duration,
+            payment_status=payment_status,
+            amount_eur=amount_eur,
+            source=source,
+            payment_ref=payment_ref,
+        )
     return created
+
+
+def _mirror_combined_field_booking(created, **kwargs) -> None:
+    """Elite and World Class need both fields. The field that was booked keeps the score."""
+    try:
+        users = load_users()
+        progress = simust_progress.ensure_progress(users.get(kwargs["username"]) or {})
+        level = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
+    except Exception:
+        return
+    if not _combined_level(level):
+        return
+    other = "B" if str(created.get("field") or "A").upper().startswith("A") else "A"
+    try:
+        mirror = _insert_reservation(
+            username=kwargs["username"],
+            display_name=kwargs["display_name"],
+            start=kwargs["start"],
+            end=kwargs["end"],
+            duration=kwargs["duration"],
+            payment_status=kwargs["payment_status"],
+            amount_eur=kwargs["amount_eur"],
+            source=kwargs["source"],
+            payment_ref=kwargs.get("payment_ref") or "",
+            field=other,
+            mirror=True,
+        )
+    except HTTPException:
+        logger.info("Field %s is already booked, so it was not added automatically", other)
+        return
+    except Exception:
+        logger.exception("Could not book the other field for Elite/World Class")
+        return
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+        for item in bookings:
+            if item.get("id") == created.get("id"):
+                item["score_source"] = True
+                item["paired_field"] = other
+            elif item.get("id") == mirror.get("id"):
+                item["score_source"] = False
+                item["paired_from"] = created.get("id")
+        save_reservations(bookings)
 
 
 def _verify_admin_password(users: dict, password: str) -> bool:
@@ -719,15 +776,15 @@ def require_active_booking_for_play(player_id: str, field: str = "A", now: Optio
 PROGRESSION = {
     "L00-Foundation": {
         "display": "Foundation",
-        # SF-180N only: 70% accuracy and 60% efficiency to open Entry.
-        "threshold_acc": 70,
-        "threshold_ae": 60,
+        # SF-30N through SF-180N: 75% accuracy and 70% efficiency open the next set.
+        "threshold_acc": 75,
+        "threshold_ae": 70,
         "themes": {"Foundation": ["Foundation"]}
     },
     "L01-Entry": {
         "display": "Entry",
-        "threshold_acc": 80,
-        "threshold_ae": 70,
+        "threshold_acc": 85,
+        "threshold_ae": 80,
         "themes": {
             "A-T1": [],
             "A-T2": [],
@@ -738,8 +795,8 @@ PROGRESSION = {
     },
     "L02-Activated": {
         "display": "Activated",
-        "threshold_acc": 80,
-        "threshold_ae": 70,
+        "threshold_acc": 85,
+        "threshold_ae": 80,
         "themes": {
             "A-T1": [],
             "A-T2": [],
@@ -750,8 +807,8 @@ PROGRESSION = {
     },
     "L03-HighPerformance": {
         "display": "High Performance",
-        "threshold_acc": 80,
-        "threshold_ae": 70,
+        "threshold_acc": 85,
+        "threshold_ae": 80,
         "themes": {
             "A-T1": [],
             "A-T2": [],
@@ -762,8 +819,8 @@ PROGRESSION = {
     },
     "L04-Elite": {
         "display": "Elite",
-        "threshold_acc": 80,
-        "threshold_ae": 70,
+        "threshold_acc": 85,
+        "threshold_ae": 80,
         "themes": {
             "A-T1": [],
             "A-T2": [],
@@ -774,8 +831,8 @@ PROGRESSION = {
     },
     "L05-WorldClass": {
         "display": "World Class",
-        "threshold_acc": 80,
-        "threshold_ae": 70,
+        "threshold_acc": 85,
+        "threshold_ae": 80,
         "themes": {
             "A-T1": [],
             "A-T2": [],
@@ -844,8 +901,8 @@ def get_level_thresholds(level_id: str) -> Tuple[float, float]:
     return 0, 0
 
 
-def apply_session_progress(users: dict, player_id: str, level_played: str, subdirectory: str, statistics: dict) -> bool:
-    """Update results / eligibility from a finished session. Unlocks come from paid credits."""
+def apply_session_progress(users: dict, player_id: str, level_played: str, subdirectory: str, statistics: dict, from_final: bool = True) -> bool:
+    """Save the latest score. The final results video is what opens the next set."""
     if not player_id or player_id not in users:
         return False
     if level_played not in ALL_LEVELS:
@@ -853,7 +910,13 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     correct = statistics.get("correct", 0) or 0
     late = statistics.get("late", 0) or 0
     total = correct + late + (statistics.get("wrong", 0) or 0) + (statistics.get("miss", 0) or 0)
-    aac = (correct + late) / total * 100 if total > 0 else 0.0
+    if statistics.get("aac") is not None:
+        try:
+            aac = float(statistics.get("aac") or 0.0)
+        except (TypeError, ValueError):
+            aac = 0.0
+    else:
+        aac = (correct + late) / total * 100 if total > 0 else 0.0
     ae = float(statistics.get("avg_ae", 0.0) or 0.0)
     progress = simust_progress.ensure_progress(users[player_id])
     ok, _reason = simust_progress.can_play(progress, level_played, subdirectory)
@@ -861,16 +924,10 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
         return False
     completed_levels = progress.setdefault("completed_levels", [])
     challenge_results = progress.setdefault("challenge_results", {})
-    # Foundation stays replayable; later challenges stop after a pass is recorded.
-    if level_played != simust_progress.FOUNDATION_LEVEL and level_played in completed_levels:
-        return False
     th_acc, th_ae = get_level_thresholds(level_played)
-    passed = False
-    if level_played == simust_progress.FOUNDATION_LEVEL:
-        if subdirectory == "SF-180N":
-            passed = aac >= th_acc and ae >= th_ae
-    else:
-        passed = aac >= th_acc and ae >= th_ae
+    passed = bool(from_final) and aac >= th_acc and ae >= th_ae
+    if level_played == simust_progress.FOUNDATION_LEVEL and not str(subdirectory or "").strip():
+        passed = False
     result = {
         "aac": round(aac, 1),
         "ae": round(ae, 1),
@@ -880,14 +937,133 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     challenge_results[level_played] = result
     progress["challenge_results"] = challenge_results
     if passed:
-        if level_played != simust_progress.FOUNDATION_LEVEL:
+        if level_played == simust_progress.FOUNDATION_LEVEL:
+            passed_playlists = list(progress.get("passed_playlists") or [])
+            simust_progress._unique_append(passed_playlists, str(subdirectory or "").strip())
+            progress["passed_playlists"] = passed_playlists
+            nxt_sf = simust_progress.next_foundation_playlist_after(subdirectory)
+            if nxt_sf:
+                playlists = list(progress.get("unlocked_playlists") or [])
+                simust_progress._unique_append(playlists, nxt_sf)
+                progress["unlocked_playlists"] = playlists
+                progress["current_level"] = simust_progress.FOUNDATION_LEVEL
+                progress["current_playlist"] = nxt_sf
+            else:
+                next_level = get_next_level(level_played)
+                _open_level(progress, next_level)
+        else:
             if level_played not in completed_levels:
                 completed_levels.append(level_played)
             progress["completed_levels"] = completed_levels
-        next_level = get_next_level(level_played)
-        simust_progress.mark_score_eligible(progress, level_played, next_level, ALL_LEVELS)
+            next_level = get_next_level(level_played)
+            _open_level(progress, next_level)
     users[player_id]["progress"] = progress
     return True
+
+
+def _open_level(progress: dict, next_level: Optional[str]) -> None:
+    """Open the next set and keep every earlier set open. The highest one becomes current."""
+    if not next_level:
+        return
+    levels = list(progress.get("unlocked_levels") or [])
+    simust_progress._unique_append(levels, next_level)
+    progress["unlocked_levels"] = levels
+    progress["current_level"] = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
+    if progress["current_level"] != simust_progress.FOUNDATION_LEVEL:
+        progress["current_playlist"] = ""
+    eligible = [item for item in (progress.get("eligible_levels") or []) if item != next_level]
+    progress["eligible_levels"] = eligible
+
+
+def _combined_level(level_id: str) -> bool:
+    return bool(re.search(r"L04-Elite|L05-WorldClass", str(level_id or ""), re.I))
+
+
+def _booking_seconds_left(player_id: str, field: str = "A") -> float:
+    """Seconds left in the live booking. Zero when no booking is active."""
+    try:
+        booking, state = find_booking_play_window(player_id, field)
+    except Exception:
+        return 0.0
+    if state != "active" or not booking:
+        return 0.0
+    try:
+        end = datetime.fromisoformat(str(booking.get("end") or "").replace("Z", "+00:00").split("+")[0])
+        return max(0.0, (end - datetime.now()).total_seconds())
+    except Exception:
+        return 0.0
+
+
+def _continue_target(progress: dict) -> dict:
+    """The highest open set, and whether reservation time is left to play it again."""
+    progress = progress or {}
+    level = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
+    subdirectory = ""
+    if level == simust_progress.FOUNDATION_LEVEL:
+        subdirectory = progress.get("current_playlist") or simust_progress.highest_foundation_playlist(progress)
+    directory = get_level_path(level)
+    if level == simust_progress.FOUNDATION_LEVEL and subdirectory:
+        directory = os.path.join(directory, subdirectory)
+    player_id = ""
+    return {
+        "level": level,
+        "subdirectory": subdirectory,
+        "directory": directory,
+        "passed": False,
+        "continue_play": False,
+        "seconds_left": 0,
+        "player_id": player_id,
+    }
+
+
+def apply_final_results_progress(field_metrics: dict, score_field: str = "") -> dict:
+    """Open the next set from the final results of the field that was booked."""
+    info = _continue_target({})
+    try:
+        with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"), "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+    except Exception:
+        payload = {}
+    fields = payload.get("fields") if isinstance(payload, dict) else {}
+    if not isinstance(fields, dict):
+        fields = {}
+    chosen = str(score_field or payload.get("score_field") or "").upper()[:1]
+    if chosen not in ("A", "B"):
+        chosen = "A" if isinstance(fields.get("A"), dict) and fields["A"].get("player_id") else "B"
+    slot = fields.get(chosen) if isinstance(fields.get(chosen), dict) else {}
+    if not slot:
+        for fid in ("A", "B"):
+            if isinstance(fields.get(fid), dict) and fields[fid].get("player_id"):
+                chosen = fid
+                slot = fields[fid]
+                break
+    player_id = str((slot or {}).get("player_id") or "").strip()
+    level = str((slot or {}).get("level") or payload.get("level") or "").strip()
+    subdirectory = str((slot or {}).get("subdirectory") or "").strip()
+    metrics = (field_metrics or {}).get(chosen) or {}
+    if not metrics and field_metrics:
+        metrics = next(iter(field_metrics.values()))
+    users = load_users()
+    passed = False
+    if player_id and level and player_id in users:
+        statistics = {
+            "aac": float(metrics.get("aac") or 0.0),
+            "avg_ae": float(metrics.get("avg_ae") or 0.0),
+            "correct": metrics.get("correct", 0),
+            "late": metrics.get("late", 0),
+            "wrong": metrics.get("wrong", 0),
+            "miss": metrics.get("miss", 0),
+        }
+        apply_session_progress(users, player_id, level, subdirectory, statistics, from_final=True)
+        save_users(users)
+        progress = (users.get(player_id) or {}).get("progress") or {}
+        passed = bool((progress.get("challenge_results") or {}).get(level, {}).get("passed"))
+        info = _continue_target(progress)
+        info["passed"] = passed
+        info["player_id"] = player_id
+        info["seconds_left"] = _booking_seconds_left(player_id, chosen)
+        info["continue_play"] = info["seconds_left"] > 30
+    return info
 
 
 def drop_live_snapshot(player_id: str, index: list) -> list:
@@ -1903,6 +2079,24 @@ async def start_realtime_playback(req: Request):
         if not play_slots:
             raise HTTPException(400, "No player selected for Field A or Field B")
 
+        score_field = str(data.get("score_field") or data.get("field") or "").strip().upper()[:1]
+        if len(play_slots) == 1:
+            pid, fid, entry = play_slots[0]
+            slot_level = str((entry or {}).get("level") or level_id or "")
+            if _combined_level(slot_level):
+                other = "B" if fid == "A" else "A"
+                cloned = dict(entry or {})
+                cloned["field"] = other
+                play_slots.append((pid, other, cloned))
+                if score_field not in ("A", "B"):
+                    score_field = fid
+                logger.info(
+                    "Elite/World Class booked %s, so Field %s is added. Score stays on Field %s.",
+                    fid, other, score_field,
+                )
+        if score_field not in ("A", "B"):
+            score_field = play_slots[0][1]
+
         users = load_users()
         admin_password = str(
             data.get("admin_password") or data.get("adminPassword") or ""
@@ -2065,6 +2259,7 @@ async def start_realtime_playback(req: Request):
                     "level": level_id,
                     "levels": slot_levels,
                     "separate_fields": False,
+                    "score_field": score_field,
                 }, f, indent=2)
         except Exception as e:
             logger.warning("Could not write players_fields.json: %s", e)
@@ -3058,6 +3253,65 @@ def _offset_video_filter(src_label, width, height, keep_span=None):
     return ";".join(parts), prev
 
 
+def _fit_logo(logo, box_w, box_h):
+    lh, lw = logo.shape[:2]
+    scale = min(float(box_w) / float(lw), float(box_h) / float(lh))
+    nw = max(1, int(round(lw * scale)))
+    nh = max(1, int(round(lh * scale)))
+    return cv2.resize(logo, (nw, nh), interpolation=cv2.INTER_AREA)
+
+
+def _blit_logo(frame, sprite, x, y):
+    height, width = frame.shape[:2]
+    sh, sw = sprite.shape[:2]
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1, y1 = min(width, int(x) + sw), min(height, int(y) + sh)
+    if x1 <= x0 or y1 <= y0:
+        return
+    crop = sprite[y0 - int(y):y0 - int(y) + (y1 - y0), x0 - int(x):x0 - int(x) + (x1 - x0)]
+    if crop.ndim == 3 and crop.shape[2] == 4:
+        alpha = crop[:, :, 3:4].astype(np.float32) / 255.0
+        color = crop[:, :, :3].astype(np.float32)
+        dest = frame[y0:y1, x0:x1].astype(np.float32)
+        frame[y0:y1, x0:x1] = (color * alpha + dest * (1.0 - alpha)).astype(np.uint8)
+    else:
+        frame[y0:y1, x0:x1] = crop[:, :, :3]
+
+
+def _place_logo_on_screens_3_and_4(frame, fields):
+    """Put logo.png whole on screen 3 and, separately, whole on screen 4."""
+    if cv2 is None or frame is None:
+        return
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    logo = cv2.imread(logo_path, cv2.IMREAD_UNCHANGED)
+    if logo is None or getattr(logo, "size", 0) == 0:
+        logger.warning("logo.png was not found; screens 3 and 4 stay empty")
+        return
+    height, width = frame.shape[:2]
+    order = list(RESULTS_SLICE_ORDER)
+    ids = []
+    if "A" in fields:
+        ids.extend(("A3", "A4"))
+    if "B" in fields:
+        ids.extend(("B3", "B4"))
+    for sid in ids:
+        if sid not in order:
+            continue
+        index = order.index(sid)
+        left, _right, rect_w = content_x_box(index, sid, width, len(order))
+        top = screen_content_offset_y(sid)
+        box_top = max(0, int(top))
+        box_h = height - box_top
+        if rect_w < 8 or box_h < 8:
+            continue
+        fitted = _fit_logo(logo, rect_w, box_h)
+        fh, fw = fitted.shape[:2]
+        x = int(left) + (int(rect_w) - fw) // 2
+        y = int(round(box_top + CHART_CENTER_Y + (COACH_BAND_HEIGHT * 0.20) - fh / 2.0))
+        y = max(box_top, min(y, box_top + box_h - fh))
+        _blit_logo(frame, fitted, x, y)
+
+
 def remap_coach_frame_to_field(frame, width: int, height: int, field_id: str):
     """Place authored coach content onto the active field's integration slices."""
     if frame is None or frame.size == 0:
@@ -3987,6 +4241,8 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
                 center_y = CHART_CENTER_Y + offset_y
+                if not is_final:
+                    center_y += int(round(height * 0.20))
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
@@ -4013,6 +4269,8 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
                 center_y = CHART_CENTER_Y + offset_y
+                if not is_final:
+                    center_y += int(round(height * 0.20))
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
@@ -4053,6 +4311,17 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         static_bg = np.zeros((height, width, 3), dtype=np.uint8)
         static_bg[:] = (10, 12, 18)
+        if not is_final:
+            logo_fields = set()
+            if str(field_id or "A").upper().startswith("B"):
+                logo_fields.add("B")
+            else:
+                logo_fields.add("A")
+            for panel in extra_ring_panels or []:
+                marker = str((panel or {}).get("slice_aet") or "")
+                if marker[:1] in ("A", "B"):
+                    logo_fields.add(marker[:1])
+            _place_logo_on_screens_3_and_4(static_bg, logo_fields)
         overlay = render_overlay_once(np.zeros((height, width, 3), dtype=np.uint8))
         overlay_mask = np.any(overlay > 2, axis=2)
         static_frame = static_bg.copy()
@@ -4321,6 +4590,31 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 # ============================================================
 # VIDEO RESULTS ENDPOINTS (UPDATED to use correct session folder)
 # ============================================================
+async def _wait_until_actions_are_scored(timeout=12.0):
+    """Per-video rings start after the last action of this test has been saved.
+
+    The last pass is scored on a short timer after it ends. Reading results.json
+    at the instant the test video ends used to omit that pass.
+    """
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "analysis_status.json")
+    deadline = time.time() + float(timeout)
+    saw_status = False
+    while time.time() < deadline:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                status = json.load(handle)
+            stamp = float(status.get("ts") or 0)
+            if time.time() - stamp < 2.0:
+                saw_status = True
+                if not status.get("session_active") and not status.get("pending"):
+                    return
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        await asyncio.sleep(0.15)
+    if not saw_status:
+        await asyncio.sleep(2.5)
+
+
 @app.post("/create-video-results")
 async def create_video_results(req: Request):
     try:
@@ -4350,6 +4644,8 @@ async def create_video_results(req: Request):
                 logger.info(f"Using newest realtime folder: {directory}")
             else:
                 return {"status": "error", "message": "No session folder found"}
+
+        await _wait_until_actions_are_scored()
 
         # Normalize to session root when pointed at field_A / field_B
         session_root = directory
@@ -4460,28 +4756,17 @@ async def create_video_results(req: Request):
             ",".join(sorted(panels.keys())),
             video_path,
         )
-        wrong_reel = None
-        try:
-            import simust_wrong_clips
-            wrong_reel = simust_wrong_clips.build_wrong_results_background(
-                session_root,
-                [(fid, fdir, rows) for fid, fdir, rows, _path in field_jobs],
-                video_index,
-            )
-        except Exception as exc:
-            logger.warning("Wrong-action slices were not built: %s", exc)
-            wrong_reel = None
         success = generate_results_video_from_results(
             primary_rows,
             video_path,
-            duration_seconds=(wrong_reel or {}).get("duration") or 20,
+            duration_seconds=20,
             is_final=False,
-            slice_video_path=(wrong_reel or {}).get("path"),
+            slice_video_path=None,
             session_folder=primary_dir,
             video_index=video_index,
             field=primary_fid,
             extra_ring_panels=extra,
-            native_background=bool(wrong_reel),
+            native_background=False,
         )
         if not success or not os.path.exists(video_path):
             return {"status": "error", "message": "Per-video generation failed"}
@@ -4620,11 +4905,13 @@ async def create_results_video(req: Request):
             generated = []
             primary_video = None
             panels = {}
+            field_metrics = {}
             primary_rows = None
             primary_fid = "A" if "A" in active else "B"
             primary_dir = session_root
             for fid, fdir, rows in field_dirs:
                 metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
+                field_metrics[fid] = metrics or {}
                 panels[fid] = build_results_ring_panel(metrics, field=fid)
                 if primary_rows is None or fid == primary_fid:
                     primary_rows = rows
@@ -4683,6 +4970,11 @@ async def create_results_video(req: Request):
         # Combined final lives at session root (one video for both fields)
 
         video_path = primary_video
+        progress_info = {}
+        try:
+            progress_info = apply_final_results_progress(field_metrics)
+        except Exception:
+            logger.exception("Final results could not update the player's level")
         if spawn_display and os.path.exists(player_script):
             play_cmd = [sys.executable, player_script, video_path, "1"]
             if sys.platform == "win32":
@@ -4696,6 +4988,7 @@ async def create_results_video(req: Request):
             "status": "success",
             "video_path": video_path,
             "videos": generated or [video_path],
+            "progress": progress_info,
         }
 
     except Exception as e:
@@ -4833,7 +5126,7 @@ async def save_session_to_player(req: Request):
         except Exception as push_exc:
             logger.warning("Host push could not start: %s", push_exc)
 
-        if apply_session_progress(users, player_id, level_played, subdirectory, statistics):
+        if apply_session_progress(users, player_id, level_played, subdirectory, statistics, from_final=False):
             save_users(users)
             result = (users.get(player_id) or {}).get("progress", {}).get("challenge_results", {}).get(level_played) or {}
             logger.info(
@@ -5610,6 +5903,7 @@ async def ingest_player_data(request: Request):
                 session_meta.get("level") or "",
                 session_meta.get("subdirectory") or "",
                 session_report.get("statistics") or {},
+                from_final=False,
             )
         return session_id
 

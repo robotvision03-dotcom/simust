@@ -25,93 +25,84 @@ class SessionUnlockPipelineTests(unittest.TestCase):
             }
         }
 
-    def test_unpaid_cannot_play_foundation(self):
+    def test_new_player_starts_on_sf30_and_later_sets_stay_locked(self):
         users = self._fresh()
         progress = users["cristiano"]["progress"]
-        ok, reason = simust_progress.can_play(progress, "L00-Foundation", "SF-30N")
-        self.assertFalse(ok)
+        ok, _reason = simust_progress.can_play(progress, "L00-Foundation", "SF-30N")
+        self.assertTrue(ok)
+        locked, reason = simust_progress.can_play(progress, "L00-Foundation", "SF-60N")
+        self.assertFalse(locked)
         self.assertIn("locked", reason.lower())
 
-    def test_30_minutes_opens_sf30_only(self):
-        users = self._fresh()
-        result = simust_progress.grant_reservation_credits(
-            users, "cristiano", 30, "res-1", ALL_LEVELS
-        )
-        self.assertEqual(result["credits_added"], 1)
-        self.assertEqual(result["unlocked_playlists"], ["SF-30N"])
-        self.assertIn("L00-Foundation", result["unlocked_levels"])
-        progress = users["cristiano"]["progress"]
-        self.assertTrue(simust_progress.can_play(progress, "L00-Foundation", "SF-30N")[0])
-        self.assertFalse(simust_progress.can_play(progress, "L00-Foundation", "SF-60N")[0])
-
-    def test_90_minutes_opens_three_foundation_playlists(self):
+    def test_booking_does_not_open_the_next_set(self):
         users = self._fresh()
         result = simust_progress.grant_reservation_credits(
             users, "cristiano", 90, "res-90", ALL_LEVELS
         )
         self.assertEqual(result["credits_added"], 3)
-        self.assertEqual(
-            result["unlocked_playlists"], ["SF-30N", "SF-60N", "SF-110N"]
-        )
+        self.assertEqual(result["unlocked_playlists"], ["SF-30N"])
+        progress = users["cristiano"]["progress"]
+        self.assertFalse(simust_progress.can_play(progress, "L00-Foundation", "SF-60N")[0])
 
-    def test_foundation_score_does_not_open_next_sf(self):
+    def test_passing_score_opens_the_next_set_and_keeps_it_open(self):
         users = self._fresh()
-        simust_progress.grant_reservation_credits(users, "cristiano", 30, "r1", ALL_LEVELS)
         apply_session_progress(
             users,
             "cristiano",
             "L00-Foundation",
             "SF-30N",
-            {"correct": 9, "late": 1, "wrong": 0, "miss": 0, "avg_ae": 90.0},
-        )
-        progress = users["cristiano"]["progress"]
-        self.assertEqual(progress["unlocked_playlists"], ["SF-30N"])
-        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
-
-    def test_sf180_pass_then_pay_opens_entry(self):
-        users = self._fresh()
-        simust_progress.grant_reservation_credits(users, "cristiano", 120, "r-found", ALL_LEVELS)
-        progress = users["cristiano"]["progress"]
-        self.assertEqual(
-            progress["unlocked_playlists"],
-            ["SF-30N", "SF-60N", "SF-110N", "SF-180N"],
-        )
-        apply_session_progress(
-            users,
-            "cristiano",
-            "L00-Foundation",
-            "SF-180N",
-            {"correct": 8, "late": 1, "wrong": 1, "miss": 0, "avg_ae": 82.0},
+            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0},
         )
         progress = users["cristiano"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["eligible_levels"])
-        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
+        self.assertIn("SF-60N", progress["unlocked_playlists"])
+        self.assertIn("SF-30N", progress["unlocked_playlists"])
+        self.assertEqual(progress["current_playlist"], "SF-60N")
+        self.assertNotIn("L01-Entry/A-T1", progress["unlocked_levels"])
 
-        simust_progress.grant_reservation_credits(users, "cristiano", 30, "r-entry", ALL_LEVELS)
-        progress = users["cristiano"]["progress"]
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
-        self.assertTrue(
-            simust_progress.can_play(progress, "L01-Entry/A-T1/A.T1.C1")[0]
-        )
-
-    def test_pending_credit_spent_after_score(self):
+    def test_sf180_pass_opens_entry(self):
         users = self._fresh()
-        simust_progress.grant_reservation_credits(users, "cristiano", 120, "r1", ALL_LEVELS)
-        # Extra 30 min while waiting on SF-180 score — credit sits unused.
-        simust_progress.grant_reservation_credits(users, "cristiano", 30, "r2", ALL_LEVELS)
         progress = users["cristiano"]["progress"]
-        self.assertEqual(progress["session_credits"], 1)
+        progress["unlocked_playlists"] = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
         apply_session_progress(
             users,
             "cristiano",
             "L00-Foundation",
             "SF-180N",
-            {"correct": 8, "late": 1, "wrong": 1, "miss": 0, "avg_ae": 82.0},
+            {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0},
         )
         progress = users["cristiano"]["progress"]
-        self.assertEqual(progress["session_credits"], 0)
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
+        self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
+        self.assertIn("L01-Entry/A-T1", progress["unlocked_levels"])
+        self.assertEqual(progress["current_level"], "L01-Entry/A-T1")
+        self.assertTrue(simust_progress.can_play(progress, "L01-Entry/A-T1")[0])
+
+    def test_entry_needs_the_higher_score(self):
+        users = self._fresh()
+        progress = users["cristiano"]["progress"]
+        progress["unlocked_levels"] = ["L00-Foundation", "L01-Entry/A-T1"]
+        progress["current_level"] = "L01-Entry/A-T1"
+        apply_session_progress(
+            users,
+            "cristiano",
+            "L01-Entry/A-T1",
+            "",
+            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0},
+        )
+        progress = users["cristiano"]["progress"]
+        self.assertFalse(progress["challenge_results"]["L01-Entry/A-T1"]["passed"])
+        self.assertNotIn("L01-Entry/A-T2", progress["unlocked_levels"])
+        apply_session_progress(
+            users,
+            "cristiano",
+            "L01-Entry/A-T1",
+            "",
+            {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0},
+        )
+        progress = users["cristiano"]["progress"]
+        self.assertTrue(progress["challenge_results"]["L01-Entry/A-T1"]["passed"])
+        self.assertIn("L01-Entry/A-T2", progress["unlocked_levels"])
+        self.assertIn("L01-Entry/A-T1", progress["unlocked_levels"])
 
     def test_grant_is_idempotent_per_reservation(self):
         users = self._fresh()
@@ -142,19 +133,20 @@ class FoundationProgressTests(unittest.TestCase):
         changed = apply_session_progress(users, "james", "L00-Foundation", "SF-30N", stats)
         self.assertTrue(changed)
         progress = users["james"]["progress"]
-        self.assertEqual(progress["current_level"], "L00-Foundation")
-        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
-        self.assertFalse(progress["challenge_results"]["L00-Foundation"]["passed"])
+        self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
+        self.assertIn("SF-60N", progress["unlocked_playlists"])
+        self.assertNotIn("L01-Entry/A-T1", progress["unlocked_levels"])
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["subdirectory"], "SF-30N")
 
-    def test_sf180n_marks_entry_eligible_not_unlocked(self):
+    def test_sf180n_opens_entry(self):
         users = self._player()
-        stats = {"correct": 8, "late": 1, "wrong": 1, "miss": 0, "avg_ae": 82.0}
+        progress = users["james"]["progress"]
+        progress["unlocked_playlists"] = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
+        stats = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
         apply_session_progress(users, "james", "L00-Foundation", "SF-180N", stats)
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
-        self.assertIn("L01-Entry/A-T1/A.T1.C1", progress["eligible_levels"])
-        self.assertNotIn("L01-Entry/A-T1/A.T1.C1", progress["unlocked_levels"])
+        self.assertIn("L01-Entry/A-T1", progress["unlocked_levels"])
 
 
 if __name__ == "__main__":
