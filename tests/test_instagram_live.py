@@ -43,6 +43,16 @@ class InstagramLiveTests(unittest.TestCase):
         })
         self.assertEqual(direct, "rtmps://example.test/rtmp/key")
 
+    def test_saved_session_user_comes_from_authorization(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
+            handle.write('{"authorization_data": {"username": "other.account"}}')
+            path = handle.name
+        try:
+            self.assertEqual(simust_instagram_live._saved_session_user(path), "other.account")
+        finally:
+            os.remove(path)
+
     def test_ineligible_account_message(self):
         message = simust_instagram_live.explain_instagram_failure({
             "message": "At this time, your account is not eligible to use this feature. Try again later!",

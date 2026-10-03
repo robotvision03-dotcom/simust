@@ -107,6 +107,7 @@ def _end_offset_frames():
 DEFAULT_RECORDINGS_DIR = "C:/Users/siama/Documents/simust_realtime_recordings"
 SIMUST_PLAYER_DIRECTORY = "C:/Users/siama/Documents/simust_player"
 IMAGE_ACTION_CUE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "image_action_cue.json")
+LIVE_ACTION_RESULT_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "live_action_result.json")
 TEAMMATE_FLASH_TIMING_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "teammate_flash_timing.json")
 
 
@@ -146,7 +147,7 @@ def _cue_on_sec(cue=None):
     """Effective On seconds from cue file, else teammate_flash_timing.json."""
     if isinstance(cue, dict) and cue.get("on_sec") is not None:
         try:
-            return max(0.1, min(9.9, float(cue.get("on_sec"))))
+            return max(0.1, min(60.0, float(cue.get("on_sec"))))
         except (TypeError, ValueError):
             pass
     on_sec, _ = _read_teammate_on_gap()
@@ -261,6 +262,7 @@ SHORT_FINISH_DIST = 35.0            # tighter mouth band on short tempo (in-sess
 LATE_NEXT_PEEK = 0.22               # short tempo: early frames of next shot may finish previous
 PEEK_BETWEEN_MAX_DIST = 140.0       # only peek if BETWEEN already closed toward the target
 LATE_OVER_CORRECT_MARGIN = 8.0      # prefer clear Late over a weak in-session Correct
+LATE_SESSION_FRACTION = 0.10         # last 10% of the session On time is Late
 MIN_MOVEMENT_THRESHOLD = 33
 MOVEMENT_RADIUS = 120
 LEAVE_THRESHOLD = 200          # kept but not used in simplified check
@@ -360,7 +362,8 @@ GOAL_PROBE_ZONES = (
     "wide_b",
 )
 # Displayed goal circle is this fraction of the old accept distance.
-GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90
+# The last two 0.90 factors make the green finish circle 10% smaller, twice.
+GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90 * 0.90 * 0.90
 # Live GOAL aims that finish inside that circle, vs shots that miss it.
 GOAL_AIM_IN = (
     "line_center",
@@ -559,7 +562,10 @@ def analyze_goal_with_context(action_id, screens, track, full_track, session_dur
 
     if arrival is not None:
         eff, t_hit, screen, proj = arrival
-        if not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
+        if arrival_in_late_window(t_hit, session_duration):
+            result = "Late"
+            evidence = (eff, t_hit, screen, proj)
+        elif not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
             result = "Correct"
             evidence = (eff, t_hit, screen, proj)
     elif late_arrival is not None:
@@ -1366,6 +1372,22 @@ def dynamic_late_window(
     )
 
 
+def arrival_in_late_window(arrive_t, session_duration) -> bool:
+    """True when the ball or person reaches the goal in the last 10% of the session.
+
+    A 3.00s session turns Late at 2.70s. Any arrival at that moment or later is Late.
+    """
+    try:
+        moment = float(arrive_t)
+        duration = float(session_duration)
+    except (TypeError, ValueError):
+        return False
+    if duration <= 0 or moment != moment:
+        return False
+    cutoff = duration * (1.0 - float(LATE_SESSION_FRACTION))
+    return moment + 1e-6 >= cutoff
+
+
 def dynamic_analysis_delay(recent_gap_sec: Optional[float] = None, session_duration: Optional[float] = None) -> float:
     """Live label delay: wait for BETWEEN frames, but not longer than the tempo allows."""
     if recent_gap_sec is None and session_duration is None:
@@ -1653,6 +1675,17 @@ def _cabinet_for_line(p0, p1):
 _FIELD_A_CABINETS = frozenset({"1", "2", "3", "4", "12", "13", "14"})
 _FIELD_B_CABINETS = frozenset({"5", "6", "7", "8", "9", "10", "11"})
 _SCREEN3_CABINET = {"A": "14", "B": "7"}
+# A2, A5, B2, B5. Their finish circle is 15% larger than the other screens.
+_SCREEN_2_AND_5_CABINETS = frozenset({"13", "3", "6", "10"})
+
+
+def _finish_circle_boost(p0, p1) -> float:
+    cabinet = _cabinet_for_line(p0, p1)
+    if not cabinet:
+        return 1.0
+    if str(cabinet).rstrip("LR") in _SCREEN_2_AND_5_CABINETS:
+        return 1.15
+    return 1.0
 
 
 def finish_zone_scale(p0, p1):
@@ -1686,6 +1719,7 @@ def goal_circle_radius(depth, p0=None, p1=None):
     radius = max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
     if p0 is not None and p1 is not None:
         radius *= finish_zone_scale(p0, p1)
+        radius *= _finish_circle_boost(p0, p1)
     return max(4.0, radius)
 
 
@@ -1702,7 +1736,10 @@ def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
     Correct and Miss both require this. A ball outside the circle is not a finish.
     """
     cx, cy = goal_circle_center(p0, p1)
-    return math.hypot(float(point[0]) - cx, float(point[1]) - cy) <= goal_circle_radius(depth)
+    radius = goal_circle_radius(depth)
+    if p0 is not None and p1 is not None:
+        radius *= _finish_circle_boost(p0, p1)
+    return math.hypot(float(point[0]) - cx, float(point[1]) - cy) <= radius
 
 
 def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_POST_RADIUS):
@@ -1953,7 +1990,7 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
 # Compute Action Efficiency (AE)
 # ================================================================
 def compute_action_efficiency(action_type: str, result: str, finishing_time: float,
-                              movement_px: int, max_movement_px: int = 100) -> float:
+                              movement_px: int, max_movement_px: int = 100, max_time: float = 3.0) -> float:
     """
     Compute Action Efficiency (AE) score for a single action.
     Returns a value between 0 and 100.
@@ -1973,8 +2010,13 @@ def compute_action_efficiency(action_type: str, result: str, finishing_time: flo
     else:  # Wrong or Miss
         A = 0
 
-    # ---- Finishing time (T) – now 3 seconds = optimal ----
-    max_time = 3.0
+    # Sooner in the goal is a higher score. 3 seconds is the usual full scale.
+    try:
+        max_time = float(max_time)
+    except (TypeError, ValueError):
+        max_time = 3.0
+    if max_time <= 0:
+        max_time = 3.0
     if finishing_time and finishing_time > 0:
         T = min(finishing_time / max_time, 1.0) * 100
     else:
@@ -2134,31 +2176,26 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                 full_track, best_screen, screens, goal_lines, arrive_t, depth,
                 origin=origin, post_radius=post_radius_for(action_type),
             )
-            came_back_in_session = returned_toward_origin(
-                track, best_screen, screens, goal_lines, arrive_t, depth,
-                origin=origin, post_radius=post_radius_for(action_type),
-            )
-            # Finish that only completes at the last in-session frame (return after
-            # the QR) is Late — covers T1.2 boundary finishes and end-of-video S10.
-            near_session_end = (
-                session_duration > 0
-                and arrive_t is not None
-                and arrive_t >= max(0.0, session_duration - 0.12)
-            )
-            if action_type == 'PRESS':
+            # Last 10% of the session is Late for every action, including a return.
+            # A 3.00s On time is Late from 2.70s onward.
+            # Finish-balls tests have one shared clock: a ball in the goal area
+            # is a goal. There is no late, miss, or return check.
+            finish_balls = bool((action_data or {}).get("finish_balls"))
+            late_by_time = (not finish_balls) and arrival_in_late_window(arrive_t, session_duration)
+            if finish_balls:
                 result = 'Correct'
                 winning_screen = best_screen
-                display_time = f"{best_min_time:.3f}"
+                display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
                 display_duration = f"{session_duration:.3f}"
                 min_dist_display = best_eff_dist
-            elif came_back and came_back_in_session:
-                result = 'Correct'
-                winning_screen = best_screen
-                display_time = f"{best_min_time:.3f}"
-                display_duration = f"{session_duration:.3f}"
-                min_dist_display = best_eff_dist
-            elif came_back and near_session_end and not came_back_in_session:
+            elif late_by_time:
                 result = 'Late'
+                winning_screen = best_screen
+                display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
+            elif action_type == 'PRESS':
+                result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{best_min_time:.3f}"
                 display_duration = f"{session_duration:.3f}"
@@ -2179,7 +2216,8 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
 
             # Short tempo: a weak in-session graze should lose to a clear BETWEEN/peek Late.
             if (
-                result in ('Correct', 'Miss')
+                not finish_balls
+                and result in ('Correct', 'Miss')
                 and short_tempo
                 and action_end_time is not None
                 and action_type in ('PASS', 'TARGET')
@@ -2200,7 +2238,7 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                     min_dist_display = late_dist
                     best_proj_t = late_proj
         else:
-            if action_end_time is not None:
+            if action_end_time is not None and not bool((action_data or {}).get("finish_balls")):
                 found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
                     action_index, all_data, screens, goal_lines, key, action_end_time, action_type,
                     late_window=late_window,
@@ -2240,7 +2278,14 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
 
         aep = get_aep_orientation(screens, winning_screen)
         finishing_time_val = float(display_time) if display_time != '-' else 0.0
-        ae = compute_action_efficiency(action_type, result, finishing_time_val, movement)
+        try:
+            efficiency_window = float((action_data or {}).get("efficiency_max_sec") or 0)
+        except (TypeError, ValueError):
+            efficiency_window = 0.0
+        ae = compute_action_efficiency(
+            action_type, result, finishing_time_val, movement,
+            max_time=efficiency_window or 3.0,
+        )
         return {
             'Action ID': action_id,
             'Action': action_type,
@@ -2254,7 +2299,10 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             'Direction': direction,
             'AEP': aep,
             'proj_t': round(best_proj_t, 3) if best_proj_t is not None else None,
-            'AE': ae
+            'AE': ae,
+            'finish_balls': bool((action_data or {}).get("finish_balls")),
+            'budget_elapsed_sec': (action_data or {}).get("budget_elapsed_sec"),
+            'budget_total_sec': (action_data or {}).get("budget_total_sec"),
         }
 
     sd = f"{float(session_duration):.3f}" if session_duration and float(session_duration) > 0 else '-'
@@ -2325,6 +2373,9 @@ class ArenaSimulator:
       Miss    — arrive in the goal area and do not come back, even after the session.
       Late    — first arrival is after the session.
       Wrong   — never arrive.
+    Finish-balls tests use one shared clock. Tests 1 to 5 send about
+    100%, 80%, 50%, 20%, then 100% of the balls into the goal. After that
+    share, the ball stays out, the clock runs out, and the rest are wrong.
     GOAL (cameras face screens 1 and 8; posts count):
       Correct — reach the goal line / proj_t band during the session and do not
                 come back toward the send origin.
@@ -2395,10 +2446,17 @@ class ArenaSimulator:
         self.aim_out_index = 0
         self.aim_name = ""
         self.border_index = 0
+        self.finish_balls = False
 
-    def start_action(self, action, screens):
+    def _finish_plan(self, test_num, action_in_set, actions_in_set):
+        """Tests 1–5: about 100%, 80%, 50%, 20%, then 100% in the goal."""
+        from smart_simust_player import finish_balls_sim_plan
+        return finish_balls_sim_plan(test_num, action_in_set, actions_in_set)
+
+    def start_action(self, action, screens, finish_balls=False, action_in_set=0, actions_in_set=0, test_num=0):
         self.action = (action or "").upper()
         self.screens = [str(s) for s in (screens or [])]
+        self.finish_balls = bool(finish_balls)
         self.start_ts = time.time()
         self.active = True
         self.late_phase = False
@@ -2469,8 +2527,14 @@ class ArenaSimulator:
                     f"dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
                 )
                 return
-            self.intended = self._next_outcome(self.action)
-            name, xy = self._next_goal_aim(self.intended)
+            self.intended = (
+                self._finish_plan(test_num, action_in_set, actions_in_set)
+                if self.finish_balls else self._next_outcome(self.action)
+            )
+            aim_as = "wrong" if self.intended == "wrong" else (
+                "correct" if self.finish_balls else self.intended
+            )
+            name, xy = self._next_goal_aim(aim_as)
             self.aim_name = name
             self.probe_name = name
             self.target_xy = xy
@@ -2485,7 +2549,11 @@ class ArenaSimulator:
                 f"target={xy} dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'}"
             )
             return
-        self.intended = self._next_outcome(self.action)
+        self.intended = (
+            self._finish_plan(test_num, action_in_set, actions_in_set)
+            if self.finish_balls else self._next_outcome(self.action)
+        )
+        self.finish_travel_s = 2.40 if self.intended == "slow" else 0.70
         screen = self.screens[0] if self.screens else ""
         depth = arrival_depth_for(screen, self.action) if screen else float(FINISH_DIST)
         # Land just inside the drawn border so a moving frame is still accepted.
@@ -2863,9 +2931,11 @@ class ArenaSimulator:
             px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
             return bx, by, px, py
 
-        if intended == "miss":
-            # Arrive in the goal area and stay — no come-back.
-            u = min(1.0, t / 0.70)
+        if intended in ("miss", "finish", "slow"):
+            # Arrive in the goal area and stay. A slow ball still counts, but
+            # it uses more of the shared clock.
+            travel = 2.40 if intended == "slow" else 0.70
+            u = min(1.0, t / travel)
             if is_press:
                 px, py = self._lerp(self.PLAYER_HOME, target, u)
                 bx, by = px + 16, py + 10
@@ -3510,6 +3580,7 @@ class SimustRealtimeCamera:
         self.visualization_enabled = bool(viz)
 
         self.session_lock = threading.RLock()
+        self._live_file_lock = threading.Lock()
         self.channels = {"A": FieldRuntime("A"), "B": FieldRuntime("B")}
         self.active_fields = set(("A", "B"))
         self._refresh_active_fields()
@@ -4192,7 +4263,9 @@ class SimustRealtimeCamera:
                 ch.block_counter = self._parse_block_num(peer.current_block_id)
 
     def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp, ch,
-                               paired_session_start=None, paired_offset_str=None, on_sec=None):
+                               paired_session_start=None, paired_offset_str=None, on_sec=None, efficiency_max_sec=None,
+                               finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None,
+                               action_in_set=None, actions_in_set=None, test_num=None):
         offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, _start_offset_seconds())
         with self.session_lock:
             ch.pending_start = {
@@ -4207,7 +4280,39 @@ class SimustRealtimeCamera:
             }
             if on_sec is not None:
                 try:
-                    ch.pending_start["on_sec"] = max(0.1, min(9.9, float(on_sec)))
+                    ch.pending_start["on_sec"] = max(0.1, min(60.0, float(on_sec)))
+                except (TypeError, ValueError):
+                    pass
+            if efficiency_max_sec is not None:
+                try:
+                    ch.pending_start["efficiency_max_sec"] = max(0.1, float(efficiency_max_sec))
+                except (TypeError, ValueError):
+                    pass
+            if finish_balls:
+                ch.pending_start["finish_balls"] = True
+            if budget_elapsed_sec is not None:
+                try:
+                    ch.pending_start["budget_elapsed_sec"] = max(0.0, float(budget_elapsed_sec))
+                except (TypeError, ValueError):
+                    pass
+            if budget_total_sec is not None:
+                try:
+                    ch.pending_start["budget_total_sec"] = max(0.0, float(budget_total_sec))
+                except (TypeError, ValueError):
+                    pass
+            if action_in_set is not None:
+                try:
+                    ch.pending_start["action_in_set"] = int(action_in_set)
+                except (TypeError, ValueError):
+                    pass
+            if actions_in_set is not None:
+                try:
+                    ch.pending_start["actions_in_set"] = int(actions_in_set)
+                except (TypeError, ValueError):
+                    pass
+            if test_num is not None:
+                try:
+                    ch.pending_start["test_num"] = int(test_num)
                 except (TypeError, ValueError):
                     pass
             if paired_session_start is not None:
@@ -4385,6 +4490,32 @@ class SimustRealtimeCamera:
             'ae': analysis_result.get('AE', 0.0),
             'video_start_sec': (action_data or {}).get('video_start_sec'),
         }
+        if analysis_result.get("finish_balls") or (action_data or {}).get("finish_balls"):
+            try:
+                elapsed = float(analysis_result.get("budget_elapsed_sec") or 0)
+            except (TypeError, ValueError):
+                elapsed = 0.0
+            try:
+                total = float(analysis_result.get("budget_total_sec") or 0)
+            except (TypeError, ValueError):
+                total = 0.0
+            arrive = None
+            try:
+                raw_arrive = result_entry.get("finishing_time")
+                if raw_arrive not in (None, "", "-", "0", 0):
+                    arrive = float(raw_arrive)
+            except (TypeError, ValueError):
+                arrive = None
+            # Cue ON is 17 frames before the session clock. The shared
+            # stopwatch starts at the first screen, so add that delay once.
+            shift = 17.0 / 20.0
+            if str(result_entry.get("result") or "") == "Correct" and arrive is not None:
+                clock = elapsed + shift + arrive
+            else:
+                clock = total if total > 0 else elapsed
+            result_entry["finish_balls"] = True
+            result_entry["balls_budget_sec"] = total
+            result_entry["balls_clock_sec"] = clock
         frames = ch.pending_analysis.get('frames') or []
         if str(result_entry['result']).strip().lower() == 'wrong' and frames:
             clip_dir = self.recording_dir or os.path.dirname(ch.recording_subdir or "") or "."
@@ -4400,6 +4531,14 @@ class SimustRealtimeCamera:
                 print(f"  [{ch.label}] Could not save wrong slice {block_id}: {exc}")
 
         ch.stats['results'].append(result_entry)
+        self._publish_live_result(
+            ch.field_id,
+            result_entry.get("result"),
+            result_entry.get("screens"),
+            result_entry.get("winning_screen"),
+            result_entry.get("id"),
+            seq=(ch.pending_analysis or {}).get("seq"),
+        )
         session_folder = ch.recording_subdir
         try:
             payload = {
@@ -4419,6 +4558,199 @@ class SimustRealtimeCamera:
         ch._recent_between_gap = None
         ch._last_session_duration = None
         self._write_analysis_status()
+
+    def _schedule_live_display(self, ch):
+        """Score the action in the background so the gap mark is already written."""
+        if ch is None or not self._field_is_active(ch.field_id):
+            return
+        if getattr(ch, "_live_display_busy", False):
+            return
+        now = time.time()
+        if now - float(getattr(ch, "_live_display_at", 0) or 0) < 0.12:
+            return
+        if ch.session_active and ch.current_qr_block is not None:
+            block = ch.current_qr_block
+            action_type = ch.current_action
+            screens = list(ch.current_screens or [])
+            block_id = ch.current_block_id
+            seq = int(getattr(ch, "_display_seq", 0) or 0)
+            between = []
+            between_start = None
+        elif ch.pending_analysis is not None:
+            block = ch.pending_analysis.get("action_data")
+            action_type = ch.pending_analysis.get("action_type")
+            screens = list(ch.pending_analysis.get("screens") or [])
+            block_id = ch.pending_analysis.get("block_id")
+            seq = int(ch.pending_analysis.get("seq") or 0)
+            between = list(ch.between_session_data or [])
+            between_start = ch.between_session_start_time
+        else:
+            return
+        if not isinstance(block, dict) or not action_type or not block_id:
+            return
+        data_copy = list(block.get("data") or [])
+        if len(data_copy) < 2:
+            return
+        snap = dict(block)
+        snap["data"] = data_copy
+        if not snap.get("end_time"):
+            snap["end_time"] = get_current_time_ms()
+        ch._live_display_busy = True
+        ch._live_display_at = now
+        threading.Thread(
+            target=self._run_live_display,
+            args=(ch.field_id, snap, action_type, screens, block_id, between, between_start, seq),
+            daemon=True,
+        ).start()
+
+    def _run_live_display(self, field_id, snap, action_type, screens, block_id, between, between_start, seq):
+        """Write the current finish without waiting for the post-gap analysis timer."""
+        try:
+            blocks = [snap]
+            if between:
+                blocks.append({
+                    "id": "BETWEEN",
+                    "action": "BETWEEN_SESSIONS",
+                    "screens": [],
+                    "field": field_id,
+                    "start_time": between_start or get_current_time_ms(),
+                    "data": between,
+                })
+            preview = analyze_action_with_context(
+                snap, GOAL_LINES, action_type, blocks, 0
+            )
+            # A ball still on the way is not a wrong finish. Wrong is published
+            # only when the session track has actually ended.
+            if str(preview.get("Result") or "").strip().lower() == "wrong":
+                return
+            self._publish_live_result(
+                field_id,
+                preview.get("Result"),
+                screens,
+                preview.get("Winning Screen"),
+                block_id,
+                seq=seq,
+            )
+        except Exception as exc:
+            print(f"  [Field {field_id}] Live display failed: {exc}")
+        finally:
+            ch = self.channels.get(field_id)
+            if ch is not None:
+                ch._live_display_busy = False
+
+    def _publish_live_result(self, field, result, screens, winning_screen, block_id, seq=0):
+        """Latest finish for the gap screen. One entry per field, replaced in place."""
+        path = LIVE_ACTION_RESULT_FILE
+        try:
+            new_seq = int(seq or 0)
+        except (TypeError, ValueError):
+            new_seq = 0
+        fid = str(field or "A").upper()[:1]
+        with self._live_file_lock:
+            payload = {"fields": {}}
+            try:
+                if os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as handle:
+                        loaded = json.load(handle) or {}
+                    if isinstance(loaded, dict) and isinstance(loaded.get("fields"), dict):
+                        payload = loaded
+            except Exception:
+                payload = {"fields": {}}
+            fields = payload.setdefault("fields", {})
+            existing = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+            try:
+                old_seq = int((existing or {}).get("seq") or 0)
+            except (TypeError, ValueError):
+                old_seq = 0
+            try:
+                old_ts = float((existing or {}).get("ts") or 0)
+            except (TypeError, ValueError):
+                old_ts = 0
+            # A late score for the previous action must not cover the one on screen now.
+            # It is still kept under its own seq so that screen can update.
+            # A new playlist starts again at seq 1, so an old file must not block it.
+            entry = {
+                "result": str(result or ""),
+                "screens": [str(s) for s in (screens or [])],
+                "winning_screen": str(winning_screen or ""),
+                "block_id": str(block_id or ""),
+                "seq": new_seq,
+                "ts": time.time(),
+            }
+            by_seq = existing.get("by_seq") if isinstance(existing.get("by_seq"), dict) else {}
+            by_seq = dict(by_seq)
+            if new_seq:
+                by_seq[str(new_seq)] = entry
+                fresh = []
+                for key in list(by_seq):
+                    try:
+                        fresh.append(int(key))
+                    except (TypeError, ValueError):
+                        by_seq.pop(key, None)
+                if fresh:
+                    newest = max(fresh)
+                    for num in fresh:
+                        if newest - num > 40:
+                            by_seq.pop(str(num), None)
+            keep_latest = not (
+                new_seq and old_seq and new_seq < old_seq and (time.time() - old_ts) < 15.0
+            )
+            if keep_latest:
+                stored = dict(entry)
+            else:
+                stored = {
+                    "result": existing.get("result", ""),
+                    "screens": existing.get("screens") or [],
+                    "winning_screen": existing.get("winning_screen", ""),
+                    "block_id": existing.get("block_id", ""),
+                    "seq": old_seq,
+                    "ts": old_ts,
+                }
+            stored["by_seq"] = by_seq
+            fields[fid] = stored
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                os.replace(tmp, path)
+            except OSError as exc:
+                print(f"Could not write live action result: {exc}")
+
+    def _publish_session_preview_locked(self, ch):
+        """Score the session that just ended so the gap can show it at once."""
+        block = ch.pending_analysis or {}
+        action_data = block.get("action_data")
+        action_type = block.get("action_type")
+        if not action_data or not action_type:
+            return
+        try:
+            combined = self._blocks_for_late_analysis(ch)
+            action_index = 0
+            block_id = block.get("block_id")
+            for index, item in enumerate(combined):
+                if item.get("id") == block_id:
+                    action_index = index
+                    break
+            preview = analyze_action_with_context(
+                action_data, GOAL_LINES, action_type, combined, action_index
+            )
+        except Exception as exc:
+            print(f"  [{ch.label}] Gap preview failed: {exc}")
+            return
+        # Wrong is only the starting value until the ball is found. The gap
+        # search still running can turn that into Correct or Late, so a cross
+        # is not shown until that search has finished.
+        if str(preview.get("Result") or "").strip().lower() == "wrong":
+            return
+        self._publish_live_result(
+            ch.field_id,
+            preview.get("Result"),
+            block.get("screens"),
+            preview.get("Winning Screen"),
+            block_id,
+            seq=(ch.pending_analysis or {}).get("seq"),
+        )
 
     def _write_analysis_status(self):
         """Tell the results page whether the last action is still being scored."""
@@ -4544,9 +4876,11 @@ class SimustRealtimeCamera:
                 'action_type': ch.current_action,
                 'block_id': ch.current_block_id,
                 'video_index': video_index,
+                'seq': int(getattr(ch, "_display_seq", 0) or 0),
                 'frames': list(getattr(ch, "_action_frames", None) or []),
             }
             ch._action_frames = []
+            self._publish_session_preview_locked(ch)
             self._schedule_late_analysis_locked(ch)
 
             ch.current_qr_block = None
@@ -4615,6 +4949,7 @@ class SimustRealtimeCamera:
         ch.current_block_id = p["block_id"]
         ch.active_goal_lines = p["goal_lines"]
         ch.session_active = True
+        ch._gap_display_sent = False
         # t=0 is cue ON (teammate image appear), not keypoint paint delay.
         # Otherwise Session Duration ≈ On − delay (~0.72s when On=1.5).
         try:
@@ -4649,7 +4984,14 @@ class SimustRealtimeCamera:
         if self.simulation_enabled:
             sim = self.simulators.get(ch.field_id)
             if sim is not None:
-                sim.start_action(ch.current_action, ch.current_screens)
+                sim.start_action(
+                    ch.current_action,
+                    ch.current_screens,
+                    finish_balls=bool(p.get("finish_balls")),
+                    action_in_set=p.get("action_in_set") or 0,
+                    actions_in_set=p.get("actions_in_set") or 0,
+                    test_num=p.get("test_num") or 0,
+                )
 
         # Image-cue: hold On frames from this appear, then clear.
         # Cue false is not used.
@@ -4658,12 +5000,30 @@ class SimustRealtimeCamera:
             if on_sec is None:
                 on_sec = _cue_on_sec()
             try:
-                on_sec = max(0.1, min(9.9, float(on_sec)))
+                on_sec = max(0.1, min(60.0, float(on_sec)))
             except (TypeError, ValueError):
                 on_sec, _ = _read_teammate_on_gap()
             ch._planned_on_sec = float(on_sec)
             ch.current_qr_block["on_sec"] = float(on_sec)
             ch.current_qr_block["planned_on_sec"] = float(on_sec)
+            try:
+                eff = float(p.get("efficiency_max_sec") or 0)
+            except (TypeError, ValueError):
+                eff = 0.0
+            if eff > 0:
+                ch.current_qr_block["efficiency_max_sec"] = eff
+            if p.get("finish_balls"):
+                ch.current_qr_block["finish_balls"] = True
+            if p.get("budget_elapsed_sec") is not None:
+                ch.current_qr_block["budget_elapsed_sec"] = p.get("budget_elapsed_sec")
+            if p.get("budget_total_sec") is not None:
+                ch.current_qr_block["budget_total_sec"] = p.get("budget_total_sec")
+            if p.get("action_in_set") is not None:
+                ch.current_qr_block["action_in_set"] = p.get("action_in_set")
+            if p.get("actions_in_set") is not None:
+                ch.current_qr_block["actions_in_set"] = p.get("actions_in_set")
+            if p.get("test_num") is not None:
+                ch.current_qr_block["test_num"] = p.get("test_num")
             hold_frames = max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
             ch.keypoint_hold_frames = hold_frames
             ch.keypoint_frames_shown = 0
@@ -4764,6 +5124,13 @@ class SimustRealtimeCamera:
                     "screens": list(hit["screens"]),
                     "keypoints": list(hit.get("keypoints") or []),
                     "on_sec": on_sec,
+                    "efficiency_max_sec": (cue or {}).get("efficiency_max_sec"),
+                    "finish_balls": bool((cue or {}).get("finish_balls")),
+                    "budget_elapsed_sec": (cue or {}).get("budget_elapsed_sec"),
+                    "budget_total_sec": (cue or {}).get("budget_total_sec"),
+                    "action_in_set": (cue or {}).get("action_in_set"),
+                    "actions_in_set": (cue or {}).get("actions_in_set"),
+                    "test_num": (cue or {}).get("test_num"),
                     "raw": cue_raw,
                     "seq": (cue or {}).get("seq", 0),
                     "hold_frames": hold_frames,
@@ -4788,6 +5155,10 @@ class SimustRealtimeCamera:
                                 self._end_session_locked(
                                     current_time_str, current_timestamp, ch
                                 )
+                    try:
+                        ch._display_seq = int(info.get("seq") or 0)
+                    except (TypeError, ValueError):
+                        ch._display_seq = 0
                     # One S-number per pass. Field raw includes the screen
                     # (A=12, B=5), so keying on raw counted A as S1 and B as S2
                     # and the overlay showed only the odds: S1, S3, S5.
@@ -4812,6 +5183,13 @@ class SimustRealtimeCamera:
                         paired_session_start=current_timestamp,
                         paired_offset_str=current_time_str,
                         on_sec=info.get("on_sec"),
+                        efficiency_max_sec=info.get("efficiency_max_sec"),
+                        finish_balls=bool(info.get("finish_balls")),
+                        budget_elapsed_sec=info.get("budget_elapsed_sec"),
+                        budget_total_sec=info.get("budget_total_sec"),
+                        action_in_set=info.get("action_in_set"),
+                        actions_in_set=info.get("actions_in_set"),
+                        test_num=info.get("test_num"),
                     )
                     with self.session_lock:
                         if ch.pending_start:
@@ -4829,6 +5207,16 @@ class SimustRealtimeCamera:
 
             # --- Hold countdown from cue ON (cue false does not clear) ---
             if ch.kp_clear_frames_left is not None and ch.session_active:
+                # The pass image goes off this many frames before keypoints clear.
+                # Write the finish then, so the gap does not open onto an empty screen.
+                if (
+                    ch.kp_clear_frames_left == int(IMAGE_CUE_EDGE_SHIFT_FRAMES)
+                    and not getattr(ch, "_gap_display_sent", False)
+                ):
+                    ch._gap_display_sent = True
+                    ch._live_display_at = 0
+                    ch._live_display_busy = False
+                    self._schedule_live_display(ch)
                 if ch.kp_clear_frames_left <= 0:
                     ch.kp_clear_frames_left = None
                     with self.session_lock:
@@ -4951,7 +5339,6 @@ class SimustRealtimeCamera:
             cv2.putText(frame, "FIELD B", (w // 4 * 3 - 50, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
         if "A" in active and "B" in active:
             cv2.line(frame, (mid_x, 0), (mid_x, h), (255, 255, 255), 2)
-        frame = self.draw_results_overlay(frame)
         return frame
 
     # ---- Frame processing (with hip-point tracking) ----
@@ -5047,6 +5434,7 @@ class SimustRealtimeCamera:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_HIP, 1)
             if into_session:
                 ch.session_fps_sum += self.tracker.current_fps
+            self._schedule_live_display(ch)
 
         self.frame_counter += 1
         self.tracker.update_fps()
@@ -5597,7 +5985,15 @@ class SimustRealtimeCamera:
                 if not self._field_is_active(fid):
                     continue
                 if ch.session_active:
-                    self.simulators[fid].start_action(ch.current_action, ch.current_screens)
+                    block = ch.current_qr_block or {}
+                    self.simulators[fid].start_action(
+                        ch.current_action,
+                        ch.current_screens,
+                        finish_balls=bool(block.get("finish_balls")),
+                        action_in_set=block.get("action_in_set") or 0,
+                        actions_in_set=block.get("actions_in_set") or 0,
+                        test_num=block.get("test_num") or 0,
+                    )
         else:
             for fid, sim in self.simulators.items():
                 if self._field_is_active(fid):

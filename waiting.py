@@ -17,6 +17,7 @@ import random
 try:
     from simust_display_layout import (
         CHART_CENTER_Y,
+        RESULTS_BAND_DROP,
         RING_RADIUS,
         RING_THICKNESS,
         COACH_BAND_WIDTH,
@@ -28,6 +29,7 @@ try:
     )
 except ImportError:
     CHART_CENTER_Y = 140
+    RESULTS_BAND_DROP = 0.10
     RING_RADIUS = 63
     RING_THICKNESS = 15
     COACH_BAND_WIDTH = 3840
@@ -82,7 +84,7 @@ class Ball:
 class WaitingOverlay(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setAutoFillBackground(True)
         self.setMouseTracking(False)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
 
@@ -215,8 +217,8 @@ class WaitingOverlay(QtWidgets.QWidget):
                 self.angle * 16, 270 * 16
             )
 
-            # ---- "Processing" and "Results" text with background ----
-            painter.setPen(QColor(255, 255, 255))
+            # ---- "Processing" and "Results" text, no plate ----
+            painter.setPen(QColor(0, 0, 0))
             font = QFont("Segoe UI", 12, QFont.Bold)  # slightly larger
             painter.setFont(font)
 
@@ -227,18 +229,9 @@ class WaitingOverlay(QtWidgets.QWidget):
             th1 = metrics.height()
             tw2 = metrics.width(text2)
             th2 = metrics.height()
-            total_text_width = max(tw1, tw2) + 20  # padding
-            total_text_height = th1 + th2 + 12     # spacing + padding
-            x_text = cx - total_text_width // 2
+            total_text_height = th1 + th2 + 12
             y_text = cy - total_text_height // 2
 
-            # Draw rounded rectangle background (dark semi-transparent)
-            painter.setBrush(QBrush(QColor(0, 0, 0, 200)))
-            painter.setPen(Qt.NoPen)
-            painter.drawRoundedRect(x_text, y_text, total_text_width, total_text_height, 8, 8)
-
-            # Draw text on top
-            painter.setPen(QColor(255, 255, 255))
             painter.drawText(cx - tw1//2, y_text + th1 + 4, text1)
             painter.drawText(cx - tw2//2, y_text + th1 + 8 + th2, text2)
 

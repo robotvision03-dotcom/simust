@@ -6,6 +6,7 @@ They are never written into source or sent to the public site.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -64,6 +65,29 @@ def _ffmpeg_bin() -> str:
     raise RuntimeError("ffmpeg was not found")
 
 
+def _saved_session_user(path: str) -> str:
+    """Username stored in the last Instagram session, if the file can be read."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    auth = data.get("authorization_data") or {}
+    if isinstance(auth, dict) and auth.get("username"):
+        return str(auth.get("username") or "").strip()
+    return str(data.get("username") or "").strip()
+
+
+def _drop_session_file():
+    if os.path.isfile(_SESSION_PATH):
+        try:
+            os.remove(_SESSION_PATH)
+        except OSError:
+            pass
+
+
 def _login():
     try:
         from instagrapi import Client
@@ -72,25 +96,34 @@ def _login():
     user, password = _credentials()
     client = Client()
     client.delay_range = [1, 2]
-    if os.path.isfile(_SESSION_PATH):
+    saved = _saved_session_user(_SESSION_PATH) if os.path.isfile(_SESSION_PATH) else ""
+    if saved and saved.lower() != user.lower():
+        logger.info("Instagram session is for %s; signing in as %s", saved, user)
+        _drop_session_file()
+        saved = ""
+    if saved:
         try:
             client.load_settings(_SESSION_PATH)
         except Exception:
             logger.info("Instagram session file could not be loaded; signing in again")
+            _drop_session_file()
     try:
         client.login(user, password)
     except Exception as exc:
         name = type(exc).__name__
-        if os.path.isfile(_SESSION_PATH):
-            try:
-                os.remove(_SESSION_PATH)
-            except OSError:
-                pass
+        _drop_session_file()
         if "Challenge" in name or "TwoFactor" in name:
             raise RuntimeError(
                 "Instagram asked to confirm the login for "
                 + user
                 + ". Approve it in the Instagram app, then press Insta again."
+            ) from exc
+        if "Suspended" in name:
+            raise RuntimeError(
+                user
+                + " is suspended on Instagram. "
+                "Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in lab.env to a different account, "
+                "restart app.py, then press Insta again."
             ) from exc
         raise RuntimeError("Instagram login failed: " + name) from exc
     try:

@@ -77,6 +77,7 @@ def run_case(action: str, screens: List[str], intended: str, session_s: float = 
         "start_time": fmt_dt(session_start),
         "end_time": fmt_dt(session_end),
         "data": session_data,
+        "on_sec": float(session_s),
     }
     between_block = {
         "id": "BETWEEN",

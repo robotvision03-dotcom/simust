@@ -32,6 +32,7 @@ except ImportError:
 try:
     from simust_display_layout import (
         CHART_CENTER_Y,
+        RESULTS_BAND_DROP,
         RING_RADIUS,
         RING_THICKNESS,
         COACH_BAND_WIDTH,
@@ -44,6 +45,7 @@ try:
     )
 except ImportError:
     CHART_CENTER_Y = 140
+    RESULTS_BAND_DROP = 0.10
     RING_RADIUS = 63
     RING_THICKNESS = 15
     COACH_BAND_WIDTH = 3840
@@ -215,6 +217,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
 
+
+def _reset_live_action_results():
+    """A new play starts cue numbers again at 1. Drop the previous play's scores."""
+    try:
+        os.makedirs(os.path.dirname(LIVE_ACTION_RESULT_FILE), exist_ok=True)
+        with open(LIVE_ACTION_RESULT_FILE, "w", encoding="utf-8") as handle:
+            json.dump({"fields": {}}, handle)
+    except Exception as exc:
+        logger.warning("Could not reset live action results: %s", exc)
+
 WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
 # Level intro clip played before every test (replaces "starting" ring animation).
@@ -334,6 +346,11 @@ ACTIVATED_TEST_NUMBERS = {
 # by every screen, and a different color on the next test.
 HP_NUMBER_MIN = 1
 HP_NUMBER_MAX = 100
+# Foundation "omid": same numbers as High Performance. The screen changes when
+# the ball reaches the goal, and a faster arrival scores higher efficiency.
+OMID_ON_MS = 8000
+OMID_GAP_MS = 80
+OMID2_BUDGET_MS = 17000
 HP_TEST_BG = {
     1: (21, 101, 192),
     2: (46, 125, 50),
@@ -407,14 +424,14 @@ except ImportError:
         return []
 
 FOUNDATION_EXTRA_MODES = (
-    ("digit", "random", "rotation")
+    ("digit", "random", "rotation", "omid", "omid_2")
     + FOUNDATION_MATH_MODES
     + tuple(FOUNDATION_COGNITIVE_MODES)
 )
 _FOUNDATION_SF_RE = re.compile(r"(SF-30N|SF-60N|SF-110N|SF-180N)", re.IGNORECASE)
 _cog_alt = "|".join(
     re.escape(m) for m in (
-        ("digit", "random", "rotation")
+        ("digit", "random", "rotation", "omid", "omid_2")
         + FOUNDATION_MATH_MODES
         + tuple(FOUNDATION_COGNITIVE_MODES)
     )
@@ -426,6 +443,7 @@ _FOUNDATION_EXTRA_RE = re.compile(
 TEAMATE_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teamate.png")
 SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
 IMAGE_ACTION_CUE_FILE = "C:/Users/siama/Documents/simust_player/image_action_cue.json"
+LIVE_ACTION_RESULT_FILE = "C:/Users/siama/Documents/simust_player/live_action_result.json"
 STOP_SAVE_FILE = "C:/Users/siama/Documents/simust_player/stop_save.txt"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
 PLAYERS_FIELDS_FILE = "C:/Users/siama/Documents/simust_player/players_fields.json"
@@ -873,22 +891,88 @@ def _build_number_band_playlist(
     return playlist
 
 
+def finish_balls_sim_plan(test_num, action_in_set, actions_in_set) -> str:
+    """Tests land 100%, 80%, 50%, 20%, then 100% of the balls."""
+    try:
+        number = int(test_num or 1)
+        index = int(action_in_set or 0)
+        total = int(actions_in_set or 0)
+    except (TypeError, ValueError):
+        number, index, total = 1, 0, 0
+    rates = (1.00, 0.80, 0.50, 0.20, 1.00)
+    rate = rates[(max(1, number) - 1) % len(rates)]
+    if total <= 0:
+        total = 1
+    goals = int(round(total * rate))
+    goals = max(0, min(total, goals))
+    if index > goals:
+        return "wrong"
+    if index and index % 3 == 0:
+        return "slow"
+    return "finish"
+
+
+def _stamp_finish_balls(playlist: List[dict]) -> List[dict]:
+    """One clock for the test: session time × action count. The next screen starts when the ball arrives."""
+    for entry in playlist or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            actions = int(entry.get("actions_in_set") or 0)
+            on_ms = int(entry.get("on_ms") or 0)
+        except (TypeError, ValueError):
+            continue
+        if actions <= 0 or on_ms <= 0:
+            continue
+        budget = on_ms * actions
+        entry["advance_on_goal"] = True
+        entry["skip_gap"] = True
+        entry["finish_balls"] = True
+        entry["budget_ms"] = budget
+        entry["efficiency_max_sec"] = budget / 1000.0
+    return playlist
+
+
 def _build_activated_playlist(series_num: int, active_fields) -> List[dict]:
-    return _build_number_band_playlist(
+    return _stamp_finish_balls(_build_number_band_playlist(
         series_num,
         active_fields,
         _activated_test_layout,
         "Activated",
-    )
+    ))
 
 
 def _build_high_performance_playlist(series_num: int, active_fields) -> List[dict]:
-    return _build_number_band_playlist(
+    return _stamp_finish_balls(_build_number_band_playlist(
         series_num,
         active_fields,
         _high_performance_test_layout,
         "HighPerformance",
+    ))
+
+
+def _build_omid_playlist(active_fields, name="omid", budget_ms=None) -> List[dict]:
+    """High Performance numbers, lowest first. The next screen starts on a goal.
+
+    budget_ms is one clock for all 6 actions. Time that runs out leaves the
+    remaining actions as Wrong.
+    """
+    playlist = _build_number_band_playlist(
+        1,
+        active_fields,
+        _high_performance_test_layout,
+        name,
     )
+    on_ms = int(budget_ms) if budget_ms else OMID_ON_MS
+    for entry in playlist:
+        entry["on_ms"] = on_ms
+        entry["gap_ms"] = OMID_GAP_MS
+        entry["advance_on_goal"] = True
+        entry["skip_gap"] = True
+        entry["efficiency_max_sec"] = on_ms / 1000.0
+        if budget_ms:
+            entry["budget_ms"] = int(budget_ms)
+    return playlist
 
 
 def _elite_screen_ids() -> List[str]:
@@ -1057,7 +1141,7 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
                 ),
                 "path": f"image://{label_prefix}/A-T{series_num}/test{test_num}/{action_in_set}",
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _script_for_mode(mode_id: str):
@@ -1135,7 +1219,7 @@ def _build_entry_playlist(series_num: int, active_fields) -> List[dict]:
                 ),
                 "path": f"image://A-T{series_num}/test{test_num}/{action_in_set}",
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _zip_field_action_playlists(parts: dict) -> List[dict]:
@@ -1197,6 +1281,25 @@ def _zip_field_action_playlists(parts: dict) -> List[dict]:
             "field_screens": field_screens,
             "screen_images": screen_images,
             "gap_screen_images": gap_screen_images or None,
+            "advance_on_goal": any(bool((step or {}).get("advance_on_goal")) for step in (
+                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
+            )),
+            "skip_gap": any(bool((step or {}).get("skip_gap")) for step in (
+                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
+            )),
+            "finish_balls": any(bool((step or {}).get("finish_balls")) for step in (
+                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
+            )),
+            "budget_ms": max(
+                [int((step or {}).get("budget_ms") or 0) for step in (
+                    (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
+                )] or [0]
+            ) or None,
+            "efficiency_max_sec": max(
+                [float((step or {}).get("efficiency_max_sec") or 0) for step in (
+                    (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
+                )] or [0]
+            ) or None,
             "label": " | ".join(labels) if labels else f"fields {','.join(fields)} a{index + 1}",
             "path": f"image://independent/{index + 1}",
         })
@@ -1297,7 +1400,7 @@ def _build_dual_field_playlist(
                     "path": f"image://dual/test{test_num}/{action_in_set}",
                     "foundation_sf": "dual",
                 })
-        return playlist
+        return _stamp_finish_balls(playlist)
 
     playlist = []
     for test_num in range(1, LABEL_TEST_COUNT + 1):
@@ -1524,7 +1627,7 @@ def _level_display_name(level_id: str, subdirectory: str = "") -> str:
 
 
 def _level_card_text(level_id: str, subdirectory: str, entry: dict, playlist: list) -> str:
-    """Three lines: name, on-time, and how many actions are in the test."""
+    """Three lines: name, total clock, and how many actions are in the test."""
     name = _level_display_name(level_id, subdirectory)
     on_ms = 0
     actions = 0
@@ -1548,35 +1651,65 @@ def _level_card_text(level_id: str, subdirectory: str, entry: dict, playlist: li
             if isinstance(item, dict) and int(item.get("test_num") or 0) == test_num
         )
     lines = [name]
-    if on_ms > 0:
-        lines.append(f"{on_ms / 1000.0:.2f} S")
+    total_ms = 0
+    if isinstance(entry, dict) and (entry.get("finish_balls") or entry.get("budget_ms")):
+        try:
+            total_ms = int(entry.get("budget_ms") or 0)
+        except (TypeError, ValueError):
+            total_ms = 0
+        if total_ms <= 0 and on_ms > 0 and actions > 0:
+            total_ms = on_ms * actions
+    shown_ms = total_ms or on_ms
+    if shown_ms > 0:
+        lines.append(f"{shown_ms / 1000.0:.2f} S")
     if actions > 0:
         lines.append(f"{actions} Actions")
     return "\n".join(lines)
 
 
+def _gap_result_mark(result) -> str:
+    """Word, ✔, or ✘ shown on the goal screen during the gap."""
+    name = str(result or "").strip().lower()
+    if name == "correct":
+        return "__check__"
+    if name == "wrong":
+        return "__wrong__"
+    if name in ("late", "miss"):
+        return name
+    return ""
+
+
+# Same fills as CURRENT DEVELOPMENT LEVEL on the My SIMUST player page.
+_LEVEL_PAGE_BG = {
+    "foundation": ((125, 255, 168), (12, 28, 18)),
+    "entry": ((241, 243, 245), (40, 44, 48)),
+    "activated": ((175, 195, 213), (12, 22, 36)),
+    "high-performance": ((49, 95, 145), (255, 255, 255)),
+    "elite": ((75, 31, 120), (255, 255, 255)),
+    "world-class": ((201, 162, 39), (28, 20, 4)),
+}
+
+
 def _level_card_colors(level_id: str, subdirectory: str, entry: dict):
-    """Background is that test's level color. Text uses the digit color on it."""
+    """Opening card uses that level's My SIMUST color, every test."""
     text = f"{level_id or ''} {subdirectory or ''}"
-    test_num = 1
     if isinstance(entry, dict):
-        try:
-            test_num = int(entry.get("test_num") or 1)
-        except (TypeError, ValueError):
-            test_num = 1
-    if test_num not in (1, 2, 3, 4, 5):
-        test_num = 1
-    if re.search(r"L04-Elite|L05-WorldClass|World[-_ ]?Class", text, re.I):
-        return ELITE_TEST_BG[test_num], ELITE_DIGIT_ON_BG[test_num]
-    if re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
-        return HP_TEST_BG[test_num], (255, 255, 255)
-    if re.search(r"L02-Activated", text, re.I):
-        return (0, 55, 28), (255, 255, 255)
-    if re.search(r"L01-Entry", text, re.I):
-        return (183, 28, 28), (255, 255, 255)
-    if re.search(r"Foundation|SF-\d+N", text, re.I):
-        return (21, 101, 192), (255, 255, 255)
-    return (0, 0, 0), (255, 0, 0)
+        text = f"{text} {entry.get('label') or ''} {entry.get('path') or ''}"
+    if re.search(r"L05-WorldClass|World[-_ ]?Class", text, re.I):
+        key = "world-class"
+    elif re.search(r"L04-Elite", text, re.I):
+        key = "elite"
+    elif re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
+        key = "high-performance"
+    elif re.search(r"L02-Activated", text, re.I):
+        key = "activated"
+    elif re.search(r"L01-Entry", text, re.I):
+        key = "entry"
+    elif re.search(r"Foundation|SF-\d+N", text, re.I):
+        key = "foundation"
+    else:
+        key = "foundation"
+    return _LEVEL_PAGE_BG[key]
 
 
 def _level_intro_key_from_id(level_id: str) -> Optional[str]:
@@ -1874,7 +2007,7 @@ def _build_scripted_sf_playlist(
                 "path": f"image://{sf_id}/test{test_num}/{action_in_set}",
                 "foundation_sf": sf_id,
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _build_sf110n_playlist(active_fields, directory, gaps: dict = None) -> List[dict]:
@@ -2153,6 +2286,25 @@ def _render_math_equation_image(eq_text: str) -> Optional[str]:
     return path
 
 
+def _ring_value_center_y(height: int) -> int:
+    """Vertical center of the number drawn inside a results ring."""
+    return (
+        int(CHART_CENTER_Y)
+        + int(round(int(height) * float(RESULTS_BAND_DROP)))
+        - 10
+    )
+
+
+def _draw_text_at_ring_value(painter, text, width, height):
+    """Put one number on the same line as the values inside the results rings."""
+    cy = _ring_value_center_y(height)
+    painter.drawText(
+        QtCore.QRect(0, cy - int(height), int(width), int(height) * 2),
+        Qt.AlignCenter,
+        str(text),
+    )
+
+
 def _render_band_digit_image(digit: str, bg, fg) -> Optional[str]:
     """Digit on a colored screen. fg and bg are (r, g, b) and must stay readable."""
     text = str(digit or "").strip()
@@ -2166,7 +2318,7 @@ def _render_band_digit_image(digit: str, bg, fg) -> Optional[str]:
     fr, fg_c, fb = (int(fg[0]), int(fg[1]), int(fg[2]))
     path = os.path.join(
         MATH_EQ_CACHE_DIR,
-        f"digit72_fg_{fr}_{fg_c}_{fb}_bg_{br}_{bgc}_{bb}_{text}.png",
+        f"digitring_fg_{fr}_{fg_c}_{fb}_bg_{br}_{bgc}_{bb}_{text}.png",
     )
     if os.path.isfile(path):
         return path
@@ -2181,10 +2333,10 @@ def _render_band_digit_image(digit: str, bg, fg) -> Optional[str]:
     painter = QPainter(img)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
-    font = QFont("Segoe UI", 72, QFont.Bold)
+    font = QFont("Segoe UI", 50, QFont.Bold)
     painter.setFont(font)
     painter.setPen(QColor(fr, fg_c, fb))
-    painter.drawText(QtCore.QRect(0, 0, w, h), Qt.AlignCenter, text)
+    _draw_text_at_ring_value(painter, text, w, h)
     painter.end()
     if not img.save(path, "PNG"):
         return None
@@ -2192,7 +2344,7 @@ def _render_band_digit_image(digit: str, bg, fg) -> Optional[str]:
 
 
 def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
-    """Digit centered on the screen. One third of the previous 216pt size.
+    """Digit centered on the screen, 30% smaller than the previous 72pt size.
 
     bg is an (r, g, b) fill shared by every screen of a High Performance test.
     The digit is white on that fill so it stays readable. Entry and Activated
@@ -2207,15 +2359,14 @@ def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
         return None
     if bg:
         r, g, b = (int(bg[0]), int(bg[1]), int(bg[2]))
-        path = os.path.join(MATH_EQ_CACHE_DIR, f"digit72_bg_{r}_{g}_{b}_{text}.png")
+        path = os.path.join(MATH_EQ_CACHE_DIR, f"digitring_bg_{r}_{g}_{b}_{text}.png")
     else:
         r = g = b = None
-        path = os.path.join(MATH_EQ_CACHE_DIR, f"digit72_red_{text}.png")
+        path = os.path.join(MATH_EQ_CACHE_DIR, f"digitring_red_{text}.png")
     if os.path.isfile(path):
         return path
     try:
         from PyQt5.QtGui import QImage, QPainter, QColor, QFont
-        from PyQt5.QtCore import Qt as _Qt
     except Exception as exc:
         logger.warning("Cannot render entry digit (no Qt): %s", exc)
         return None
@@ -2230,14 +2381,10 @@ def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
     painter = QPainter(img)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
-    font = QFont("Segoe UI", 72, QFont.Bold)
+    font = QFont("Segoe UI", 50, QFont.Bold)
     painter.setFont(font)
     painter.setPen(pen)
-    painter.drawText(
-        QtCore.QRect(0, 0, w, h),
-        _Qt.AlignCenter,
-        text,
-    )
+    _draw_text_at_ring_value(painter, text, w, h)
     painter.end()
     if not img.save(path, "PNG"):
         return None
@@ -2526,7 +2673,7 @@ def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
     return placements
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None):
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None):
     """Tell simust_realtime which screens are lit (no QR on canvas).
 
     force_end=True: sequence finished — realtime must clear keypoints now.
@@ -2541,7 +2688,41 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
     }
     if on_sec is not None:
         try:
-            payload["on_sec"] = max(0.1, min(9.9, float(on_sec)))
+            # Shared clocks reach 4.5s × 12 actions (54s). The first screen
+            # has to stay up for whatever is left of that clock.
+            payload["on_sec"] = max(0.1, min(60.0, float(on_sec)))
+        except (TypeError, ValueError):
+            pass
+    if efficiency_max_sec is not None:
+        try:
+            payload["efficiency_max_sec"] = max(0.1, float(efficiency_max_sec))
+        except (TypeError, ValueError):
+            pass
+    if finish_balls:
+        payload["finish_balls"] = True
+    if budget_elapsed_sec is not None:
+        try:
+            payload["budget_elapsed_sec"] = max(0.0, float(budget_elapsed_sec))
+        except (TypeError, ValueError):
+            pass
+    if budget_total_sec is not None:
+        try:
+            payload["budget_total_sec"] = max(0.0, float(budget_total_sec))
+        except (TypeError, ValueError):
+            pass
+    if action_in_set is not None:
+        try:
+            payload["action_in_set"] = int(action_in_set)
+        except (TypeError, ValueError):
+            pass
+    if actions_in_set is not None:
+        try:
+            payload["actions_in_set"] = int(actions_in_set)
+        except (TypeError, ValueError):
+            pass
+    if test_num is not None:
+        try:
+            payload["test_num"] = int(test_num)
         except (TypeError, ValueError):
             pass
     action_name = str(action or "PASS").strip().upper() or "PASS"
@@ -2594,6 +2775,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._summary_screens = None
         self._summary_bg = (0, 0, 0)
         self._summary_fg = (255, 255, 255)
+        self._result_badges = {}
+        self._badge_anchor = "center"
 
     def clear(self):
         self._stop_screen_video()
@@ -2606,6 +2789,21 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._summary_fg = (255, 255, 255)
         self.update()
 
+    def set_result_badges(self, screen_to_label, anchor=None):
+        """Finish marks. '__check__' draws ✔. '__wrong__' draws ✘. 'under' sits below a 00."""
+        badges = {}
+        for sid, label in (screen_to_label or {}).items():
+            name = _sid(sid)
+            text = str(label or "").strip()
+            if name and text:
+                badges[name] = text
+        place = anchor if anchor in ("center", "under") else getattr(self, "_badge_anchor", "center")
+        if badges == getattr(self, "_result_badges", {}) and place == getattr(self, "_badge_anchor", "center"):
+            return
+        self._badge_anchor = place
+        self._result_badges = badges
+        self.update()
+
     def set_level_summary(self, lines, screen_ids=None, background=None, foreground=None):
         """Show the test name, time, and action count on each listed screen."""
         self._stop_screen_video()
@@ -2616,6 +2814,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._summary_screens = chosen or None
         self._summary_bg = tuple(int(v) for v in (background or (0, 0, 0))[:3])
         self._summary_fg = tuple(int(v) for v in (foreground or (255, 255, 255))[:3])
+        self._result_badges = {}
         self.update()
 
     def set_pass_screens(self, screen_ids):
@@ -2623,6 +2822,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._stop_screen_video()
         self._summary_lines = []
         self._summary_screens = None
+        self._result_badges = {}
         self._content_scale = self.PASS_IMAGE_SCALE
         self.active_screens = {_sid(sid) for sid in screen_ids if _sid(sid)}
         self._screen_pixmaps = {}
@@ -2831,20 +3031,101 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 continue
             rect = QtCore.QRect(left, 0, rect_w, self.height())
             painter.fillRect(rect, fill)
-            font = QtGui.QFont("Segoe UI", 48, QtGui.QFont.Bold)
+            font = QtGui.QFont("Segoe UI", 20, QtGui.QFont.Bold)
             painter.setFont(font)
             metrics = painter.fontMetrics()
             longest = max(lines, key=len)
-            while metrics.width(longest) > rect_w - 12 and font.pointSize() > 18:
+            while metrics.width(longest) > rect_w - 12 and font.pointSize() > 8:
                 font.setPointSize(font.pointSize() - 2)
                 painter.setFont(font)
                 metrics = painter.fontMetrics()
             painter.setClipRect(rect)
-            painter.drawText(
-                rect.adjusted(6, 6, -6, -6),
-                QtCore.Qt.AlignCenter,
-                "\n".join(lines),
-            )
+            spacing = max(1, metrics.lineSpacing())
+            mid = len(lines) // 2
+            target = _ring_value_center_y(self.height()) + int(screen_content_offset_y(name) or 0)
+            first_top = target - metrics.height() // 2 - mid * spacing
+            for i, line in enumerate(lines):
+                line_rect = QtCore.QRect(rect.left(), first_top + i * spacing, rect.width(), metrics.height())
+                painter.drawText(line_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, line)
+            painter.setClipping(False)
+
+    def _mark_font(self, point):
+        return QtGui.QFont("Segoe UI", max(18, int(point)), QtGui.QFont.Bold)
+
+    def _paint_mark_glyph(self, painter, rect, glyph, color, match=None):
+        side = min(rect.width(), rect.height())
+        point = max(36, int(side * 0.42))
+        font = self._mark_font(point)
+        if match:
+            probe = QtGui.QFontMetrics(font)
+            tick_box = probe.tightBoundingRect(match)
+            mark_box = probe.tightBoundingRect(glyph)
+            tick_size = max(tick_box.width(), tick_box.height())
+            mark_size = max(mark_box.width(), mark_box.height())
+            if tick_size > 0 and mark_size > 0:
+                font = self._mark_font(point * float(tick_size) / float(mark_size))
+        painter.setFont(font)
+        painter.setPen(color)
+        painter.drawText(rect, QtCore.Qt.AlignCenter, glyph)
+
+    def _paint_check_mark(self, painter, rect):
+        """Green ✔ for a correct finish."""
+        self._paint_mark_glyph(painter, rect, "✔", QtGui.QColor(0, 200, 80))
+
+    def _paint_wrong_mark(self, painter, rect):
+        """Red ✘, the same size as the tick."""
+        self._paint_mark_glyph(painter, rect, "✘", QtGui.QColor(255, 48, 48), match="✔")
+
+    def _paint_result_badges(self, painter):
+        """Finish marks are no longer drawn on the action screens."""
+        return
+        badges = getattr(self, "_result_badges", None) or {}
+        if not badges:
+            return
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+        for name, label in badges.items():
+            if not name or name not in SLICE_ORDER:
+                continue
+            index = SLICE_ORDER.index(name)
+            left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
+            if rect_w < 8:
+                continue
+            rect = QtCore.QRect(left, 0, rect_w, self.height())
+            if getattr(self, "_badge_anchor", "center") == "under":
+                # 00 is centered. Keep late / miss / the OK mark beneath it.
+                top = rect.top() + int(rect.height() * 0.62)
+                rect = QtCore.QRect(rect.left(), top, rect.width(), max(8, rect.bottom() - top))
+            painter.setClipRect(rect)
+            if label == "__check__":
+                self._paint_check_mark(painter, rect)
+            elif label == "__wrong__":
+                self._paint_wrong_mark(painter, rect)
+            else:
+                color = {
+                    "late": QtGui.QColor(255, 152, 0),
+                    "miss": QtGui.QColor(255, 82, 82),
+                    "wrong": QtGui.QColor(255, 82, 82),
+                }.get(label, QtGui.QColor(255, 255, 255))
+                font = QtGui.QFont("Segoe UI", 54, QtGui.QFont.Bold)
+                painter.setFont(font)
+                metrics = painter.fontMetrics()
+                while metrics.width(label) > rect_w - 16 and font.pointSize() > 18:
+                    font.setPointSize(font.pointSize() - 2)
+                    painter.setFont(font)
+                    metrics = painter.fontMetrics()
+                plate_h = metrics.height() + 28
+                plate = QtCore.QRect(
+                    rect.left() + 8,
+                    rect.center().y() - plate_h // 2,
+                    rect.width() - 16,
+                    plate_h,
+                )
+                painter.setPen(QtCore.Qt.NoPen)
+                painter.setBrush(QtGui.QColor(0, 0, 0, 170))
+                painter.drawRoundedRect(plate, 10, 10)
+                painter.setPen(color)
+                painter.drawText(rect, QtCore.Qt.AlignCenter, label)
             painter.setClipping(False)
 
     def paintEvent(self, event):
@@ -2854,7 +3135,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self._paint_level_summary(painter)
             painter.end()
             return
-        if not self._screen_pixmaps:
+        if not self._screen_pixmaps and not getattr(self, "_result_badges", None):
             painter.end()
             return
         for sid, pix in self._screen_pixmaps.items():
@@ -2880,6 +3161,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 py = (self.height() - scaled.height()) // 2 + dy
                 painter.drawPixmap(px, py, scaled)
             painter.setClipping(False)
+        self._paint_result_badges(painter)
         painter.end()
 
 
@@ -2929,7 +3211,7 @@ class WaitingOverlay(QtWidgets.QWidget):
     """
     def __init__(self, parent=None, active_fields=None):
         super().__init__(parent)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setAutoFillBackground(True)
         self.setMouseTracking(False)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.angle = 0
@@ -2948,6 +3230,7 @@ class WaitingOverlay(QtWidgets.QWidget):
 
         # Balls per slice (will be created on first paint)
         self.balls_by_slice = None
+        self.level_colors = {}
 
         # Audio player (optional)
         self.audio_player = QMediaPlayer()
@@ -2973,6 +3256,27 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.balls_by_slice = None
         self.update()
 
+    def set_level_colors(self, colors):
+        """Background and text colors, one pair per field, matching the opening card."""
+        cleaned = {}
+        for fid, pair in (colors or {}).items():
+            key = str(fid or "").upper()[:1]
+            if key not in ("A", "B") or not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            cleaned[key] = (
+                tuple(int(v) for v in pair[0][:3]),
+                tuple(int(v) for v in pair[1][:3]),
+            )
+        self.level_colors = cleaned
+        self.update()
+
+    def _level_qcolor(self, fid, which):
+        pair = (self.level_colors or {}).get(fid)
+        if not pair:
+            return QColor(10, 12, 18) if which == "bg" else QColor(255, 255, 255)
+        rgb = pair[0] if which == "bg" else pair[1]
+        return QColor(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
     def set_status_text(self, text):
         """Update the status text (shown inside the rings instead of 'Processing Results')."""
         self.status_text = text
@@ -2987,43 +3291,39 @@ class WaitingOverlay(QtWidgets.QWidget):
             h = self.height()
             if w <= 0 or h <= 0:
                 return
-            tile_width = w / self.num_slices
-            padding = 12
+            padding = 8
             for i, slice_num in enumerate(self.slice_order):
                 if slice_num is None or slice_num not in self.active_slice_nums:
                     continue
-                offset_x = screen_content_offset(slice_num)
-                offset_y = screen_content_offset_y(slice_num)
-                x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding + offset_y
-                width = int(tile_width) - 2 * padding
-                height = h - 2 * padding
+                rect = self._opening_rect(i, slice_num)
                 for ball in self.balls_by_slice[i]:
-                    ball.update(x0, y0, width, height)
+                    ball.update(
+                        rect.left() + padding,
+                        rect.top() + padding,
+                        max(1, rect.width() - 2 * padding),
+                        max(1, rect.height() - 2 * padding),
+                    )
 
         self.update()
+
+    def _opening_rect(self, index, slice_num):
+        """Same rectangle as the opening card on this screen."""
+        left, _right, rect_w = content_x_box(index, slice_num, self.width(), self.num_slices)
+        return QtCore.QRect(int(left), 0, int(rect_w), max(1, self.height()))
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor(10, 12, 18))
-
         w = self.width()
         h = self.height()
         if w <= 0 or h <= 0:
             return
-
-        tile_width = w / self.num_slices
-
-        # Draw tile boundaries only across the active half
-        painter.setPen(QPen(QColor(80, 80, 100, 80), 1))
-        for i in range(1, self.num_slices):
-            left_num = self.slice_order[i - 1]
-            right_num = self.slice_order[i]
-            if left_num not in self.active_slice_nums and right_num not in self.active_slice_nums:
+        painter.fillRect(self.rect(), QColor(10, 12, 18))
+        for i, slice_num in enumerate(self.slice_order):
+            if slice_num is None or slice_num not in self.active_slice_nums:
                 continue
-            x_line = int(i * tile_width)
-            painter.drawLine(x_line, 0, x_line, h)
+            fid = "B" if str(slice_num).startswith("B") else "A"
+            painter.fillRect(self._opening_rect(i, slice_num), self._level_qcolor(fid, "bg"))
 
         # Create balls on first paint (active slices only)
         if self.balls_by_slice is None:
@@ -3040,13 +3340,12 @@ class WaitingOverlay(QtWidgets.QWidget):
                     continue
                 num_balls = random.randint(2, 3)
                 slice_balls = []
-                padding = 12
-                offset_x = screen_content_offset(slice_num)
-                offset_y = screen_content_offset_y(slice_num)
-                x0 = int(i * tile_width) + padding + offset_x
-                y0 = padding + offset_y
-                width = int(tile_width) - 2 * padding
-                height = h - 2 * padding
+                padding = 8
+                box = self._opening_rect(i, slice_num)
+                x0 = box.left() + padding
+                y0 = box.top() + padding
+                width = max(1, box.width() - 2 * padding)
+                height = max(1, box.height() - 2 * padding)
                 for _ in range(num_balls):
                     radius_ball = random.randint(6, 14)
                     vx = random.uniform(1.0, 3.0) * random.choice([-1, 1])
@@ -3062,12 +3361,13 @@ class WaitingOverlay(QtWidgets.QWidget):
         for i, slice_num in enumerate(self.slice_order):
             if slice_num is None or slice_num not in self.active_slice_nums:
                 continue
-            offset_x = screen_content_offset(slice_num)
-            cx = int((i + 0.5) * tile_width) + offset_x
-            cy = CHART_CENTER_Y + screen_content_offset_y(slice_num)
+            rect = self._opening_rect(i, slice_num)
+            painter.setClipRect(rect)
+            cx = rect.center().x()
+            cy = CHART_CENTER_Y + screen_content_offset_y(slice_num) + int(round(h * RESULTS_BAND_DROP))
 
             # Ring
-            radius = min(self.ring_radius, int(tile_width // 2))
+            radius = min(self.ring_radius, max(5, rect.width() // 2 - 4))
             if radius < 5:
                 radius = 5
 
@@ -3092,7 +3392,8 @@ class WaitingOverlay(QtWidgets.QWidget):
                 text1 = "Processing"
                 text2 = "Results"
 
-            painter.setPen(QColor(255, 255, 255))
+            fid = "B" if str(slice_num).startswith("B") else "A"
+            painter.setPen(self._level_qcolor(fid, "fg"))
             font = QFont("Segoe UI", 12 if text2 else 14, QFont.Bold)
             painter.setFont(font)
 
@@ -3102,27 +3403,15 @@ class WaitingOverlay(QtWidgets.QWidget):
             if text2:
                 tw2 = metrics.width(text2)
                 th2 = metrics.height()
-                total_text_width = max(tw1, tw2) + 20
                 total_text_height = th1 + th2 + 12
-                x_text = cx - total_text_width // 2
                 y_text = cy - total_text_height // 2
-                painter.setBrush(QBrush(QColor(0, 0, 0, 200)))
-                painter.setPen(Qt.NoPen)
-                painter.drawRoundedRect(x_text, y_text, total_text_width, total_text_height, 8, 8)
-                painter.setPen(QColor(255, 255, 255))
                 painter.drawText(cx - tw1//2, y_text + th1 + 4, text1)
                 painter.drawText(cx - tw2//2, y_text + th1 + 8 + th2, text2)
             else:
                 tw = metrics.width(text1)
                 th = metrics.height()
-                total_text_width = tw + 20
                 total_text_height = th + 12
-                x_text = cx - total_text_width // 2
                 y_text = cy - total_text_height // 2
-                painter.setBrush(QBrush(QColor(0, 0, 0, 200)))
-                painter.setPen(Qt.NoPen)
-                painter.drawRoundedRect(x_text, y_text, total_text_width, total_text_height, 8, 8)
-                painter.setPen(QColor(255, 255, 255))
                 painter.drawText(cx - tw//2, y_text + th + 6, text1)
 
             # Bouncing balls
@@ -3142,6 +3431,7 @@ class WaitingOverlay(QtWidgets.QWidget):
                                         int(ball.y - highlight_radius * 0.5),
                                         int(highlight_radius),
                                         int(highlight_radius))
+            painter.setClipping(False)
 
     def showEvent(self, event):
         self.timer.start()
@@ -3656,6 +3946,38 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         else:
             extra_mode = _detect_foundation_extra_mode(self.video_directory)
 
+        if extra_mode == "omid":
+            self._label_mode = True
+            playlist = _build_omid_playlist(active)
+            if playlist:
+                logger.info(
+                    "Foundation omid playlist: %s tests x %s actions, "
+                    "advance when the ball reaches the goal, max=%sms",
+                    ENTRY_TEST_COUNT,
+                    ENTRY_ACTIONS_PER_TEST,
+                    OMID_ON_MS,
+                )
+                return playlist
+            logger.error("Omid playlist empty")
+            self._label_mode = False
+            return []
+
+        if extra_mode == "omid_2":
+            self._label_mode = True
+            playlist = _build_omid_playlist(active, name="omid_2", budget_ms=OMID2_BUDGET_MS)
+            if playlist:
+                logger.info(
+                    "Foundation omid_2 playlist: %s tests x %s actions, "
+                    "%sms shared for each set of 6",
+                    ENTRY_TEST_COUNT,
+                    ENTRY_ACTIONS_PER_TEST,
+                    OMID2_BUDGET_MS,
+                )
+                return playlist
+            logger.error("Omid_2 playlist empty")
+            self._label_mode = False
+            return []
+
         # ---- Foundation random / digit / rotation ----
         if extra_mode == "random":
             pass_image = _find_any_foundation_pass_image(self.video_directory)
@@ -3999,6 +4321,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _begin_level_intro(self, next_index=0):
         """Show the test card for 5 seconds, then play the level clip."""
         next_index = int(next_index)
+        self._clear_held_results()
         if getattr(self, "_level_card_shown_for", None) != next_index:
             self._show_level_card(next_index)
             return
@@ -4018,7 +4341,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not level_id:
             level_id = str(getattr(self, "_phase_mode_id", "") or "")
         text = _level_card_text(level_id, subdirectory, entry, files)
-        background, foreground = _level_card_colors(level_id, subdirectory, entry)
+        color_context = " ".join([
+            level_id,
+            subdirectory,
+            str(getattr(self, "video_directory", "") or ""),
+            str(getattr(self, "_level_root", "") or ""),
+            " ".join(str(v) for v in (getattr(self, "_phase_field_directories", None) or {}).values()),
+            " ".join(str(v) for v in levels.values()),
+        ])
+        background, foreground = _level_card_colors(color_context, "", entry)
         if self.image_canvas:
             screens = []
             for fid in self._active_fields():
@@ -4038,7 +4369,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             fr, fg_c, fb = foreground
             label.setStyleSheet(
                 f"background-color: rgb({br},{bgc},{bb}); color: rgb({fr},{fg_c},{fb}); "
-                "font-size: 34px; padding: 28px 48px; border-radius: 12px; "
+                "font-size: 14px; padding: 12px 20px; border-radius: 12px; "
                 "font-weight: bold; font-family: 'Segoe UI';"
             )
             label.setText(text)
@@ -4145,6 +4476,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass
         if self.image_canvas:
             self.image_canvas.clear()
+        self._clear_held_results()
         self._prestart_done = True
         self.is_first_video = False
         self._hide_waiting_overlay()
@@ -4262,7 +4594,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.current_video_path = entry.get("path") if isinstance(entry, dict) else entry
         self.video_end_called = False
         self._action_phase = "idle"
-        self._label_phase = "gap"  # gap_N before action N
+        self._label_phase = "action" if isinstance(entry, dict) and entry.get("skip_gap") else "gap"
         self._flash_cycle = 0
         self._flash_phase = 0
 
@@ -4355,8 +4687,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.check_timer.start()
             if (isinstance(entry, dict) and entry.get("kind") == "labeled_action") or self._label_mode:
                 self._action_phase = "label"
-                # gap_N before action N (gap_1 before first action; gap_2 between 1→2)
-                self._label_phase = "gap"
+                # gap_N before action N, unless this test switches as soon as the ball arrives.
+                if isinstance(entry, dict) and entry.get("skip_gap"):
+                    self._label_phase = "action"
+                else:
+                    self._label_phase = "gap"
                 self._apply_label_phase()
             else:
                 self._action_phase = "flash"
@@ -4373,6 +4708,347 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.player.play()
         self._update_progress_display()
         self.check_timer.start()
+
+    def _current_label_entry(self):
+        files = self.video_files or []
+        index = int(getattr(self, "current_video_index", 0) or 0)
+        if 0 <= index < len(files) and isinstance(files[index], dict):
+            return files[index]
+        return {}
+
+    def _result_hold_mode(self, entry=None) -> str:
+        """How long a finish mark stays on its screen.
+
+        Foundation: until a later action uses that same screen.
+        Entry through High Performance: until the test ends.
+        Elite and World Class: under the 00 until every action in the test is done.
+        """
+        if not isinstance(entry, dict):
+            entry = self._current_label_entry()
+        if entry.get("combined_field"):
+            return "under"
+        text = " ".join(
+            str(part or "")
+            for part in (
+                getattr(self, "_phase_mode_id", ""),
+                getattr(self, "_phase_subdirectory", ""),
+                getattr(self, "video_directory", ""),
+                entry.get("label"),
+                entry.get("path"),
+            )
+        )
+        if re.search(r"L04-Elite|L05-WorldClass|World[-_ ]?Class", text, re.I):
+            return "under"
+        if re.search(
+            r"L01-Entry|L02-Activated|L03-HighPerformance|High[-_ ]?Performance",
+            text,
+            re.I,
+        ):
+            return "test"
+        if entry.get("entry_digits"):
+            return "test"
+        return "screen"
+
+    def _apply_held_results(self):
+        if not self.image_canvas:
+            return
+        anchor = "under" if self._result_hold_mode() == "under" else "center"
+        self.image_canvas.set_result_badges(getattr(self, "_held_result_badges", {}), anchor)
+
+    def _release_results_on(self, screens):
+        """Foundation: the mark leaves when this screen starts another action."""
+        held = getattr(self, "_held_result_badges", None)
+        if not isinstance(held, dict):
+            self._held_result_badges = {}
+            return
+        released = getattr(self, "_result_released_screens", None)
+        if not isinstance(released, set):
+            released = set()
+            self._result_released_screens = released
+        for sid in screens or []:
+            name = _sid(sid)
+            if name:
+                held.pop(name, None)
+                released.add(name)
+        self._apply_held_results()
+
+    def _clear_held_results(self):
+        self._stop_gap_result_poll()
+        self._held_result_badges = {}
+        self._result_released_screens = set()
+        if self.image_canvas:
+            self.image_canvas.set_result_badges({})
+
+    def _stop_gap_result_poll(self):
+        timer = getattr(self, "_gap_result_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:
+                pass
+            self._gap_result_timer = None
+
+    def _budget_remaining_ms(self, entry) -> int:
+        """Milliseconds left in this test's shared clock."""
+        budget = int(entry.get("budget_ms") or 0)
+        test_num = int(entry.get("test_num") or 0)
+        action_in_set = int(entry.get("action_in_set") or 1)
+        if action_in_set <= 1 or getattr(self, "_budget_test", None) != test_num:
+            self._budget_started_at = time.perf_counter()
+            self._budget_test = test_num
+            self._budget_closed_test = None
+        elapsed = (time.perf_counter() - float(self._budget_started_at)) * 1000.0
+        return int(round(budget - elapsed))
+
+    def _abandon_budget_rest(self):
+        """The shared clock is finished. Actions not reached are Wrong."""
+        files = self.video_files or []
+        idx = int(getattr(self, "current_video_index", 0) or 0)
+        if not (0 <= idx < len(files)) or not isinstance(files[idx], dict):
+            return
+        test_num = int(files[idx].get("test_num") or 0)
+        if getattr(self, "_budget_closed_test", None) == test_num:
+            return
+        self._budget_closed_test = test_num
+        missed = []
+        last = idx
+        for i in range(idx, len(files)):
+            item = files[i]
+            if not isinstance(item, dict) or int(item.get("test_num") or 0) != test_num:
+                break
+            missed.append(item)
+            last = i
+        logger.info(
+            "Shared clock finished on test %s — %s actions scored Wrong",
+            test_num, len(missed),
+        )
+        self._store_budget_wrongs(missed)
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
+        self.current_video_index = last
+        self._post_results_index = last + 1 if last + 1 < len(files) else None
+        self._finished_field_screens = {}
+        self._on_video_ended()
+
+    def _store_budget_wrongs(self, missed):
+        """Write a Wrong row for each action the player had no time to play."""
+        import urllib.request
+        root = "C:/Users/siama/Documents/simust_realtime_recordings"
+        if not os.path.isdir(root):
+            logger.warning("No recording folder for unfinished omid_2 actions")
+            return
+        folders = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+        if not folders:
+            logger.warning("No recording folder for unfinished omid_2 actions")
+            return
+        folders.sort(key=lambda d: os.path.getctime(os.path.join(root, d)), reverse=True)
+        newest = os.path.join(root, folders[0])
+        for item in missed:
+            test_num = int(item.get("test_num") or 1)
+            action_in_set = int(item.get("action_in_set") or 1)
+            if item.get("budget_ms"):
+                window = float(item.get("budget_ms") or 0) / 1000.0
+            else:
+                window = float(item.get("efficiency_max_sec") or 12.0)
+            ae = max(0.0, min(100.0, (0.40 * 70.0) - 25.0))
+            for fid, screens in (item.get("field_screens") or {}).items():
+                fid_u = str(fid).upper()[:1]
+                folder = os.path.join(newest, f"field_{fid_u}")
+                if not os.path.isdir(folder):
+                    continue
+                payload = {
+                    "session_folder": folder,
+                    "action_result": {
+                        "id": f"T{test_num}a{action_in_set}",
+                        "action": "PASS",
+                        "screens": list(screens or []),
+                        "field": fid_u,
+                        "result": "Wrong",
+                        "winning_screen": "N/A",
+                        "min_dist": None,
+                        "movement": 0,
+                        "direction": "NONE",
+                        "aep": "N/A",
+                        "session_duration": f"{window:.3f}",
+                        "video_index": test_num,
+                        "finishing_time": f"{window:.3f}",
+                        "total_distance": 0.0,
+                        "ae": ae,
+                    },
+                }
+                if item.get("finish_balls"):
+                    payload["action_result"]["finish_balls"] = True
+                    payload["action_result"]["balls_budget_sec"] = window
+                    payload["action_result"]["balls_clock_sec"] = window
+                try:
+                    req = urllib.request.Request(
+                        "http://127.0.0.1:8000/save-results-to-json",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    urllib.request.urlopen(req, timeout=3).read()
+                except Exception as exc:
+                    logger.warning("Could not store Wrong for unfinished action: %s", exc)
+
+    def _stop_goal_advance_poll(self):
+        timer = getattr(self, "_goal_advance_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:
+                pass
+            self._goal_advance_timer = None
+
+    def _start_goal_advance_poll(self):
+        """Omid: leave this screen as soon as the ball reaches its goal."""
+        self._stop_goal_advance_poll()
+        self._goal_advance_timer = QtCore.QTimer(self)
+        self._goal_advance_timer.timeout.connect(self._poll_goal_advance)
+        self._goal_advance_timer.start(40)
+
+    def _poll_goal_advance(self):
+        if self.display_phase != "action" or getattr(self, "_label_phase", "") != "action":
+            return
+        if getattr(self, "_goal_arrived", False):
+            return
+        files = self.video_files or []
+        idx = int(getattr(self, "current_video_index", 0) or 0)
+        entry = files[idx] if 0 <= idx < len(files) and isinstance(files[idx], dict) else {}
+        if not entry.get("advance_on_goal"):
+            self._stop_goal_advance_poll()
+            return
+        try:
+            want_seq = int(getattr(self, "_flash_seq", 0) or 0)
+        except (TypeError, ValueError):
+            want_seq = 0
+        cue_wall = float(getattr(self, "_action_cue_wall", 0) or 0)
+        try:
+            with open(LIVE_ACTION_RESULT_FILE, "r", encoding="utf-8") as handle:
+                payload = json.load(handle) or {}
+        except Exception:
+            return
+        fields = payload.get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            return
+        for fid in self._active_fields():
+            item = fields.get(fid) or {}
+            if not isinstance(item, dict):
+                continue
+            by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
+            chosen = by_seq.get(str(want_seq)) if want_seq else None
+            if not isinstance(chosen, dict):
+                chosen = item
+            try:
+                item_seq = int(chosen.get("seq") or 0)
+            except (TypeError, ValueError):
+                item_seq = 0
+            try:
+                stamped = float(chosen.get("ts") or 0)
+            except (TypeError, ValueError):
+                stamped = 0
+            if want_seq and item_seq and item_seq != want_seq:
+                continue
+            if cue_wall and stamped + 0.05 < cue_wall:
+                continue
+            name = str(chosen.get("result") or "").strip().lower()
+            if name not in ("correct", "miss", "late"):
+                continue
+            self._goal_arrived = True
+            self._stop_goal_advance_poll()
+            logger.info("Ball reached the goal on %s (%s) — next screen", fid, name)
+            self._finish_label_action()
+            return
+
+    def _start_gap_result_poll(self):
+        """Finish marks stay off the action screens."""
+        self._stop_gap_result_poll()
+
+    def _finished_marks_pending(self) -> bool:
+        """True while a finished screen still has no mark and is not in a new action."""
+        released = getattr(self, "_result_released_screens", None) or set()
+        held = getattr(self, "_held_result_badges", None) or {}
+        for screens in (getattr(self, "_finished_field_screens", None) or {}).values():
+            for sid in screens or []:
+                name = _sid(sid)
+                if name and name not in held and name not in released:
+                    return True
+        return False
+
+    def _finished_screens_open(self) -> bool:
+        """True while a finished screen is still showing its own result."""
+        released = getattr(self, "_result_released_screens", None) or set()
+        for screens in (getattr(self, "_finished_field_screens", None) or {}).values():
+            for sid in screens or []:
+                name = _sid(sid)
+                if name and name not in released:
+                    return True
+        return False
+
+    def _poll_gap_result(self):
+        phase = getattr(self, "_label_phase", "")
+        if self.display_phase != "action" or phase not in ("gap", "action", "encode", "spin"):
+            self._stop_gap_result_poll()
+            return
+        if not self._finished_screens_open():
+            self._stop_gap_result_poll()
+            return
+        payload = {}
+        try:
+            with open(LIVE_ACTION_RESULT_FILE, "r", encoding="utf-8") as handle:
+                payload = json.load(handle) or {}
+        except Exception:
+            payload = {}
+        fields = payload.get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            fields = {}
+        started = float(getattr(self, "_finished_action_at", 0) or 0)
+        cue_wall = float(getattr(self, "_finished_cue_wall", 0) or 0)
+        try:
+            want_seq = int(getattr(self, "_finished_cue_seq", 0) or 0)
+        except (TypeError, ValueError):
+            want_seq = 0
+        released = getattr(self, "_result_released_screens", None) or set()
+        badges = {}
+        for fid, screens in (getattr(self, "_finished_field_screens", None) or {}).items():
+            item = fields.get(fid) or {}
+            if not isinstance(item, dict):
+                continue
+            by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
+            chosen = by_seq.get(str(want_seq)) if want_seq else None
+            if not isinstance(chosen, dict):
+                chosen = item
+            try:
+                stamped = float(chosen.get("ts") or 0)
+            except (TypeError, ValueError):
+                stamped = 0
+            try:
+                item_seq = int(chosen.get("seq") or 0)
+            except (TypeError, ValueError):
+                item_seq = 0
+            # Show this action's score. A result from the previous cue stays hidden.
+            if cue_wall and stamped + 0.05 < cue_wall:
+                continue
+            if want_seq and item_seq and item_seq != want_seq:
+                continue
+            if not cue_wall and stamped + 1.5 < started:
+                continue
+            mark = _gap_result_mark(chosen.get("result"))
+            if not mark:
+                continue
+            for sid in screens:
+                name = _sid(sid)
+                if name and name in released:
+                    continue
+                badges[sid] = mark
+        if not hasattr(self, "_held_result_badges") or not isinstance(self._held_result_badges, dict):
+            self._held_result_badges = {}
+        before = dict(getattr(self, "_held_result_badges", {}) or {})
+        self._held_result_badges.update(badges)
+        if self._held_result_badges != before:
+            logger.info("Finish marks on screen: %s", self._held_result_badges)
+        self._apply_held_results()
 
     def _apply_label_phase(self):
         """gap_N (before action) → labeled action (+ fillers). Cue only during action."""
@@ -4416,6 +5092,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 else:
                     # No gap image → black (nothing displayed)
                     self.image_canvas.clear()
+            self._apply_held_results()
+            self._start_gap_result_poll()
 
             # Gap does not send cue false. Keypoints clear from the cue-ON countdown.
             delay = self._flash_delay_ms(on=False)
@@ -4481,27 +5159,50 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass_scale = (
                 self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.81
             )
+        if self._result_hold_mode(entry) == "screen":
+            self._release_results_on(lit_screens)
         if self.image_canvas:
             if video_path and os.path.isfile(str(video_path)):
                 self.image_canvas.set_screen_video(lit_screens, str(video_path), scale=pass_scale)
             else:
                 self.image_canvas.set_screen_images(screen_images, scale=pass_scale)
+            self._apply_held_results()
             # Paint now. The old timer started before the second monitor showed
             # the image, so Kinovea measured ~2.6s of a 3.0s hold.
             self.image_canvas.repaint()
             QtWidgets.QApplication.processEvents()
 
-        self._flash_seq += 1
         delay = self._flash_delay_ms(on=True)
+        if entry.get("budget_ms"):
+            delay = self._budget_remaining_ms(entry)
+            if delay <= 40:
+                self._abandon_budget_rest()
+                return
+        self._flash_seq += 1
         on_sec = max(0.1, float(delay) / 1000.0)
         self._pass_shown_at = time.perf_counter()
         self._pass_on_ms = int(delay)
+        self._action_cue_wall = time.time()
+        self._goal_arrived = False
+        budget_elapsed = None
+        budget_total = None
+        if entry.get("finish_balls") and entry.get("budget_ms"):
+            started = getattr(self, "_budget_started_at", None)
+            budget_elapsed = 0.0 if not started else max(0.0, time.perf_counter() - started)
+            budget_total = float(entry.get("budget_ms") or 0) / 1000.0
         _write_image_action_cue(
             True,
             field_screens,
             seq=self._flash_seq,
             action=action_name,
             on_sec=on_sec,
+            efficiency_max_sec=entry.get("efficiency_max_sec"),
+            finish_balls=bool(entry.get("finish_balls")),
+            budget_elapsed_sec=budget_elapsed,
+            budget_total_sec=budget_total,
+            action_in_set=entry.get("action_in_set"),
+            actions_in_set=entry.get("actions_in_set"),
+            test_num=entry.get("test_num"),
         )
         logger.info(
             "Labeled action %s %s ON screens %s (+%s fillers) for %sms [test %s scale=%.2f on=%.3fs]",
@@ -4519,6 +5220,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
         self.action_timer.timeout.connect(self._finish_label_action)
         self.action_timer.start(delay)
+        if entry.get("advance_on_goal"):
+            self._start_goal_advance_poll()
+        if getattr(self, "_finished_field_screens", None):
+            self._start_gap_result_poll()
 
     def _advance_label_phase(self):
         """After pre-action gap → encode (cognitive) / rotation spin → action hold."""
@@ -4710,7 +5415,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # Keep the pass image up until a full 3s after it was painted.
         shown = getattr(self, "_pass_shown_at", None)
         need_ms = int(getattr(self, "_pass_on_ms", 0) or 0)
-        if shown is not None and need_ms > 0:
+        goal_hit = bool(getattr(self, "_goal_arrived", False))
+        if not goal_hit and shown is not None and need_ms > 0:
             remain = int(need_ms - (time.perf_counter() - shown) * 1000.0)
             if remain > 40:
                 self._stop_action_timer()
@@ -4725,6 +5431,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 (time.perf_counter() - shown),
                 need_ms / 1000.0,
             )
+        self._goal_arrived = False
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
         if self.image_canvas:
             self.image_canvas.clear()
         # Pass image goes off here. Keypoints clear themselves after the cue-ON
@@ -4743,6 +5452,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             and next_entry.get("kind") == "labeled_action"
             and int(next_entry.get("test_num") or -1) == cur_test
         )
+        if isinstance(cur, dict) and (same_test or self._label_mode):
+            finished = {}
+            for fid, sids in (cur.get("field_screens") or {}).items():
+                names = _named_screens(sids or [])
+                if names:
+                    finished[str(fid).upper()[:1]] = names
+            self._finished_field_screens = finished
+            self._finished_action_at = time.time()
+            self._finished_cue_seq = int(getattr(self, "_flash_seq", 0) or 0)
+            self._finished_cue_wall = float(getattr(self, "_action_cue_wall", 0) or 0)
+            self._result_released_screens = set()
+        else:
+            self._finished_field_screens = {}
+            self._finished_action_at = 0
+            self._finished_cue_seq = 0
+            self._clear_held_results()
         self._action_phase = "idle"
 
         # Within a test: next action. End of test: per-video results.
@@ -4761,9 +5486,64 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._load_video(self.current_video_index)
             return
 
-        # End of test set → per-video results, then resume at next_idx (or final)
+        # End of test: go to the per-video results. Finish marks are not shown.
         self._post_results_index = next_idx if next_idx < len(self.video_files) else None
+        self._finished_field_screens = {}
+        self._clear_held_results()
         self._on_video_ended()
+
+    def _hold_for_last_result(self, entry):
+        """Stay on the last action until its mark is on screen, then open results."""
+        gap_ms = 1000
+        if isinstance(entry, dict):
+            try:
+                gap_ms = int(entry.get("gap_ms") or 1000)
+            except (TypeError, ValueError):
+                gap_ms = 1000
+        self._waiting_last_result = True
+        self._last_result_seen_at = None
+        self._last_result_read_ms = max(800, min(2000, int(gap_ms)))
+        self._last_result_deadline = time.time() + 5.0
+        self.display_phase = "action"
+        self._action_phase = "label"
+        self._label_phase = "gap"
+        self.video_end_called = False
+        self.waiting_for_results = False
+        self.check_timer.stop()
+        self._stop_action_timer()
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+            self._apply_held_results()
+        self._start_gap_result_poll()
+        logger.info("Holding the last action until its result is on screen")
+        self._check_last_result_hold()
+
+    def _check_last_result_hold(self):
+        if not getattr(self, "_waiting_last_result", False):
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._check_last_result_hold)
+            return
+        now = time.time()
+        if not self._finished_marks_pending():
+            if not getattr(self, "_last_result_seen_at", None):
+                self._last_result_seen_at = now
+                logger.info("Last action result is on screen")
+            seen_ms = (now - float(self._last_result_seen_at)) * 1000.0
+            if seen_ms >= float(getattr(self, "_last_result_read_ms", 1000) or 1000):
+                self._waiting_last_result = False
+                self._stop_gap_result_poll()
+                self._on_video_ended()
+                return
+        elif now >= float(getattr(self, "_last_result_deadline", now) or now):
+            logger.info("Last action result did not arrive — opening per-video results")
+            self._waiting_last_result = False
+            self._stop_gap_result_poll()
+            self._on_video_ended()
+            return
+        QTimer.singleShot(40, self._check_last_result_hold)
 
     def _apply_flash_phase(self):
         """Legacy teammate flash: 4+11 / off / 3+10 / off, × FLASH_REPEAT."""
@@ -4882,6 +5662,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._update_status_file("playing", 0, total, f"Playlist loaded: {total} {kind}")
         logger.info("Playlist loaded: %s %s", total, kind)
 
+    def _opening_card_colors(self):
+        """Same background and text colors as the opening card, per field."""
+        levels = getattr(self, "_phase_field_levels", None) or {}
+        directories = getattr(self, "_phase_field_directories", None) or {}
+        subdirectory = str(getattr(self, "_phase_subdirectory", "") or "")
+        colors = {}
+        for fid in ("A", "B"):
+            level_id = str(levels.get(fid) or getattr(self, "_phase_mode_id", "") or "")
+            context = " ".join([
+                level_id,
+                subdirectory,
+                str(getattr(self, "video_directory", "") or ""),
+                str(getattr(self, "_level_root", "") or ""),
+                str(directories.get(fid) or ""),
+            ])
+            colors[fid] = _level_card_colors(context, "", {})
+        return colors
+
     def _show_waiting_overlay(self, status_text=""):
         if self.image_canvas:
             self.image_canvas.clear()
@@ -4893,6 +5691,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         else:
             self.waiting_overlay.set_active_fields(active)
         # Empty status keeps the same "Processing" / "Results" rings as per-video wait.
+        self.waiting_overlay.set_level_colors(self._opening_card_colors())
         self.waiting_overlay.set_status_text(status_text or "")
         self.waiting_overlay.setGeometry(0, 0, self.videoframe.width(), self.videoframe.height())
         self.waiting_overlay.show()
@@ -4925,6 +5724,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._phase_field_levels = dict(phase.get("field_levels") or {})
         self._phase_dual_independent = bool(phase.get("dual_independent"))
         self.video_directory = phase.get("directory") or self._level_root
+        _reset_live_action_results()
+        self._held_result_badges = {}
+        self._result_released_screens = set()
+        self._finished_field_screens = {}
         _write_players_fields_active(self._phase_active)
         logger.info(
             "Starting phase %s/%s: %s → %s (active=%s mode=%s dual=%s)",

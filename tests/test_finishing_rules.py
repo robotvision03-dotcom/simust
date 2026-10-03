@@ -26,7 +26,7 @@ import simust_realtime as rt  # noqa: E402
 rt.ArenaSimulator.GOAL_PROBE = False
 
 
-def _analyze(action, screens, frames, after=None, session_s=3.2):
+def _analyze(action, screens, frames, after=None, session_s=3.2, on_sec=None):
     start = datetime.strptime("12:00:00.000000", "%H:%M:%S.%f")
     end = start + timedelta(seconds=session_s)
     action_data = {
@@ -37,6 +37,8 @@ def _analyze(action, screens, frames, after=None, session_s=3.2):
         "end_time": audit.fmt_dt(end),
         "data": frames,
     }
+    if on_sec:
+        action_data["on_sec"] = float(on_sec)
     all_data = [action_data]
     if after:
         all_data.append({
@@ -174,6 +176,56 @@ class FinishingRuleTests(unittest.TestCase):
         after = _travel(mid, start, arrive_s=0.65, hold_s=0.40)
         result = _analyze("PASS", [screen], session, after=after)
         self.assertEqual(result.get("Result"), "Correct", msg=result)
+
+    def test_last_tenth_of_the_session_is_late(self):
+        self.assertTrue(rt.arrival_in_late_window(2.70, 3.00))
+        self.assertTrue(rt.arrival_in_late_window(2.85, 3.00))
+        self.assertFalse(rt.arrival_in_late_window(2.69, 3.00))
+        screen = "2"
+        start = rt.ArenaSimulator.BALL_HOME
+        mid = rt.ArenaSimulator()._line_target([screen])[0]
+        late = []
+        t = 0.0
+        while t < 2.72:
+            late.append({
+                "t": round(t, 3),
+                "b": [[int(start[0]), int(start[1])]],
+                "p": [[280, 268]],
+                "hp": [280, 268],
+            })
+            t += 0.04
+        late.append({
+            "t": 2.80,
+            "b": [[int(mid[0]), int(mid[1])]],
+            "p": [[280, 268]],
+            "hp": [280, 268],
+        })
+        result = _analyze("PASS", [screen], late, session_s=3.0, on_sec=3.0)
+        self.assertEqual(result.get("Result"), "Late", msg=result)
+        early = _travel(start, mid, arrive_s=1.00, hold_s=0.20, back=start, back_s=0.40)
+        result = _analyze("PASS", [screen], early, session_s=3.0, on_sec=3.0)
+        self.assertEqual(result.get("Result"), "Correct", msg=result)
+        stayed = _travel(start, mid, arrive_s=1.00, hold_s=1.80)
+        result = _analyze("PASS", [screen], stayed, session_s=3.0, on_sec=3.0)
+        self.assertEqual(result.get("Result"), "Miss", msg=result)
+        pressed = []
+        t = 0.0
+        while t < 2.72:
+            pressed.append({
+                "t": round(t, 3),
+                "b": [],
+                "p": [[int(start[0]), int(start[1])]],
+                "hp": [int(start[0]), int(start[1])],
+            })
+            t += 0.04
+        pressed.append({
+            "t": 2.80,
+            "b": [],
+            "p": [[int(mid[0]), int(mid[1])]],
+            "hp": [int(mid[0]), int(mid[1])],
+        })
+        result = _analyze("PRESS", [screen], pressed, session_s=3.0, on_sec=3.0)
+        self.assertEqual(result.get("Result"), "Late", msg=result)
 
     def test_goal_center_circle_counts_posts_do_not(self):
         for screen in ("8", "1"):

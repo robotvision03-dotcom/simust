@@ -9,6 +9,9 @@ import ast
 import os
 
 CHART_CENTER_Y = 140
+# Per-video results, the logo, and the processing rings share this drop.
+# 0.10 is 10% higher than the previous 0.20 drop.
+RESULTS_BAND_DROP = 0.10
 RING_RADIUS = 63
 RING_THICKNESS = 15
 
@@ -36,10 +39,10 @@ CONTENT_WIDTH_RATIO = 0.92
 # BEGIN GENERATED OFFSETS
 SCREEN_CONTENT_OFFSET = {
     "A1": -10,
-    "A2": -27,
+    "A2": -29,
     "A3": -46,
-    "A4": -14,
-    "A5": -34,
+    "A4": -16,
+    "A5": -36,
     "A6": -52,
     "B1": -72,
     "B2": -90,

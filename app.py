@@ -65,6 +65,7 @@ import simust_push
 import simust_remote
 from simust_display_layout import (
     CHART_CENTER_Y,
+    RESULTS_BAND_DROP,
     RING_RADIUS,
     RING_THICKNESS,
     COACH_BAND_WIDTH,
@@ -1115,6 +1116,9 @@ SIMUST_PLAYER_DIRECTORY = os.environ.get("SIMUST_PLAYER_DIRECTORY", _DEFAULT_PLA
 PLAYER_REPORTS_DIR = os.environ.get("SIMUST_REPORTS_DIR", _DEFAULT_REPORTS_DIR)
 REALTIME_RECORDINGS_DIR = os.environ.get("SIMUST_REALTIME_DIR", _DEFAULT_REALTIME_DIR)
 ANIMATIONS_DIR = os.environ.get("SIMUST_ANIMATIONS_DIR", _DEFAULT_ANIMATIONS_DIR)
+COACH_DIR = os.environ.get("SIMUST_COACH_DIR", os.path.join(_APP_DIR, "coach"))
+FINAL_COACH_SECONDS = 40.0
+FINAL_COACH_SCALE = 0.90 * 1.20
 
 # Ensure directories exist
 os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
@@ -3144,6 +3148,228 @@ def get_slice_video_for_accuracy(accuracy: float) -> str:
         return "PRO_CI_UPTO_50%_V01.mp4"
 
 
+def _player_age_years(value):
+    """Age in years from a profile age, or from a birthday string."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        try:
+            born = datetime.fromisoformat(text[:10]).date()
+            today = datetime.now().date()
+            return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        except Exception:
+            return None
+    match = re.match(r"(\d+)", text)
+    if not match:
+        return None
+    number = int(match.group(1))
+    if number >= 1900:
+        return max(0, datetime.now().year - number)
+    return number
+
+
+def _coach_for_player(gender, age):
+    """Boy and girl coaches for each age band. Girls 17 and older use Elena."""
+    text = str(gender or "").strip().lower()
+    female = text in ("f", "female", "girl", "woman", "w") or text.startswith("girl") or text.startswith("female")
+    years = _player_age_years(age)
+    if years is None:
+        years = 16
+    if female:
+        if years <= 13:
+            return "Mila"
+        if years <= 16:
+            return "Noor"
+        return "Elena"
+    if years <= 13:
+        return "Jason"
+    if years <= 16:
+        return "Carlos"
+    if years <= 19:
+        return "Khalid"
+    return "Victor"
+
+
+def _file_accuracy_span(filename):
+    """Accuracy window encoded in a coach filename.
+
+    U-16-Carlos-00-50_-V01 is 0–50. U-13-Jason-50_-V01 is the same window.
+    U-13-Jason95-100_-V01 is 95–100. The last number pair in the name wins.
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    pairs = list(re.finditer(r"(\d+)\s*-\s*(\d+)", stem))
+    if pairs:
+        lo, hi = int(pairs[-1].group(1)), int(pairs[-1].group(2))
+        if hi > lo:
+            return lo, hi
+    single = re.search(r"-(\d+)\s*_", stem)
+    if single:
+        return 0, int(single.group(1))
+    return None
+
+
+def _span_holds_accuracy(accuracy, lo, hi):
+    acc = float(accuracy or 0)
+    if lo <= 0:
+        return acc <= hi
+    if hi >= 100:
+        return acc > lo
+    return lo < acc <= hi
+
+
+def select_coach_video(gender, age, accuracy, coach_dir=None):
+    """Coach mp4 for this player's gender, age, and accuracy percent."""
+    folder_name = _coach_for_player(gender, age)
+    folder = os.path.join(coach_dir or COACH_DIR, folder_name)
+    if not os.path.isdir(folder):
+        logger.warning("Coach folder missing: %s", folder)
+        return None
+    files = sorted(
+        name for name in os.listdir(folder)
+        if name.lower().endswith(".mp4")
+    )
+    for name in files:
+        span = _file_accuracy_span(name)
+        if span and _span_holds_accuracy(accuracy, span[0], span[1]):
+            return os.path.join(folder, name)
+    logger.warning(
+        "No coach clip for %s accuracy %.1f in %s",
+        folder_name, float(accuracy or 0), folder,
+    )
+    return None
+
+
+def _field_player_profiles():
+    """Gender and age of the player booked on each field."""
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+    except Exception:
+        payload = {}
+    fields = payload.get("fields") if isinstance(payload, dict) else {}
+    if not isinstance(fields, dict):
+        fields = {}
+    users = load_users()
+    profiles = {}
+    for fid in ("A", "B"):
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        player_id = str((slot or {}).get("player_id") or "").strip()
+        user = users.get(player_id) or {}
+        if player_id and not user:
+            key = find_username(users, player_id)
+            user = users.get(key) or {} if key else {}
+        profiles[fid] = {
+            "player_id": player_id,
+            "gender": user.get("gender") or "",
+            "age": user.get("age") or user.get("birthday") or "",
+        }
+    return profiles
+
+
+def _results_screen_box(sid, width, height):
+    """Where one screen's picture sits on the results strip."""
+    order = list(RESULTS_SLICE_ORDER)
+    if sid not in order:
+        return 0, 0, 2, 2
+    index = order.index(sid)
+    left, _right, rect_w = content_x_box(index, sid, width, len(order))
+    top = max(0, int(screen_content_offset_y(sid) or 0))
+    box_w = max(2, int(rect_w) - (int(rect_w) % 2))
+    box_h = int(height) - top
+    box_h = max(2, box_h - (box_h % 2))
+    return int(left), int(top), box_w, box_h
+
+
+def _coach_jobs_for_final(ring_panels, width, height):
+    """One coach clip per field, shown whole on that field's screens 3 and 4."""
+    profiles = _field_player_profiles()
+    jobs = []
+    by_path = {}
+    for panel in ring_panels or []:
+        sid = str(panel.get("slice_aet") or "A1")
+        fid = "B" if sid.startswith("B") else "A"
+        profile = profiles.get(fid) or {}
+        accuracy = float(panel.get("aac") or 0)
+        path = select_coach_video(profile.get("gender"), profile.get("age"), accuracy)
+        boxes = [
+            _results_screen_box(f"{fid}3", width, height),
+            _results_screen_box(f"{fid}4", width, height),
+        ]
+        if not path:
+            logger.warning(
+                "Final Field %s: no coach video for %s age %s at %.1f%%",
+                fid, profile.get("gender") or "unspecified", profile.get("age") or "unspecified", accuracy,
+            )
+            continue
+        job = by_path.get(path)
+        if job is None:
+            job = {"path": path, "boxes": [], "field": fid, "accuracy": accuracy, "profile": profile}
+            by_path[path] = job
+            jobs.append(job)
+        job["boxes"].extend(boxes)
+        logger.info(
+            "Final Field %s: coach %s for %s age %s at %.1f%% accuracy",
+            fid, os.path.basename(path), profile.get("gender") or "unspecified",
+            profile.get("age") or "unspecified", accuracy,
+        )
+    return jobs
+
+
+def _final_coach_ffmpeg_filter(jobs, width, height, fps, logo_input, overlay_input):
+    """Place each coach clip on its own screens, then the logo, then the rings."""
+    parts = [
+        f"color=c=0x0a0c12:s={width}x{height}:r={float(fps):.3f}:d={FINAL_COACH_SECONDS:.3f}[base]"
+    ]
+    prev = "base"
+    logo_slots = []
+    for index, job in enumerate(jobs):
+        boxes = job.get("boxes") or []
+        count = len(boxes)
+        if count <= 0:
+            continue
+        outs = "".join(f"[c{index}_{k}]" for k in range(count))
+        parts.append(f"[{index}:v]split={count}{outs}")
+        clip = min(FINAL_COACH_SECONDS, float(job.get("clip_sec") or FINAL_COACH_SECONDS))
+        for k, (x, y, box_w, box_h) in enumerate(boxes):
+            fitted = f"fit{index}_{k}"
+            fit_w = max(2, int(int(box_w) * FINAL_COACH_SCALE) // 2 * 2)
+            fit_h = max(2, int(int(box_h) * FINAL_COACH_SCALE) // 2 * 2)
+            parts.append(
+                f"[c{index}_{k}]scale={fit_w}:{fit_h}:force_original_aspect_ratio=decrease,"
+                f"pad=max(iw\\,{int(box_w)}):max(ih\\,{int(box_h)}):(ow-iw)/2:(oh-ih)/2:color=0x0a0c12,"
+                f"crop={int(box_w)}:{int(box_h)}:(iw-{int(box_w)})/2:(ih-{int(box_h)})/2,setsar=1[{fitted}]"
+            )
+            nxt = f"cv{index}_{k}"
+            parts.append(
+                f"[{prev}][{fitted}]overlay=x={int(x)}:y={int(y)}:eof_action=pass:"
+                f"enable='lt(t,{clip:.3f})'[{nxt}]"
+            )
+            prev = nxt
+            if clip < FINAL_COACH_SECONDS - 0.05:
+                cx, cy = max(0, int(x)), max(0, int(y))
+                cw = min(int(x) + int(box_w), int(width)) - cx
+                ch = min(int(y) + int(box_h), int(height)) - cy
+                logo_slots.append((cx, cy, cw, ch, clip, index, k))
+    if logo_slots:
+        outs = "".join(f"[ls{n}]" for n in range(len(logo_slots)))
+        parts.append(f"[{logo_input}:v]format=rgba,split={len(logo_slots)}{outs}")
+        for n, (cx, cy, cw, ch, clip, index, k) in enumerate(logo_slots):
+            if cw < 2 or ch < 2:
+                continue
+            nxt = f"lv{index}_{k}"
+            parts.append(f"[ls{n}]crop={cw}:{ch}:{cx}:{cy}[lg{n}]")
+            parts.append(
+                f"[{prev}][lg{n}]overlay=x={cx}:y={cy}:enable='gte(t,{clip:.3f})'[{nxt}]"
+            )
+            prev = nxt
+    parts.append(
+        f"[{prev}][{overlay_input}:v]overlay=0:0:format=auto,format=yuv420p[v]"
+    )
+    return ";".join(parts)
+
+
 # Fourteen frames across the 3840 projection. Empty places sit between 3 and 4.
 RESULTS_SLICE_ORDER = list(DISPLAY_SLICE_ORDER)
 # PRO_CI coach clips cover Field A integration: A3, the empty place, and A4.
@@ -3307,8 +3533,11 @@ def _place_logo_on_screens_3_and_4(frame, fields):
         fitted = _fit_logo(logo, rect_w, box_h)
         fh, fw = fitted.shape[:2]
         x = int(left) + (int(rect_w) - fw) // 2
-        y = int(round(box_top + CHART_CENTER_Y + (COACH_BAND_HEIGHT * 0.20) - fh / 2.0))
-        y = max(box_top, min(y, box_top + box_h - fh))
+        # Logo bottom lines up with the bottom of the orange results label.
+        offset_y = screen_content_offset_y(sid)
+        center_y = CHART_CENTER_Y + int(offset_y) + int(round(height * RESULTS_BAND_DROP))
+        orange_bottom = center_y + RING_RADIUS + 20 + 65
+        y = int(round(orange_bottom - fh + height * (0.10 - 0.064)))
         _blit_logo(frame, fitted, x, y)
 
 
@@ -3554,6 +3783,102 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
         logger.warning("Could not save section metrics for video %s: %s", video_index, exc)
 
 
+def finish_balls_clock(results_list):
+    """Shared-clock speed. All balls in the goal → time used. Any miss uses the whole clock."""
+    results_list = list(results_list or [])
+    budgets = []
+    clocks = []
+    saw = False
+    for row in results_list:
+        if row.get("finish_balls") or row.get("balls_budget_sec") is not None:
+            saw = True
+        budget = _parse_positive_float(row.get("balls_budget_sec"))
+        if budget:
+            budgets.append(budget)
+        if str(row.get("result") or "") == "Correct":
+            clock = _parse_positive_float(row.get("balls_clock_sec"))
+            if clock:
+                clocks.append(clock)
+    if not saw and not budgets:
+        return None
+    budget = max(budgets) if budgets else 0.0
+    correct = sum(1 for row in results_list if str(row.get("result") or "") == "Correct")
+    total = len(results_list)
+    all_in = total > 0 and correct == total
+    if all_in and clocks and budget > 0:
+        used = max(clocks)
+        if used > budget:
+            used = budget
+    else:
+        used = budget
+    percent = 0.0
+    if budget > 0:
+        percent = max(0.0, min(100.0, (1.0 - (used / budget)) * 100.0))
+    accuracy = (correct / total) * 100.0 if total else 0.0
+    return {
+        "finish_balls": True,
+        "aac": accuracy,
+        "aet": used,
+        "aet_display": f"{used:.2f}s" if budget > 0 else "-",
+        "aet_session_display": f"{budget:.2f}s" if budget > 0 else "-",
+        "aet_percent": percent,
+    }
+
+
+def finish_balls_action_ae(row, aet_percent):
+    """One action. The time term is the test AET, not a 3-second finish.
+
+    AE = 0.40×P + 0.30×A + 0.20×AET + 0.10×(100−D) − 25×Wrong
+    AET here is (100−T), the same percent shown on the speed ring.
+    """
+    action = str((row or {}).get("action") or "PASS").strip().upper()
+    priority = {"GOAL": 90, "PASS": 70, "TARGET": 50, "PRESS": 30}.get(action, 50)
+    screen = str((row or {}).get("winning_screen") or "")
+    if action == "TARGET" and screen in ("9L", "6L", "9R", "6R"):
+        priority = 85
+    result = str((row or {}).get("result") or "")
+    if result == "Correct":
+        accuracy_term = 100.0
+        wrong = 0.0
+    else:
+        accuracy_term = 0.0
+        wrong = 1.0
+    try:
+        movement = float((row or {}).get("movement") or 0)
+    except (TypeError, ValueError):
+        movement = 0.0
+    if movement > 0:
+        displacement = max(0.0, min(100.0, 100.0 - movement))
+    else:
+        displacement = 100.0
+    try:
+        aet = float(aet_percent or 0.0)
+    except (TypeError, ValueError):
+        aet = 0.0
+    aet = max(0.0, min(100.0, aet))
+    ae = (
+        (0.40 * priority)
+        + (0.30 * accuracy_term)
+        + (0.20 * aet)
+        + (0.10 * (100.0 - displacement))
+        - (25.0 * wrong)
+    )
+    return max(0.0, min(100.0, ae))
+
+
+def finish_balls_efficiency(results_list, aet_percent):
+    """Test efficiency is the average of the action scores."""
+    scores = [finish_balls_action_ae(row, aet_percent) for row in (results_list or [])]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def apply_finish_balls_efficiency(metrics):
+    """AE is already the shared-clock formula. Distance must not replace it."""
+    return metrics
+
+
 def summarize_results_section_metrics(results_list):
     """Per-section (one playlist video) rings: AET / AE / ACC / displacement stamp max."""
     results_list = list(results_list or [])
@@ -3628,6 +3953,15 @@ def summarize_results_section_metrics(results_list):
     else:
         aet_percent = 0.0
 
+    clock = finish_balls_clock(results_list)
+    if clock:
+        aac = clock["aac"]
+        aet = clock["aet"]
+        aet_percent = clock["aet_percent"]
+        aet_display = clock["aet_display"]
+        aet_session_display = clock["aet_session_display"]
+        avg_ae = finish_balls_efficiency(results_list, aet_percent)
+
     return {
         "total_distance": float(total_distance),
         "correct": correct,
@@ -3642,6 +3976,7 @@ def summarize_results_section_metrics(results_list):
         "aet_percent": float(aet_percent),
         "aet_display": aet_display,
         "aet_session_display": aet_session_display,
+        "finish_balls": bool(clock),
     }
 
 
@@ -3808,6 +4143,7 @@ def prepare_field_section_metrics(results_rows, fdir, video_index=None, is_final
             if recomputed > 0:
                 metrics["total_distance"] = recomputed
         metrics["distance_m_display"] = distance_m_display(metrics.get("total_distance"))
+        apply_finish_balls_efficiency(metrics)
     return metrics
 
 # ---------- generate_results_video_from_results ----------
@@ -3892,25 +4228,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         aet_display = metrics["aet_display"]
         logger.info(f"Stored total_distance from results_list: {total_distance:.2f} m (display {distance_shown}m)")
 
+        coach_jobs = []
         if is_final:
-            selected_video = get_slice_video_for_accuracy(avg_ae)
-            # Final coach clip:
-            # - A-only or B-only → include coach animation based on AE (same as classic Field A)
-            # - Dual A+B → caller uses Field A as primary, so coach stays on A only
-            #   (Field B rings are passed via extra_ring_panels, no second coach clip)
-            if selected_video:
-                selected_path = os.path.join(ANIMATIONS_DIR, selected_video)
-                if os.path.exists(selected_path):
-                    slice_video_path = selected_path
-                    logger.info(
-                        "Final Field %s: using coach slice for AE %.1f%%: %s",
-                        field_id, avg_ae, selected_video,
-                    )
-                else:
-                    logger.warning(f"Selected slice video {selected_video} not found, falling back to default.")
-                    slice_video_path = None
-            else:
-                slice_video_path = None
+            # Coach mp4s are chosen after the rings exist, from gender, age, and accuracy.
+            slice_video_path = None
         else:
             # Per-video rings stay on screens 1, 2, 5 and 6.
             # A wrong-action reel passed in is the picture on screens 3 and 4.
@@ -3919,6 +4240,10 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         REFERENCE_DISTANCE_METERS = 77.0
         economy_percent = min(100.0, (total_distance / REFERENCE_DISTANCE_METERS) * 100) if total_distance > 0 else 0
+        if metrics.get("finish_balls"):
+            apply_finish_balls_efficiency(metrics)
+            avg_ae = float(metrics.get("avg_ae") or 0.0)
+            ae_display = metrics.get("ae_display")
 
         ring_panels = [{
             "slice_aet": slice_aet,
@@ -3986,57 +4311,65 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 logger.warning(f"ffprobe failed: {e}")
             return vid_info, has_audio
 
-        if is_final:
-            if slice_video_path and os.path.exists(slice_video_path):
-                vid_info, has_slice_audio = probe_media(slice_video_path)
-                if vid_info and vid_info.get("r_frame_rate"):
-                    fps_str = vid_info["r_frame_rate"]
-                    if "/" in str(fps_str):
-                        num, den = map(int, str(fps_str).split("/"))
-                        true_fps = num / den if den > 0 else 25.0
-                    else:
-                        true_fps = float(fps_str)
-                    output_fps = true_fps
-                    if vid_info.get("nb_frames"):
-                        total_frames = int(vid_info["nb_frames"])
-                    elif vid_info.get("duration"):
-                        total_frames = int(round(float(vid_info["duration"]) * output_fps))
-                    else:
-                        cap = cv2.VideoCapture(slice_video_path)
-                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                        cap.release()
-                    if vid_info.get("duration"):
-                        video_duration = float(vid_info["duration"])
-                    elif output_fps > 0 and total_frames > 0:
-                        video_duration = total_frames / output_fps
-                    use_slice_video = True
-                    logger.info(
-                        "Final video will stream %s at %.2f FPS (%s frames, %.3fs); audio=%s",
-                        os.path.basename(slice_video_path), output_fps, total_frames,
-                        video_duration, has_slice_audio,
-                    )
+        def _clip_fps_and_duration(vid_info, filepath):
+            fps = 25.0
+            duration = 0.0
+            if vid_info and vid_info.get("r_frame_rate"):
+                fps_str = str(vid_info["r_frame_rate"])
+                if "/" in fps_str:
+                    num, den = fps_str.split("/", 1)
+                    try:
+                        fps = float(num) / float(den) if float(den) else 25.0
+                    except (TypeError, ValueError):
+                        fps = 25.0
                 else:
-                    cap = cv2.VideoCapture(slice_video_path)
-                    if cap.isOpened():
-                        output_fps = cap.get(cv2.CAP_PROP_FPS) or 25
-                        if output_fps <= 1:
-                            output_fps = 25
-                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                        video_duration = total_frames / output_fps if output_fps else 0
-                        cap.release()
-                        use_slice_video = True
-                        logger.info(
-                            "Using OpenCV FPS: %.2f, frames: %s, duration: %.3fs",
-                            output_fps, total_frames, video_duration,
-                        )
-                    else:
-                        logger.warning("Could not open slice video, falling back to static background.")
+                    try:
+                        fps = float(fps_str)
+                    except (TypeError, ValueError):
+                        fps = 25.0
+            if vid_info and vid_info.get("duration"):
+                try:
+                    duration = float(vid_info["duration"])
+                except (TypeError, ValueError):
+                    duration = 0.0
+            if fps <= 1 or duration <= 0:
+                cap = cv2.VideoCapture(filepath)
+                if cap.isOpened():
+                    if fps <= 1:
+                        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                    if duration <= 0:
+                        frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                        duration = frames / fps if fps else 0.0
+                cap.release()
+            if fps <= 1:
+                fps = 25.0
+            return fps, duration
 
-            if not use_slice_video:
+        if is_final:
+            coach_jobs = _coach_jobs_for_final(ring_panels, width, height)
+            video_duration = FINAL_COACH_SECONDS
+            output_fps = 25.0
+            if coach_jobs:
+                for job in coach_jobs:
+                    vid_info, has_audio = probe_media(job["path"])
+                    fps, duration = _clip_fps_and_duration(vid_info, job["path"])
+                    job["fps"] = fps
+                    job["has_audio"] = bool(has_audio)
+                    job["clip_sec"] = min(FINAL_COACH_SECONDS, duration if duration > 0 else FINAL_COACH_SECONDS)
+                output_fps = float(coach_jobs[0].get("fps") or 25.0)
+                slice_video_path = coach_jobs[0]["path"]
+                has_slice_audio = bool(coach_jobs[0].get("has_audio"))
+                use_slice_video = True
+                total_frames = max(1, int(round(video_duration * output_fps)))
+                logger.info(
+                    "Final results: %d coach clip(s) on screens 3 and 4 for %.0fs",
+                    len(coach_jobs), video_duration,
+                )
+            else:
+                use_slice_video = False
                 output_fps = 2
-                total_frames = 60
-                video_duration = 30.0
-                logger.info("Using static background for final video (30s, 2 FPS)")
+                total_frames = max(1, int(round(video_duration * output_fps)))
+                logger.info("Final results: logo on screens 3 and 4 for %.0fs", video_duration)
         else:
             output_fps = 2
             video_duration = float(duration_seconds) if duration_seconds and duration_seconds > 0 else 20.0
@@ -4085,7 +4418,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             x0, x1 = slice_x_span(index, width, num_tiles)
             return x0, x1 - x0
         coach_geom = coach_integration_x_ranges(width, field_id)
-        remap_coach_to_b = (str(field_id or "").upper() == "B")
+        remap_coach_to_b = (not is_final) and (str(field_id or "").upper() == "B")
         if remap_coach_to_b:
             logger.info(
                 "Field B coach integration: crop A3–A4 (x=%s..%s) → B3–B4 (x=%s..%s)",
@@ -4240,9 +4573,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 offset_x = screen_content_offset(num)
                 offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
-                center_y = CHART_CENTER_Y + offset_y
-                if not is_final:
-                    center_y += int(round(height * 0.20))
+                center_y = CHART_CENTER_Y + offset_y + int(round(height * RESULTS_BAND_DROP))
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
@@ -4268,9 +4599,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 offset_x = screen_content_offset(num)
                 offset_y = screen_content_offset_y(num)
                 center_x = x_offset + tile_width // 2 + offset_x
-                center_y = CHART_CENTER_Y + offset_y
-                if not is_final:
-                    center_y += int(round(height * 0.20))
+                center_y = CHART_CENTER_Y + offset_y + int(round(height * RESULTS_BAND_DROP))
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
@@ -4311,17 +4640,16 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 
         static_bg = np.zeros((height, width, 3), dtype=np.uint8)
         static_bg[:] = (10, 12, 18)
-        if not is_final:
-            logo_fields = set()
-            if str(field_id or "A").upper().startswith("B"):
-                logo_fields.add("B")
-            else:
-                logo_fields.add("A")
-            for panel in extra_ring_panels or []:
-                marker = str((panel or {}).get("slice_aet") or "")
-                if marker[:1] in ("A", "B"):
-                    logo_fields.add(marker[:1])
-            _place_logo_on_screens_3_and_4(static_bg, logo_fields)
+        logo_fields = set()
+        if str(field_id or "A").upper().startswith("B"):
+            logo_fields.add("B")
+        else:
+            logo_fields.add("A")
+        for panel in list(extra_ring_panels or []) + (ring_panels if is_final else []):
+            marker = str((panel or {}).get("slice_aet") or "")
+            if marker[:1] in ("A", "B"):
+                logo_fields.add(marker[:1])
+        _place_logo_on_screens_3_and_4(static_bg, logo_fields)
         overlay = render_overlay_once(np.zeros((height, width, 3), dtype=np.uint8))
         overlay_mask = np.any(overlay > 2, axis=2)
         static_frame = static_bg.copy()
@@ -4359,59 +4687,43 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
         # and encodes H.264 (plus audio) without an MJPEG temp file or a second mux.
         overlay_png = output_path.replace(".mp4", "_overlay.png")
         static_png = output_path.replace(".mp4", "_static.png")
+        logo_png = output_path.replace(".mp4", "_logo.png")
         encoded = False
         try:
             overlay_bgra = cv2.cvtColor(overlay, cv2.COLOR_BGR2BGRA)
             overlay_bgra[:, :, 3] = np.where(overlay_mask, 255, 0).astype(np.uint8)
             if not cv2.imwrite(overlay_png, overlay_bgra):
                 raise RuntimeError("Could not write overlay PNG")
-            if remap_coach_to_b:
-                # PRO_CI clips show coach on Field A tiles 14/1/2 — move that band to B tiles 7/9.
-                sx0, sw = coach_geom["src_x0"], coach_geom["src_w"]
-                dx0, dw = coach_geom["dst_x0"], coach_geom["dst_w"]
-                shift_vf, shift_label = _offset_video_filter(
-                    "bg2", width, height, keep_span=(dx0, dx0 + dw),
+            if is_final and coach_jobs:
+                logo_bgra = cv2.cvtColor(static_bg, cv2.COLOR_BGR2BGRA)
+                dark = np.array([10, 12, 18], dtype=np.int16)
+                changed = np.any(np.abs(static_bg.astype(np.int16) - dark) > 8, axis=2)
+                logo_bgra[:, :, 3] = np.where(changed, 255, 0).astype(np.uint8)
+                if not cv2.imwrite(logo_png, logo_bgra):
+                    raise RuntimeError("Could not write logo PNG")
+                logo_input = len(coach_jobs)
+                overlay_input = logo_input + 1
+                vf = _final_coach_ffmpeg_filter(
+                    coach_jobs, width, height, output_fps, logo_input, overlay_input,
                 )
-                vf = (
-                    f"color=c=0x0a0c12:s={width}x{height}[bg];"
-                    f"[0:v]scale={width}:{height}:flags=fast_bilinear,"
-                    f"crop={sw}:{height}:{sx0}:0,scale={dw}:{height}:flags=fast_bilinear[ci];"
-                    f"[bg][ci]overlay=x={dx0}:y=0[bg2];"
-                    f"{shift_vf};"
-                    f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
-                )
-            else:
-                shift_vf, shift_label = _offset_video_filter(
-                    "bg", width, height,
-                    keep_span=(coach_geom["dst_x0"], coach_geom["dst_x1"]),
-                )
-                vf = (
-                    f"[0:v]scale={width}:{height}:flags=fast_bilinear[bg];"
-                    f"{shift_vf};"
-                    f"[{shift_label}][1:v]overlay=0:0:format=auto,format=yuv420p[v]"
-                )
-            if use_slice_video and is_final and slice_video_path and os.path.exists(slice_video_path):
-                cmd = [
-                    ffmpeg_exe, "-y",
-                    "-i", slice_video_path,
-                    "-i", overlay_png,
-                    "-filter_complex", vf,
-                    "-map", "[v]",
-                ]
+                cmd = [ffmpeg_exe, "-y"]
+                for job in coach_jobs:
+                    cmd += ["-i", job["path"]]
+                cmd += ["-i", logo_png, "-i", overlay_png, "-filter_complex", vf, "-map", "[v]"]
                 if has_slice_audio:
-                    cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"]
-                    if video_duration and video_duration > 0:
-                        cmd += ["-af", "apad", "-t", str(video_duration)]
-                    else:
-                        cmd += ["-shortest"]
+                    cmd += [
+                        "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k",
+                        "-af", f"apad=whole_dur={FINAL_COACH_SECONDS:.3f}",
+                    ]
                 else:
                     cmd += ["-an"]
                 cmd += [
+                    "-t", str(FINAL_COACH_SECONDS),
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                     "-movflags", "+faststart", output_path,
                 ]
-                encoded = run_ffmpeg(cmd, timeout=180)
-            elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+                encoded = run_ffmpeg(cmd, timeout=240)
+            elif use_slice_video and slice_video_path and os.path.exists(slice_video_path) and not is_final:
                 if native_background:
                     shift_vf, shift_label = _offset_video_filter("bg", width, height)
                     per_vf = (
@@ -4466,7 +4778,7 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             logger.warning("ffmpeg overlay encode failed, using OpenCV fallback: %s", e)
             encoded = False
         finally:
-            for tmp in (overlay_png, static_png):
+            for tmp in (overlay_png, static_png, logo_png):
                 try:
                     if os.path.exists(tmp):
                         os.remove(tmp)
@@ -4484,8 +4796,47 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             logger.error(f"Could not open temporary video writer for {temp_avi}")
             return False
 
+        def _blit_fitted(canvas, frame, x, y, box_w, box_h):
+            if frame is None or getattr(frame, "size", 0) == 0:
+                return
+            fh, fw = frame.shape[:2]
+            if fw < 1 or fh < 1 or box_w < 2 or box_h < 2:
+                return
+            scale = min(float(box_w) / float(fw), float(box_h) / float(fh)) * FINAL_COACH_SCALE
+            nw = max(1, int(round(fw * scale)))
+            nh = max(1, int(round(fh * scale)))
+            fitted = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+            dx = int(x) + (int(box_w) - nw) // 2
+            dy = int(y) + (int(box_h) - nh) // 2
+            vis_x0 = max(dx, int(x))
+            vis_y0 = max(dy, int(y))
+            vis_x1 = min(dx + nw, int(x) + int(box_w))
+            vis_y1 = min(dy + nh, int(y) + int(box_h))
+            if vis_x1 <= vis_x0 or vis_y1 <= vis_y0:
+                return
+            crop = fitted[vis_y0 - dy:vis_y1 - dy, vis_x0 - dx:vis_x1 - dx]
+            _blit_logo(canvas, crop, vis_x0, vis_y0)
+
         written = 0
-        if use_slice_video and slice_video_path and os.path.exists(slice_video_path):
+        if is_final and coach_jobs:
+            caps = [cv2.VideoCapture(job["path"]) for job in coach_jobs]
+            for frame_i in range(max(total_frames, 1)):
+                t = frame_i / float(output_fps or 25.0)
+                canvas = static_bg.copy()
+                for cap, job in zip(caps, coach_jobs):
+                    if t >= float(job.get("clip_sec") or 0):
+                        continue
+                    ok_read, frame = cap.read()
+                    if not ok_read:
+                        continue
+                    for box in job["boxes"]:
+                        _blit_fitted(canvas, frame, *box)
+                canvas[overlay_mask] = overlay[overlay_mask]
+                out.write(canvas)
+                written += 1
+            for cap in caps:
+                cap.release()
+        elif use_slice_video and slice_video_path and os.path.exists(slice_video_path):
             cap = cv2.VideoCapture(slice_video_path)
             if not cap.isOpened():
                 logger.warning("Could not reopen slice video for streaming; using static overlay")
@@ -4937,7 +5288,7 @@ async def create_results_video(req: Request):
                 only_fid = next(iter(panels.keys()))
                 video_path = os.path.join(session_root, f"final_results_video_field_{only_fid}.mp4")
             logger.info(
-                "Generating final results video for fields %s (coach clip on primary %s): %s",
+                "Generating final results video for fields %s (coach clips on screens 3 and 4, primary %s): %s",
                 ",".join(sorted(panels.keys())),
                 primary_fid,
                 video_path,
