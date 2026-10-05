@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#06101f" />
     <title>SIMUST PLAY IT SMART · Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -60,6 +64,18 @@
         .tab-button { background: transparent; color: #8190a5; border: none; border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.04em; }
         .tab-button.active { color: #fff; border-bottom-color: var(--gold); background: #276ce51a; }
         .tab-button:hover { color: #dce7f5; background: #276ce50d; }
+        .level-main-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; width: 100%; }
+        .level-main-btn { width: 100%; height: 52px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; padding: 4px; font-weight: 800; font-size: 12px; letter-spacing: 0.02em; cursor: pointer; white-space: normal; line-height: 1.15; display: flex; align-items: center; justify-content: center; text-align: center; }
+        .level-main-btn.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.45); }
+        .level-sub-list { width: 100%; margin-top: 10px; background: #07111f; color: #f5f8fb; border: 1px solid var(--line); border-radius: 8px; padding: 4px; font-size: 14px; }
+        .level-sub-rows { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #07111f; }
+        .level-sub-row { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+        .level-sub-row:last-child { border-bottom: none; }
+        .level-sub-row.active { background: rgba(214,179,75,0.16); }
+        .level-sub-pick { flex: 1; text-align: start; background: transparent; color: #fff; border: none; font-weight: 700; cursor: pointer; padding: 10px 12px; font-size: 14px; }
+        .level-sub-lock, .level-sub-unlock { flex: 0 0 auto; min-width: 76px; margin-inline-end: 8px; border-radius: 6px; border: none; font-weight: 800; cursor: pointer; padding: 8px 10px; }
+        .level-sub-unlock { background: #2ecc71; color: #07111f; }
+        .level-sub-lock { background: #1a2d4a; color: #ead48f; }
         .player-card { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 12px 18px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
         .player-card:hover { border-color: var(--gold); background: #10243f; }
         .player-card.active { border-color: var(--gold); background: #10243f; }
@@ -197,36 +213,41 @@
         .today-schedule-row .field-tag { display: inline-block; margin-inline-start: 6px; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em; background: rgba(214, 179, 75, 0.15); color: var(--gold); border: 1px solid rgba(214, 179, 75, 0.35); vertical-align: middle; }
         .today-schedule-row .when { color: var(--gold); font-size: 12px; font-weight: 800; white-space: nowrap; }
         .today-schedule-empty { color: #8fa0b6; font-size: 13px; font-style: italic; padding: 12px 0; }
-        .op-res-wrap { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start; }
-        .op-res-panel { background: var(--navy-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-        .op-res-panel h2 { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
-        .op-res-panel .sub { color: #8fa0b6; font-size: 13px; margin-bottom: 14px; line-height: 1.45; }
+        .op-res-wrap { display: grid; grid-template-columns: 1.35fr 0.9fr; gap: 16px; align-items: start; }
+        .op-res-panel { background: #0c1a2e; border: 1px solid #243652; border-radius: 16px; padding: 16px; }
+        .op-res-panel h2 { font-size: 18px; font-weight: 800; margin: 0 0 4px; color: #f5f8fb; }
+        .op-res-panel .sub { color: #9aafc6; font-size: 13px; margin-bottom: 12px; line-height: 1.45; }
         .op-res-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-        .op-res-toolbar button, .op-res-form button, .op-res-list button {
-            background: #07111f; border: 1px solid var(--line); color: #dce7f5; border-radius: 6px;
-            padding: 8px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+        .op-res-toolbar button, .op-res-form button, .op-res-list button, .op-res-week button {
+            background: #07111f; border: 1px solid #2a4060; color: #e7eef8; border-radius: 10px;
+            padding: 10px 14px; font-size: 13px; font-weight: 700; cursor: pointer; min-height: 40px;
         }
         .op-res-toolbar button.primary, .op-res-form button.primary {
-            background: linear-gradient(105deg, var(--gold), #d6b34b); color: #07111f; border: none;
+            background: linear-gradient(105deg, #e2c36a, #c9a227); color: #1c1404; border: none;
         }
+        .op-res-form button.danger, .op-res-list button.danger {
+            background: #c0392b; color: #fff; border: none;
+        }
+        .op-res-form button:disabled, .op-res-list button:disabled { opacity: 0.45; cursor: not-allowed; }
         .op-res-week { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-        .op-res-week button { min-width: 64px; }
-        .op-res-week button.active { border-color: var(--gold); color: var(--gold); }
-        .op-res-grid-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--line); border-radius: 8px; }
-        .op-res-grid { display: grid; grid-template-columns: 56px 1fr 1fr; min-width: 420px; }
+        .op-res-week button { min-width: 72px; }
+        .op-res-week button.active { background: #315F91; border-color: #7ca8f8; color: #fff; }
+        .op-res-grid-wrap { overflow: auto; max-height: 62vh; border: 1px solid #243652; border-radius: 12px; background: #07111f; }
+        .op-res-grid { display: grid; grid-template-columns: 64px 1fr 1fr; min-width: 360px; }
         .op-res-grid .head, .op-res-grid .time {
-            position: sticky; top: 0; background: #050e1a; z-index: 1; font-size: 11px; font-weight: 800;
-            color: var(--gold); padding: 8px; border-bottom: 1px solid var(--line); text-align: center;
+            position: sticky; top: 0; background: #071422; z-index: 1; font-size: 12px; font-weight: 800;
+            color: #ead48f; padding: 10px 6px; border-bottom: 1px solid #243652; text-align: center;
         }
-        .op-res-grid .time { position: static; color: #8fa0b6; font-weight: 700; border-right: 1px solid var(--line); }
+        .op-res-grid .time { position: static; color: #8fa0b6; font-weight: 700; border-right: 1px solid #1a2c44; }
         .op-res-slot {
-            min-height: 28px; border-bottom: 1px solid #132033; border-right: 1px solid #132033;
-            font-size: 10px; padding: 4px 6px; cursor: pointer; color: #9fb2c9;
+            min-height: 42px; border-bottom: 1px solid #1a2c44; border-right: 1px solid #1a2c44;
+            font-size: 12px; padding: 6px 8px; cursor: pointer; color: #8fa0b6;
+            display: flex; align-items: center;
         }
-        .op-res-slot.free:hover { background: rgba(39,108,229,0.18); }
-        .op-res-slot.booked { background: rgba(214,179,75,0.18); color: #f5f8fb; cursor: pointer; }
+        .op-res-slot.free:hover { background: rgba(49,95,145,0.35); color: #fff; }
+        .op-res-slot.booked { background: rgba(201,162,39,0.28); color: #fff; font-weight: 700; }
         .op-res-slot.past { opacity: 0.35; cursor: default; }
-        .op-res-slot.selected { outline: 1px solid var(--gold); }
+        .op-res-slot.selected { box-shadow: inset 0 0 0 2px #fff; }
         .op-res-form .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .op-res-form label { display: block; font-size: 11px; color: #8fa0b6; font-weight: 700; margin-bottom: 4px; }
         .op-res-form input, .op-res-form select {
@@ -266,8 +287,17 @@
         .modal-box .btn-row .cancel-btn { background:transparent; color:#a8c6ff; border: 1px solid var(--line); }
         .modal-box .btn-row .delete-btn { background:var(--red); color:white; }
         @media (max-width:900px) {
+            html, body { width: 100%; max-width: 100%; min-height: 100dvh; overflow-x: hidden; }
             body { padding: 0; align-items: stretch; justify-content: flex-start; }
-            .simust-card { min-height: 100dvh; border-radius: 0; max-width: none; }
+            .simust-card { width: 100%; min-height: 100dvh; max-width: none; border-radius: 0; border: none; box-shadow: none; }
+            .simust-header { padding: 10px 12px; }
+            .simust-header h1 { font-size: 1.05rem !important; line-height: 1.2; }
+            .simust-tabs { padding: 0 8px; }
+            .simust-body { min-height: 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+            .simust-footer { display: none; }
+            .level-main-btn { height: 48px; min-height: 48px; font-size: 10px; padding: 2px; }
+            .login-overlay { padding: 12px; }
+            .login-layout { max-width: 100%; }
         }
         @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
         @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
@@ -757,11 +787,44 @@
         // Subdirectories for Foundation — locked until paid 30-minute credits unlock them
         var LEVEL_SUBDIRS = {
             'L00-Foundation': [
-                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N', 'omid', 'omid_2'
+                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'
             ]
         };
         var FOUNDATION_PLAYLISTS = LEVEL_SUBDIRS['L00-Foundation'].slice();
-        var FOUNDATION_EXTRA_PLAYLISTS = ['omid', 'omid_2'];
+        var FOUNDATION_EXTRA_PLAYLISTS = [];
+        var LEVEL_MAIN_BUTTONS = [
+            { id: 'L00-Foundation', label: 'Foundation', bg: '#7dffa8', fg: '#0c1c12' },
+            { id: 'L01-Entry', label: 'Entry', bg: '#F1F3F5', fg: '#282c30' },
+            { id: 'L02-Activated', label: 'Activated', bg: '#AFC3D5', fg: '#0c1624' },
+            { id: 'L03-HighPerformance', label: 'High Performance', bg: '#315F91', fg: '#ffffff' },
+            { id: 'L04-Elite', label: 'Elite', bg: '#4B1F78', fg: '#ffffff' },
+            { id: 'L05-WorldClass', label: 'World Class', bg: '#C9A227', fg: '#1c1404' }
+        ];
+        var mainLevelIdOf = function(levelId) {
+            var id = String(levelId || '');
+            if (!id) return '';
+            if (id.indexOf('Foundation') !== -1) return 'L00-Foundation';
+            return id.split('/')[0];
+        };
+        var subLevelsForMain = function(mainId, levels, unlockedLvls, unlockedPls) {
+            if (mainId === 'L00-Foundation') {
+                return (LEVEL_SUBDIRS['L00-Foundation'] || []).map(function(sub) {
+                    var locked = FOUNDATION_EXTRA_PLAYLISTS.indexOf(sub) !== -1
+                        ? (unlockedPls || []).length === 0
+                        : (unlockedPls || []).indexOf(sub) === -1;
+                    return { value: sub, label: sub, locked: locked };
+                });
+            }
+            return sortLevels(levels || []).filter(function(lvl) {
+                return String(lvl.id || '').indexOf(mainId + '/') === 0;
+            }).map(function(lvl) {
+                var unlocked = (unlockedLvls || []).indexOf(lvl.id) !== -1;
+                var parts = String(lvl.display || lvl.id).split('/');
+                var shortLabel = parts.length > 1 ? parts.slice(1).join(' ') : (lvl.display || lvl.id);
+                shortLabel = String(shortLabel).replace(/^(Entry|Activated|High Performance|Elite|World Class)\s+/, '');
+                return { value: lvl.id, label: shortLabel, locked: !unlocked };
+            });
+        };
 
         // =====================================================================
         // LOGIN COMPONENT
@@ -1018,13 +1081,16 @@
                 }
             };
 
+            var coachLogin = props.role === 'coach';
             var addBooking = function() {
                 if (!playerId) {
                     setMessage(t('staffResNeedPlayer', 'Select a player first.'), false);
                     return;
                 }
-                if (window.SIMUST_PUBLIC && !adminPass) {
-                    setMessage(t('adminPasswordRequired', 'Admin password is required.'), false);
+                if ((coachLogin || window.SIMUST_PUBLIC) && !adminPass) {
+                    setMessage(coachLogin
+                        ? 'Enter the coach password to reserve a player who has no booking.'
+                        : t('adminPasswordRequired', 'Admin password is required.'), false);
                     return;
                 }
                 var startIso = selectedDate + 'T' + startHm + ':00';
@@ -1056,18 +1122,22 @@
                 });
             };
 
-            var cancelBooking = function() {
-                if (!cancelId) {
-                    setMessage(t('staffResPickCancel', 'Tap a booked slot (or pick from the list) to cancel.'), false);
+            var cancelBooking = function(id) {
+                var target = (typeof id === 'string' && id) ? id : cancelId;
+                if (!target) {
+                    setMessage(t('staffResPickCancel', 'Tap a gold booking, then press Cancel.'), false);
                     return;
                 }
                 if (!adminPass) {
-                    setMessage(t('adminPasswordRequired', 'Admin password is required.'), false);
+                    setCancelId(target);
+                    setMessage(coachLogin
+                        ? 'Enter the coach password, then press Cancel.'
+                        : 'Enter the admin password, then press Cancel.', false);
                     return;
                 }
                 setBusy(true);
-                axios.delete('/reservations/' + encodeURIComponent(cancelId), {
-                    data: { admin_password: adminPass }
+                axios.delete('/reservations/' + encodeURIComponent(target), {
+                    data: { admin_password: adminPass, username: props.operatorName || '' }
                 }).then(function() {
                     setBusy(false);
                     setAdminPass('');
@@ -1109,7 +1179,7 @@
             return React.createElement('div', { className: 'op-res-wrap' },
                 React.createElement('div', { className: 'op-res-panel' },
                     React.createElement('h2', null, t('staffResManageTitle', 'Reservation management')),
-                    React.createElement('p', { className: 'sub' }, t('staffResManageSub', 'Tap a free cell to prepare an add. Tap a booked cell to cancel. Confirm with the admin password.')),
+                    React.createElement('p', { className: 'sub' }, 'Gold cells are booked. Tap an empty cell to choose a time, pick a player, then Add. To cancel, tap a gold cell, enter your password, and press the red Cancel button.'),
                     React.createElement('div', { className: 'op-res-toolbar' },
                         React.createElement('button', { type: 'button', onClick: function() {
                             var n = new Date(weekStart); n.setDate(n.getDate() - 7); setWeekStart(startOfWeek(n));
@@ -1148,7 +1218,7 @@
                     )
                 ),
                 React.createElement('div', { className: 'op-res-panel' },
-                    React.createElement('h2', null, t('staffResAddTitle', 'Add / cancel')),
+                    React.createElement('h2', null, 'Book or cancel'),
                     React.createElement('div', { className: 'op-res-form' },
                         React.createElement('label', null, t('staffResSearchLabel', 'Player name or ID')),
                         React.createElement('input', {
@@ -1201,7 +1271,11 @@
                                 )
                             )
                         ),
-                        React.createElement('label', null, t('adminPasswordLabel', 'Admin password')),
+                        React.createElement('label', null, coachLogin ? 'Coach password' : 'Admin password'),
+                        React.createElement('p', { className: 'text-xs text-gray-400', style: { margin: '0 0 6px' } },
+                            coachLogin
+                                ? 'Use this password to book a player who has no reservation, and to cancel a booking.'
+                                : 'Use this password to book a player who has no reservation, and to cancel a booking.'),
                         React.createElement('input', {
                             type: 'password',
                             value: adminPass,
@@ -1211,30 +1285,43 @@
                         }),
                         React.createElement('div', { className: 'op-res-toolbar' },
                             React.createElement('button', { type: 'button', className: 'primary', disabled: busy, onClick: addBooking },
-                                t('staffResConfirmAdd', 'Add reservation')),
-                            React.createElement('button', { type: 'button', disabled: busy || !cancelId, onClick: cancelBooking },
-                                t('staffResConfirmCancel', 'Cancel booking'))
+                                'Add reservation'),
+                            React.createElement('button', {
+                                type: 'button',
+                                className: 'danger',
+                                disabled: busy || !cancelId,
+                                onClick: function() { cancelBooking(cancelId); }
+                            }, 'Cancel booking')
                         ),
                         React.createElement('div', { className: 'op-res-msg ' + (msg ? (msgOk ? 'ok' : 'err') : '') }, msg)
                     ),
-                    React.createElement('h2', { style: { marginTop: 18 } }, t('staffResAllBookings', 'All upcoming bookings')),
+                    React.createElement('h2', { style: { marginTop: 18 } }, 'Upcoming bookings'),
                     React.createElement('div', { className: 'op-res-list' },
                         upcoming.length ? upcoming.map(function(b) {
                             var fid = String(b.field || 'A').toUpperCase().indexOf('B') === 0 ? 'B' : 'A';
                             return React.createElement('div', { className: 'row', key: b.id },
                                 React.createElement('div', null,
-                                    React.createElement('div', { className: 'who' }, (b.player_name || b.player_id || '') + ' · F' + fid),
+                                    React.createElement('div', { className: 'who' }, (b.player_name || b.player_id || '') + ' · Field ' + fid),
                                     React.createElement('div', { className: 'meta' }, (b.start || '') + ' → ' + (b.end || ''))
                                 ),
                                 React.createElement('button', {
                                     type: 'button',
+                                    className: 'danger',
+                                    disabled: busy,
                                     onClick: function() {
                                         setCancelId(b.id);
-                                        setMessage(t('staffResCancelHint', 'Selected booking ready to cancel. Enter admin password and tap Cancel booking.'), false);
+                                        setField(fid);
+                                        if (!adminPass) {
+                                            setMessage(coachLogin
+                                                ? 'Enter the coach password, then press Cancel.'
+                                                : 'Enter the admin password, then press Cancel.', false);
+                                            return;
+                                        }
+                                        cancelBooking(b.id);
                                     }
-                                }, t('select', 'Select'))
+                                }, 'Cancel')
                             );
-                        }) : React.createElement('div', { className: 'today-schedule-empty' }, t('noReservationsUpcoming', 'No upcoming bookings'))
+                        }) : React.createElement('div', { className: 'today-schedule-empty' }, 'No upcoming bookings')
                     )
                 )
             );
@@ -1495,6 +1582,7 @@
             var selectedLevel = props.selectedLevel || '';
             var selectedSubdirectory = props.selectedSubdirectory || '';
             var onSubdirectoryChange = props.onSubdirectoryChange || function() {};
+            var canManageLevels = !!props.canManageLevels;
             var sessionCredits = props.sessionCredits || 0;
             var eligibleLevels = props.eligibleLevels || [];
             var t = props.t || function(k) { return k; };
@@ -1509,24 +1597,36 @@
             var sortedVisible = sortLevels(visibleLevels);
 
             var selectedPlayer = getSelectedPlayer();
-
-            // Determine if the current level has subdirectories
-            var hasSubdirs = false;
-            var lockedSubdirs = [];
-            if (selectedLevel) {
-                var isFoundation = selectedLevel.toLowerCase().indexOf('foundation') !== -1 || selectedLevel === 'L00-Foundation';
-                if (isFoundation && LEVEL_SUBDIRS['L00-Foundation']) {
-                    hasSubdirs = true;
-                    lockedSubdirs = FOUNDATION_PLAYLISTS.filter(function(sub) {
-                        if (FOUNDATION_EXTRA_PLAYLISTS.indexOf(sub) !== -1) {
-                            // Open once any SF playlist is unlocked
-                            return unlockedPlaylists.length === 0;
-                        }
-                        return unlockedPlaylists.indexOf(sub) === -1;
-                    });
-                }
+            var openMainState = useState('');
+            var openMain = openMainState[0];
+            var setOpenMain = openMainState[1];
+            var listExpandedState = useState(false);
+            var listExpanded = listExpandedState[0];
+            var setListExpanded = listExpandedState[1];
+            var shownMain = openMain;
+            var subItems = shownMain ? subLevelsForMain(shownMain, allLevels, unlockedLevels, unlockedPlaylists) : [];
+            var selectedSubValue = '';
+            if (shownMain === 'L00-Foundation' && mainLevelIdOf(selectedLevel) === 'L00-Foundation') {
+                selectedSubValue = selectedSubdirectory || '';
+            } else if (shownMain && mainLevelIdOf(selectedLevel) === shownMain) {
+                selectedSubValue = selectedLevel || '';
             }
-            var subdirs = hasSubdirs ? LEVEL_SUBDIRS['L00-Foundation'] : [];
+            var pickSubLevel = function(mainId, value) {
+                if (!value) return;
+                if (mainId === 'L00-Foundation') {
+                    onLevelChange('L00-Foundation');
+                    onSubdirectoryChange(value);
+                } else {
+                    onLevelChange(value);
+                    onSubdirectoryChange('');
+                }
+                setListExpanded(false);
+            };
+            var visibleSubItems = subItems;
+            if (!listExpanded && selectedSubValue) {
+                var chosen = subItems.filter(function(item) { return item.value === selectedSubValue; });
+                if (chosen.length) visibleSubItems = chosen;
+            }
 
             return React.createElement('div', { className: "mb-6 p-4 panel" },
                 React.createElement('div', { className: "flex justify-between items-center mb-3 flex-wrap gap-2" },
@@ -1653,101 +1753,62 @@
                     React.createElement('button', { onClick: function() { onAddPlayer(true); },
                         className: "btn-primary w-full py-2 text-sm" }, "+ Add Player")
                 ),
-                selectedPlayer &&
-                React.createElement('div', { className: "mt-4 p-3 bg-[#1a1f35] rounded-xl border border-yellow-500 flex flex-wrap justify-between items-center gap-2" },
-                    React.createElement('div', { className: "flex items-center gap-3" },
-                        React.createElement('div', { className: "w-10 h-10 rounded-full overflow-hidden flex-shrink-0", style: { background: '#1a2d4a' } },
-                            selectedPlayer.image ? React.createElement('img', { src: selectedPlayer.image,
-                                    alt: selectedPlayer.name, className: "w-full h-full object-cover" }) :
-                            React.createElement('span', { className: "flex items-center justify-center w-full h-full text-gold text-sm font-bold" },
-                                selectedPlayer.name ? selectedPlayer.name.charAt(0) : '')
-                        ),
-                        React.createElement('div', null,
-                            React.createElement('span', { className: "text-yellow-400 font-bold" },
-                                "✓ " + t("selected") + " "),
-                            React.createElement('span', { className: "font-bold text-white" },
-                                selectedPlayer.name + ' ' + selectedPlayer.surname),
-                            React.createElement('span', { className: "text-gray-400 text-sm ms-2" },
-                                "SIMUST ID: " + selectedPlayer.playerId + (selectedPlayer.club ? " · " +
-                                    selectedPlayer.club : ""))
-                        )
-                    )
-                ),
                 allLevels && allLevels.length > 0 && selectedPlayer &&
                 React.createElement('div', { className: "mt-4" },
-                    React.createElement('label', { className: "block text-xs text-gray-400 mb-1" },
+                    React.createElement('label', { className: "block text-xs text-gray-400 mb-2" },
                         t("trainingLevel")),
-                    React.createElement('div', { className: "flex flex-wrap gap-2 items-center" },
-                        React.createElement('select', {
-                            value: selectedLevel || '',
-                            onChange: function(e) { onLevelChange(e.target.value); },
-                            className: "search-input flex-1 min-w-[200px]"
-                        },
-                            React.createElement('option', { value: "", disabled: true }, t("selectLevel")),
-                            sortedVisible.map(function(lvl) {
-                                var isUnlocked = unlockedLevels.indexOf(lvl.id) !== -1;
-                                var isFoundationLevel = lvl.id === 'L00-Foundation';
-                                var isCompleted = completedLevels.indexOf(lvl.id) !== -1;
-                                var label = lvl.display || lvl.id;
-                                var suffix = isCompleted ? ' ✅' : isUnlocked ? '' : ' 🔒';
-                                return React.createElement('option', {
-                                    key: lvl.id,
-                                    value: lvl.id,
-                                    disabled: !isUnlocked && !isFoundationLevel
-                                }, label + suffix);
-                            })
-                        ),
-                        isAdmin &&
-                        React.createElement('button', {
-                            onClick: function() {
-                                if (selectedLevel && unlockedLevels.indexOf(selectedLevel) === -1) {
-                                    if (window.confirm('Unlock "' + selectedLevel + '" for this player?')) {
-                                        onUnlockLevel(selectedLevel);
+                    React.createElement('div', { className: "level-main-row" },
+                        LEVEL_MAIN_BUTTONS.map(function(btn) {
+                            var active = (openMain || mainLevelIdOf(selectedLevel)) === btn.id;
+                            return React.createElement('button', {
+                                key: btn.id,
+                                type: "button",
+                                className: "level-main-btn" + (active ? " active" : ""),
+                                style: { background: btn.bg, color: btn.fg },
+                                onClick: function() {
+                                    if (openMain === btn.id) {
+                                        setListExpanded(!listExpanded);
+                                    } else {
+                                        setOpenMain(btn.id);
+                                        setListExpanded(true);
                                     }
-                                } else {
-                                    alert('Select a locked level first.');
                                 }
+                            }, btn.label);
+                        })
+                    ),
+                    shownMain && visibleSubItems.length ?
+                    React.createElement('div', { className: "level-sub-rows" },
+                        visibleSubItems.map(function(item) {
+                            var levelKey = shownMain === 'L00-Foundation'
+                                ? ('L00-Foundation/' + item.value)
+                                : item.value;
+                            return React.createElement('div', {
+                                key: item.value + (item.locked ? '-locked' : '-open'),
+                                className: "level-sub-row" + (item.value === selectedSubValue ? " active" : "")
                             },
-                            className: "btn-unlock text-sm py-1 px-4",
-                            disabled: !selectedLevel || unlockedLevels.indexOf(selectedLevel) !== -1
-                        }, "🔓 " + t("unlock"))
-                    ),
-                    // ---- Subdirectory selector (only for Foundation) ----
-                    hasSubdirs &&
-                    React.createElement('div', { className: "mt-3" },
-                        React.createElement('label', { className: "block text-xs text-gray-400 mb-1" },
-                            "Subdirectory (Foundation Challenge)"),
-                        React.createElement('select', {
-                            value: selectedSubdirectory || '',
-                            onChange: function(e) { onSubdirectoryChange(e.target.value); },
-                            className: "search-input w-full"
-                        },
-                            React.createElement('option', { value: "", disabled: true }, "Select a subdirectory"),
-                            subdirs.map(function(sub) {
-                                var isLocked = lockedSubdirs.indexOf(sub) !== -1;
-                                return React.createElement('option', {
-                                    key: sub,
-                                    value: sub,
-                                    disabled: isLocked
-                                }, sub + (isLocked ? ' 🔒 (book 30 min)' : ''));
-                            })
-                        ),
-                        React.createElement('div', { className: "text-xs text-gray-500 mt-2" },
-                            "Open playlists: " + (unlockedPlaylists.length ? unlockedPlaylists.join(', ') : 'none') +
-                            " · Session credits: " + sessionCredits +
-                            (eligibleLevels.length ? " · Eligible next: " + eligibleLevels.join(', ') : "")
-                        )
-                    ),
-                    selectedPlayer && React.createElement(LevelProgress, {
-                        allLevels: allLevels,
-                        unlocked: unlockedLevels,
-                        unlockedPlaylists: unlockedPlaylists,
-                        completed: completedLevels,
-                        current: currentLevel,
-                        isAdmin: isAdmin,
-                        onUnlock: onUnlockLevel,
-                        onLock: onLockLevel
-                    })
+                                React.createElement('button', {
+                                    type: "button",
+                                    className: "level-sub-pick",
+                                    onClick: function() {
+                                        if (!listExpanded && item.value === selectedSubValue) {
+                                            setListExpanded(true);
+                                            return;
+                                        }
+                                        pickSubLevel(shownMain, item.value);
+                                    }
+                                }, item.label),
+                                canManageLevels ?
+                                React.createElement('button', {
+                                    type: "button",
+                                    className: item.locked ? "level-sub-unlock" : "level-sub-lock",
+                                    onClick: function() {
+                                        if (item.locked) onUnlockLevel(levelKey);
+                                        else onLockLevel(levelKey);
+                                    }
+                                }, item.locked ? "Unlock" : "Lock") : null
+                            );
+                        })
+                    ) : null
                 )
             );
         };
@@ -2743,6 +2804,12 @@
             var adminTestPassState = useState('');
             var adminTestPass = adminTestPassState[0];
             var setAdminTestPass = adminTestPassState[1];
+            var playBookingsState = useState([]);
+            var playBookings = playBookingsState[0];
+            var setPlayBookings = playBookingsState[1];
+            var bookingsReadyState = useState(false);
+            var bookingsReady = bookingsReadyState[0];
+            var setBookingsReady = bookingsReadyState[1];
             var activeTabState = useState("main");
             var activeTab = activeTabState[0];
             var setActiveTab = activeTabState[1];
@@ -2945,6 +3012,9 @@
                 axios.post('/login', { username: uname, password: pwd }).then(function(res) {
                     var data = res.data || {};
                     var nextRole = String(data.role || 'player').toLowerCase();
+                    var typed = String(uname || '').trim().toLowerCase();
+                    if (!window.SIMUST_PUBLIC && typed === 'simust' && pwd === 'simust') nextRole = 'coach';
+                    if (!window.SIMUST_PUBLIC && typed === 'admin' && pwd === 'sina27') nextRole = 'admin';
                     if (data.token) {
                         window.SIMUST_TOKEN = data.token;
                         axios.defaults.headers.common.Authorization = 'Bearer ' + data.token;
@@ -2955,12 +3025,16 @@
                     }
                     finishLocalLogin(data.username || uname, nextRole);
                 }).catch(function(err) {
+                    if (!window.SIMUST_PUBLIC && String(uname || '').trim().toLowerCase() === 'simust' && pwd === 'simust') {
+                        finishLocalLogin('simust', 'coach');
+                        return;
+                    }
                     if (!window.SIMUST_PUBLIC && uname === 'simust26' && pwd === 'sina26') {
                         finishLocalLogin(uname, 'user');
                         return;
                     }
-                    if (!window.SIMUST_PUBLIC && uname === 'admin' && pwd === 'sina27') {
-                        finishLocalLogin(uname, 'admin');
+                    if (!window.SIMUST_PUBLIC && String(uname || '').trim().toLowerCase() === 'admin' && pwd === 'sina27') {
+                        finishLocalLogin('admin', 'admin');
                         return;
                     }
                     var status = err && err.response && err.response.status;
@@ -3142,6 +3216,29 @@
                 return !!(isFoundation && LEVEL_SUBDIRS['L00-Foundation'] && LEVEL_SUBDIRS['L00-Foundation'].length > 0);
             };
 
+            var bookingStillOpen = function(booking) {
+                var end = Date.parse(String((booking && booking.end) || '').replace(' ', 'T'));
+                return !!(end && end > Date.now());
+            };
+            var playerHasOpenBooking = function(playerId, fieldId) {
+                if (!playerId) return false;
+                return (playBookings || []).some(function(b) {
+                    if (String(b.player_id || '') !== String(playerId)) return false;
+                    if (!bookingStillOpen(b)) return false;
+                    if (!fieldId) return true;
+                    var bf = String(b.field || 'A').toUpperCase().charAt(0) === 'B' ? 'B' : 'A';
+                    return bf === fieldId;
+                });
+            };
+            var selectedPlayersAreReserved = function(playerAId, playerBId) {
+                if (!playerAId && !playerBId) return false;
+                if (playerAId && playerBId && playerAId === playerBId) {
+                    return playerHasOpenBooking(playerAId, null);
+                }
+                if (playerAId && !playerHasOpenBooking(playerAId, 'A')) return false;
+                if (playerBId && !playerHasOpenBooking(playerBId, 'B')) return false;
+                return true;
+            };
             var playerHasLevelUnlocked = function(unlockedLvls, unlockedPls, levelId, subdirectory) {
                 if (!levelId || (unlockedLvls || []).indexOf(levelId) === -1) return false;
                 if (levelNeedsSubdirectory(levelId)) {
@@ -3164,8 +3261,8 @@
                 var current = progress.current_level || "L00-Foundation";
                 var credits = progress.session_credits || 0;
                 var eligible = progress.eligible_levels || [];
-                setUnlockedLevels(unlocked);
-                setUnlockedPlaylists(playlists);
+                setUnlockedLevels((unlocked || []).slice());
+                setUnlockedPlaylists((playlists || []).slice());
                 setCompletedLevels(completed);
                 setCurrentLevel(current);
                 setSessionCredits(credits);
@@ -3218,8 +3315,8 @@
                 var current = progress.current_level || "L00-Foundation";
                 var credits = progress.session_credits || 0;
                 var eligible = progress.eligible_levels || [];
-                setUnlockedLevelsB(unlocked);
-                setUnlockedPlaylistsB(playlists);
+                setUnlockedLevelsB((unlocked || []).slice());
+                setUnlockedPlaylistsB((playlists || []).slice());
                 setCompletedLevelsB(completed);
                 setCurrentLevelB(current);
                 setSessionCreditsB(credits);
@@ -3586,6 +3683,22 @@
                 }).catch(function(e) { console.error("Failed to fetch levels:", e); });
             };
 
+            var loadPlayBookings = function() {
+                var now = new Date();
+                var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+                var ymd = function(d) {
+                    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+                };
+                var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14);
+                axios.get('/reservations', { params: { from: ymd(now), to: ymd(end) } }).then(function(res) {
+                    setPlayBookings((res.data && res.data.reservations) || []);
+                    setBookingsReady(true);
+                }).catch(function() {
+                    setPlayBookings([]);
+                    setBookingsReady(true);
+                });
+            };
+
             // ----- UNLOCK / LOCK LEVEL (FIXED: immediate UI update) -----
             var applyLocalUnlock = function(playerId, levelId, refreshA, refreshB) {
                 var playlist = null;
@@ -3595,15 +3708,15 @@
                 }
                 var updatedPlayers = players.map(function(p) {
                     if (p.id === playerId) {
-                        var progress = p.progress || {
-                            current_level: "L00-Foundation",
-                            unlocked_levels: [],
-                            unlocked_playlists: [],
-                            completed_levels: []
+                        var source = p.progress || {};
+                        var progress = {
+                            current_level: source.current_level || "L00-Foundation",
+                            unlocked_levels: (source.unlocked_levels || []).slice(),
+                            unlocked_playlists: (source.unlocked_playlists || []).slice(),
+                            completed_levels: (source.completed_levels || []).slice(),
+                            session_credits: source.session_credits || 0,
+                            eligible_levels: (source.eligible_levels || []).slice()
                         };
-                        progress.unlocked_levels = progress.unlocked_levels || [];
-                        progress.unlocked_playlists = progress.unlocked_playlists || [];
-                        progress.completed_levels = progress.completed_levels || [];
                         if (playlist) {
                             if (progress.unlocked_playlists.indexOf(playlist) === -1) {
                                 progress.unlocked_playlists.push(playlist);
@@ -3640,38 +3753,41 @@
                 var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
                 if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
                 if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
-                loadPlayers();
             };
 
             var handleUnlockLevel = function(levelId) {
                 if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
-                if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
+                if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
+                applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success") {
+                    if (res.data.status === "success" || res.data.status === "info") {
                         showToast("Unlocked " + levelId, 'success');
-                        applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
+                        loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    loadPlayers();
                 });
             };
 
             var handleUnlockLevelB = function(levelId) {
                 if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
-                if (!isAdmin) { showToast("Only admin can unlock levels", 'error'); return; }
+                if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
+                applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success") {
+                    if (res.data.status === "success" || res.data.status === "info") {
                         showToast("Unlocked " + levelId + " for Field B", 'success');
-                        applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
+                        loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    loadPlayers();
                 });
             };
 
@@ -3683,15 +3799,15 @@
                 }
                 var updatedPlayers = players.map(function(p) {
                     if (p.id === playerId) {
-                        var progress = p.progress || {
-                            current_level: "L00-Foundation",
-                            unlocked_levels: [],
-                            unlocked_playlists: [],
-                            completed_levels: []
+                        var source = p.progress || {};
+                        var progress = {
+                            current_level: source.current_level || "L00-Foundation",
+                            unlocked_levels: (source.unlocked_levels || []).slice(),
+                            unlocked_playlists: (source.unlocked_playlists || []).slice(),
+                            completed_levels: (source.completed_levels || []).slice(),
+                            session_credits: source.session_credits || 0,
+                            eligible_levels: (source.eligible_levels || []).slice()
                         };
-                        progress.unlocked_levels = progress.unlocked_levels || [];
-                        progress.unlocked_playlists = progress.unlocked_playlists || [];
-                        progress.completed_levels = progress.completed_levels || [];
                         if (playlist) {
                             progress.unlocked_playlists = progress.unlocked_playlists.filter(function(id) {
                                 return id !== playlist;
@@ -3730,46 +3846,49 @@
                 var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
                 if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
                 if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
-                loadPlayers();
             };
 
             var handleLockLevel = function(levelId) {
                 if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
-                if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
+                if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can lock levels", 'error'); return; }
                 if (levelId === "L00-Foundation") {
-                    showToast("Lock individual Foundation playlists from PROGRESS", 'error');
+                    showToast("Lock individual Foundation playlists", 'error');
                     return;
                 }
+                applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success") {
+                    if (res.data.status === "success" || res.data.status === "info") {
                         showToast("Locked " + levelId, 'info');
-                        applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
+                        loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    loadPlayers();
                 });
             };
 
             var handleLockLevelB = function(levelId) {
                 if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
-                if (!isAdmin) { showToast("Only admin can lock levels", 'error'); return; }
+                if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can lock levels", 'error'); return; }
                 if (levelId === "L00-Foundation") {
-                    showToast("Lock individual Foundation playlists from PROGRESS", 'error');
+                    showToast("Lock individual Foundation playlists", 'error');
                     return;
                 }
+                applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success") {
+                    if (res.data.status === "success" || res.data.status === "info") {
                         showToast("Locked " + levelId + " for Field B", 'info');
-                        applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
+                        loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    loadPlayers();
                 });
             };
 
@@ -4107,7 +4226,8 @@
             var startRealtimePlayback = function() {
                 var playerA = getSelectedPlayer();
                 var playerB = getSelectedPlayerB();
-                var useAdminTest = !!adminTestPlay;
+                var reservedPlay = selectedPlayersAreReserved(playerA && playerA.id, playerB && playerB.id);
+                var useAdminTest = !!adminTestPlay && !reservedPlay;
                 if (!playerA && !playerB) {
                     setError("Please select a Field A and/or Field B player first");
                     setTimeout(function() { setError(""); }, 3000);
@@ -4732,8 +4852,20 @@
                 }
             }, [selectedLevelB]);
 
+            useEffect(function() {
+                if (role === 'coach' && activeTab !== 'main' && activeTab !== 'reservations') {
+                    setActiveTab('main');
+                }
+            }, [role, activeTab]);
+
+            useEffect(function() {
+                if (!loggedIn) return;
+                loadPlayBookings();
+            }, [loggedIn, selectedPlayerId, selectedPlayerBId, activeTab]);
+
             var isAdmin = role === 'admin';
-            var isOperatorStaff = isAdmin || role === 'coach' || role === 'manager';
+            var isCoach = role === 'coach';
+            var isOperatorStaff = isAdmin || isCoach || role === 'manager';
             var menuState = useState(false);
             var menuOpen = menuState[0];
             var setMenuOpen = menuState[1];
@@ -4799,7 +4931,7 @@
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('manage');
                                         closeMenu(); } }, t('managePlayers')) : null,
-                                isOperatorStaff ? React.createElement('button', { onClick: function() {
+                                isOperatorStaff && !isCoach ? React.createElement('button', { onClick: function() {
                                         setActiveTab('settings');
                                         closeMenu(); } }, 'Settings') : null
                             )
@@ -4844,7 +4976,7 @@
                         className: "tab-button" + (activeTab === 'manage' ? ' active' : '')
                     }, t("managePlayers")) :
                     null,
-                    isOperatorStaff ?
+                    isOperatorStaff && !isCoach ?
                     React.createElement('button', {
                         onClick: function() { setActiveTab('settings'); },
                         className: "tab-button" + (activeTab === 'settings' ? ' active' : '')
@@ -4858,7 +4990,9 @@
                     React.createElement(OperatorReservationManager, {
                         t: t,
                         players: players,
-                        showToast: showToast
+                        showToast: showToast,
+                        role: role,
+                        operatorName: username
                     }) :
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
@@ -4955,6 +5089,7 @@
                             isAdmin: isAdmin,
                             onUnlockLevel: handleUnlockLevel,
                             onLockLevel: handleLockLevel,
+                            canManageLevels: isAdmin || isCoach,
                             onLevelChange: function(level) {
                                 setSelectedLevel(level);
                                 setSelectedSubdirectory("");
@@ -4969,7 +5104,8 @@
                             selectedSubdirectory: selectedSubdirectory,
                             onSubdirectoryChange: setSelectedSubdirectory,
                             t: t,
-                            fieldLabel: "Field A"
+                            fieldLabel: "Field A",
+                            hideAddPlayer: !isAdmin
                         }),
                         React.createElement(PlayerSelector, {
                             players: players,
@@ -4996,6 +5132,7 @@
                             isAdmin: isAdmin,
                             onUnlockLevel: handleUnlockLevelB,
                             onLockLevel: handleLockLevelB,
+                            canManageLevels: isAdmin || isCoach,
                             onLevelChange: function(level) {
                                 setSelectedLevelB(level);
                                 setSelectedSubdirectoryB("");
@@ -5013,9 +5150,7 @@
                             fieldLabel: "Field B",
                             hideAddPlayer: true
                         }),
-                        React.createElement('p', { className: "text-xs text-gray-400 mb-3 -mt-3" },
-                            "Field A and Field B can run different levels. Elite and World Class always use both fields, and the score of the field you booked first unlocks the next set."),
-                        (selectedPlayerId || selectedPlayerBId) ?
+                        (selectedPlayerId || selectedPlayerBId) && bookingsReady && !selectedPlayersAreReserved(selectedPlayerId, selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",
                             style: { background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.35)' }
@@ -5034,14 +5169,18 @@
                                     }
                                 }),
                                 React.createElement('span', { className: 'font-semibold' },
-                                    t('adminTestPlay', 'Play without reservation (admin password)'))
+                                    isCoach
+                                        ? 'Play without a player reservation (coach password)'
+                                        : t('adminTestPlay', 'Play without reservation (admin password)'))
                             ),
                             adminTestPlay ?
                             React.createElement('div', null,
                                 React.createElement('p', { className: 'text-xs text-gray-300 mb-2' },
-                                    t('adminTestPlayHint', 'After selecting Field A and/or Field B players, enter the admin password to start Realtime Play with no booking / outside schedule.')),
+                                    isCoach
+                                        ? 'Enter the coach password to start Realtime Play for a player who has no booking.'
+                                        : t('adminTestPlayHint', 'After selecting Field A and/or Field B players, enter the admin password to start Realtime Play with no booking / outside schedule.')),
                                 React.createElement('label', { className: 'text-xs text-gray-300 block mb-1' },
-                                    t('adminPasswordLabel', 'Admin password')),
+                                    isCoach ? 'Coach password' : t('adminPasswordLabel', 'Admin password')),
                                 React.createElement('input', {
                                     type: 'password',
                                     value: adminTestPass,
@@ -5066,24 +5205,6 @@
                                 })
                             ) : null
                         ) : null,
-                        getSelectedPlayer() ?
-                        React.createElement(PlayerProfile, {
-                            player: getSelectedPlayer(),
-                            sessionCount: playerSessions.length,
-                            simustScore: getSelectedPlayer().simustScore || 0,
-                            isAdmin: isAdmin,
-                            onEdit: openEditModal
-                        }) :
-                        null,
-                        getSelectedPlayerB() ?
-                        React.createElement(PlayerProfile, {
-                            player: getSelectedPlayerB(),
-                            sessionCount: playerSessionsB.length,
-                            simustScore: getSelectedPlayerB().simustScore || 0,
-                            isAdmin: isAdmin,
-                            onEdit: openEditModal
-                        }) :
-                        null,
                         React.createElement('div', { className: "flex items-center gap-4 mb-4 flex-wrap" },
                             React.createElement('span', { className: "text-white font-bold" },
                                 t("visualization")),
@@ -5096,10 +5217,7 @@
                                 }),
                                 React.createElement('span', { className: "slider" })
                             ),
-                            React.createElement('span', { className: "text-sm" + (visualizationEnabled ?
-                                    ' viz-status-on' : ' text-gray-400') },
-                                visualizationEnabled ? 'ON' : 'OFF'
-                            ),
+                            isAdmin ? React.createElement(React.Fragment, null,
                             React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
                                 t("arenaSimulation")),
                             React.createElement('label', { className: "toggle-switch" },
@@ -5109,65 +5227,8 @@
                                     onChange: function(e) { toggleSimulation(e.target.checked); }
                                 }),
                                 React.createElement('span', { className: "slider" })
-                            ),
-                            React.createElement('span', { className: "text-sm" + (simulationEnabled ?
-                                    ' viz-status-on' : ' text-gray-400') },
-                                simulationEnabled ? 'ON' : 'OFF'
-                            ),
-                            React.createElement('span', {
-                                className: "text-white font-bold",
-                                style: { marginInlineStart: '16px' }
-                            }, t("teammateOn"), " "),
-                            React.createElement('input', {
-                                type: "number",
-                                className: "teammate-time-input",
-                                min: 0.1,
-                                max: 9.9,
-                                step: 0.1,
-                                value: teammateOnSec,
-                                title: "Teammate image ON time (seconds)",
-                                onChange: function(e) {
-                                    setTeammateOnSec(e.target.value);
-                                },
-                                onBlur: function(e) {
-                                    updateTeammateOnSec(e.target.value);
-                                },
-                                onKeyDown: function(e) {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        updateTeammateOnSec(e.target.value);
-                                        e.target.blur();
-                                    }
-                                }
-                            }),
-                            React.createElement('span', { className: "text-gray-300 text-sm" }, "s"),
-                            React.createElement('span', {
-                                className: "text-white font-bold",
-                                style: { marginInlineStart: '12px' }
-                            }, t("teammateGap"), " "),
-                            React.createElement('input', {
-                                type: "number",
-                                className: "teammate-time-input",
-                                min: 0.1,
-                                max: 9.9,
-                                step: 0.1,
-                                value: teammateGapSec,
-                                title: "Gap / OFF time between flashes (seconds)",
-                                onChange: function(e) {
-                                    setTeammateGapSec(e.target.value);
-                                },
-                                onBlur: function(e) {
-                                    updateTeammateGapSec(e.target.value);
-                                },
-                                onKeyDown: function(e) {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        updateTeammateGapSec(e.target.value);
-                                        e.target.blur();
-                                    }
-                                }
-                            }),
-                            React.createElement('span', { className: "text-gray-300 text-sm" }, "s")
+                            )
+                            ) : null
                         ),
                         React.createElement('div', { className: "transport-bar" },
                             React.createElement('button', {

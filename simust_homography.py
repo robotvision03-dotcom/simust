@@ -32,6 +32,11 @@ SNAP_PX = 12.0
 FALLBACK_M_PER_PX = 0.0259
 LEFT_CAMERA = "camera-1"
 RIGHT_CAMERA = "camera-8"
+# Live arena cameras. Homography capture and the realtime session both use these.
+LAB_CAMERAS = {
+    LEFT_CAMERA: "rtsp://admin:majidAram2@192.168.2.1:554/Streaming/Channels/101/",
+    RIGHT_CAMERA: "rtsp://admin:majidAram2@192.168.2.8:554/Streaming/Channels/101/",
+}
 MAX_RMSE_M = 3.0
 FRAME_RESIDUAL_WEIGHT = 6.0
 

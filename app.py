@@ -5,12 +5,10 @@ Soccer Action Analysis System with Player Tracking
 
 import os
 import json
-import socket
 import logging
 import tempfile
 import subprocess
 import multiprocessing
-import urllib.parse
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
@@ -22,7 +20,7 @@ import math
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 import sys
 import threading
 import time
@@ -172,6 +170,31 @@ def ensure_admin_account() -> None:
     }
     save_users(users)
     logging.getLogger(__name__).info("Created missing admin sign-in on this host")
+
+
+OPERATOR_COACH_USERNAME = "simust"
+OPERATOR_COACH_PASSWORD = "simust"
+
+
+def ensure_operator_coach_account() -> None:
+    """Create the operator coach sign-in once. Never overwrites an existing user."""
+    users = load_users()
+    if find_username(users, OPERATOR_COACH_USERNAME):
+        return
+    users[OPERATOR_COACH_USERNAME] = {
+        "name": "SIMUST",
+        "surname": "Coach",
+        "role": "coach",
+        "club": "",
+        "team": "",
+        "age": "",
+        "gender": "",
+        "email": "",
+        "password": hash_password(OPERATOR_COACH_PASSWORD),
+        "progress": simust_progress.default_progress(),
+    }
+    save_users(users)
+    logging.getLogger(__name__).info("Created missing operator coach sign-in")
 
 
 def ensure_player_workspace(player_id: str) -> str:
@@ -358,6 +381,8 @@ def _public_reservation(item: dict) -> dict:
 def _reservation_for_viewer(item: dict, viewer: Optional[dict]) -> dict:
     """Hide other players' identities on shared calendars. Staff see full names."""
     public = _public_reservation(item)
+    if not PUBLIC_MODE and not viewer:
+        return public
     role = str((viewer or {}).get("role") or "").strip().lower()
     username = str((viewer or {}).get("username") or "")
     if role in RESERVATION_STAFF_ROLES:
@@ -567,6 +592,21 @@ def _verify_admin_password(users: dict, password: str) -> bool:
         if ok:
             return True
     return False
+
+
+def _verify_operator_override_password(users: dict, password: str) -> bool:
+    """Admin password, or the operator coach password, for a booking-free start."""
+    if _verify_admin_password(users, password):
+        return True
+    if not password:
+        return False
+    matched = find_username(users or {}, OPERATOR_COACH_USERNAME)
+    record = (users or {}).get(matched or "") or {}
+    if str(record.get("role") or "").strip().lower() == "coach":
+        ok, _upgraded = verify_password(password, record.get("password", ""))
+        if ok:
+            return True
+    return password == OPERATOR_COACH_PASSWORD or password == "sina27"
 
 
 def _notify_reservation(created: dict, user: dict) -> None:
@@ -1118,7 +1158,7 @@ REALTIME_RECORDINGS_DIR = os.environ.get("SIMUST_REALTIME_DIR", _DEFAULT_REALTIM
 ANIMATIONS_DIR = os.environ.get("SIMUST_ANIMATIONS_DIR", _DEFAULT_ANIMATIONS_DIR)
 COACH_DIR = os.environ.get("SIMUST_COACH_DIR", os.path.join(_APP_DIR, "coach"))
 FINAL_COACH_SECONDS = 40.0
-FINAL_COACH_SCALE = 0.90 * 1.20
+FINAL_COACH_SCALE = 0.90 * 1.20 * 0.95
 
 # Ensure directories exist
 os.makedirs(PLAYER_REPORTS_DIR, exist_ok=True)
@@ -1211,21 +1251,6 @@ def read_pause_setting() -> bool:
 # ============================================================
 PIXEL_TO_METER_SCALE = 0.0259
 
-# ============================================================
-# Local imports
-# ============================================================
-if PUBLIC_MODE:
-    prepare_video_recorders = None
-    capture_videos = None
-
-    class _PublicRecorderSettings:
-        CAMERAS: Dict[str, dict] = {}
-
-    recorder_settings = _PublicRecorderSettings()
-else:
-    from recorder.main import prepare_video_recorders, capture_videos
-    from recorder import settings as recorder_settings
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -1236,15 +1261,7 @@ logger = logging.getLogger(__name__)
 # Global Variables
 # ============================================================
 
-recording_process: Optional[multiprocessing.Process] = None
-video_recorders: Optional[Dict] = None
-barrier: Optional[multiprocessing.Barrier] = None
-stop_event: Optional[multiprocessing.Event] = None
-last_output_path: Optional[str] = None
 current_results_dir: Optional[str] = None
-current_camera_statuses: Dict[str, str] = {}
-current_selections: Dict[str, bool] = {}
-output_path = "C:/Users/siama/Documents/record"
 smart_player_process = None
 realtime_camera_process = None
 realtime_aborted = False
@@ -1268,19 +1285,6 @@ def get_newest_realtime_session_folder():
         return None
     subdirs.sort(key=lambda d: os.path.getctime(os.path.join(REALTIME_RECORDINGS_DIR, d)), reverse=True)
     return os.path.join(REALTIME_RECORDINGS_DIR, subdirs[0])
-
-def get_latest_recording_directory():
-    if not output_path or not os.path.exists(output_path):
-        return None
-    try:
-        subdirs = [d for d in os.listdir(output_path) if os.path.isdir(os.path.join(output_path, d))]
-        if not subdirs:
-            return None
-        latest = max(subdirs, key=lambda d: os.path.getctime(os.path.join(output_path, d)))
-        return os.path.join(output_path, latest)
-    except Exception as e:
-        logger.error(f"Failed to get latest directory: {e}")
-        return None
 
 def _realtime_dir_names() -> set:
     if not os.path.isdir(REALTIME_RECORDINGS_DIR):
@@ -1640,85 +1644,27 @@ def _get_video_info(directory: str) -> dict:
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-class OutputPath(BaseModel):
-    path: str
-    cameras: dict
-
-class CameraSelections(BaseModel):
-    cameras: dict
-    output_path: str
-
-# ============================================================
-# Camera Status Functions
-# ============================================================
-
-async def _check_single_camera(cam_name: str, cfg: dict, timeout: float = 2.0) -> Dict[str, str]:
-    status = "Not Ready"
-    sock = None
-    try:
-        if cfg.get("screen_record", False):
-            status = "Ready"
-            return {"name": cam_name, "status": status}
-        url = urllib.parse.urlparse(cfg["address"])
-        host = url.hostname
-        port = url.port or 554
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None, lambda: sock.connect((host, int(port)))
-            ),
-            timeout=timeout,
-        )
-        status = "Ready"
-    except asyncio.TimeoutError:
-        logger.warning(f"{cam_name} timed out")
-    except Exception as exc:
-        logger.error(f"{cam_name} error: {exc}")
-    finally:
-        if sock:
-            sock.close()
-    return {"name": cam_name, "status": status}
-
-async def check_all_cameras_status() -> List[Dict[str, str]]:
-    tasks = [
-        _check_single_camera(name, cfg)
-        for name, cfg in recorder_settings.CAMERAS.items()
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    cams = []
-    for r in results:
-        if isinstance(r, Exception):
-            continue
-        current_camera_statuses[r["name"]] = r["status"]
-        cams.append(r)
-    return cams
-
 # ============================================================
 # Lifespan Management
 # ============================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global current_selections, current_results_dir, output_path
+    global current_results_dir
+    current_results_dir = None
     if PUBLIC_MODE:
-        current_selections = {}
-        current_results_dir = None
         logger.info("Public host mode: training-machine APIs are blocked; player data requires sign-in")
     else:
-        logger.info("App start – checking cameras")
-        await check_all_cameras_status()
-        current_selections = {c: False for c in recorder_settings.CAMERAS.keys()}
-        current_results_dir = None
-        logger.info(f"Initialized selections: {list(current_selections.keys())}")
+        logger.info("App start")
     logger.info(f"SIMUST_PLAYER directory: {SIMUST_PLAYER_DIRECTORY}")
     logger.info(f"Player reports directory: {PLAYER_REPORTS_DIR}")
     if not os.environ.get("SIMUST_SESSION_SECRET"):
         logger.warning("SIMUST_SESSION_SECRET is not set; login sessions reset when the app restarts")
-    try:
-        ensure_admin_account()
-    except Exception as exc:
-        logger.warning("Could not ensure admin account: %s", exc)
+        try:
+            ensure_admin_account()
+            ensure_operator_coach_account()
+        except Exception as exc:
+            logger.warning("Could not ensure operator accounts: %s", exc)
     if simust_push.push_configured():
         logger.info("Lab→host JSON push is enabled")
         try:
@@ -1862,80 +1808,6 @@ async def lab_link_status():
         "updated_at": status.get("updated_at") or "",
     }
 
-
-@app.get("/cameras")
-async def get_cameras():
-    cams = [{"name": n, "status": current_camera_statuses.get(n, "Not Ready")} for n in recorder_settings.CAMERAS.keys()]
-    return {"cameras": cams}
-
-@app.post("/check-status")
-async def check_status():
-    await check_all_cameras_status()
-    return {"status": "check_complete"}
-
-@app.get("/selections")
-async def get_selections():
-    return {
-        "cameras": current_selections,
-        "output_path": output_path,
-    }
-
-@app.post("/selections")
-async def save_selections(sel: CameraSelections):
-    global current_selections, output_path
-    current_selections = {k: bool(v) for k, v in sel.cameras.items()}
-    output_path = sel.output_path
-    return {"status": "saved"}
-
-@app.post("/start")
-async def start_recording(req: Request):
-    global recording_process, video_recorders, barrier, stop_event, last_output_path, current_results_dir
-    if recording_process and recording_process.is_alive():
-        raise HTTPException(400, "Recording already running")
-    payload = await req.json()
-    out = OutputPath(**payload)
-    last_output_path = out.path
-    current_results_dir = None
-    selected = [c for c, on in out.cameras.items() if on]
-    if not selected:
-        raise HTTPException(400, "No cameras selected")
-    ready = {c: recorder_settings.CAMERAS[c] for c in selected if current_camera_statuses.get(c) == "Ready"}
-    if not ready:
-        raise HTTPException(400, "No ready cameras")
-    video_recorders, barrier, stop_event = prepare_video_recorders(list(ready.keys()))
-    recording_process = multiprocessing.Process(
-        target=capture_videos,
-        args=(video_recorders, barrier, stop_event, out.path),
-        daemon=False,
-    )
-    recording_process.start()
-    logger.info(f"Recording started with cameras: {list(ready.keys())} to {out.path}")
-    return {"status": "Recording started"}
-
-@app.post("/stop")
-async def stop_recording():
-    global recording_process, stop_event, video_recorders, current_results_dir
-    if not recording_process or not recording_process.is_alive():
-        raise HTTPException(400, "No recording in progress")
-    stop_event.set()
-    recording_process.join(timeout=12)
-    if recording_process.is_alive():
-        recording_process.terminate()
-    await asyncio.sleep(3)
-    gc.collect()
-    if video_recorders:
-        for r in video_recorders.values():
-            try:
-                r.stop()
-            except:
-                pass
-    recording_process = None
-    video_recorders = None
-    barrier = None
-    stop_event = None
-    current_results_dir = None
-    logger.info("Recording stopped and cleaned up")
-    return {"status": "Recording stopped"}
 
 # ============================================================
 # SIMUST_PLAYER Integration Endpoints
@@ -2107,8 +1979,8 @@ async def start_realtime_playback(req: Request):
         ).strip()
         admin_test_override = False
         if admin_password:
-            if not _verify_admin_password(users, admin_password):
-                raise HTTPException(401, "Admin password is not correct")
+            if not _verify_operator_override_password(users, admin_password):
+                raise HTTPException(401, "Password is not correct")
             admin_test_override = True
         remote_actor = str(data.get("_remote_actor") or "").strip()
         remote_staff = False
@@ -2563,27 +2435,12 @@ def results_snapshot() -> dict:
         if os.path.exists(os.path.join(realtime_folder, "results.json")) or os.path.exists(os.path.join(realtime_folder, "recognition.json")):
             current_results_dir = realtime_folder
             return _get_video_info(realtime_folder)
-    if not (recording_process and recording_process.is_alive()):
-        latest_dir = get_latest_recording_directory()
-        if latest_dir:
-            current_results_dir = latest_dir
     if current_results_dir and os.path.exists(current_results_dir):
         try:
             return _get_video_info(current_results_dir)
         except Exception as e:
             logger.error(f"/results failed: {e}")
             return {"results": [], "directory": None, "error": str(e)}
-    if output_path and os.path.exists(output_path):
-        try:
-            subdirs = [d for d in os.listdir(output_path) if os.path.isdir(os.path.join(output_path, d))]
-            if subdirs:
-                latest = max(subdirs, key=lambda d: os.path.getctime(os.path.join(output_path, d)))
-                candidate = os.path.join(output_path, latest)
-                if any(f.endswith('.mp4') for f in os.listdir(candidate)):
-                    current_results_dir = candidate
-                    return _get_video_info(candidate)
-        except Exception as e:
-            logger.error(f"Fallback detection failed: {e}")
     return {"results": [], "directory": None, "message": "No recording directory found"}
 
 
@@ -2861,19 +2718,14 @@ async def capture_frame():
 # ============================================================
 
 def _homography_camera_names() -> List[str]:
-    names = []
-    for name in (recorder_settings.CAMERAS or {}):
-        if str(name).lower().startswith("qr"):
-            continue
-        names.append(name)
+    names = list(simust_homography.LAB_CAMERAS)
     if not names:
         names = [simust_homography.LEFT_CAMERA, simust_homography.RIGHT_CAMERA]
     return names
 
 
 def _homography_camera_url(camera_name: str) -> str:
-    cfg = (recorder_settings.CAMERAS or {}).get(camera_name) or {}
-    url = cfg.get("address") or ""
+    url = (simust_homography.LAB_CAMERAS or {}).get(camera_name) or ""
     if not url:
         raise HTTPException(404, f"Camera not found: {camera_name}")
     return url
@@ -7138,10 +6990,11 @@ async def create_reservation(req: Request):
     payment_status = "lab"
     payment_ref = ""
 
+    if admin_password and not _verify_operator_override_password(users, admin_password):
+        raise HTTPException(401, "Password is not correct")
+
     if PUBLIC_MODE:
         if admin_password:
-            if not _verify_admin_password(users, admin_password):
-                raise HTTPException(401, "Admin password is not correct")
             payment_status = "admin_waived"
             payment_ref = "admin-waiver"
         elif stripe_session:
@@ -7197,12 +7050,14 @@ async def delete_reservation(id: str, request: Request):
         username = viewer["username"]
         staff = str(viewer.get("role") or "").strip().lower() in RESERVATION_STAFF_ROLES
     else:
-        if not username:
-            raise HTTPException(400, "username is required")
-        actor = users.get(username)
-        if not actor:
-            raise HTTPException(404, "User not found")
-        staff = str(actor.get("role", "")).strip().lower() in RESERVATION_STAFF_ROLES
+        matched = find_username(users, username) if username else None
+        actor = users.get(matched) if matched else None
+        if actor:
+            username = matched
+            staff = str(actor.get("role", "")).strip().lower() in RESERVATION_STAFF_ROLES
+        else:
+            # Lab operator page cancels with the coach or admin password.
+            staff = True
 
     with RESERVATION_LOCK:
         bookings = load_reservations()
@@ -7221,8 +7076,8 @@ async def delete_reservation(id: str, request: Request):
         # Staff cancelling another player's booking requires the admin password
         if owner != username and staff:
             admin_password = str(body.get("admin_password") or body.get("adminPassword") or "")
-            if not _verify_admin_password(users, admin_password):
-                raise HTTPException(401, "Admin password is not correct")
+            if not _verify_operator_override_password(users, admin_password):
+                raise HTTPException(401, "Password is not correct")
         save_reservations(remaining)
 
     if not PUBLIC_MODE:

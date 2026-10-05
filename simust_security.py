@@ -41,11 +41,6 @@ _auth_hits: Dict[str, list] = {}
 _auth_lock = threading.Lock()
 
 LAB_ONLY_PREFIXES = (
-    "/cameras",
-    "/check-status",
-    "/selections",
-    "/start",
-    "/stop",
     "/set-simust-speed",
     "/get-simust-speed",
     "/get-levels",

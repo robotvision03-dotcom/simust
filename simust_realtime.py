@@ -3435,7 +3435,6 @@ class FieldRuntime:
         self.allowed_screens = set(cfg.get("screens") or screens_for_field(self.field_id))
         self.subdir_name = f"field_{self.field_id}"
         self.recording_subdir = None
-        self._action_frames = []
 
         self.pending_start = None
         self.pending_start_time = 0
@@ -3626,10 +3625,10 @@ class SimustRealtimeCamera:
         self.window_name = "SIMUST REALTIME - Camera Feed"
         self.window_created = False
 
-        self.cameras = {
-            "camera-1": {"address": "rtsp://admin:majidAram2@192.168.2.1:554/Streaming/Channels/101/"},
-            "camera-8": {"address": "rtsp://admin:majidAram2@192.168.2.8:554/Streaming/Channels/101/"}
-        }
+        lab = {}
+        if simust_homography is not None:
+            lab = getattr(simust_homography, "LAB_CAMERAS", None) or {}
+        self.cameras = {name: {"address": url} for name, url in lab.items()}
 
         self.frame_buffers = {}
         self.frame_locks = {}
@@ -3759,38 +3758,6 @@ class SimustRealtimeCamera:
 
     def _field_is_active(self, fid):
         return (normalize_field(fid) or fid) in self.active_fields
-
-    def _keep_action_frames(self, frame):
-        """Keep this action's half-frames so a Wrong result can be saved on its own."""
-        if frame is None:
-            return
-        active = [
-            ch for ch in self.channels.values()
-            if ch.session_active and self._field_is_active(ch.field_id)
-        ]
-        if not active:
-            return
-        small = frame
-        height, width = frame.shape[:2]
-        if (width, height) != (SAVE_VIDEO_WIDTH, SAVE_VIDEO_HEIGHT):
-            small = cv2.resize(
-                frame,
-                (SAVE_VIDEO_WIDTH, SAVE_VIDEO_HEIGHT),
-                interpolation=cv2.INTER_AREA,
-            )
-        mid = small.shape[1] // 2
-        for ch in active:
-            planned = getattr(ch, "_planned_on_sec", None) or 3.0
-            try:
-                planned = float(planned)
-            except (TypeError, ValueError):
-                planned = 3.0
-            limit = int(round(max(0.1, planned) * SAVE_VIDEO_FPS)) + 2
-            buf = ch._action_frames
-            if len(buf) >= limit:
-                continue
-            half = small[:, :mid] if ch.field_id == "A" else small[:, mid:]
-            buf.append(half.copy())
 
     def _mask_inactive_half(self, frame):
         """Black out the unused half so saved/live video has no inactive-field content."""
@@ -4516,19 +4483,6 @@ class SimustRealtimeCamera:
             result_entry["finish_balls"] = True
             result_entry["balls_budget_sec"] = total
             result_entry["balls_clock_sec"] = clock
-        frames = ch.pending_analysis.get('frames') or []
-        if str(result_entry['result']).strip().lower() == 'wrong' and frames:
-            clip_dir = self.recording_dir or os.path.dirname(ch.recording_subdir or "") or "."
-            clip_path = os.path.join(
-                clip_dir, "wrong_saved", f"field_{ch.field_id}", f"{block_id}.mp4"
-            )
-            try:
-                import simust_wrong_clips
-                if simust_wrong_clips.write_frames_clip(clip_path, frames, SAVE_VIDEO_FPS):
-                    result_entry['wrong_clip'] = clip_path
-                    print(f"  [{ch.label}] Saved wrong slice {block_id} → {clip_path}")
-            except Exception as exc:
-                print(f"  [{ch.label}] Could not save wrong slice {block_id}: {exc}")
 
         ch.stats['results'].append(result_entry)
         self._publish_live_result(
@@ -4877,9 +4831,7 @@ class SimustRealtimeCamera:
                 'block_id': ch.current_block_id,
                 'video_index': video_index,
                 'seq': int(getattr(ch, "_display_seq", 0) or 0),
-                'frames': list(getattr(ch, "_action_frames", None) or []),
             }
-            ch._action_frames = []
             self._publish_session_preview_locked(ch)
             self._schedule_late_analysis_locked(ch)
 
@@ -4979,7 +4931,6 @@ class SimustRealtimeCamera:
         frames = int(getattr(saver, "frame_count", 0) or 0)
         recording = bool(getattr(saver, "is_recording", False))
         ch.current_qr_block["video_start_sec"] = round((frames / fps) if recording else 0.0, 3)
-        ch._action_frames = []
 
         if self.simulation_enabled:
             sim = self.simulators.get(ch.field_id)
@@ -6120,7 +6071,6 @@ class SimustRealtimeCamera:
                                 pass
                         else:
                             self.video_saver.write_frame(stitched)
-                            self._keep_action_frames(stitched)
                     slot += frame_dt
                     catch += 1
                 self._next_cue_frame_at = slot
