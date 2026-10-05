@@ -6013,9 +6013,11 @@ async def ingest_player_data(request: Request):
         existing = users.get(username) or {}
         merged = dict(existing)
         for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
-            value = account.get(field)
-            if value not in (None, ""):
-                merged[field] = value
+            if field in account:
+                value = account.get(field)
+                merged[field] = "" if value is None else value
+            elif field not in merged:
+                merged[field] = ""
         if account.get("progress"):
             merged["progress"] = simust_progress.merge_progress(
                 existing.get("progress"), account.get("progress")
@@ -6673,13 +6675,13 @@ async def login(req: Request):
 
     return {
         "username": username,
-        "role": user["role"],
-        "name": user["name"],
-        "surname": user["surname"],
-        "club": user["club"],
-        "team": user["team"],
-        "age": user["age"],
-        "gender": user.get("gender", "Male"),
+        "role": user.get("role") or "player",
+        "name": user.get("name") or "",
+        "surname": user.get("surname") or "",
+        "club": user.get("club") or "",
+        "team": user.get("team") or "",
+        "age": user.get("age") or "",
+        "gender": user.get("gender") or "Male",
         "image": image,
         "progress": user.get("progress", {}),
         "token": issue_token(username, user.get("role", "player")),

@@ -4298,7 +4298,7 @@
                     player_name: primary.name,
                     player_surname: primary.surname,
                     player_player_id: primary.playerId,
-                    visualization_enabled: visualizationEnabledRef.current,
+                    visualization_enabled: (role === 'admin') && !!visualizationEnabledRef.current,
                     simulation_enabled: simulationEnabledRef.current,
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
@@ -4693,18 +4693,11 @@
                 var hostPlayerRefresh = setInterval(function() {
                     loadPlayers();
                 }, 15000);
-                var stored = localStorage.getItem('simust_visualization');
-                if (stored !== null) {
-                    var val = JSON.parse(stored);
-                    visualizationEnabledRef.current = val;
-                    setVisualizationEnabled(val);
-                    axios.post("/set-visualization", { enabled: val }).catch(function() {});
-                } else {
-                    visualizationEnabledRef.current = false;
-                    setVisualizationEnabled(false);
-                    localStorage.setItem('simust_visualization', JSON.stringify(false));
-                    axios.post("/set-visualization", { enabled: false }).catch(function() {});
-                }
+                // Default OFF. Only an admin can turn visualization on from the control row.
+                visualizationEnabledRef.current = false;
+                setVisualizationEnabled(false);
+                localStorage.setItem('simust_visualization', JSON.stringify(false));
+                axios.post("/set-visualization", { enabled: false }).catch(function() {});
                 var storedSim = localStorage.getItem('simust_simulation');
                 if (storedSim !== null) {
                     var simVal = JSON.parse(storedSim);
@@ -4857,6 +4850,15 @@
                     setActiveTab('main');
                 }
             }, [role, activeTab]);
+
+            useEffect(function() {
+                if (role === 'admin') return;
+                if (!visualizationEnabledRef.current && !visualizationEnabled) return;
+                visualizationEnabledRef.current = false;
+                setVisualizationEnabled(false);
+                localStorage.setItem('simust_visualization', JSON.stringify(false));
+                axios.post("/set-visualization", { enabled: false }).catch(function() {});
+            }, [role]);
 
             useEffect(function() {
                 if (!loggedIn) return;
@@ -5205,6 +5207,7 @@
                                 })
                             ) : null
                         ) : null,
+                        isAdmin ?
                         React.createElement('div', { className: "flex items-center gap-4 mb-4 flex-wrap" },
                             React.createElement('span', { className: "text-white font-bold" },
                                 t("visualization")),
@@ -5217,7 +5220,6 @@
                                 }),
                                 React.createElement('span', { className: "slider" })
                             ),
-                            isAdmin ? React.createElement(React.Fragment, null,
                             React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
                                 t("arenaSimulation")),
                             React.createElement('label', { className: "toggle-switch" },
@@ -5228,8 +5230,7 @@
                                 }),
                                 React.createElement('span', { className: "slider" })
                             )
-                            ) : null
-                        ),
+                        ) : null,
                         React.createElement('div', { className: "transport-bar" },
                             React.createElement('button', {
                                 onClick: startRealtimePlayback,
