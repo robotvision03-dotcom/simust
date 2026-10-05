@@ -145,7 +145,7 @@ object Prefs {
             .replace(Regex("""&v=[^&]*"""), "")
             .replace(Regex("""\?v=[^&]*&"""), "?")
             .replace(Regex("""\?v=[^&]*$"""), "")
-        out += if (out.contains("?")) "&v=2.12" else "?v=2.12"
+        out += if (out.contains("?")) "&v=2.13" else "?v=2.13"
         return out
     }
 }

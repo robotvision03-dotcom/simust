@@ -936,9 +936,29 @@ def get_main_level(level_id: str) -> str:
     return level_id.split('/')[0]  # first part
 
 def get_next_level(current_level_id: str) -> Optional[str]:
-    """Return the next level ID in ALL_LEVELS after current_level_id, or None if it's the last."""
+    """Return the next level to open after a pass.
+
+    A-T4 opens the next band (e.g. Entry A-T4 → Activated A-T1).
+    World Class A-T4 still opens World Class A-T5. A-T5 is skipped in
+    earlier bands so set 4 is the band-completion gate.
+    """
+    cid = str(current_level_id or "")
+    if cid.endswith("/A-T4"):
+        main = cid.split("/")[0]
+        band_order = [
+            "L01-Entry",
+            "L02-Activated",
+            "L03-HighPerformance",
+            "L04-Elite",
+            "L05-WorldClass",
+        ]
+        if main in band_order:
+            idx = band_order.index(main)
+            if idx + 1 < len(band_order):
+                return f"{band_order[idx + 1]}/A-T1"
+            return "L05-WorldClass/A-T5"
     try:
-        idx = ALL_LEVELS.index(current_level_id)
+        idx = ALL_LEVELS.index(cid)
         if idx + 1 < len(ALL_LEVELS):
             return ALL_LEVELS[idx + 1]
     except ValueError:

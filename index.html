@@ -247,7 +247,9 @@
         .op-res-slot.free:hover { background: rgba(49,95,145,0.35); color: #fff; }
         .op-res-slot.booked { background: rgba(201,162,39,0.28); color: #fff; font-weight: 700; }
         .op-res-slot.past { opacity: 0.35; cursor: default; }
-        .op-res-slot.selected { box-shadow: inset 0 0 0 2px #fff; }
+        .op-res-slot.selected { box-shadow: inset 0 0 0 2px #fff; background: rgba(49,95,145,0.55); color: #fff; font-weight: 800; }
+        .op-res-slot.pick { box-shadow: inset 0 0 0 2px #e2c36a; background: rgba(226,195,106,0.35); color: #fff; font-weight: 800; }
+        .op-res-picked { font-size: 12px; color: #ead48f; font-weight: 700; margin: 0 0 10px; min-height: 18px; }
         .op-res-form .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .op-res-form label { display: block; font-size: 11px; color: #8fa0b6; font-weight: 700; margin-bottom: 4px; }
         .op-res-form input, .op-res-form select {
@@ -290,17 +292,43 @@
             html, body { width: 100%; max-width: 100%; min-height: 100dvh; overflow-x: hidden; }
             body { padding: 0; align-items: stretch; justify-content: flex-start; }
             .simust-card { width: 100%; min-height: 100dvh; max-width: none; border-radius: 0; border: none; box-shadow: none; }
-            .simust-header { padding: 10px 12px; }
-            .simust-header h1 { font-size: 1.05rem !important; line-height: 1.2; }
-            .simust-tabs { padding: 0 8px; }
-            .simust-body { min-height: 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+            .simust-header { padding: 8px 10px; gap: 8px; }
+            .simust-header h1 { font-size: 0.95rem !important; line-height: 1.15; }
+            .simust-header .header-brand { gap: 8px !important; }
+            .simust-tabs { padding: 0 6px; }
+            .simust-body { min-height: 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
             .simust-footer { display: none; }
-            .level-main-btn { height: 48px; min-height: 48px; font-size: 10px; padding: 2px; }
+            .level-main-row { gap: 4px; }
+            .level-main-btn { height: 44px; min-height: 44px; font-size: 9px; padding: 2px 1px; letter-spacing: 0; border-radius: 6px; }
+            .level-sub-pick, .level-sub-lock, .level-sub-unlock { font-size: 12px; min-height: 40px; }
+            .tab-button { padding: 8px 10px; font-size: 11px; min-height: 40px; white-space: nowrap; }
+            .transport-bar { gap: 6px; margin-bottom: 12px; padding: 8px 0; }
+            .transport-bar .btn-primary { flex: 1 1 calc(50% - 6px); min-width: 0; min-height: 44px; padding: 8px 6px; font-size: 12px; }
+            .transport-bar .btn-realtime { flex: 1 1 100%; min-width: 0; min-height: 48px; font-size: 14px; }
+            .transport-bar .auto-badge { display: none; }
+            .op-res-wrap { gap: 10px; }
+            .op-res-panel { padding: 12px; border-radius: 12px; }
+            .op-res-panel h2 { font-size: 16px; }
+            .op-res-toolbar button, .op-res-week button { min-height: 36px; padding: 8px 10px; font-size: 12px; }
+            .op-res-grid { grid-template-columns: 48px 1fr 1fr; min-width: 0; }
+            .op-res-slot { min-height: 36px; font-size: 11px; }
+            .op-res-grid-wrap { max-height: 48vh; }
             .login-overlay { padding: 12px; }
             .login-layout { max-width: 100%; }
+            .hamburger-btn { font-size: 26px; padding: 4px 8px; }
+            .dropdown-menu { min-width: 160px; }
         }
-        @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .simust-header { padding:14px 16px; } .tab-button { padding:8px 16px; font-size:12px; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .hamburger-btn { font-size:24px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
-        @media (max-width:480px) { .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; } .chart-container canvas { min-width:400px; height:160px; } .player-avatar { width:80px; height:80px; font-size:32px; } .login-box { padding:24px 16px; } .level-progress .level-item { font-size:9px; padding:2px 6px; } .level-progress .level-category .cat-label { font-size:8px; min-width:50px; } }
+        @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
+        @media (max-width:480px) {
+            .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; }
+            .chart-container canvas { min-width:400px; height:160px; }
+            .player-avatar { width:80px; height:80px; font-size:32px; }
+            .login-box { padding:24px 16px; }
+            .level-progress .level-item { font-size:9px; padding:2px 6px; }
+            .level-progress .level-category .cat-label { font-size:8px; min-width:50px; }
+            .level-main-btn { font-size: 8px; height: 42px; min-height: 42px; }
+            .simust-header h1 { font-size: 0.88rem !important; }
+        }
         html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; overflow-x: hidden; }
         html.simust-android .simust-card { min-height: 100dvh; border-radius: 0; max-width: none; }
         html.simust-android .simust-body { min-height: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
@@ -338,10 +366,22 @@
             html.simust-android .simust-body { padding: 12px 16px; }
             html.simust-android .btn-realtime { min-width: 240px; }
         }
-        .lab-link-banner { width: 100%; padding: 8px 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-align: center; }
-        .lab-link-banner.online { background: rgba(46,204,113,0.16); color: #2ecc71; }
-        .lab-link-banner.offline { background: rgba(231,76,60,0.16); color: #e74c3c; }
-        .lab-link-banner.unknown { background: #10243f; color: #8fa0b6; }
+        .lab-link-banner { display: none; }
+        .lab-online-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+            background: #8fa0b6; box-shadow: 0 0 0 0 rgba(143,160,182,0.4);
+        }
+        .lab-online-dot.online {
+            background: #2ecc71;
+            animation: lab-blink 1.2s ease-in-out infinite;
+            box-shadow: 0 0 8px rgba(46,204,113,0.65);
+        }
+        .lab-online-dot.offline { background: #e74c3c; }
+        .lab-online-dot.unknown { background: #8fa0b6; }
+        @keyframes lab-blink {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.35; transform: scale(0.85); }
+        }
 
         .num-ltr,
         .metric-ring .value,
@@ -796,7 +836,7 @@
             { id: 'L00-Foundation', label: 'Foundation', bg: '#7dffa8', fg: '#0c1c12' },
             { id: 'L01-Entry', label: 'Entry', bg: '#F1F3F5', fg: '#282c30' },
             { id: 'L02-Activated', label: 'Activated', bg: '#AFC3D5', fg: '#0c1624' },
-            { id: 'L03-HighPerformance', label: 'High Performance', bg: '#315F91', fg: '#ffffff' },
+            { id: 'L03-HighPerformance', label: 'High Perf', bg: '#315F91', fg: '#ffffff' },
             { id: 'L04-Elite', label: 'Elite', bg: '#4B1F78', fg: '#ffffff' },
             { id: 'L05-WorldClass', label: 'World Class', bg: '#C9A227', fg: '#1c1404' }
         ];
@@ -974,7 +1014,19 @@
                 times.push(pad(h) + ':00');
                 times.push(pad(h) + ':30');
             }
-            var durations = [30, 60, 90, 120, 150, 180];
+            var hmIndex = function(hm) { return times.indexOf(hm); };
+            var slotsAreConsecutive = function(list) {
+                if (!list.length) return true;
+                var idxs = list.map(hmIndex).filter(function(i) { return i >= 0; }).sort(function(a, b) { return a - b; });
+                if (idxs.length !== list.length) return false;
+                for (var i = 1; i < idxs.length; i++) {
+                    if (idxs[i] !== idxs[i - 1] + 1) return false;
+                }
+                return true;
+            };
+            var sortHms = function(list) {
+                return list.slice().sort(function(a, b) { return hmIndex(a) - hmIndex(b); });
+            };
 
             var weekState = useState(startOfWeek(new Date()));
             var weekStart = weekState[0];
@@ -1000,12 +1052,9 @@
             var playerIdState = useState('');
             var playerId = playerIdState[0];
             var setPlayerId = playerIdState[1];
-            var startState = useState('07:00');
-            var startHm = startState[0];
-            var setStartHm = startState[1];
-            var durState = useState(60);
-            var duration = durState[0];
-            var setDuration = durState[1];
+            var picksState = useState([]);
+            var selectedSlots = picksState[0];
+            var setSelectedSlots = picksState[1];
             var fieldState = useState('A');
             var field = fieldState[0];
             var setField = fieldState[1];
@@ -1070,29 +1119,70 @@
 
             var onSlotClick = function(hm, fieldId, booking) {
                 if (isPast(selectedDate, hm) && !booking) return;
-                setField(fieldId);
-                setStartHm(hm);
                 if (booking && booking.id) {
+                    setField(fieldId);
+                    setSelectedSlots([]);
                     setCancelId(booking.id);
-                    setMessage(t('staffResCancelHint', 'Selected booking ready to cancel. Enter admin password and tap Cancel booking.'), false);
-                } else {
-                    setCancelId('');
                     setMessage('', false);
+                    return;
                 }
+                setCancelId('');
+                setMessage('', false);
+                if (fieldId !== field || !selectedSlots.length) {
+                    setField(fieldId);
+                    setSelectedSlots([hm]);
+                    return;
+                }
+                var idx = selectedSlots.indexOf(hm);
+                if (idx >= 0) {
+                    var removed = selectedSlots.filter(function(x) { return x !== hm; });
+                    setSelectedSlots(slotsAreConsecutive(removed) ? sortHms(removed) : []);
+                    return;
+                }
+                if (selectedSlots.length >= 3) {
+                    setMessage('Select up to 3 slots (30 min each).', false);
+                    return;
+                }
+                var next = sortHms(selectedSlots.concat([hm]));
+                if (!slotsAreConsecutive(next)) {
+                    setField(fieldId);
+                    setSelectedSlots([hm]);
+                    return;
+                }
+                setSelectedSlots(next);
             };
 
             var coachLogin = props.role === 'coach';
+            var pickedLabel = function() {
+                if (!selectedSlots.length) return '';
+                var sorted = sortHms(selectedSlots);
+                var start = sorted[0];
+                var lastIdx = hmIndex(sorted[sorted.length - 1]);
+                var endHm = lastIdx >= 0 && lastIdx + 1 < times.length ? times[lastIdx + 1] : null;
+                var endPart = endHm || (function() {
+                    var dt = parseLocal(selectedDate + 'T' + sorted[sorted.length - 1] + ':00');
+                    if (!dt) return '';
+                    dt = new Date(dt.getTime() + 30 * 60000);
+                    return pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+                })();
+                return start + '–' + endPart + ' · Field ' + field + ' · ' + (sorted.length * 30) + ' min';
+            };
             var addBooking = function() {
                 if (!playerId) {
                     setMessage(t('staffResNeedPlayer', 'Select a player first.'), false);
                     return;
                 }
-                if ((coachLogin || window.SIMUST_PUBLIC) && !adminPass) {
-                    setMessage(coachLogin
-                        ? 'Enter the coach password to reserve a player who has no booking.'
-                        : t('adminPasswordRequired', 'Admin password is required.'), false);
+                if (!selectedSlots.length) {
+                    setMessage('Tap 1–3 empty time slots on the calendar.', false);
                     return;
                 }
+                if ((coachLogin || window.SIMUST_PUBLIC) && !adminPass) {
+                    setMessage(coachLogin ? 'Coach password required.' : t('adminPasswordRequired', 'Admin password is required.'), false);
+                    return;
+                }
+                var sorted = sortHms(selectedSlots);
+                var startHm = sorted[0];
+                var duration = sorted.length * 30;
                 var startIso = selectedDate + 'T' + startHm + ':00';
                 var startDt = parseLocal(startIso);
                 if (!startDt) return;
@@ -1111,6 +1201,7 @@
                     setBusy(false);
                     setAdminPass('');
                     setCancelId('');
+                    setSelectedSlots([]);
                     setMessage(t('reservationCreated', 'Reservation added.'), true);
                     showToast(t('reservationCreated', 'Reservation added.'), 'success');
                     loadBookings();
@@ -1130,9 +1221,7 @@
                 }
                 if (!adminPass) {
                     setCancelId(target);
-                    setMessage(coachLogin
-                        ? 'Enter the coach password, then press Cancel.'
-                        : 'Enter the admin password, then press Cancel.', false);
+                    setMessage(coachLogin ? 'Coach password required.' : 'Admin password required.', false);
                     return;
                 }
                 setBusy(true);
@@ -1163,11 +1252,13 @@
             var slotEl = function(fieldId, hm) {
                 var booking = bookingAt(selectedDate, hm, fieldId);
                 var past = isPast(selectedDate, hm);
+                var isPick = !booking && field === fieldId && selectedSlots.indexOf(hm) >= 0;
+                var isCancelSel = !!(booking && booking.id === cancelId);
                 var cls = 'op-res-slot' + (booking ? ' booked' : ' free') + (past && !booking ? ' past' : '')
-                    + ((booking && booking.id === cancelId) || (!booking && startHm === hm && field === fieldId) ? ' selected' : '');
+                    + (isCancelSel ? ' selected' : '') + (isPick ? ' pick' : '');
                 var label = booking
                     ? ((booking.player_name || booking.player_id || 'Booked') + ' · F' + fieldId)
-                    : '';
+                    : (isPick ? hm : '');
                 return React.createElement('div', {
                     key: fieldId + hm,
                     className: cls,
@@ -1178,14 +1269,14 @@
 
             return React.createElement('div', { className: 'op-res-wrap' },
                 React.createElement('div', { className: 'op-res-panel' },
-                    React.createElement('h2', null, t('staffResManageTitle', 'Reservation management')),
-                    React.createElement('p', { className: 'sub' }, 'Gold cells are booked. Tap an empty cell to choose a time, pick a player, then Add. To cancel, tap a gold cell, enter your password, and press the red Cancel button.'),
+                    React.createElement('h2', null, 'Reservation'),
                     React.createElement('div', { className: 'op-res-toolbar' },
                         React.createElement('button', { type: 'button', onClick: function() {
                             var n = new Date(weekStart); n.setDate(n.getDate() - 7); setWeekStart(startOfWeek(n));
                         } }, '← ' + t('reservationPrev', 'Week')),
                         React.createElement('button', { type: 'button', className: 'primary', onClick: function() {
                             var now = new Date(); setWeekStart(startOfWeek(now)); setSelectedDate(ymd(now));
+                            setSelectedSlots([]); setCancelId('');
                         } }, t('reservationToday', 'Today')),
                         React.createElement('button', { type: 'button', onClick: function() {
                             var n = new Date(weekStart); n.setDate(n.getDate() + 7); setWeekStart(startOfWeek(n));
@@ -1198,10 +1289,15 @@
                                 key: day.date,
                                 type: 'button',
                                 className: selectedDate === day.date ? 'active' : '',
-                                onClick: function() { setSelectedDate(day.date); setCancelId(''); }
+                                onClick: function() {
+                                    setSelectedDate(day.date);
+                                    setCancelId('');
+                                    setSelectedSlots([]);
+                                }
                             }, day.label);
                         })
                     ),
+                    React.createElement('div', { className: 'op-res-picked' }, pickedLabel() || 'Tap 1–3 empty slots'),
                     React.createElement('div', { className: 'op-res-grid-wrap' },
                         React.createElement('div', { className: 'op-res-grid' },
                             React.createElement('div', { className: 'head' }, ''),
@@ -1240,42 +1336,7 @@
                             }) : React.createElement('div', { className: 'today-schedule-empty', style: { padding: '10px' } },
                                 t('noPlayersFound', 'No players found'))
                         ),
-                        React.createElement('div', { className: 'form-row' },
-                            React.createElement('div', null,
-                                React.createElement('label', null, t('reservationDate', 'Date')),
-                                React.createElement('input', { type: 'date', value: selectedDate, onChange: function(e) {
-                                    setSelectedDate(e.target.value);
-                                    var d = parseLocal(e.target.value + 'T12:00:00');
-                                    if (d) setWeekStart(startOfWeek(d));
-                                } })
-                            ),
-                            React.createElement('div', null,
-                                React.createElement('label', null, t('reservationStart', 'Start')),
-                                React.createElement('select', { value: startHm, onChange: function(e) { setStartHm(e.target.value); } },
-                                    times.map(function(hm) { return React.createElement('option', { key: hm, value: hm }, hm); })
-                                )
-                            )
-                        ),
-                        React.createElement('div', { className: 'form-row' },
-                            React.createElement('div', null,
-                                React.createElement('label', null, t('reservationDuration', 'Duration')),
-                                React.createElement('select', { value: String(duration), onChange: function(e) { setDuration(Number(e.target.value)); } },
-                                    durations.map(function(m) { return React.createElement('option', { key: m, value: String(m) }, m + ' min'); })
-                                )
-                            ),
-                            React.createElement('div', null,
-                                React.createElement('label', null, t('reservationField', 'Field')),
-                                React.createElement('select', { value: field, onChange: function(e) { setField(e.target.value); } },
-                                    React.createElement('option', { value: 'A' }, 'Field A'),
-                                    React.createElement('option', { value: 'B' }, 'Field B')
-                                )
-                            )
-                        ),
                         React.createElement('label', null, coachLogin ? 'Coach password' : 'Admin password'),
-                        React.createElement('p', { className: 'text-xs text-gray-400', style: { margin: '0 0 6px' } },
-                            coachLogin
-                                ? 'Use this password to book a player who has no reservation, and to cancel a booking.'
-                                : 'Use this password to book a player who has no reservation, and to cancel a booking.'),
                         React.createElement('input', {
                             type: 'password',
                             value: adminPass,
@@ -1285,17 +1346,17 @@
                         }),
                         React.createElement('div', { className: 'op-res-toolbar' },
                             React.createElement('button', { type: 'button', className: 'primary', disabled: busy, onClick: addBooking },
-                                'Add reservation'),
+                                'Add'),
                             React.createElement('button', {
                                 type: 'button',
                                 className: 'danger',
                                 disabled: busy || !cancelId,
                                 onClick: function() { cancelBooking(cancelId); }
-                            }, 'Cancel booking')
+                            }, 'Cancel')
                         ),
                         React.createElement('div', { className: 'op-res-msg ' + (msg ? (msgOk ? 'ok' : 'err') : '') }, msg)
                     ),
-                    React.createElement('h2', { style: { marginTop: 18 } }, 'Upcoming bookings'),
+                    React.createElement('h2', { style: { marginTop: 18 } }, 'Upcoming'),
                     React.createElement('div', { className: 'op-res-list' },
                         upcoming.length ? upcoming.map(function(b) {
                             var fid = String(b.field || 'A').toUpperCase().indexOf('B') === 0 ? 'B' : 'A';
@@ -1311,10 +1372,9 @@
                                     onClick: function() {
                                         setCancelId(b.id);
                                         setField(fid);
+                                        setSelectedSlots([]);
                                         if (!adminPass) {
-                                            setMessage(coachLogin
-                                                ? 'Enter the coach password, then press Cancel.'
-                                                : 'Enter the admin password, then press Cancel.', false);
+                                            setMessage(coachLogin ? 'Coach password required.' : 'Admin password required.', false);
                                             return;
                                         }
                                         cancelBooking(b.id);
@@ -1589,8 +1649,8 @@
             var fieldLabel = props.fieldLabel || '';
             var hideAddPlayer = !!props.hideAddPlayer;
             var selectorTitle = fieldLabel
-                ? ("SEARCH & SELECT PLAYER — " + fieldLabel)
-                : "SEARCH & SELECT PLAYER";
+                ? ("Select player field " + (String(fieldLabel).indexOf('B') >= 0 ? 'B' : 'A'))
+                : "Select player";
 
             // Always list levels so unpaid players still see Foundation locked after search.
             var visibleLevels = allLevels;
@@ -4906,16 +4966,9 @@
             var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false);
 
             return React.createElement('div', { className: "simust-card" },
-                window.SIMUST_PUBLIC ? React.createElement('div', {
-                    className: 'lab-link-banner ' + (labOnline === true ? 'online' : labOnline === false ? 'offline' : 'unknown')
-                }, labOnline === true
-                    ? 'Lab online — Realtime Play from this tablet runs on the training machine over the internet.'
-                    : labOnline === false
-                        ? 'Lab offline.'
-                        : 'Connecting to the training lab…') : null,
                 // HEADER
                 React.createElement('div', { className: "simust-header" },
-                    React.createElement('div', { className: "flex items-center gap-4" },
+                    React.createElement('div', { className: "flex items-center gap-3 header-brand" },
                         React.createElement('div', { className: "hamburger-menu" },
                             React.createElement('button', { onClick: toggleMenu, className: "hamburger-btn" },
                                 '☰'),
@@ -4926,7 +4979,7 @@
                                         closeMenu(); } }, t('smartControl')),
                                 isOperatorStaff ? React.createElement('button', { onClick: function() {
                                         setActiveTab('reservations');
-                                        closeMenu(); } }, t('navReservations') || 'Reservations') : null,
+                                        closeMenu(); } }, 'Reservation') : null,
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('results');
                                         closeMenu(); } }, t('results')) : null,
@@ -4935,23 +4988,23 @@
                                         closeMenu(); } }, t('managePlayers')) : null,
                                 isOperatorStaff && !isCoach ? React.createElement('button', { onClick: function() {
                                         setActiveTab('settings');
-                                        closeMenu(); } }, 'Settings') : null
+                                        closeMenu(); } }, 'Settings') : null,
+                                React.createElement('button', { onClick: function() {
+                                        closeMenu();
+                                        handleLogout();
+                                    } }, t('logout'))
                             )
                         ),
+                        window.SIMUST_PUBLIC ? React.createElement('span', {
+                            className: 'lab-online-dot ' + (labOnline === true ? 'online' : labOnline === false ? 'offline' : 'unknown'),
+                            title: labOnline === true ? 'Online' : labOnline === false ? 'Offline' : 'Connecting…'
+                        }) : null,
                         React.createElement('h1', { className: "text-3xl font-black" },
                             React.createElement('span', { className: "gold-accent" }, "SIMUST"),
                             React.createElement('span', { className: "text-white" }, " PLAY IT SMART")
                         )
                     ),
-                    React.createElement('div', { className: "flex items-center gap-4" },
-                        React.createElement(LanguageSwitcher, { lang: lang, onLangChange: changeLang, t: t }),
-                        React.createElement('span', { className: "live-dot" + (realtimePaused ? " paused" : (realtimeRunning ? " active" : " inactive")) }),
-                        React.createElement('span', { className: "text-xs text-gray-400" },
-                            realtimePaused ? t("paused") : (realtimeRunning ? t("live") : t("idle"))
-                        ),
-                        React.createElement('button', { onClick: handleLogout, className: "btn-logout" },
-                            t("logout"))
-                    )
+                    React.createElement('div', { className: "flex items-center gap-2" })
                 ),
 
                 // TABS
@@ -4964,7 +5017,7 @@
                     React.createElement('button', {
                         onClick: function() { setActiveTab('reservations'); },
                         className: "tab-button" + (activeTab === 'reservations' ? ' active' : '')
-                    }, t("navReservations") || "Reservations") :
+                    }, "Reservation") :
                     null,
                     isAdmin ?
                     React.createElement('button', {
@@ -5171,41 +5224,31 @@
                                     }
                                 }),
                                 React.createElement('span', { className: 'font-semibold' },
-                                    isCoach
-                                        ? 'Play without a player reservation (coach password)'
-                                        : t('adminTestPlay', 'Play without reservation (admin password)'))
+                                    isCoach ? 'Coach password' : t('adminPasswordLabel', 'Admin password'))
                             ),
                             adminTestPlay ?
-                            React.createElement('div', null,
-                                React.createElement('p', { className: 'text-xs text-gray-300 mb-2' },
-                                    isCoach
-                                        ? 'Enter the coach password to start Realtime Play for a player who has no booking.'
-                                        : t('adminTestPlayHint', 'After selecting Field A and/or Field B players, enter the admin password to start Realtime Play with no booking / outside schedule.')),
-                                React.createElement('label', { className: 'text-xs text-gray-300 block mb-1' },
-                                    isCoach ? 'Coach password' : t('adminPasswordLabel', 'Admin password')),
-                                React.createElement('input', {
-                                    type: 'password',
-                                    value: adminTestPass,
-                                    disabled: realtimeRunning,
-                                    autoComplete: 'current-password',
-                                    placeholder: '••••••••',
-                                    className: 'w-full max-w-md',
-                                    style: {
-                                        background: 'rgba(0,0,0,0.45)',
-                                        border: '1px solid rgba(212,175,55,0.45)',
-                                        borderRadius: 8,
-                                        padding: '10px 12px',
-                                        color: '#fff',
-                                        fontSize: '16px'
-                                    },
-                                    onChange: function(e) { setAdminTestPass(e.target.value); },
-                                    onKeyDown: function(e) {
-                                        if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
-                                            startRealtimePlayback();
-                                        }
+                            React.createElement('input', {
+                                type: 'password',
+                                value: adminTestPass,
+                                disabled: realtimeRunning,
+                                autoComplete: 'current-password',
+                                placeholder: '••••••••',
+                                className: 'w-full max-w-md',
+                                style: {
+                                    background: 'rgba(0,0,0,0.45)',
+                                    border: '1px solid rgba(212,175,55,0.45)',
+                                    borderRadius: 8,
+                                    padding: '10px 12px',
+                                    color: '#fff',
+                                    fontSize: '16px'
+                                },
+                                onChange: function(e) { setAdminTestPass(e.target.value); },
+                                onKeyDown: function(e) {
+                                    if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
+                                        startRealtimePlayback();
                                     }
-                                })
-                            ) : null
+                                }
+                            }) : null
                         ) : null,
                         isAdmin ?
                         React.createElement('div', { className: "flex items-center gap-4 mb-4 flex-wrap" },

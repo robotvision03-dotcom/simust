@@ -138,9 +138,16 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 "passed_playlists still lists every Foundation set that was passed."
             )
 
-        series_levels = [level for level in ALL_LEVELS if level != "L00-Foundation"]
+        # A-T4 opens the next band; A-T5 is only required on World Class.
+        series_levels = [
+            level for level in ALL_LEVELS
+            if level != "L00-Foundation"
+            and (not level.endswith("/A-T5") or level.startswith("L05-"))
+        ]
         self.assertEqual(series_levels[0], "L01-Entry/A-T1")
         self.assertEqual(series_levels[-1], "L05-WorldClass/A-T5")
+        self.assertNotIn("L01-Entry/A-T5", series_levels)
+        self.assertEqual(get_next_level("L01-Entry/A-T4"), "L02-Activated/A-T1")
 
         for level in series_levels:
             progress = users[PLAYER_ID]["progress"]

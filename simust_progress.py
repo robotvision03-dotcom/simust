@@ -6,7 +6,8 @@ Rules:
 - Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry:
   75% accuracy and 70% efficiency on the final results.
 - Entry and every later set: 85% accuracy and 80% efficiency on the final results.
-- The next set opens as soon as that score is reached. Booking does not open levels.
+- Passing A-T4 opens the next band (Entry A-T4 → Activated A-T1, and so on).
+  World Class A-T4 opens World Class A-T5. Booking does not open levels.
 """
 
 from __future__ import annotations
