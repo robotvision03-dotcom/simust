@@ -1608,22 +1608,69 @@ def _active_field_screens(active_fields):
 def _level_display_name(level_id: str, subdirectory: str = "") -> str:
     """Short name shown before the intro video."""
     text = f"{level_id or ''} {subdirectory or ''}"
+    series = re.search(r"A[-.]T([1-9]\d*)", text, re.I)
+
+    def with_set(name):
+        if series and not str(name).upper().startswith("SF-"):
+            return f"{name} A-T{series.group(1)}"
+        return name
+
     if re.search(r"L05-WorldClass|World[-_ ]?Class", text, re.I):
-        return "World Class"
+        return with_set("World Class")
     if re.search(r"L04-Elite", text, re.I):
-        return "Elite"
+        return with_set("Elite")
     if re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
-        return "High Performance"
+        return with_set("High Performance")
     if re.search(r"L02-Activated", text, re.I):
-        return "Activated"
+        return with_set("Activated")
     if re.search(r"L01-Entry", text, re.I):
-        return "Entry"
+        return with_set("Entry")
     if re.search(r"SF-30N|SF-60N|SF-110N|SF-180N", text, re.I):
         match = re.search(r"SF-\d+N", text, re.I)
         return match.group(0).upper() if match else "Foundation"
     if re.search(r"Foundation", text, re.I):
         return "Foundation"
-    return str(level_id or "Test").split("/")[-1] or "Test"
+    tail = str(level_id or "Test").split("/")[-1] or "Test"
+    return with_set(tail)
+
+
+def _opening_cards_for_fields(active, levels, modes, playlists, fallback_entry, fallback_playlist, test_num):
+    """Opening name, clock, and action count for each field on its own screens."""
+    cards = {}
+    try:
+        wanted = int(test_num or 1)
+    except (TypeError, ValueError):
+        wanted = 1
+    for fid in active or []:
+        level_id = str((levels or {}).get(fid) or "")
+        mode = str((modes or {}).get(fid) or "")
+        own = (playlists or {}).get(fid) or []
+        playlist = own or list(fallback_playlist or [])
+        field_entry = None
+        for item in playlist:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_test = int(item.get("test_num") or 0)
+            except (TypeError, ValueError):
+                item_test = 0
+            if item_test == wanted:
+                field_entry = item
+                break
+        if field_entry is None:
+            field_entry = own[0] if own else (fallback_entry or {})
+        sub = mode
+        if not sub and "/" in level_id:
+            sub = level_id.split("/", 1)[1]
+        text = _level_card_text(level_id, sub, field_entry or {}, playlist)
+        background, foreground = _level_card_colors(f"{level_id} {sub}", "", {})
+        cards[fid] = {
+            "lines": text.split("\n"),
+            "bg": background,
+            "fg": foreground,
+            "text": text,
+        }
+    return cards
 
 
 def _level_card_text(level_id: str, subdirectory: str, entry: dict, playlist: list) -> str:
@@ -2773,6 +2820,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._content_scale = 1.0
         self._summary_lines = []
         self._summary_screens = None
+        self._summary_by_screen = {}
         self._summary_bg = (0, 0, 0)
         self._summary_fg = (255, 255, 255)
         self._result_badges = {}
@@ -2785,6 +2833,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._content_scale = 1.0
         self._summary_lines = []
         self._summary_screens = None
+        self._summary_by_screen = {}
         self._summary_bg = (0, 0, 0)
         self._summary_fg = (255, 255, 255)
         self.update()
@@ -2809,6 +2858,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._stop_screen_video()
         self.active_screens = set()
         self._screen_pixmaps = {}
+        self._summary_by_screen = {}
         self._summary_lines = [str(line) for line in (lines or []) if str(line).strip()]
         chosen = {_sid(sid) for sid in (screen_ids or []) if _sid(sid)}
         self._summary_screens = chosen or None
@@ -2817,11 +2867,36 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._result_badges = {}
         self.update()
 
+    def set_level_summaries(self, by_screen):
+        """Different opening text and colors on each field's screens."""
+        self._stop_screen_video()
+        self.active_screens = set()
+        self._screen_pixmaps = {}
+        specs = {}
+        for sid, spec in (by_screen or {}).items():
+            name = _sid(sid)
+            if not name or not isinstance(spec, dict):
+                continue
+            lines = [str(line) for line in (spec.get("lines") or []) if str(line).strip()]
+            if not lines:
+                continue
+            specs[name] = {
+                "lines": lines,
+                "bg": tuple(int(v) for v in (spec.get("bg") or (0, 0, 0))[:3]),
+                "fg": tuple(int(v) for v in (spec.get("fg") or (255, 255, 255))[:3]),
+            }
+        self._summary_by_screen = specs
+        self._summary_lines = [" "] if specs else []
+        self._summary_screens = set(specs) or None
+        self._result_badges = {}
+        self.update()
+
     def set_pass_screens(self, screen_ids):
         """Legacy: same fallback image on each lit screen."""
         self._stop_screen_video()
         self._summary_lines = []
         self._summary_screens = None
+        self._summary_by_screen = {}
         self._result_badges = {}
         self._content_scale = self.PASS_IMAGE_SCALE
         self.active_screens = {_sid(sid) for sid in screen_ids if _sid(sid)}
@@ -2836,6 +2911,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._stop_screen_video()
         self._summary_lines = []
         self._summary_screens = None
+        self._summary_by_screen = {}
         self._content_scale = float(scale or 1.0)
         self._screen_pixmaps = {}
         self.active_screens = set()
@@ -2862,6 +2938,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._stop_screen_video()
         self._summary_lines = []
         self._summary_screens = None
+        self._summary_by_screen = {}
         self._video_fill = bool(fill)
         if scale is None:
             scale = 1.0 if fill else self.PASS_IMAGE_SCALE
@@ -3006,7 +3083,10 @@ class ImageActionCanvas(QtWidgets.QWidget):
 
     def _paint_level_summary(self, painter):
         """Name, time, and action count, centered on every screen."""
+        by_screen = getattr(self, "_summary_by_screen", None) or {}
         lines = list(self._summary_lines or [])
+        if by_screen:
+            lines = [" "]
         if not lines:
             return
         chosen = getattr(self, "_summary_screens", None)
@@ -3018,19 +3098,30 @@ class ImageActionCanvas(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
         bg = getattr(self, "_summary_bg", (0, 0, 0)) or (0, 0, 0)
         fg = getattr(self, "_summary_fg", (255, 255, 255)) or (255, 255, 255)
-        painter.setPen(QtGui.QColor(int(fg[0]), int(fg[1]), int(fg[2])))
-        fill = QtGui.QColor(int(bg[0]), int(bg[1]), int(bg[2]))
         for name in SLICE_ORDER:
             if not name:
                 continue
             if chosen is not None and name not in chosen:
                 continue
+            screen_lines = lines
+            screen_bg = bg
+            screen_fg = fg
+            if by_screen:
+                spec = by_screen.get(name) or {}
+                screen_lines = list(spec.get("lines") or [])
+                if not screen_lines:
+                    continue
+                screen_bg = spec.get("bg") or bg
+                screen_fg = spec.get("fg") or fg
+            painter.setPen(QtGui.QColor(int(screen_fg[0]), int(screen_fg[1]), int(screen_fg[2])))
+            fill = QtGui.QColor(int(screen_bg[0]), int(screen_bg[1]), int(screen_bg[2]))
             index = SLICE_ORDER.index(name)
             left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
             if rect_w < 8:
                 continue
             rect = QtCore.QRect(left, 0, rect_w, self.height())
             painter.fillRect(rect, fill)
+            lines = screen_lines
             font = QtGui.QFont("Segoe UI", 20, QtGui.QFont.Bold)
             painter.setFont(font)
             metrics = painter.fontMetrics()
@@ -3781,6 +3872,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         active = set(self._active_fields())
         if not active:
             return []
+        if not getattr(self, "_one_field_build", False):
+            self._field_opening_playlists = {}
 
         self._playlist_block_reason = ""
         decision = _combined_play_decision(
@@ -3825,6 +3918,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if fid not in active:
                     continue
                 parts[fid] = self._build_one_field_playlist(fid)
+            self._field_opening_playlists = parts
             playlist = _zip_field_action_playlists(parts)
             if playlist:
                 self._label_mode = True
@@ -4309,6 +4403,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             hit = _intro_video_for_key(_level_intro_key_from_id(level))
             if hit:
                 return hit
+            # This field has its own level. Do not borrow the other field's intro.
+            return None
         directory = str((getattr(self, "_phase_field_directories", None) or {}).get(fid) or "").strip()
         if directory:
             for pat, key in _LEVEL_INTRO_PATH_RULES:
@@ -4332,32 +4428,72 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         files = self.video_files or []
         entry = files[next_index] if 0 <= next_index < len(files) and isinstance(files[next_index], dict) else {}
         levels = getattr(self, "_phase_field_levels", None) or {}
+        modes = getattr(self, "_phase_field_modes", None) or {}
         level_id = ""
         subdirectory = str(getattr(self, "_phase_subdirectory", "") or "")
-        for fid in self._active_fields():
+        active_fields = list(self._active_fields())
+        for fid in active_fields:
             if levels.get(fid):
                 level_id = str(levels.get(fid))
                 break
         if not level_id:
             level_id = str(getattr(self, "_phase_mode_id", "") or "")
-        text = _level_card_text(level_id, subdirectory, entry, files)
+        try:
+            card_test = int(entry.get("test_num") or 1) if isinstance(entry, dict) else 1
+        except (TypeError, ValueError):
+            card_test = 1
+        separate_cards = (
+            len(active_fields) >= 2
+            and (self._field_levels_differ() or self._field_modes_differ())
+        )
+        field_cards = {}
+        if separate_cards:
+            field_cards = _opening_cards_for_fields(
+                active_fields,
+                levels,
+                modes,
+                getattr(self, "_field_opening_playlists", None) or {},
+                entry,
+                files,
+                card_test,
+            )
+            text = " | ".join(
+                f"{fid} {field_cards[fid]['text'].replace(chr(10), ' ')}"
+                for fid in active_fields if fid in field_cards
+            )
+        else:
+            text = _level_card_text(level_id, subdirectory, entry, files)
         color_context = " ".join([
             level_id,
             subdirectory,
             str(getattr(self, "video_directory", "") or ""),
             str(getattr(self, "_level_root", "") or ""),
-            " ".join(str(v) for v in (getattr(self, "_phase_field_directories", None) or {}).values()),
-            " ".join(str(v) for v in levels.values()),
         ])
-        background, foreground = _level_card_colors(color_context, "", entry)
+        if not separate_cards:
+            color_context = " ".join([
+                color_context,
+                " ".join(str(v) for v in (getattr(self, "_phase_field_directories", None) or {}).values()),
+                " ".join(str(v) for v in levels.values()),
+            ])
+        background, foreground = _level_card_colors(color_context, "", entry if not separate_cards else {})
         if self.image_canvas:
             screens = []
             for fid in self._active_fields():
                 screens.extend(_field_all_screens(fid))
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
-            self.image_canvas.set_level_summary(
-                text.split("\n"), screens, background, foreground,
-            )
+            if separate_cards and field_cards:
+                by_screen = {}
+                for fid in active_fields:
+                    card = field_cards.get(fid)
+                    if not card:
+                        continue
+                    for sid in _field_all_screens(fid):
+                        by_screen[sid] = card
+                self.image_canvas.set_level_summaries(by_screen)
+            else:
+                self.image_canvas.set_level_summary(
+                    text.split("\n"), screens, background, foreground,
+                )
             self.image_canvas.show()
             self.image_canvas.raise_()
             self.image_canvas.update()

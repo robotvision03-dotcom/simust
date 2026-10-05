@@ -291,6 +291,9 @@ def can_access_player(viewer: Optional[Dict[str, Any]], player_id: str, player_m
         return viewer["username"] == player_id
     meta = player_meta or {}
     if role == "coach":
+        # Remote operator coach (simust) manages every player on the console.
+        if str(viewer.get("username") or "").strip().lower() == "simust":
+            return True
         return bool(viewer.get("team")) and meta.get("team") == viewer.get("team")
     if role == "manager":
         return bool(viewer.get("club")) and meta.get("club") == viewer.get("club")

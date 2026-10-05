@@ -177,9 +177,21 @@ OPERATOR_COACH_PASSWORD = "simust"
 
 
 def ensure_operator_coach_account() -> None:
-    """Create the operator coach sign-in once. Never overwrites an existing user."""
+    """Create or repair the operator coach sign-in. Does not overwrite a non-coach user."""
     users = load_users()
-    if find_username(users, OPERATOR_COACH_USERNAME):
+    matched = find_username(users, OPERATOR_COACH_USERNAME)
+    if matched:
+        record = users.get(matched) or {}
+        role = str(record.get("role") or "").strip().lower()
+        if role != "coach":
+            return
+        ok, _upgraded = verify_password(OPERATOR_COACH_PASSWORD, record.get("password", ""))
+        if ok:
+            return
+        record["password"] = hash_password(OPERATOR_COACH_PASSWORD)
+        users[matched] = record
+        save_users(users)
+        logging.getLogger(__name__).info("Reset operator coach password for %s", matched)
         return
     users[OPERATOR_COACH_USERNAME] = {
         "name": "SIMUST",
@@ -1660,11 +1672,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"Player reports directory: {PLAYER_REPORTS_DIR}")
     if not os.environ.get("SIMUST_SESSION_SECRET"):
         logger.warning("SIMUST_SESSION_SECRET is not set; login sessions reset when the app restarts")
-        try:
-            ensure_admin_account()
-            ensure_operator_coach_account()
-        except Exception as exc:
-            logger.warning("Could not ensure operator accounts: %s", exc)
+    try:
+        ensure_admin_account()
+        ensure_operator_coach_account()
+    except Exception as exc:
+        logger.warning("Could not ensure operator accounts: %s", exc)
     if simust_push.push_configured():
         logger.info("Lab→host JSON push is enabled")
         try:
