@@ -3573,6 +3573,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.operator_paused = False
         self._paused_media_time = None
         self._pause_started_at = 0
+        self._pause_perf_started_at = 0
         self._pending_start_after_pause = False
         self._force_close_timer = None
         self._frozen_qt_timers = []
@@ -3591,6 +3592,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._prestart_done = False  # "starting" wait only once per session
         self._post_results_index = None
         self._set_start_time = None
+        self._pass_shown_at = None
+        self._pass_on_ms = 0
+        self._budget_started_at = None
+        self._budget_test = None
+        self._gap_result_timer = None
+        self._goal_advance_timer = None
         self._phase_active = None
         self._run_phases = []
         self._phase_index = 0
@@ -4929,8 +4936,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """Milliseconds left in this test's shared clock."""
         budget = int(entry.get("budget_ms") or 0)
         test_num = int(entry.get("test_num") or 0)
-        action_in_set = int(entry.get("action_in_set") or 1)
-        if action_in_set <= 1 or getattr(self, "_budget_test", None) != test_num:
+        if getattr(self, "_budget_test", None) != test_num or not getattr(self, "_budget_started_at", None):
             self._budget_started_at = time.perf_counter()
             self._budget_test = test_num
             self._budget_closed_test = None
@@ -5045,6 +5051,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._goal_advance_timer.start(40)
 
     def _poll_goal_advance(self):
+        if self.operator_paused:
+            return
         if self.display_phase != "action" or getattr(self, "_label_phase", "") != "action":
             return
         if getattr(self, "_goal_arrived", False):
@@ -6500,6 +6508,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.operator_paused = paused
         if paused:
             self._pause_started_at = time.time()
+            self._pause_perf_started_at = time.perf_counter()
             try:
                 t = self.player.get_time()
                 self._paused_media_time = t if t is not None and t >= 0 else None
@@ -6511,11 +6520,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.info("Operator pause: video and timers frozen at %s ms", self._paused_media_time)
             return
         dt = time.time() - self._pause_started_at if self._pause_started_at else 0
-        if self._pause_started_at and self.video_start_time:
-            self.video_start_time += dt
-        if self._final_play_started_at:
-            self._final_play_started_at += dt
+        dt_perf = (
+            time.perf_counter() - self._pause_perf_started_at
+            if self._pause_perf_started_at
+            else dt
+        )
+        self._shift_clocks_after_pause(dt, dt_perf)
         self._pause_started_at = 0
+        self._pause_perf_started_at = 0
         self._thaw_qt_timers()
         self._set_vlc_paused(False)
         if self._paused_media_time is not None:
@@ -6530,10 +6542,48 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._update_status_file("playing", self.current_video_index + 1, len(self.video_files), "Resumed")
         logger.info("Operator resume: continuing from pause point")
 
+    def _maybe_attr(self, name, default=None):
+        try:
+            return object.__getattribute__(self, name)
+        except Exception:
+            return default
+
+    def _shift_clocks_after_pause(self, dt, dt_perf):
+        """Wall-clock pause must not consume On / budget / result windows."""
+        if dt <= 0 and dt_perf <= 0:
+            return
+        for name in (
+            "video_start_time",
+            "_set_start_time",
+            "_final_play_started_at",
+            "_wait_started",
+            "_action_cue_wall",
+            "_finished_action_at",
+            "_finished_cue_wall",
+            "_last_result_deadline",
+            "last_check_time",
+        ):
+            value = self._maybe_attr(name)
+            if value:
+                setattr(self, name, float(value) + dt)
+        for name in ("_pass_shown_at", "_budget_started_at"):
+            value = self._maybe_attr(name)
+            if value:
+                setattr(self, name, float(value) + dt_perf)
+
     def _freeze_qt_timers(self):
         frozen = []
-        for name in ("results_timer", "close_timer", "play_delay_timer", "_force_close_timer", "action_timer"):
-            timer = getattr(self, name, None)
+        remain_on = self._paused_on_remaining_ms()
+        for name in (
+            "results_timer",
+            "close_timer",
+            "play_delay_timer",
+            "_force_close_timer",
+            "action_timer",
+            "_gap_result_timer",
+            "_goal_advance_timer",
+        ):
+            timer = self._maybe_attr(name)
             if timer is None:
                 continue
             try:
@@ -6541,14 +6591,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     continue
                 remaining = timer.remainingTime()
                 timer.stop()
+                if name == "action_timer" and remain_on is not None:
+                    remaining = remain_on
                 frozen.append((name, max(50, remaining if remaining >= 0 else 0)))
             except Exception:
                 continue
         self._frozen_qt_timers = frozen
 
+    def _paused_on_remaining_ms(self):
+        shown = self._maybe_attr("_pass_shown_at")
+        need_ms = int(self._maybe_attr("_pass_on_ms", 0) or 0)
+        if shown is None or need_ms <= 0:
+            return None
+        remain = int(need_ms - (time.perf_counter() - float(shown)) * 1000.0)
+        return max(50, remain)
+
     def _thaw_qt_timers(self):
         for name, remaining in self._frozen_qt_timers:
-            timer = getattr(self, name, None)
+            timer = self._maybe_attr(name)
             if timer is None:
                 continue
             try:

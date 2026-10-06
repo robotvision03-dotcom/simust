@@ -81,27 +81,35 @@ class CameraPauseShiftTests(unittest.TestCase):
         cam._pause_lock = __import__("threading").Lock()
         cam._pause_started_at = 0
         cam._paused_analysis_remaining = None
-        cam.analysis_timer = None
-        cam.analysis_started_at = 0
-        cam.pending_start = {"action": "PASS"}
-        cam.pending_start_time = 100.0
-        cam.pending_end = True
-        cam.pending_end_time = 110.0
-        cam.session_active = True
-        cam.session_start_timestamp = 90.0
-        cam.between_sessions_active = False
-        cam.between_session_start_ts = 0
-        cam.simulator = type("Sim", (), {"start_ts": 95.0, "late_start_ts": 0.0})()
+        ch = type("Ch", (), {})()
+        ch.analysis_timer = None
+        ch.analysis_started_at = 0
+        ch._paused_analysis_remaining = None
+        ch.pending_start = {"action": "PASS"}
+        ch.pending_start_time = 100.0
+        ch.pending_end = True
+        ch.pending_end_time = 110.0
+        ch.pending_end_time_str = ""
+        ch.session_active = True
+        ch.session_start_timestamp = 90.0
+        ch.between_sessions_active = False
+        ch.between_session_start_ts = 0
+        ch.between_session_start_time = None
+        ch.current_qr_block = None
+        ch.qr_state = {}
+        cam.channels = {"A": ch}
+        cam.simulators = {"A": type("Sim", (), {"start_ts": 95.0, "late_start_ts": 0.0})()}
+        cam._field_is_active = lambda fid: True
 
         cam._freeze_for_pause()
         self.assertTrue(cam.operator_paused)
         cam._pause_started_at -= 2.5
         cam._unfreeze_after_pause()
         self.assertFalse(cam.operator_paused)
-        self.assertAlmostEqual(cam.pending_start_time, 102.5, places=1)
-        self.assertAlmostEqual(cam.pending_end_time, 112.5, places=1)
-        self.assertAlmostEqual(cam.session_start_timestamp, 92.5, places=1)
-        self.assertAlmostEqual(cam.simulator.start_ts, 97.5, places=1)
+        self.assertAlmostEqual(ch.pending_start_time, 102.5, places=1)
+        self.assertAlmostEqual(ch.pending_end_time, 112.5, places=1)
+        self.assertAlmostEqual(ch.session_start_timestamp, 92.5, places=1)
+        self.assertAlmostEqual(cam.simulators["A"].start_ts, 97.5, places=1)
 
 
 class PauseRemoteTests(unittest.TestCase):
