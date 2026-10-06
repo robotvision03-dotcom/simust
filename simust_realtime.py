@@ -364,6 +364,9 @@ GOAL_PROBE_ZONES = (
 # Displayed goal circle is this fraction of the old accept distance.
 # The last two 0.90 factors make the green finish circle 10% smaller, twice.
 GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90 * 0.90 * 0.90
+# Green finish cylinder drawn on top of the circle (pixels in the stitched frame).
+FINISH_CYLINDER_HEIGHT_PX = 31
+FINISH_CYLINDER_COLOR = (0, 180, 0)
 # Live GOAL aims that finish inside that circle, vs shots that miss it.
 GOAL_AIM_IN = (
     "line_center",
@@ -565,7 +568,7 @@ def analyze_goal_with_context(action_id, screens, track, full_track, session_dur
         if arrival_in_late_window(t_hit, session_duration):
             result = "Late"
             evidence = (eff, t_hit, screen, proj)
-        elif not returned_toward_origin(full_track, screen, screens, goal_lines, t_hit, depth):
+        else:
             result = "Correct"
             evidence = (eff, t_hit, screen, proj)
     elif late_arrival is not None:
@@ -1675,17 +1678,27 @@ def _cabinet_for_line(p0, p1):
 _FIELD_A_CABINETS = frozenset({"1", "2", "3", "4", "12", "13", "14"})
 _FIELD_B_CABINETS = frozenset({"5", "6", "7", "8", "9", "10", "11"})
 _SCREEN3_CABINET = {"A": "14", "B": "7"}
-# A2, A5, B2, B5. Their finish circle is 15% larger than the other screens.
+# Screens 2–5: extra size, then −10%, then another −10%.
 _SCREEN_2_AND_5_CABINETS = frozenset({"13", "3", "6", "10"})
+_SCREEN_2_TO_5_CABINETS = frozenset({"13", "14", "2", "3", "6", "7", "9", "10"})
+_FINISH_CIRCLE_EXTRA = 1.15
+_FINISH_CIRCLE_MORE = 1.10
+_FINISH_CIRCLE_SHRINK = 0.90 * 0.90
 
 
 def _finish_circle_boost(p0, p1) -> float:
     cabinet = _cabinet_for_line(p0, p1)
     if not cabinet:
         return 1.0
-    if str(cabinet).rstrip("LR") in _SCREEN_2_AND_5_CABINETS:
-        return 1.15
-    return 1.0
+    base = str(cabinet).rstrip("LR")
+    scale = 1.0
+    if base in _SCREEN_2_AND_5_CABINETS:
+        scale *= _FINISH_CIRCLE_EXTRA
+    if base in _SCREEN_2_TO_5_CABINETS:
+        scale *= _FINISH_CIRCLE_EXTRA
+        scale *= _FINISH_CIRCLE_MORE
+        scale *= _FINISH_CIRCLE_SHRINK
+    return scale
 
 
 def finish_zone_scale(p0, p1):
@@ -1730,16 +1743,58 @@ def goal_circle_center(p0, p1):
     )
 
 
-def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
-    """True when the point is inside the displayed goal circle.
+def draw_finish_cylinder(img, cx, cy, radius, height=FINISH_CYLINDER_HEIGHT_PX, color=FINISH_CYLINDER_COLOR):
+    """Draw a standing cylinder: circle at the base, ellipse on top."""
+    r = max(4, int(radius))
+    h = max(8, int(height))
+    cx, cy = int(cx), int(cy)
+    top_cy = cy - h
+    ry = max(3, int(round(r * 0.35)))
+    fill = color
+    edge = (0, 220, 0)
+    cv2.rectangle(img, (cx - r, top_cy), (cx + r, cy), fill, -1)
+    cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 360, fill, -1)
+    cv2.circle(img, (cx, cy), r, fill, -1)
+    cv2.ellipse(img, (cx, top_cy), (r, ry), 0, 0, 360, fill, -1)
+    cv2.ellipse(img, (cx, top_cy), (r, ry), 0, 0, 360, edge, 2)
+    cv2.line(img, (cx - r, top_cy), (cx - r, cy), edge, 2)
+    cv2.line(img, (cx + r, top_cy), (cx + r, cy), edge, 2)
+    cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 180, edge, 2)
 
-    Correct and Miss both require this. A ball outside the circle is not a finish.
-    """
+
+def finish_cylinder_height_sim():
+    """Cylinder height in SIM pixels (matches the 31px overlay on a 360p frame)."""
+    return float(FINISH_CYLINDER_HEIGHT_PX)
+
+
+def in_finish_cylinder(point, p0, p1, depth):
+    """True when the point is inside the green finish cylinder (circle + shaft + top)."""
+    if p0 is None or p1 is None or point is None:
+        return False
     cx, cy = goal_circle_center(p0, p1)
-    radius = goal_circle_radius(depth)
-    if p0 is not None and p1 is not None:
-        radius *= _finish_circle_boost(p0, p1)
-    return math.hypot(float(point[0]) - cx, float(point[1]) - cy) <= radius
+    radius = goal_circle_radius(depth, p0, p1)
+    px, py = float(point[0]), float(point[1])
+    dx = px - cx
+    dy = py - cy
+    if math.hypot(dx, dy) <= radius:
+        return True
+    height = finish_cylinder_height_sim()
+    top_cy = cy - height
+    ry = max(3.0, radius * 0.35)
+    if abs(dx) <= radius and top_cy <= py <= cy:
+        return True
+    if radius > 0 and ry > 0:
+        if (dx / radius) ** 2 + ((py - top_cy) / ry) ** 2 <= 1.0:
+            return True
+    return False
+
+
+def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
+    """True when the ball is inside the displayed green finish cylinder.
+
+    A ball in that zone is a correct finish (no return required).
+    """
+    return in_finish_cylinder(point, p0, p1, depth)
 
 
 def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_POST_RADIUS):
@@ -2200,17 +2255,11 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                 display_time = f"{best_min_time:.3f}"
                 display_duration = f"{session_duration:.3f}"
                 min_dist_display = best_eff_dist
-            elif came_back:
+            else:
+                # Ball inside the green cylinder is a correct finish (return not required).
                 result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{best_min_time:.3f}"
-                display_duration = f"{session_duration:.3f}"
-                min_dist_display = best_eff_dist
-            else:
-                # Entered goal area but did not complete return → Miss
-                result = 'Miss'
-                winning_screen = best_screen
-                display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
                 display_duration = f"{session_duration:.3f}"
                 min_dist_display = best_eff_dist
 
@@ -5017,7 +5066,8 @@ class SimustRealtimeCamera:
                 cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
                 cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
                 radius = max(4, int(round(goal_circle_radius(depth, (x1, y1), (x2, y2)) * min(sx, sy))))
-                cv2.circle(overlay, (cx, cy), radius, (0, 180, 0), -1)
+                height_px = max(8, int(round(finish_cylinder_height_sim() * sy)))
+                draw_finish_cylinder(overlay, cx, cy, radius, height=height_px)
                 drew_band = True
                 line_marks.append((
                     action,
