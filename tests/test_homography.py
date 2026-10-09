@@ -25,7 +25,63 @@ class HomographyRouteGuardTests(unittest.TestCase):
         self.assertTrue(is_lab_only_path("/homography/save"))
         self.assertTrue(is_lab_only_path("/homography/frame/camera-1"))
         self.assertFalse(is_lab_only_path("/homography/status"))
+        self.assertFalse(is_lab_only_path("/homography/technical-map"))
 
+
+@unittest.skipUnless(HAS_CV2, "OpenCV required")
+class TechnicalMapTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cal_path = os.path.join(self.tmp.name, "homography_calibration.json")
+        self.path_patch = None
+        from unittest.mock import patch
+        self.path_patch = patch.object(homo, "CALIBRATION_FILE", self.cal_path)
+        self.path_patch.start()
+        homo._cache = None
+        homo._cache_mtime = 0.0
+        image = [(0, 0), (100, 0), (100, 100), (0, 100)]
+        world = [(0, 0), (2, 0), (2, 5), (0, 5)]
+        homo.save_camera_calibration(
+            "camera-1",
+            image_points=image,
+            world_points=world,
+            image_width=100,
+            image_height=100,
+        )
+        # Right camera: same local coords, world shifted +10 m in X
+        world_b = [(10, 0), (12, 0), (12, 5), (10, 5)]
+        homo.save_camera_calibration(
+            "camera-8",
+            image_points=image,
+            world_points=world_b,
+            image_width=100,
+            image_height=100,
+        )
+
+    def tearDown(self):
+        if self.path_patch:
+            self.path_patch.stop()
+        homo._cache = None
+        homo._cache_mtime = 0.0
+        self.tmp.cleanup()
+
+    def test_maps_goal_lines_to_metres(self):
+        goal_lines = {
+            "13": {"p0": (20, 20), "p1": (80, 20)},  # Field A / left half
+            "6": {"p0": (120, 20), "p1": (180, 20)},  # Field B / right half (u >= 100)
+        }
+        payload = homo.build_technical_map(goal_lines=goal_lines)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(len(payload["screens"]), 2)
+        by_id = {item["id"]: item for item in payload["screens"]}
+        self.assertEqual(by_id["13"]["field"], "A")
+        self.assertEqual(by_id["13"]["name"], "A2")
+        self.assertAlmostEqual(by_id["13"]["center"]["x"], 1.0, places=1)
+        self.assertEqual(by_id["6"]["field"], "B")
+        self.assertEqual(by_id["6"]["name"], "B2")
+        self.assertAlmostEqual(by_id["6"]["center"]["x"], 11.0, places=1)
+        self.assertIn("<svg", payload["svg"])
+        self.assertIn("A2", payload["svg"])
 
 
 @unittest.skipUnless(HAS_CV2, "OpenCV required")

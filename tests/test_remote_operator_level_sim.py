@@ -123,26 +123,33 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             nxt = simust_progress.next_foundation_playlist_after(name)
             report.append(
                 "Foundation set %s/%s %s pass %.0f%%/70 → playlists %s → %s (next=%s)"
-                % (index, len(foundation), name, _accuracy(PASS_FOUNDATION), before, after, nxt or "Entry A-T1")
+                % (index, len(foundation), name, _accuracy(PASS_FOUNDATION), before, after, nxt or "Entry S1.T1")
             )
             if nxt:
                 self.assertIn(nxt, after)
             else:
-                self.assertIn("L01-Entry/A-T1", users[PLAYER_ID]["progress"]["unlocked_levels"])
+                self.assertIn("L01-Entry/S1.T1", users[PLAYER_ID]["progress"]["unlocked_levels"])
 
         progress = users[PLAYER_ID]["progress"]
         report.append(
-            "After Foundation set 4 (SF-180N): current=%s unlocked_levels includes Entry A-T1=%s"
-            % (progress.get("current_level"), "L01-Entry/A-T1" in progress["unlocked_levels"])
+            "After Foundation set 4 (SF-180N): current=%s unlocked_levels includes Entry S1.T1=%s"
+            % (progress.get("current_level"), "L01-Entry/S1.T1" in progress["unlocked_levels"])
         )
-        if "L01-Entry/A-T1" not in progress["unlocked_levels"]:
+        if "L01-Entry/S1.T1" not in progress["unlocked_levels"]:
             issues.append("Passing Foundation set 4 (SF-180N) did not unlock Entry A-T1.")
 
-        # Series levels: A-T4 opens the next band (A-T5 skipped except World Class).
+        # Entry skips S1.T5. Later bands keep S1.T5 then S2; S2.T5 only on World Class.
         series = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
-            and (not level.endswith("/A-T5") or level.startswith("L05-"))
+            and (
+                not level.endswith("/S2.T5")
+                or level.startswith("L05-")
+            )
+            and (
+                not level.endswith("/S1.T5")
+                or not level.startswith("L01-Entry")
+            )
         ]
         for level in series:
             progress = users[PLAYER_ID]["progress"]
@@ -175,22 +182,37 @@ class RemoteOperatorLevelSim(unittest.TestCase):
                 % (level, _accuracy(PASS_SERIES), int(PASS_SERIES["avg_ae"]), nxt or "none", progress.get("current_level"))
             )
 
-            if set_name == "A-T4":
+            if set_name == "S1.T4":
                 next_band = {
-                    "L01-Entry": "L02-Activated/A-T1",
-                    "L02-Activated": "L03-HighPerformance/A-T1",
-                    "L03-HighPerformance": "L04-Elite/A-T1",
-                    "L04-Elite": "L05-WorldClass/A-T1",
-                    "L05-WorldClass": "L05-WorldClass/A-T5",
+                    "L01-Entry": "L02-Activated/S1.T1",
+                    "L02-Activated": "L02-Activated/S1.T5",
+                    "L03-HighPerformance": "L03-HighPerformance/S1.T5",
+                    "L04-Elite": "L04-Elite/S1.T5",
+                    "L05-WorldClass": "L05-WorldClass/S1.T5",
                 }.get(band)
                 if next_band and next_band not in progress["unlocked_levels"]:
                     issues.append(
-                        f"After passing {level} (set 4), {next_band} is not unlocked. "
-                        "A-T4 must open the next band (or World Class A-T5)."
+                        f"After passing {level} (set 4), {next_band} is not unlocked."
                     )
                 else:
                     report.append(
-                        f"  Set-4 check ({level}): opened {next_band} (A-T4 unlocks next level)."
+                        f"  Set-4 check ({level}): opened {next_band}."
+                    )
+            if set_name == "S2.T4":
+                next_band = {
+                    "L02-Activated": "L03-HighPerformance/S1.T1",
+                    "L03-HighPerformance": "L04-Elite/S1.T1",
+                    "L04-Elite": "L05-WorldClass/S1.T1",
+                    "L05-WorldClass": "L05-WorldClass/S2.T5",
+                }.get(band)
+                if next_band and next_band not in progress["unlocked_levels"]:
+                    issues.append(
+                        f"After passing {level}, {next_band} is not unlocked. "
+                        "S2.T4 must open the next band (or World Class S2.T5)."
+                    )
+                else:
+                    report.append(
+                        f"  Set-4 check ({level}): opened {next_band} (S2.T4 unlocks next)."
                     )
 
             if nxt:
@@ -265,17 +287,26 @@ def build(level, subdirectory=""):
                 })
         return player._stamp_finish_balls(rows) if rows else []
     series = 1
-    m = re.search(r"A-T([1-5])", level)
+    m = re.search(r"S(?:1|2)[.-]T([1-5])|A-T([1-5])", level)
     if m:
-        series = int(m.group(1))
+        series = int(m.group(1) or m.group(2))
     active = {"A", "B"} if _combined_level(level) else {"A"}
     if "L05-WorldClass" in level:
+        if re.search(r"S2[.-]T[1-5]", level, re.I):
+            return player._build_world_class_s2_playlist(series) or []
         return player._build_elite_playlist(series, "world-class") or []
     if "L04-Elite" in level:
+        if re.search(r"S2[.-]T[1-5]", level, re.I):
+            return player._build_elite_s2_playlist(series) or []
         return player._build_elite_playlist(series, "elite") or []
     if "L03-HighPerformance" in level:
+        if re.search(r"S2[.-]T[1-5]", level, re.I):
+            return player._build_high_performance_s2_playlist(series, active) or []
         return player._build_high_performance_playlist(series, active) or []
     if "L02-Activated" in level:
+        a1 = re.search(r"S2[.-]T([1-5])|A1[-.]T([1-5])", level, re.I)
+        if a1:
+            return player._build_activated_a1_playlist(int(a1.group(1) or a1.group(2)), active) or []
         return player._build_activated_playlist(series, active) or []
     if "L01-Entry" in level:
         return player._build_entry_playlist(series, active) or []
@@ -284,14 +315,14 @@ def build(level, subdirectory=""):
 samples = [
     ("L00-Foundation", "SF-30N"),
     ("L00-Foundation", "SF-180N"),
-    ("L01-Entry/A-T1", ""),
-    ("L01-Entry/A-T4", ""),
-    ("L02-Activated/A-T3", ""),
-    ("L03-HighPerformance/A-T2", ""),
-    ("L04-Elite/A-T1", ""),
-    ("L04-Elite/A-T4", ""),
-    ("L05-WorldClass/A-T1", ""),
-    ("L05-WorldClass/A-T5", ""),
+    ("L01-Entry/S1.T1", ""),
+    ("L01-Entry/S1.T4", ""),
+    ("L02-Activated/S1.T3", ""),
+    ("L03-HighPerformance/S1.T2", ""),
+    ("L04-Elite/S1.T1", ""),
+    ("L04-Elite/S1.T4", ""),
+    ("L05-WorldClass/S1.T1", ""),
+    ("L05-WorldClass/S1.T5", ""),
 ]
 out = {"lines": [], "issues": []}
 for level, sub in samples:
@@ -314,17 +345,17 @@ for level, sub in samples:
         out["lines"].append(f"  {level} {sub or '-'}: ERROR {exc}")
         out["issues"].append(f"Simulator playlist failed for {level} {sub}: {exc}")
 
-parts = {"A": build("L00-Foundation", "SF-180N"), "B": build("L01-Entry/A-T3", "")}
+parts = {"A": build("L00-Foundation", "SF-180N"), "B": build("L01-Entry/S1.T3", "")}
 merged = player._zip_field_action_playlists(parts)
 out["lines"].append(
-    f"  Independent A=SF-180N + B=Entry A-T3 zip: {len(merged)} step(s) (A={len(parts['A'])} B={len(parts['B'])})"
+    f"  Independent A=SF-180N + B=Entry S1.T3 zip: {len(merged)} step(s) (A={len(parts['A'])} B={len(parts['B'])})"
 )
 if not merged:
     out["issues"].append("Independent dual-field playlist zip is empty.")
 cards = player._opening_cards_for_fields(
     ["A", "B"],
-    {"A": "L00-Foundation", "B": "L01-Entry/A-T3"},
-    {"A": "SF-180N", "B": "A-T3"},
+    {"A": "L00-Foundation", "B": "L01-Entry/S1.T3"},
+    {"A": "SF-180N", "B": "S1.T3"},
     parts, {}, [], 1,
 )
 out["lines"].append(
@@ -333,8 +364,8 @@ out["lines"].append(
 )
 if "SF-180N" not in cards.get("A", {}).get("text", ""):
     out["issues"].append("Opening card for Field A did not show SF-180N.")
-if "Entry" not in cards.get("B", {}).get("text", ""):
-    out["issues"].append("Opening card for Field B did not show Entry.")
+if "S1.T3" not in cards.get("B", {}).get("text", ""):
+    out["issues"].append("Opening card for Field B did not show S1.T3.")
 print(json.dumps(out))
 '''
         tmp = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8")
@@ -381,14 +412,14 @@ print(json.dumps(out))
         samples = [
             ("L00-Foundation", "SF-30N"),
             ("L00-Foundation", "SF-180N"),
-            ("L01-Entry/A-T1", ""),
-            ("L01-Entry/A-T4", ""),
-            ("L02-Activated/A-T3", ""),
-            ("L03-HighPerformance/A-T2", ""),
-            ("L04-Elite/A-T1", ""),
-            ("L04-Elite/A-T4", ""),
-            ("L05-WorldClass/A-T1", ""),
-            ("L05-WorldClass/A-T5", ""),
+            ("L01-Entry/S1.T1", ""),
+            ("L01-Entry/S1.T4", ""),
+            ("L02-Activated/S1.T3", ""),
+            ("L03-HighPerformance/S1.T2", ""),
+            ("L04-Elite/S1.T1", ""),
+            ("L04-Elite/S1.T4", ""),
+            ("L05-WorldClass/S1.T1", ""),
+            ("L05-WorldClass/S1.T5", ""),
         ]
         for level, sub in samples:
             try:
@@ -404,19 +435,19 @@ print(json.dumps(out))
         try:
             parts = {
                 "A": self._build_playlist_rows("L00-Foundation", "SF-180N"),
-                "B": self._build_playlist_rows("L01-Entry/A-T3", ""),
+                "B": self._build_playlist_rows("L01-Entry/S1.T3", ""),
             }
             merged = player._zip_field_action_playlists(parts)
             report.append(
-                "  Independent A=SF-180N + B=Entry A-T3 zip: %s step(s) (A=%s B=%s)"
+                "  Independent A=SF-180N + B=Entry S1.T3 zip: %s step(s) (A=%s B=%s)"
                 % (len(merged), len(parts["A"]), len(parts["B"]))
             )
             if not merged:
                 issues.append("Independent dual-field playlist zip is empty.")
             cards = player._opening_cards_for_fields(
                 ["A", "B"],
-                {"A": "L00-Foundation", "B": "L01-Entry/A-T3"},
-                {"A": "SF-180N", "B": "A-T3"},
+                {"A": "L00-Foundation", "B": "L01-Entry/S1.T3"},
+                {"A": "SF-180N", "B": "S1.T3"},
                 parts,
                 {},
                 [],
@@ -424,8 +455,8 @@ print(json.dumps(out))
             )
             if "SF-180N" not in cards.get("A", {}).get("text", ""):
                 issues.append("Opening card for Field A did not show SF-180N.")
-            if "Entry" not in cards.get("B", {}).get("text", ""):
-                issues.append("Opening card for Field B did not show Entry.")
+            if "S1.T3" not in cards.get("B", {}).get("text", ""):
+                issues.append("Opening card for Field B did not show S1.T3.")
             else:
                 report.append(
                     "  Opening cards: A=%s | B=%s"
@@ -467,17 +498,26 @@ print(json.dumps(out))
                     })
             return player._stamp_finish_balls(rows) if rows else []
         series = 1
-        match = __import__("re").search(r"A-T([1-5])", level)
+        match = __import__("re").search(r"S(?:1|2)[.-]T([1-5])|A-T([1-5])", level)
         if match:
-            series = int(match.group(1))
+            series = int(match.group(1) or match.group(2))
         active = {"A", "B"} if _combined_level(level) else {"A"}
         if "L05-WorldClass" in level:
+            if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
+                return player._build_world_class_s2_playlist(series) or []
             return player._build_elite_playlist(series, "world-class") or []
         if "L04-Elite" in level:
+            if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
+                return player._build_elite_s2_playlist(series) or []
             return player._build_elite_playlist(series, "elite") or []
         if "L03-HighPerformance" in level or "HighPerformance" in level:
+            if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
+                return player._build_high_performance_s2_playlist(series, active) or []
             return player._build_high_performance_playlist(series, active) or []
         if "L02-Activated" in level:
+            a1 = __import__("re").search(r"S2[.-]T([1-5])|A1[-.]T([1-5])", level, re.I)
+            if a1:
+                return player._build_activated_a1_playlist(int(a1.group(1) or a1.group(2)), active) or []
             return player._build_activated_playlist(series, active) or []
         if "L01-Entry" in level:
             return player._build_entry_playlist(series, active) or []
@@ -542,8 +582,8 @@ print(json.dumps(out))
 
     def _dual_field_checks_body(self, store: dict, report: List[str], issues: List[str]) -> None:
         for label, level in (
-            ("Elite A-T1", "L04-Elite/A-T1"),
-            ("World Class A-T1", "L05-WorldClass/A-T1"),
+            ("Elite S1.T1", "L04-Elite/S1.T1"),
+            ("World Class S1.T1", "L05-WorldClass/S1.T1"),
         ):
             store["users"][PLAYER_ID]["progress"]["current_level"] = level
             unlocked = list(store["users"][PLAYER_ID]["progress"].get("unlocked_levels") or [])

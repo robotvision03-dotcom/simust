@@ -64,15 +64,18 @@
         .tab-button { background: transparent; color: #8190a5; border: none; border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.04em; }
         .tab-button.active { color: #fff; border-bottom-color: var(--gold); background: #276ce51a; }
         .tab-button:hover { color: #dce7f5; background: #276ce50d; }
-        .level-main-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; width: 100%; }
+        .level-main-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; width: 100%; align-items: start; }
+        .level-main-wrap { position: relative; min-width: 0; z-index: 1; }
+        .level-main-wrap.open { z-index: 80; }
         .level-main-btn { width: 100%; height: 52px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; padding: 4px; font-weight: 800; font-size: 12px; letter-spacing: 0.02em; cursor: pointer; white-space: normal; line-height: 1.15; display: flex; align-items: center; justify-content: center; text-align: center; }
         .level-main-btn.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.45); }
         .level-sub-list { width: 100%; margin-top: 10px; background: #07111f; color: #f5f8fb; border: 1px solid var(--line); border-radius: 8px; padding: 4px; font-size: 14px; }
-        .level-sub-rows { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #07111f; }
-        .level-sub-row { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+        .level-sub-rows { position: absolute; top: calc(100% + 4px); inset-inline-start: 0; min-width: 100%; width: max(100%, 168px); margin-top: 0; border: 1px solid rgba(0,0,0,0.28); border-radius: 8px; overflow: hidden; max-height: min(320px, 55vh); overflow-y: auto; box-shadow: 0 12px 28px rgba(0,0,0,0.38); z-index: 90; }
+        .level-main-wrap:nth-child(n+4) .level-sub-rows { inset-inline-start: auto; inset-inline-end: 0; }
+        .level-sub-row { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(0,0,0,0.18); }
         .level-sub-row:last-child { border-bottom: none; }
-        .level-sub-row.active { background: rgba(214,179,75,0.16); }
-        .level-sub-pick { flex: 1; text-align: start; background: transparent; color: #fff; border: none; font-weight: 700; cursor: pointer; padding: 10px 12px; font-size: 14px; }
+        .level-sub-row.active { background: rgba(0,0,0,0.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35); }
+        .level-sub-pick { flex: 1; text-align: start; background: transparent; color: inherit; border: none; font-weight: 700; cursor: pointer; padding: 10px 12px; font-size: 14px; }
         .level-sub-lock, .level-sub-unlock { flex: 0 0 auto; min-width: 76px; margin-inline-end: 8px; border-radius: 6px; border: none; font-weight: 800; cursor: pointer; padding: 8px 10px; }
         .level-sub-unlock { background: #2ecc71; color: #07111f; }
         .level-sub-lock { background: #1a2d4a; color: #ead48f; }
@@ -373,14 +376,22 @@
         }
         .lab-online-dot.online {
             background: #2ecc71;
-            animation: lab-blink 1.2s ease-in-out infinite;
+            animation: lab-blink-slow 2.4s ease-in-out infinite;
             box-shadow: 0 0 8px rgba(46,204,113,0.65);
         }
-        .lab-online-dot.offline { background: #e74c3c; }
-        .lab-online-dot.unknown { background: #8fa0b6; }
-        @keyframes lab-blink {
+        .lab-online-dot.online.playing {
+            animation: lab-blink-fast 0.45s ease-in-out infinite;
+            box-shadow: 0 0 12px rgba(46,204,113,0.9);
+        }
+        .lab-online-dot.offline { background: #e74c3c; animation: none; }
+        .lab-online-dot.unknown { background: #8fa0b6; animation: none; }
+        @keyframes lab-blink-slow {
             0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.35; transform: scale(0.85); }
+            50% { opacity: 0.4; transform: scale(0.9); }
+        }
+        @keyframes lab-blink-fast {
+            0%, 100% { opacity: 1; transform: scale(1.05); }
+            50% { opacity: 0.25; transform: scale(0.75); }
         }
 
         .num-ltr,
@@ -859,8 +870,8 @@
                 return String(lvl.id || '').indexOf(mainId + '/') === 0;
             }).map(function(lvl) {
                 var unlocked = (unlockedLvls || []).indexOf(lvl.id) !== -1;
-                var parts = String(lvl.display || lvl.id).split('/');
-                var shortLabel = parts.length > 1 ? parts.slice(1).join(' ') : (lvl.display || lvl.id);
+                var idParts = String(lvl.id || '').split('/');
+                var shortLabel = idParts.length > 1 ? idParts[1] : String(lvl.display || lvl.id || '');
                 shortLabel = String(shortLabel).replace(/^(Entry|Activated|High Performance|Elite|World Class)\s+/, '');
                 return { value: lvl.id, label: shortLabel, locked: !unlocked };
             });
@@ -1551,8 +1562,9 @@
                                     if (lvl.isCurrent) className += " current";
                                     if (!lvl.isUnlocked) className += " locked";
 
-                                    var label = lvl.display || lvl.id;
-                                    var shortLabel = label.replace(/^(Foundation|Entry|Activated|High Performance|Elite|World Class)\s+/, '').trim() || label;
+                                    var idParts = String(lvl.id || '').split('/');
+                                    var shortLabel = (idParts.length > 1 ? idParts[1] : (lvl.display || lvl.id || ''));
+                                    shortLabel = String(shortLabel).replace(/^(Foundation|Entry|Activated|High Performance|Elite|World Class)\s+/, '').trim() || shortLabel;
                                     shortLabel = shortLabel.replace(/^L\d{2}-/, '');
                                     var icon = '⬜';
                                     if (lvl.isCompleted) icon = '✅';
@@ -1820,55 +1832,67 @@
                     React.createElement('div', { className: "level-main-row" },
                         LEVEL_MAIN_BUTTONS.map(function(btn) {
                             var active = (openMain || mainLevelIdOf(selectedLevel)) === btn.id;
-                            return React.createElement('button', {
-                                key: btn.id,
-                                type: "button",
-                                className: "level-main-btn" + (active ? " active" : ""),
-                                style: { background: btn.bg, color: btn.fg },
-                                onClick: function() {
-                                    if (openMain === btn.id) {
-                                        setListExpanded(!listExpanded);
-                                    } else {
-                                        setOpenMain(btn.id);
-                                        setListExpanded(true);
-                                    }
-                                }
-                            }, btn.label);
-                        })
-                    ),
-                    shownMain && visibleSubItems.length ?
-                    React.createElement('div', { className: "level-sub-rows" },
-                        visibleSubItems.map(function(item) {
-                            var levelKey = shownMain === 'L00-Foundation'
-                                ? ('L00-Foundation/' + item.value)
-                                : item.value;
+                            var isOpen = shownMain === btn.id && visibleSubItems.length > 0;
                             return React.createElement('div', {
-                                key: item.value + (item.locked ? '-locked' : '-open'),
-                                className: "level-sub-row" + (item.value === selectedSubValue ? " active" : "")
+                                key: btn.id,
+                                className: "level-main-wrap" + (isOpen ? " open" : "")
                             },
                                 React.createElement('button', {
                                     type: "button",
-                                    className: "level-sub-pick",
+                                    className: "level-main-btn" + (active ? " active" : ""),
+                                    style: { background: btn.bg, color: btn.fg },
                                     onClick: function() {
-                                        if (!listExpanded && item.value === selectedSubValue) {
+                                        if (openMain === btn.id) {
+                                            setListExpanded(!listExpanded);
+                                        } else {
+                                            setOpenMain(btn.id);
                                             setListExpanded(true);
-                                            return;
                                         }
-                                        pickSubLevel(shownMain, item.value);
                                     }
-                                }, item.label),
-                                canManageLevels ?
-                                React.createElement('button', {
-                                    type: "button",
-                                    className: item.locked ? "level-sub-unlock" : "level-sub-lock",
-                                    onClick: function() {
-                                        if (item.locked) onUnlockLevel(levelKey);
-                                        else onLockLevel(levelKey);
+                                }, btn.label),
+                                isOpen ?
+                                React.createElement('div', {
+                                    className: "level-sub-rows",
+                                    style: {
+                                        background: btn.bg,
+                                        color: btn.fg,
+                                        borderColor: btn.fg
                                     }
-                                }, item.locked ? "Unlock" : "Lock") : null
+                                },
+                                    visibleSubItems.map(function(item) {
+                                        var levelKey = shownMain === 'L00-Foundation'
+                                            ? ('L00-Foundation/' + item.value)
+                                            : item.value;
+                                        return React.createElement('div', {
+                                            key: item.value + (item.locked ? '-locked' : '-open'),
+                                            className: "level-sub-row" + (item.value === selectedSubValue ? " active" : "")
+                                        },
+                                            React.createElement('button', {
+                                                type: "button",
+                                                className: "level-sub-pick",
+                                                onClick: function() {
+                                                    if (!listExpanded && item.value === selectedSubValue) {
+                                                        setListExpanded(true);
+                                                        return;
+                                                    }
+                                                    pickSubLevel(shownMain, item.value);
+                                                }
+                                            }, item.label),
+                                            canManageLevels ?
+                                            React.createElement('button', {
+                                                type: "button",
+                                                className: item.locked ? "level-sub-unlock" : "level-sub-lock",
+                                                onClick: function() {
+                                                    if (item.locked) onUnlockLevel(levelKey);
+                                                    else onLockLevel(levelKey);
+                                                }
+                                            }, item.locked ? "Unlock" : "Lock") : null
+                                        );
+                                    })
+                                ) : null
                             );
                         })
-                    ) : null
+                    )
                 )
             );
         };
@@ -2882,6 +2906,9 @@
             var simulationEnabledState = useState(false);
             var simulationEnabled = simulationEnabledState[0];
             var setSimulationEnabled = simulationEnabledState[1];
+            var simulationFieldsState = useState({ A: false, B: false });
+            var simulationFields = simulationFieldsState[0];
+            var setSimulationFields = simulationFieldsState[1];
             var teammateOnSecState = useState(1.2);
             var teammateOnSec = teammateOnSecState[0];
             var setTeammateOnSec = teammateOnSecState[1];
@@ -3014,6 +3041,7 @@
             var visualizationEnabledRef = useRef(false);
             var vizRequestSeqRef = useRef(0);
             var simulationEnabledRef = useRef(false);
+            var simulationFieldsRef = useRef({ A: false, B: false });
             var simRequestSeqRef = useRef(0);
             var teammateOnSecRef = useRef(1.2);
             var teammateGapSecRef = useRef(0.5);
@@ -3440,7 +3468,7 @@
                     updateProgressForPlayer(player, { preferDefaults: true });
                     updateProgressForPlayerB(player, { preferDefaults: true });
                     loadPlayerSessionsFromBackend(player.id);
-                    showToast("Elite / World Class uses both fields. Score stays on Field A.", 'success');
+                    showToast("Elite / World Class plays all 12 screens. Score stays on Field A.", 'success');
                     return;
                 }
                 if (selectedPlayerBId && player.id === selectedPlayerBId) {
@@ -3500,7 +3528,7 @@
                     updateProgressForPlayer(player, { preferDefaults: true });
                     updateProgressForPlayerB(player, { preferDefaults: true });
                     loadPlayerSessionsFromBackendB(player.id);
-                    showToast("Elite / World Class uses both fields. Score stays on Field B.", 'success');
+                    showToast("Elite / World Class plays all 12 screens. Score stays on Field B.", 'success');
                     return;
                 }
                 if (selectedPlayerId && player.id === selectedPlayerId) {
@@ -4108,24 +4136,42 @@
                 });
             };
 
-            var toggleSimulation = function(enabled) {
-                simulationEnabledRef.current = enabled;
-                setSimulationEnabled(enabled);
-                localStorage.setItem('simust_simulation', JSON.stringify(enabled));
+            var applySimulationFields = function(next, toastOn) {
+                var fields = { A: !!next.A, B: !!next.B };
+                var anyOn = !!(fields.A || fields.B);
+                simulationFieldsRef.current = fields;
+                setSimulationFields({ A: fields.A, B: fields.B });
+                simulationEnabledRef.current = anyOn;
+                setSimulationEnabled(anyOn);
+                localStorage.setItem('simust_simulation_fields', JSON.stringify(fields));
+                localStorage.setItem('simust_simulation', JSON.stringify(anyOn));
                 var seq = ++simRequestSeqRef.current;
-                axios.post("/set-simulation", { enabled: enabled }).then(function() {
-                    if (seq === simRequestSeqRef.current) {
-                        showToast("Arena simulation " + (enabled ? 'ON' : 'OFF'), 'info');
+                axios.post("/set-simulation", { fields: fields }).then(function() {
+                    if (seq === simRequestSeqRef.current && toastOn) {
+                        showToast(
+                            "Arena sim A " + (fields.A ? "ON" : "OFF") +
+                            " · B " + (fields.B ? "ON" : "OFF"),
+                            "info"
+                        );
                     }
                 }).catch(function(e) {
                     console.error(e);
                     if (seq !== simRequestSeqRef.current) return;
-                    var revert = !enabled;
-                    simulationEnabledRef.current = revert;
-                    setSimulationEnabled(revert);
-                    localStorage.setItem('simust_simulation', JSON.stringify(revert));
-                    showToast("Arena simulation toggle failed", 'error');
+                    showToast("Arena simulation toggle failed", "error");
                 });
+            };
+
+            var toggleSimulationField = function(fid, enabled) {
+                var next = {
+                    A: !!simulationFieldsRef.current.A,
+                    B: !!simulationFieldsRef.current.B
+                };
+                next[fid] = !!enabled;
+                applySimulationFields(next, true);
+            };
+
+            var toggleSimulation = function(enabled) {
+                applySimulationFields({ A: !!enabled, B: !!enabled }, true);
             };
 
             var saveSessionToPlayerFolder = function(playerId, playerName, playerSurname, playerPlayerId,
@@ -4359,7 +4405,11 @@
                     player_surname: primary.surname,
                     player_player_id: primary.playerId,
                     visualization_enabled: (role === 'admin') && !!visualizationEnabledRef.current,
-                    simulation_enabled: simulationEnabledRef.current,
+                    simulation_enabled: !!(simulationFieldsRef.current.A || simulationFieldsRef.current.B),
+                    simulation_fields: {
+                        A: !!simulationFieldsRef.current.A,
+                        B: !!simulationFieldsRef.current.B
+                    },
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
                     field: scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B"),
@@ -4758,18 +4808,21 @@
                 setVisualizationEnabled(false);
                 localStorage.setItem('simust_visualization', JSON.stringify(false));
                 axios.post("/set-visualization", { enabled: false }).catch(function() {});
+                var storedFields = localStorage.getItem('simust_simulation_fields');
                 var storedSim = localStorage.getItem('simust_simulation');
-                if (storedSim !== null) {
-                    var simVal = JSON.parse(storedSim);
-                    simulationEnabledRef.current = simVal;
-                    setSimulationEnabled(simVal);
-                    axios.post("/set-simulation", { enabled: simVal }).catch(function() {});
-                } else {
-                    simulationEnabledRef.current = false;
-                    setSimulationEnabled(false);
-                    localStorage.setItem('simust_simulation', JSON.stringify(false));
-                    axios.post("/set-simulation", { enabled: false }).catch(function() {});
+                var startFields = { A: false, B: false };
+                if (storedFields) {
+                    try {
+                        var parsedFields = JSON.parse(storedFields);
+                        startFields = { A: !!parsedFields.A, B: !!parsedFields.B };
+                    } catch (e) {}
+                } else if (storedSim !== null) {
+                    try {
+                        var simVal = JSON.parse(storedSim);
+                        startFields = { A: !!simVal, B: !!simVal };
+                    } catch (e) {}
                 }
+                applySimulationFields(startFields, false);
                 var storedOn = localStorage.getItem('simust_teammate_on_sec');
                 if (storedOn !== null) {
                     var onN = parseFloat(storedOn);
@@ -4996,8 +5049,11 @@
                             )
                         ),
                         window.SIMUST_PUBLIC ? React.createElement('span', {
-                            className: 'lab-online-dot ' + (labOnline === true ? 'online' : labOnline === false ? 'offline' : 'unknown'),
-                            title: labOnline === true ? 'Online' : labOnline === false ? 'Offline' : 'Connecting…'
+                            className: 'lab-online-dot ' + (labOnline === true ? 'online' : labOnline === false ? 'offline' : 'unknown')
+                                + (labOnline === true && realtimeRunning ? ' playing' : ''),
+                            title: labOnline === true
+                                ? (realtimeRunning ? 'Realtime Play running' : 'Online')
+                                : (labOnline === false ? 'Offline' : 'Connecting…')
                         }) : null,
                         React.createElement('h1', { className: "text-3xl font-black" },
                             React.createElement('span', { className: "gold-accent" }, "SIMUST"),
@@ -5264,12 +5320,22 @@
                                 React.createElement('span', { className: "slider" })
                             ),
                             React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
-                                t("arenaSimulation")),
-                            React.createElement('label', { className: "toggle-switch" },
+                                "Sim A"),
+                            React.createElement('label', { className: "toggle-switch", title: "Field A arena simulator. Leave OFF for a real player; turn ON when Field B is the real player." },
                                 React.createElement('input', {
                                     type: "checkbox",
-                                    checked: simulationEnabled,
-                                    onChange: function(e) { toggleSimulation(e.target.checked); }
+                                    checked: !!simulationFields.A,
+                                    onChange: function(e) { toggleSimulationField("A", e.target.checked); }
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            ),
+                            React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
+                                "Sim B"),
+                            React.createElement('label', { className: "toggle-switch", title: "Field B arena simulator. Optional for Elite / World Class — one field is enough; all 12 screens still play." },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: !!simulationFields.B,
+                                    onChange: function(e) { toggleSimulationField("B", e.target.checked); }
                                 }),
                                 React.createElement('span', { className: "slider" })
                             )

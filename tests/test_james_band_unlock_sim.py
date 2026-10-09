@@ -2,7 +2,7 @@
 
 Creates a full player profile, books 30-minute credits through SF-30N/60N/110N/180N,
 passes each Foundation set at 75% accuracy and 70% efficiency, then walks
-Entry A-T1..A-T4 at 85% accuracy and 80% efficiency. Passing A-T4 opens the
+Entry A-T1..A-T4 at 85% accuracy and 80% efficiency. Passing S1.T4 opens the
 next set and it stays open. Booking does not open levels.
 
 There is no SF-90N in the product; Foundation playlists are SF-30N, SF-60N, SF-110N, SF-180N.
@@ -29,7 +29,7 @@ from app import ALL_LEVELS, apply_session_progress, get_level_thresholds, get_ne
 
 PLAYER_ID = "james_band"
 FOUNDATION_SFS = list(simust_progress.FOUNDATION_PLAYLISTS)  # SF-30N, SF-60N, SF-110N, SF-180N
-ENTRY_SERIES = [f"L01-Entry/A-T{n}" for n in range(1, 5)]
+ENTRY_SERIES = [f"L01-Entry/S1.T{n}" for n in range(1, 5)]
 
 # Foundation gate: 75% accuracy, 70% efficiency → 3 correct + 1 wrong of 4.
 STATS_SF180_MIN = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
@@ -144,7 +144,7 @@ def run_pipeline(fields: List[str]) -> Tuple[dict, List[dict]]:
         # Dual A+B: same session score applies once (progress is per player).
         log.append(play(users, "L00-Foundation", sf, stats, field_tag))
 
-    # After SF-180 pass, Entry A-T1 is open — walk A-T1..A-T4; A-T4 opens Activated.
+    # After SF-180 pass, Entry S1.T1 is open — walk A-T1..A-T4; S1.T4 opens Activated.
     for series in ENTRY_SERIES:
         grant = book(users, 30, f"{field_tag}-book-{series.replace('/', '_')}")
         log.append({
@@ -281,9 +281,9 @@ class JamesBandUnlockSimTests(unittest.TestCase):
             self.assertTrue(summary["entry_complete"])
             for series in ENTRY_SERIES:
                 self.assertIn(series, summary["completed_levels"])
-            # After Entry A-T4 pass, Activated A-T1 should unlock.
-            self.assertIn("L02-Activated/A-T1", summary["unlocked_levels"])
-            self.assertEqual(summary["next_after_entry"], "L02-Activated/A-T1")
+            # After Entry S1.T4 pass, Activated S1.T1 should unlock.
+            self.assertIn("L02-Activated/S1.T1", summary["unlocked_levels"])
+            self.assertEqual(summary["next_after_entry"], "L02-Activated/S1.T1")
             results = summary["challenge_results"]
             self.assertTrue(results["L00-Foundation"]["passed"])
             self.assertGreaterEqual(results["L00-Foundation"]["aac"], 75.0)

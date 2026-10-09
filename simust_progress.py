@@ -6,13 +6,45 @@ Rules:
 - Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry:
   75% accuracy and 70% efficiency on the final results.
 - Entry and every later set: 85% accuracy and 80% efficiency on the final results.
-- Passing A-T4 opens the next band (Entry A-T4 → Activated A-T1, and so on).
-  World Class A-T4 opens World Class A-T5. Booking does not open levels.
+- Passing S1.T4 opens the next band (Entry S1.T4 → Activated S1.T1, and so on).
+  World Class S1.T4 opens World Class S1.T5. Booking does not open levels.
+  Sub-level names: A-T# / A.T# → S1.T#, A1.T# → S2.T#.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def normalize_level_id(level_id: str) -> str:
+    """Map legacy A-T / A1.T theme ids to S1.T / S2.T."""
+    cid = str(level_id or "").strip()
+    if not cid or "/" not in cid:
+        return cid
+    parts = cid.split("/")
+    main, theme = parts[0], parts[1]
+    rest = parts[2:]
+    a1 = re.match(r"^A1[.-]?T([1-5])$", theme, re.I)
+    if a1:
+        theme = f"S2.T{a1.group(1)}"
+    else:
+        legacy = re.match(r"^A[-.]?T([1-5])$", theme, re.I)
+        if legacy:
+            theme = f"S1.T{legacy.group(1)}"
+    return "/".join([main, theme] + rest)
+
+
+def _migrate_level_list(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for raw in values or []:
+        nid = normalize_level_id(str(raw or "").strip())
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        out.append(nid)
+    return out
 
 FOUNDATION_PLAYLISTS = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
 # Extra Foundation modes (not in the paid SF unlock chain)
@@ -80,6 +112,16 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     if FOUNDATION_LEVEL not in levels:
         levels.append(FOUNDATION_LEVEL)
         progress["unlocked_levels"] = levels
+    progress["unlocked_levels"] = _migrate_level_list(progress.get("unlocked_levels") or [])
+    progress["completed_levels"] = _migrate_level_list(progress.get("completed_levels") or [])
+    progress["eligible_levels"] = _migrate_level_list(progress.get("eligible_levels") or [])
+    progress["current_level"] = normalize_level_id(str(progress.get("current_level") or FOUNDATION_LEVEL)) or FOUNDATION_LEVEL
+    results = dict(progress.get("challenge_results") or {})
+    if results:
+        migrated = {}
+        for key, value in results.items():
+            migrated[normalize_level_id(str(key))] = value
+        progress["challenge_results"] = migrated
     if not progress.get("current_level"):
         progress["current_level"] = FOUNDATION_LEVEL
     if progress.get("current_level") == FOUNDATION_LEVEL and not progress.get("current_playlist"):
@@ -117,11 +159,12 @@ def score_gate(level_id: str) -> Tuple[float, float]:
 
 def highest_unlocked_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
     """Furthest open level. Foundation while only SF sets are open."""
-    unlocked = set(progress.get("unlocked_levels") or [])
+    unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
     best = ""
     for level_id in all_levels or []:
-        if level_id in unlocked and level_id != FOUNDATION_LEVEL:
-            best = level_id
+        nid = normalize_level_id(level_id)
+        if nid in unlocked and nid != FOUNDATION_LEVEL:
+            best = nid
     return best or FOUNDATION_LEVEL
 
 
@@ -269,7 +312,9 @@ def can_play(
         if sub not in unlocked_playlists:
             return False, f"{sub} is locked until the previous set is passed, or an admin unlocks it"
         return True, ""
-    if level_id not in unlocked_levels:
+    want = normalize_level_id(level_id)
+    unlocked = {normalize_level_id(x) for x in unlocked_levels}
+    if want not in unlocked:
         return False, f"{level_id} is locked until the previous set is passed, or an admin unlocks it"
     return True, ""
 

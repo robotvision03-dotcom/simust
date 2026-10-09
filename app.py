@@ -839,11 +839,11 @@ PROGRESSION = {
         "threshold_acc": 85,
         "threshold_ae": 80,
         "themes": {
-            "A-T1": [],
-            "A-T2": [],
-            "A-T3": [],
-            "A-T4": [],
-            "A-T5": []
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
         }
     },
     "L02-Activated": {
@@ -851,11 +851,16 @@ PROGRESSION = {
         "threshold_acc": 85,
         "threshold_ae": 80,
         "themes": {
-            "A-T1": [],
-            "A-T2": [],
-            "A-T3": [],
-            "A-T4": [],
-            "A-T5": []
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
+            "S2.T1": [],
+            "S2.T2": [],
+            "S2.T3": [],
+            "S2.T4": [],
+            "S2.T5": [],
         }
     },
     "L03-HighPerformance": {
@@ -863,11 +868,16 @@ PROGRESSION = {
         "threshold_acc": 85,
         "threshold_ae": 80,
         "themes": {
-            "A-T1": [],
-            "A-T2": [],
-            "A-T3": [],
-            "A-T4": [],
-            "A-T5": []
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
+            "S2.T1": [],
+            "S2.T2": [],
+            "S2.T3": [],
+            "S2.T4": [],
+            "S2.T5": [],
         }
     },
     "L04-Elite": {
@@ -875,11 +885,16 @@ PROGRESSION = {
         "threshold_acc": 85,
         "threshold_ae": 80,
         "themes": {
-            "A-T1": [],
-            "A-T2": [],
-            "A-T3": [],
-            "A-T4": [],
-            "A-T5": []
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
+            "S2.T1": [],
+            "S2.T2": [],
+            "S2.T3": [],
+            "S2.T4": [],
+            "S2.T5": [],
         }
     },
     "L05-WorldClass": {
@@ -887,11 +902,16 @@ PROGRESSION = {
         "threshold_acc": 85,
         "threshold_ae": 80,
         "themes": {
-            "A-T1": [],
-            "A-T2": [],
-            "A-T3": [],
-            "A-T4": [],
-            "A-T5": []
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
+            "S2.T1": [],
+            "S2.T2": [],
+            "S2.T3": [],
+            "S2.T4": [],
+            "S2.T5": [],
         }
     }
 }
@@ -900,7 +920,7 @@ def get_all_level_ids():
     """
     Returns a flat list of all challenge IDs in order.
     For Foundation: "L00-Foundation"
-    For others: "L01-Entry/A-T1/A.T1.C1" etc.
+    For others: "L01-Entry/S1.T1" etc. (S2.T* is Activated series 2).
     """
     ids = []
     for main_id, config in PROGRESSION.items():
@@ -912,22 +932,33 @@ def get_all_level_ids():
                     ids.append(f"{main_id}/{theme}")
                     continue
                 for ch in challenges:
-                    # e.g., A.T1.C1
-                    challenge_name = f"A.{theme[2:]}.{ch}" if theme.startswith("A-") else f"{theme}.{ch}"
-                    ids.append(f"{main_id}/{theme}/{challenge_name}")
+                    ids.append(f"{main_id}/{theme}/{theme}.{ch}")
     return ids
 
 ALL_LEVELS = get_all_level_ids()
+
+# Folder names on disk may still use legacy A-T / A1.T theme folders.
+_LEGACY_THEME_FOLDERS = {
+    **{f"S1.T{n}": f"A-T{n}" for n in range(1, 6)},
+    **{f"S2.T{n}": f"A1.T{n}" for n in range(1, 6)},
+}
 
 def get_level_path(level_id: str) -> str:
     """
     Convert level ID to filesystem path under SIMUST_PLAYER_DIRECTORY.
     For L00-Foundation, we return a special path (will be handled as a special case).
     """
-    if level_id == "L00-Foundation":
+    cid = simust_progress.normalize_level_id(level_id)
+    if cid == "L00-Foundation":
         return os.path.join(SIMUST_PLAYER_DIRECTORY, "L00-Foundation-Challenge")
-    # e.g., "L01-Entry/A-T1/A.T1.C1" -> "L01-Entry/A-T1/A.T1.C1"
-    return os.path.join(SIMUST_PLAYER_DIRECTORY, *level_id.split('/'))
+    parts = cid.split("/")
+    if len(parts) >= 2 and parts[1] in _LEGACY_THEME_FOLDERS:
+        legacy = list(parts)
+        legacy[1] = _LEGACY_THEME_FOLDERS[parts[1]]
+        legacy_path = os.path.join(SIMUST_PLAYER_DIRECTORY, *legacy)
+        if os.path.isdir(legacy_path):
+            return legacy_path
+    return os.path.join(SIMUST_PLAYER_DIRECTORY, *parts)
 
 def get_main_level(level_id: str) -> str:
     """Return the main level ID (e.g., 'L01-Entry') from a challenge ID."""
@@ -938,25 +969,31 @@ def get_main_level(level_id: str) -> str:
 def get_next_level(current_level_id: str) -> Optional[str]:
     """Return the next level to open after a pass.
 
-    A-T4 opens the next band (e.g. Entry A-T4 → Activated A-T1).
-    World Class A-T4 still opens World Class A-T5. A-T5 is skipped in
-    earlier bands so set 4 is the band-completion gate.
+    Entry S1.T4 opens Activated S1.T1.
+    Activated / High Performance / Elite / World Class keep S1.T5 then S2.T*,
+    and S2.T4 opens the next band (or World Class S2.T5 at the end).
     """
-    cid = str(current_level_id or "")
-    if cid.endswith("/A-T4"):
+    cid = simust_progress.normalize_level_id(current_level_id)
+    if cid.endswith("/S2.T4"):
         main = cid.split("/")[0]
-        band_order = [
-            "L01-Entry",
+        s2_gate = {
+            "L02-Activated": "L03-HighPerformance/S1.T1",
+            "L03-HighPerformance": "L04-Elite/S1.T1",
+            "L04-Elite": "L05-WorldClass/S1.T1",
+            "L05-WorldClass": "L05-WorldClass/S2.T5",
+        }
+        return s2_gate.get(main)
+    if cid.endswith("/S1.T4"):
+        main = cid.split("/")[0]
+        if main == "L01-Entry":
+            return "L02-Activated/S1.T1"
+        if main in (
             "L02-Activated",
             "L03-HighPerformance",
             "L04-Elite",
             "L05-WorldClass",
-        ]
-        if main in band_order:
-            idx = band_order.index(main)
-            if idx + 1 < len(band_order):
-                return f"{band_order[idx + 1]}/A-T1"
-            return "L05-WorldClass/A-T5"
+        ):
+            return f"{main}/S1.T5"
     try:
         idx = ALL_LEVELS.index(cid)
         if idx + 1 < len(ALL_LEVELS):
@@ -978,6 +1015,7 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     """Save the latest score. The final results video is what opens the next set."""
     if not player_id or player_id not in users:
         return False
+    level_played = simust_progress.normalize_level_id(level_played)
     if level_played not in ALL_LEVELS:
         return False
     correct = statistics.get("correct", 0) or 0
@@ -1210,16 +1248,40 @@ def write_visualization_setting(enabled):
     os.replace(tmp_file, viz_file)
 
 
-def write_simulation_setting(enabled):
-    """Atomically write arena simulation on/off so the realtime process can pick it up."""
+def write_simulation_fields(fields):
+    """Atomically write per-field arena simulation flags for the realtime process."""
     sim_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
     os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    payload = {
+        "A": bool((fields or {}).get("A") or (fields or {}).get("a")),
+        "B": bool((fields or {}).get("B") or (fields or {}).get("b")),
+    }
     tmp_file = sim_file + ".tmp"
     with open(tmp_file, "w", encoding="utf-8") as f:
-        f.write("true" if enabled else "false")
+        json.dump(payload, f)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_file, sim_file)
+    return payload
+
+
+def write_simulation_setting(enabled):
+    """Atomically write arena simulation on/off so the realtime process can pick it up."""
+    flag = bool(enabled)
+    return write_simulation_fields({"A": flag, "B": flag})
+
+
+def _read_written_simulation_fields():
+    sim_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
+    try:
+        with open(sim_file, "r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        return {
+            "A": bool(data.get("A") or data.get("a")),
+            "B": bool(data.get("B") or data.get("b")),
+        }
+    except Exception:
+        return {"A": False, "B": False}
 
 
 def write_teammate_flash_timing(on_sec, gap_sec):
@@ -1802,13 +1864,12 @@ async def app_config():
     levels = []
     for level_id in ALL_LEVELS:
         main = get_main_level(level_id)
-        display = PROGRESSION.get(main, {}).get("display", level_id)
-        if level_id != "L00-Foundation":
+        if level_id == "L00-Foundation":
+            display = PROGRESSION.get(main, {}).get("display", level_id)
+        else:
+            # Same naming as Activated opening: S1.T1 / S2.T1 (no band prefix).
             parts = level_id.split("/")
-            if len(parts) >= 3:
-                display += f" {parts[1]} {parts[2]}"
-            elif len(parts) == 2:
-                display += f" {parts[1]}"
+            display = parts[1] if len(parts) >= 2 else level_id
         levels.append({
             "id": level_id,
             "display": display,
@@ -1889,16 +1950,13 @@ async def get_levels():
             if exists:
                 videos = [f for f in os.listdir(path) if f.lower().endswith('.mp4')]
                 video_count = len(videos)
-            # Determine display name
+            # Determine display name (series levels: S1.T1 / S2.T1 like Activated)
             main = get_main_level(level_id)
-            display = PROGRESSION[main]["display"]
-            # For challenge levels, append theme/challenge
-            if level_id != "L00-Foundation":
+            if level_id == "L00-Foundation":
+                display = PROGRESSION[main]["display"]
+            else:
                 parts = level_id.split('/')
-                if len(parts) >= 3:
-                    display += f" {parts[1]} {parts[2]}"
-                elif len(parts) == 2:
-                    display += f" {parts[1]}"
+                display = parts[1] if len(parts) >= 2 else level_id
             levels_info.append({
                 "id": level_id,
                 "display": display,
@@ -1999,7 +2057,7 @@ async def start_realtime_playback(req: Request):
                 if score_field not in ("A", "B"):
                     score_field = fid
                 logger.info(
-                    "Elite/World Class booked %s, so Field %s is added. Score stays on Field %s.",
+                    "Elite/World Class on %s: Field %s is added automatically for all 12 screens. Score stays on Field %s.",
                     fid, other, score_field,
                 )
         if score_field not in ("A", "B"):
@@ -2114,7 +2172,11 @@ async def start_realtime_playback(req: Request):
             launch_path = level_path
 
         write_visualization_setting(bool(data.get("visualization_enabled", False)))
-        write_simulation_setting(bool(data.get("simulation_enabled", False)))
+        sim_fields = data.get("simulation_fields")
+        if not isinstance(sim_fields, dict):
+            both = bool(data.get("simulation_enabled", False))
+            sim_fields = {"A": both, "B": both}
+        write_simulation_fields(sim_fields)
         flash_timing = write_teammate_flash_timing(
             data.get("teammate_on_sec", data.get("on_sec", 1.2)),
             data.get("teammate_gap_sec", data.get("gap_sec", 0.5)),
@@ -2138,12 +2200,11 @@ async def start_realtime_playback(req: Request):
                     "field": data.get("field") or "A",
                 }]
             field_map = {"A": None, "B": None}
-            resolved_by_field = {fid: (slot_level, entry_sub) for _pid, fid, _entry, slot_level, entry_sub in resolved_slots}
-            for entry in players_payload:
-                fid = _reservation_field_id(entry)
-                slot_level, entry_sub = resolved_by_field.get(fid, (level_id, str(subdirectory or "").strip()))
+            # Prefer resolved_slots so Elite/World Class mirroring (one field → both)
+            # is written into players_fields.json for the 12-screen combined play.
+            for pid, fid, entry, slot_level, entry_sub in resolved_slots:
                 field_map[fid] = {
-                    "player_id": (entry or {}).get("player_id") or "",
+                    "player_id": pid or (entry or {}).get("player_id") or "",
                     "player_name": (entry or {}).get("player_name") or "",
                     "player_surname": (entry or {}).get("player_surname") or "",
                     "field": fid,
@@ -2156,6 +2217,23 @@ async def start_realtime_playback(req: Request):
                 if isinstance(field_map.get(fid), dict)
                 and str(field_map[fid].get("player_id") or "").strip()
             ]
+            for fid, other in (("A", "B"), ("B", "A")):
+                if not bool(sim_fields.get(fid)) or fid in active_list:
+                    continue
+                src = field_map.get(other) if isinstance(field_map.get(other), dict) else {}
+                if not str((src or {}).get("player_id") or "").strip():
+                    continue
+                field_map[fid] = {
+                    "player_id": "__sim_%s__" % fid,
+                    "player_name": "Simulator",
+                    "player_surname": fid,
+                    "field": fid,
+                    "subdirectory": src.get("subdirectory") or "",
+                    "level": src.get("level") or level_id,
+                    "directory": field_dirs.get(fid) or src.get("directory") or "",
+                    "simulated": True,
+                }
+                active_list.append(fid)
             # Both selected fields stay active together (neither half dark).
             phase_active = active_list or ["A"]
             os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
@@ -2448,10 +2526,23 @@ async def set_visualization(req: Request):
 async def set_simulation(req: Request):
     try:
         data = await req.json()
-        enabled = bool(data.get("enabled", False))
-        write_simulation_setting(enabled)
-        logger.info(f"Arena simulation set to: {enabled}")
-        return {"status": "success", "simulation_enabled": enabled}
+        fields = data.get("fields") if isinstance(data.get("fields"), dict) else None
+        if fields is None and data.get("field"):
+            fid = str(data.get("field") or "").upper()[:1]
+            current = _read_written_simulation_fields()
+            if fid in ("A", "B"):
+                current[fid] = bool(data.get("enabled", False))
+            fields = current
+        if fields is None:
+            both = bool(data.get("enabled", False))
+            fields = {"A": both, "B": both}
+        saved = write_simulation_fields(fields)
+        logger.info("Arena simulation set to: A=%s B=%s", saved.get("A"), saved.get("B"))
+        return {
+            "status": "success",
+            "simulation_fields": saved,
+            "simulation_enabled": bool(saved.get("A") or saved.get("B")),
+        }
     except Exception as e:
         logger.error(f"Failed to set simulation: {e}")
         raise HTTPException(500, f"Failed to set simulation: {str(e)}")

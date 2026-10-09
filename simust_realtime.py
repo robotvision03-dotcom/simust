@@ -363,7 +363,8 @@ GOAL_PROBE_ZONES = (
 )
 # Displayed goal circle is this fraction of the old accept distance.
 # The last two 0.90 factors make the green finish circle 10% smaller, twice.
-GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90 * 0.90 * 0.90
+# 0.93 shrinks diameter 7%; 1.03 then grows it 3%.
+GOAL_CIRCLE_SCALE = 0.65 * 0.70 * 0.90 * 0.90 * 0.90 * 0.90 * 0.93 * 1.03
 # Green finish cylinder drawn on top of the circle (pixels in the stitched frame).
 FINISH_CYLINDER_HEIGHT_PX = 31
 FINISH_CYLINDER_COLOR = (0, 180, 0)
@@ -1681,9 +1682,11 @@ _SCREEN3_CABINET = {"A": "14", "B": "7"}
 # Screens 2–5: extra size, then −10%, then another −10%.
 _SCREEN_2_AND_5_CABINETS = frozenset({"13", "3", "6", "10"})
 _SCREEN_2_TO_5_CABINETS = frozenset({"13", "14", "2", "3", "6", "7", "9", "10"})
+_SCREEN_2_CABINETS = frozenset({"13", "6"})  # Field A2 and Field B2
 _FINISH_CIRCLE_EXTRA = 1.15
 _FINISH_CIRCLE_MORE = 1.10
 _FINISH_CIRCLE_SHRINK = 0.90 * 0.90
+_FINISH_CYLINDER_SCREEN2 = 1.10
 
 
 def _finish_circle_boost(p0, p1) -> float:
@@ -1698,6 +1701,8 @@ def _finish_circle_boost(p0, p1) -> float:
         scale *= _FINISH_CIRCLE_EXTRA
         scale *= _FINISH_CIRCLE_MORE
         scale *= _FINISH_CIRCLE_SHRINK
+    if base in _SCREEN_2_CABINETS:
+        scale *= _FINISH_CYLINDER_SCREEN2
     return scale
 
 
@@ -1762,9 +1767,15 @@ def draw_finish_cylinder(img, cx, cy, radius, height=FINISH_CYLINDER_HEIGHT_PX, 
     cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 180, edge, 2)
 
 
-def finish_cylinder_height_sim():
+def finish_cylinder_height_sim(p0=None, p1=None):
     """Cylinder height in SIM pixels (matches the 31px overlay on a 360p frame)."""
-    return float(FINISH_CYLINDER_HEIGHT_PX)
+    height = float(FINISH_CYLINDER_HEIGHT_PX)
+    if p0 is None or p1 is None:
+        return height
+    cabinet = _cabinet_for_line(p0, p1)
+    if cabinet and str(cabinet).rstrip("LR") in _SCREEN_2_CABINETS:
+        height *= _FINISH_CYLINDER_SCREEN2
+    return height
 
 
 def in_finish_cylinder(point, p0, p1, depth):
@@ -1778,7 +1789,7 @@ def in_finish_cylinder(point, p0, p1, depth):
     dy = py - cy
     if math.hypot(dx, dy) <= radius:
         return True
-    height = finish_cylinder_height_sim()
+    height = finish_cylinder_height_sim(p0, p1)
     top_cy = cy - height
     ry = max(3.0, radius * 0.35)
     if abs(dx) <= radius and top_cy <= py <= cy:
@@ -2405,8 +2416,46 @@ def read_visualization_setting():
     return _read_flag_file(VIZ_FILE)
 
 
+def parse_simulation_fields(content) -> dict:
+    """Map arena_simulation.txt to per-field flags. Legacy true/false means both."""
+    raw = str(content or "").strip()
+    if not raw:
+        return {"A": False, "B": False}
+    lower = raw.lower()
+    if lower in ("true", "1", "yes", "on"):
+        return {"A": True, "B": True}
+    if lower in ("false", "0", "no", "off"):
+        return {"A": False, "B": False}
+    if raw[:1] == "{":
+        try:
+            data = json.loads(raw) or {}
+        except Exception:
+            return {"A": False, "B": False}
+        return {
+            "A": bool(data.get("A") or data.get("a")),
+            "B": bool(data.get("B") or data.get("b")),
+        }
+    tokens = {
+        part.strip().upper()[:1]
+        for part in raw.replace(";", ",").split(",")
+        if part.strip()
+    }
+    return {"A": "A" in tokens, "B": "B" in tokens}
+
+
+def read_simulation_fields() -> dict:
+    try:
+        if not os.path.exists(SIM_FILE):
+            return {"A": False, "B": False}
+        with open(SIM_FILE, "r", encoding="utf-8") as handle:
+            return parse_simulation_fields(handle.read())
+    except Exception:
+        return {"A": False, "B": False}
+
+
 def read_simulation_setting():
-    return _read_flag_file(SIM_FILE)
+    fields = read_simulation_fields()
+    return bool(fields.get("A") or fields.get("B"))
 
 
 def read_pause_setting():
@@ -2496,9 +2545,12 @@ class ArenaSimulator:
         self.aim_name = ""
         self.border_index = 0
         self.finish_balls = False
+        self.always_correct = False
 
     def _finish_plan(self, test_num, action_in_set, actions_in_set):
         """Tests 1–5: about 100%, 80%, 50%, 20%, then 100% in the goal."""
+        if getattr(self, "always_correct", False):
+            return "finish"
         from smart_simust_player import finish_balls_sim_plan
         return finish_balls_sim_plan(test_num, action_in_set, actions_in_set)
 
@@ -2560,7 +2612,7 @@ class ArenaSimulator:
             depth = arrival_depth_for(goal_screen, "GOAL")
             self.start_xy = goal_send_origin(self.screens)
             self.travel_s = GOAL_SHOT_TRAVEL_S
-            if self.GOAL_PROBE:
+            if self.GOAL_PROBE and not getattr(self, "always_correct", False):
                 name = GOAL_PROBE_ZONES[self.outcome_index % len(GOAL_PROBE_ZONES)]
                 self.outcome_index += 1
                 self.probe_name = name
@@ -2662,6 +2714,8 @@ class ArenaSimulator:
         return name, xy
 
     def _next_outcome(self, action):
+        if getattr(self, "always_correct", False):
+            return "correct"
         if action == "GOAL":
             cycle = self.GOAL_CYCLE
         elif action == "PASS":
@@ -3537,6 +3591,7 @@ class FieldRuntime:
         self._planned_on_sec = None
         self.analysis_started_at = 0
         self._paused_analysis_remaining = None
+        self._cylinder_goal_seq = None
 
     def reset_for_recording(self, parent_dir):
         self.recording_subdir = os.path.join(parent_dir, self.subdir_name)
@@ -3617,13 +3672,15 @@ class SimustRealtimeCamera:
         print("REAL-TIME RESULTS ANALYSIS DISPLAYED (A left / B right)")
         print("=" * 60)
 
-        sim = read_simulation_setting()
-        self.simulation_enabled = bool(sim)
+        fields = read_simulation_fields()
+        self.simulation_fields = {"A": bool(fields.get("A")), "B": bool(fields.get("B"))}
+        self.simulation_enabled = bool(self.simulation_fields["A"] or self.simulation_fields["B"])
         self.simulator_a = ArenaSimulator(field_id="A")
         self.simulator_b = ArenaSimulator(field_id="B")
         self.simulator = self.simulator_a  # back-compat alias
         self.simulators = {"A": self.simulator_a, "B": self.simulator_b}
-        self.tracker = DetectionTracker(require_models=not self.simulation_enabled)
+        both_sim = bool(self.simulation_fields["A"] and self.simulation_fields["B"])
+        self.tracker = DetectionTracker(require_models=not both_sim)
         viz = read_visualization_setting()
         self.visualization_enabled = bool(viz)
 
@@ -3632,6 +3689,7 @@ class SimustRealtimeCamera:
         self.channels = {"A": FieldRuntime("A"), "B": FieldRuntime("B")}
         self.active_fields = set(("A", "B"))
         self._refresh_active_fields()
+        self._sync_simulator_partner_mode()
 
         # Back-compat aliases → Field A (legacy single-field call sites)
         ch_a = self.channels["A"]
@@ -3718,7 +3776,11 @@ class SimustRealtimeCamera:
         print(f"Detection Confidence: {DETECTION_CONF}")
         print(f"Recordings: {DEFAULT_RECORDINGS_DIR}")
         print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
-        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (Field A + Field B)")
+        print(
+            "Arena simulation: "
+            f"A={'ON' if self.simulation_fields.get('A') else 'OFF'} "
+            f"B={'ON' if self.simulation_fields.get('B') else 'OFF'}"
+        )
         print(
             f"Action cues: {'image_action_cue.json only (camera QR OFF)' if not CAMERA_QR_ENABLED else 'camera QR + image cue'}"
         )
@@ -3804,9 +3866,24 @@ class SimustRealtimeCamera:
         self._sync_aliases_from_channel(
             self.channels.get("A" if "A" in active else ("B" if "B" in active else "A"))
         )
+        self._sync_simulator_partner_mode()
 
     def _field_is_active(self, fid):
         return (normalize_field(fid) or fid) in self.active_fields
+
+    def _field_is_simulated(self, fid):
+        key = str(normalize_field(fid) or fid or "").upper()[:1]
+        return bool((getattr(self, "simulation_fields", None) or {}).get(key))
+
+    def _sync_simulator_partner_mode(self):
+        """With a real player on one field, the simulated field always scores 100%."""
+        active = set(self.active_fields) if self.active_fields else {"A", "B"}
+        sim_on = {fid for fid in ("A", "B") if fid in active and self._field_is_simulated(fid)}
+        real_on = {fid for fid in ("A", "B") if fid in active and fid not in sim_on}
+        partner = bool(sim_on and real_on)
+        for sim in (self.simulators or {}).values():
+            if sim is not None:
+                sim.always_correct = partner
 
     def _mask_inactive_half(self, frame):
         """Black out the unused half so saved/live video has no inactive-field content."""
@@ -4822,7 +4899,7 @@ class SimustRealtimeCamera:
         # Do not clear kp_appear_frames_left / _pending_cue_info / _frame_sync_cue_raw.
         # The next pass arms its 17f delay while this hold is still running.
         # Wiping that countdown here restarted it late, so S2 slipped 8f and S3 16f.
-        if self.simulation_enabled:
+        if self._field_is_simulated(ch.field_id):
             sim = self.simulators.get(ch.field_id)
             if sim is not None:
                 sim.end_action()
@@ -4981,7 +5058,7 @@ class SimustRealtimeCamera:
         recording = bool(getattr(saver, "is_recording", False))
         ch.current_qr_block["video_start_sec"] = round((frames / fps) if recording else 0.0, 3)
 
-        if self.simulation_enabled:
+        if self._field_is_simulated(ch.field_id):
             sim = self.simulators.get(ch.field_id)
             if sim is not None:
                 sim.start_action(
@@ -5066,7 +5143,7 @@ class SimustRealtimeCamera:
                 cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
                 cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
                 radius = max(4, int(round(goal_circle_radius(depth, (x1, y1), (x2, y2)) * min(sx, sy))))
-                height_px = max(8, int(round(finish_cylinder_height_sim() * sy)))
+                height_px = max(8, int(round(finish_cylinder_height_sim((x1, y1), (x2, y2)) * sy)))
                 draw_finish_cylinder(overlay, cx, cy, radius, height=height_px)
                 drew_band = True
                 line_marks.append((
@@ -5117,6 +5194,8 @@ class SimustRealtimeCamera:
             # arrives during the tail of the 3s hold).
             just_armed = False
             if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
+                if ch.session_active and bool((cue or {}).get("finish_balls")):
+                    self._clear_goal_area_now(ch, current_timestamp)
                 on_sec = _cue_on_sec(cue)
                 hold_frames = _on_hold_frames(on_sec)
                 ch._frame_sync_cue_raw = cue_raw
@@ -5345,37 +5424,34 @@ class SimustRealtimeCamera:
     # ---- Frame processing (with hip-point tracking) ----
     def _detections_for_frame(self, frame, current_timestamp):
         active = set(self.active_fields) if self.active_fields else {"A", "B"}
-        if self.simulation_enabled:
-            h, w = frame.shape[:2]
-            balls, players = [], []
-            hips = {}
-            for fid, sim in self.simulators.items():
-                if fid not in active:
-                    hips[fid] = (None, None)
-                    continue
-                b, p, hip = sim.step(w, h)
-                for item in b:
-                    item = dict(item)
-                    item["field"] = fid
-                    balls.append(item)
-                for item in p:
-                    item = dict(item)
-                    item["field"] = fid
-                    players.append(item)
-                hips[fid] = hip
-                frame = sim.draw_on_frame(frame, b, p)
-            return frame, balls, players, hips
-        balls, players = self.tracker.detect_objects(frame, active_fields=active)
-        hips = {}
-        for fid in ("A", "B"):
-            if fid not in active:
-                hips[fid] = (None, None)
+        sim_ids = {fid for fid in ("A", "B") if fid in active and self._field_is_simulated(fid)}
+        real_ids = {fid for fid in ("A", "B") if fid in active and fid not in sim_ids}
+        balls, players = [], []
+        hips = {"A": (None, None), "B": (None, None)}
+        h, w = frame.shape[:2]
+        if real_ids:
+            balls, players = self.tracker.detect_objects(frame, active_fields=real_ids)
+            for fid in real_ids:
+                ch = self.channels[fid]
+                sx, sy = self.tracker.get_player_tracking_point_for_field(
+                    frame, players, fid, current_timestamp, ch.session_start_timestamp or current_timestamp
+                )
+                hips[fid] = (sx, sy)
+        for fid in sim_ids:
+            sim = self.simulators.get(fid)
+            if sim is None:
                 continue
-            ch = self.channels[fid]
-            sx, sy = self.tracker.get_player_tracking_point_for_field(
-                frame, players, fid, current_timestamp, ch.session_start_timestamp or current_timestamp
-            )
-            hips[fid] = (sx, sy)
+            b, p, hip = sim.step(w, h)
+            for item in b:
+                item = dict(item)
+                item["field"] = fid
+                balls.append(item)
+            for item in p:
+                item = dict(item)
+                item["field"] = fid
+                players.append(item)
+            hips[fid] = hip
+            frame = sim.draw_on_frame(frame, b, p)
         return frame, balls, players, hips
 
     def _append_frame_data(self, ch, balls, players, hip, current_timestamp, into_session):
@@ -5415,9 +5491,64 @@ class SimustRealtimeCamera:
             if ch.current_qr_block is not None:
                 ch.current_qr_block["data"].append(frame_data)
             self._tick_keypoint_hold(ch, current_timestamp)
+            self._publish_goal_if_in_cylinder(ch, field_balls, current_timestamp)
         else:
             ch.between_session_data.append(frame_data)
         return sx, sy
+
+    def _clear_goal_area_now(self, ch, current_timestamp):
+        """Drop the goal line and cylinder on this frame (finish-balls screen change)."""
+        ch.kp_clear_frames_left = None
+        ch.active_goal_lines = {}
+        ch.current_keypoints = []
+        now_str = get_current_time_ms()
+        with self.session_lock:
+            if ch.session_active:
+                self._end_session_locked(now_str, current_timestamp, ch)
+            else:
+                ch.active_goal_lines = {}
+                ch.current_keypoints = []
+
+    def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
+        """Finish-balls: as soon as the ball is in the cylinder, score Correct."""
+        if self.operator_paused or not ch.session_active:
+            return
+        block = ch.current_qr_block
+        if not isinstance(block, dict) or not block.get("finish_balls"):
+            return
+        try:
+            seq = int(getattr(ch, "_display_seq", 0) or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        if seq and getattr(ch, "_cylinder_goal_seq", None) == seq:
+            return
+        action = str(ch.current_action or "PASS").upper()
+        for screen_name, line_data in (ch.active_goal_lines or {}).items():
+            if not isinstance(line_data, dict):
+                continue
+            p0, p1 = line_data.get("p0"), line_data.get("p1")
+            if p0 is None or p1 is None:
+                continue
+            depth = arrival_depth_for(str(screen_name), action)
+            for ball in field_balls or []:
+                center = ball.get("center") if isinstance(ball, dict) else None
+                if center is None:
+                    continue
+                if in_goal_area(center, p0, p1, depth):
+                    ch._cylinder_goal_seq = seq
+                    self._publish_live_result(
+                        ch.field_id,
+                        "Correct",
+                        list(ch.current_screens or []),
+                        screen_name,
+                        ch.current_block_id,
+                        seq=seq,
+                    )
+                    self._clear_goal_area_now(
+                        ch,
+                        current_timestamp if current_timestamp is not None else time.time(),
+                    )
+                    return
 
     def process_dual_fields_frame(self, frame, current_timestamp):
         self.tracker.increment_frame_count()
@@ -5976,18 +6107,31 @@ class SimustRealtimeCamera:
             print("RESUMED — continuing from the pause point")
 
     def _apply_simulation_setting(self):
-        new_sim = read_simulation_setting()
-        if new_sim is None or new_sim == self.simulation_enabled:
+        new_fields = read_simulation_fields()
+        old_fields = dict(getattr(self, "simulation_fields", {}) or {})
+        if new_fields == old_fields:
             return
-        self.simulation_enabled = new_sim
-        print(f"Arena simulation: {'ON' if self.simulation_enabled else 'OFF'} (active fields only)")
-        if self.simulation_enabled:
-            for fid, ch in self.channels.items():
-                if not self._field_is_active(fid):
-                    continue
-                if ch.session_active:
+        self.simulation_fields = new_fields
+        self.simulation_enabled = bool(new_fields.get("A") or new_fields.get("B"))
+        self._sync_simulator_partner_mode()
+        print(
+            "Arena simulation: "
+            f"A={'ON' if new_fields.get('A') else 'OFF'} "
+            f"B={'ON' if new_fields.get('B') else 'OFF'}"
+        )
+        for fid in ("A", "B"):
+            now_on = bool(new_fields.get(fid))
+            was_on = bool(old_fields.get(fid))
+            if now_on == was_on:
+                continue
+            sim = self.simulators.get(fid)
+            if sim is None:
+                continue
+            if now_on:
+                ch = self.channels.get(fid)
+                if ch is not None and self._field_is_active(fid) and ch.session_active:
                     block = ch.current_qr_block or {}
-                    self.simulators[fid].start_action(
+                    sim.start_action(
                         ch.current_action,
                         ch.current_screens,
                         finish_balls=bool(block.get("finish_balls")),
@@ -5995,12 +6139,8 @@ class SimustRealtimeCamera:
                         actions_in_set=block.get("actions_in_set") or 0,
                         test_num=block.get("test_num") or 0,
                     )
-        else:
-            for fid, sim in self.simulators.items():
-                if self._field_is_active(fid):
-                    sim.end_action()
-                else:
-                    sim.end_action()
+            else:
+                sim.end_action()
 
     # ---- Main loop ----
     def run(self):
@@ -6060,9 +6200,22 @@ class SimustRealtimeCamera:
 
                 if left is None or right is None:
                     if self.simulation_enabled:
-                        left = self.simulator_a.blank_half() if self._field_is_active("A") else self.simulator_a.blank_half()
-                        right = self.simulator_b.blank_half() if self._field_is_active("B") else self.simulator_b.blank_half()
-                        # Inactive half: solid dark (no simulated action)
+                        if left is None:
+                            left = (
+                                self.simulator_a.blank_half()
+                                if self._field_is_simulated("A")
+                                else self.simulator_a.blank_half()
+                            )
+                            if not self._field_is_simulated("A"):
+                                left = np.zeros_like(left)
+                        if right is None:
+                            right = (
+                                self.simulator_b.blank_half()
+                                if self._field_is_simulated("B")
+                                else self.simulator_b.blank_half()
+                            )
+                            if not self._field_is_simulated("B"):
+                                right = np.zeros_like(right)
                         if not self._field_is_active("A"):
                             left = np.zeros_like(left)
                         if not self._field_is_active("B"):

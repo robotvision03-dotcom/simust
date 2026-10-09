@@ -60,7 +60,7 @@ class FoundationProgressTests(unittest.TestCase):
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
         self.assertIn("SF-60N", progress["unlocked_playlists"])
-        self.assertNotIn("L01-Entry/A-T1", progress["unlocked_levels"])
+        self.assertNotIn("L01-Entry/S1.T1", progress["unlocked_levels"])
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["subdirectory"], "SF-30N")
         self.assertEqual(progress["challenge_results"]["L00-Foundation"]["aac"], 90.0)
 
@@ -72,7 +72,7 @@ class FoundationProgressTests(unittest.TestCase):
         apply_session_progress(users, "james", "L00-Foundation", "SF-180N", stats)
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
-        self.assertIn("L01-Entry/A-T1", progress["unlocked_levels"])
+        self.assertIn("L01-Entry/S1.T1", progress["unlocked_levels"])
 
 
 class SanitizeSessionTests(unittest.TestCase):

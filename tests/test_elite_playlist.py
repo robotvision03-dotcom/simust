@@ -1,4 +1,4 @@
-"""Elite and World Class: one 12-screen field, 00 stays, two players required."""
+"""Elite and World Class: one 12-screen field; one field is enough to start."""
 
 import ast
 import os
@@ -26,39 +26,49 @@ class ElitePlaylistTests(unittest.TestCase):
         player._render_band_digit_image = self._render
         player.random.sample = self._sample
 
-    def test_one_player_cannot_start(self):
+    def test_one_field_can_start_combined_play(self):
         decision = player._combined_play_decision(
             ["A"],
-            {"A": "L04-Elite/A-T1"},
+            {"A": "L04-Elite/S1.T1"},
         )
-        self.assertEqual(decision[0], "block")
+        self.assertEqual(decision, ("play", "elite", 1, 1))
         decision = player._combined_play_decision(
             ["B"],
-            {"B": "L05-WorldClass/A-T1"},
+            {"B": "L05-WorldClass/S1.T1"},
         )
-        self.assertEqual(decision[0], "block")
+        self.assertEqual(decision, ("play", "world-class", 1, 1))
+        decision = player._combined_play_decision(
+            ["A"],
+            {"A": "L04-Elite/S2.T1"},
+        )
+        self.assertEqual(decision, ("play", "elite", 1, 2))
 
     def test_both_players_must_share_the_same_set(self):
         mixed = player._combined_play_decision(
             ["A", "B"],
-            {"A": "L05-WorldClass/A-T1", "B": "L04-Elite/A-T1"},
+            {"A": "L05-WorldClass/S1.T1", "B": "L04-Elite/S1.T1"},
         )
         self.assertEqual(mixed[0], "block")
         different_sets = player._combined_play_decision(
             ["A", "B"],
-            {"A": "L04-Elite/A-T1", "B": "L04-Elite/A-T2"},
+            {"A": "L04-Elite/S1.T1", "B": "L04-Elite/S1.T2"},
         )
         self.assertEqual(different_sets[0], "block")
         elite = player._combined_play_decision(
             ["A", "B"],
-            {"A": "L04-Elite/A-T1", "B": "L04-Elite/A-T1"},
+            {"A": "L04-Elite/S1.T1", "B": "L04-Elite/S1.T1"},
         )
-        self.assertEqual(elite, ("play", "elite", 1))
+        self.assertEqual(elite, ("play", "elite", 1, 1))
         world = player._combined_play_decision(
             ["A", "B"],
-            {"A": "L05-WorldClass/A-T3", "B": "L05-WorldClass/A-T3"},
+            {"A": "L05-WorldClass/S1.T3", "B": "L05-WorldClass/S1.T3"},
         )
-        self.assertEqual(world, ("play", "world-class", 3))
+        self.assertEqual(world, ("play", "world-class", 3, 1))
+        elite_s2 = player._combined_play_decision(
+            ["A", "B"],
+            {"A": "L04-Elite/S2.T2", "B": "L04-Elite/S2.T2"},
+        )
+        self.assertEqual(elite_s2, ("play", "elite", 2, 2))
 
     def test_twelve_actions_lowest_becomes_orange_00(self):
         playlist = player._build_elite_playlist(1, "elite")
@@ -88,6 +98,9 @@ class ElitePlaylistTests(unittest.TestCase):
         self.assertTrue(second["screen_images"]["B1"].startswith("03|"))
         self.assertEqual(second["field_screens"], {"B": ["B1"]})
         self.assertNotIn("A", second["field_screens"])
+        self.assertTrue(first["advance_on_goal"])
+        self.assertTrue(first["finish_balls"])
+        self.assertTrue(first["skip_gap"])
         test2 = [step for step in playlist if step["test_num"] == 2]
         self.assertEqual(test2[0]["field_screens"], {"B": ["B6"]})
         self.assertTrue(test2[0]["screen_images"]["B6"].startswith("01|"))
@@ -138,7 +151,7 @@ class ElitePlaylistTests(unittest.TestCase):
         ons = {step["test_num"]: step["on_ms"] for step in first}
         self.assertEqual(set(ons.values()), {4500})
 
-    def test_player_refuses_one_field_and_builds_both(self):
+    def test_player_one_field_builds_twelve_screen_playlist(self):
         window = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
         window._one_field_build = False
         window._phase_field_directories = {}
@@ -147,13 +160,18 @@ class ElitePlaylistTests(unittest.TestCase):
         window._phase_mode_id = ""
         window._phase_subdirectory = ""
         window._active_fields = lambda: ["A"]
-        window._phase_field_levels = {"A": "L04-Elite/A-T2"}
-        self.assertEqual(window._build_image_action_playlist(), [])
-        self.assertIn("two players", window._playlist_block_reason)
+        window._phase_field_levels = {"A": "L04-Elite/S1.T2"}
+        playlist = window._build_image_action_playlist()
+        self.assertEqual(len(playlist), 60)
+        self.assertTrue(window._label_mode)
+        self.assertEqual(window._phase_active, ["A", "B"])
+        self.assertEqual(len(playlist[0]["screen_images"]), 12)
+        self.assertEqual(playlist[0]["on_ms"], 4050)
+        self.assertEqual(playlist[0]["gap_ms"], 500)
         window._active_fields = lambda: ["A", "B"]
         window._phase_field_levels = {
-            "A": "L05-WorldClass/A-T2",
-            "B": "L05-WorldClass/A-T2",
+            "A": "L05-WorldClass/S1.T2",
+            "B": "L05-WorldClass/S1.T2",
         }
         playlist = window._build_image_action_playlist()
         self.assertEqual(len(playlist), 60)
@@ -161,7 +179,7 @@ class ElitePlaylistTests(unittest.TestCase):
         self.assertEqual(playlist[0]["on_ms"], 4050)
         self.assertEqual(playlist[0]["gap_ms"], 500)
 
-    def test_world_class_keeps_each_numbers_own_color_on_00(self):
+    def test_world_class_changes_colors_every_action(self):
         playlist = player._build_elite_playlist(1, "world-class")
         first = playlist[0]
         colors = []
@@ -178,6 +196,21 @@ class ElitePlaylistTests(unittest.TestCase):
         self.assertTrue(zero.startswith("00|"))
         self.assertEqual(zero.split("|")[2], origin)
         self.assertNotIn(str(player.ELITE_ZERO_COLOR), zero)
+        # Remaining digits get a new palette on the next action.
+        live_first = {
+            sid: first["screen_images"][sid].split("|")[2]
+            for sid in player._elite_screen_ids()
+            if sid != "A1"
+        }
+        live_second = {
+            sid: playlist[1]["screen_images"][sid].split("|")[2]
+            for sid in player._elite_screen_ids()
+            if sid != "A1"
+        }
+        self.assertNotEqual(live_first, live_second)
+        bg_first = first["screen_images"]["B1"].split("|")[1]
+        bg_second = playlist[1]["screen_images"]["B1"].split("|")[1]
+        self.assertNotEqual(bg_first, bg_second)
         goals = []
         for step in playlist:
             if step["test_num"] != 1:

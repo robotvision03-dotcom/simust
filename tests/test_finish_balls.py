@@ -44,8 +44,8 @@ class FinishBallsTests(unittest.TestCase):
     def test_two_fields_keep_their_own_opening_cards(self):
         cards = player._opening_cards_for_fields(
             ["A", "B"],
-            {"A": "L00-Foundation", "B": "L01-Entry/A-T3"},
-            {"A": "SF-180N", "B": "A-T3"},
+            {"A": "L00-Foundation", "B": "L01-Entry/S1.T3"},
+            {"A": "SF-180N", "B": "S1.T3"},
             {
                 "A": [{"test_num": 1, "on_ms": 1800, "actions_in_set": 8}],
                 "B": [{"test_num": 1, "on_ms": 2400, "actions_in_set": 6, "budget_ms": 14400, "finish_balls": True}],
@@ -58,12 +58,12 @@ class FinishBallsTests(unittest.TestCase):
         self.assertNotIn("Entry", cards["A"]["text"])
         self.assertIn("1.80 S", cards["A"]["text"])
         self.assertIn("8 Actions", cards["A"]["text"])
-        self.assertIn("Entry A-T3", cards["B"]["text"])
-        self.assertNotIn("Foundation", cards["B"]["text"])
-        self.assertNotIn("SF-180N", cards["B"]["text"])
-        self.assertIn("14.40 S", cards["B"]["text"])
-        self.assertIn("6 Actions", cards["B"]["text"])
-        self.assertNotEqual(cards["A"]["bg"], cards["B"]["bg"])
+        self.assertEqual(cards["B"]["text"].split("\n"), ["S1.T3", "6 Actions"])
+        self.assertNotIn("Entry", cards["B"]["text"])
+        self.assertNotIn("14.40", cards["B"]["text"])
+        self.assertEqual(cards["A"]["bg"], (0, 0, 0))
+        self.assertEqual(cards["B"]["bg"], (0, 0, 0))
+        self.assertNotEqual(cards["A"]["fg"], cards["B"]["fg"])
 
     def test_simulator_accuracy_runs_100_80_50_20_100(self):
         # 10 actions: 10, 8, 5, 2, 10 goals.
