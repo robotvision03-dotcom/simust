@@ -5194,8 +5194,11 @@ class SimustRealtimeCamera:
             # arrives during the tail of the 3s hold).
             just_armed = False
             if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
-                if ch.session_active and bool((cue or {}).get("finish_balls")):
-                    self._clear_goal_area_now(ch, current_timestamp)
+                # Do not drop the current cylinder here. The next cue is written
+                # when the pass timer ends, 17 frames (0.9s) before that pass
+                # leaves the camera. Clearing now made a synced 3s cylinder
+                # last 2.1s. The appear countdown below ends the old session
+                # after those 17 frames, together with the pass.
                 on_sec = _cue_on_sec(cue)
                 hold_frames = _on_hold_frames(on_sec)
                 ch._frame_sync_cue_raw = cue_raw
@@ -5278,17 +5281,24 @@ class SimustRealtimeCamera:
                     hold = int(info.get("hold_frames") or ch.kp_clear_frames_left or 0)
                     if hold > 0:
                         ch.kp_clear_frames_left = hold
+                    try:
+                        hold_sec = float(info.get("on_sec") or 0)
+                    except (TypeError, ValueError):
+                        hold_sec = 0.0
+                    if hold_sec <= 0 and hold > 0:
+                        hold_sec = hold / float(IMAGE_CUE_FPS)
+                    # Wall clock, not camera FPS. At ~25 fps a 60-frame hold
+                    # cleared the cylinder in ~2.4s while the pass stayed 3s.
+                    ch._kp_clear_deadline = time.time() + max(0.1, hold_sec)
                     print(
                         f"[{ch.label}] keypoints APPEAR → clear in "
-                        f"{ch.kp_clear_frames_left}f"
+                        f"{hold_sec:.2f}s ({ch.kp_clear_frames_left}f)"
                     )
                 else:
                     ch.kp_appear_frames_left -= 1
 
-            # --- Hold countdown from cue ON (cue false does not clear) ---
-            if ch.kp_clear_frames_left is not None and ch.session_active:
-                # The pass image goes off this many frames before keypoints clear.
-                # Write the finish then, so the gap does not open onto an empty screen.
+            # --- Hold until the same wall-clock On as the pass image ---
+            if ch.session_active and getattr(ch, "_kp_clear_deadline", None):
                 if (
                     ch.kp_clear_frames_left == int(IMAGE_CUE_EDGE_SHIFT_FRAMES)
                     and not getattr(ch, "_gap_display_sent", False)
@@ -5297,16 +5307,17 @@ class SimustRealtimeCamera:
                     ch._live_display_at = 0
                     ch._live_display_busy = False
                     self._schedule_live_display(ch)
-                if ch.kp_clear_frames_left <= 0:
+                if ch.kp_clear_frames_left is not None and ch.kp_clear_frames_left > 0:
+                    ch.kp_clear_frames_left -= 1
+                if time.time() >= float(ch._kp_clear_deadline):
                     ch.kp_clear_frames_left = None
+                    ch._kp_clear_deadline = None
                     with self.session_lock:
                         if ch.session_active:
                             self._end_session_locked(
                                 current_time_str, current_timestamp, ch
                             )
-                    print(f"[{ch.label}] keypoints CLEAR (On countdown done)")
-                else:
-                    ch.kp_clear_frames_left -= 1
+                    print(f"[{ch.label}] keypoints CLEAR (On wall-clock done)")
 
     def _tick_keypoint_hold(self, ch, current_timestamp=None):
         """Hold keypoints for On; image-cue mode clears on cue OFF instead."""
@@ -5544,10 +5555,9 @@ class SimustRealtimeCamera:
                         ch.current_block_id,
                         seq=seq,
                     )
-                    self._clear_goal_area_now(
-                        ch,
-                        current_timestamp if current_timestamp is not None else time.time(),
-                    )
+                    # Score now, but keep the green cylinder until the 3s On
+                    # ends with the pass image. Clearing here made the zone
+                    # vanish as soon as the ball arrived.
                     return
 
     def process_dual_fields_frame(self, frame, current_timestamp):
@@ -6074,6 +6084,8 @@ class SimustRealtimeCamera:
                         ch.pending_end_time_str = add_offset_to_time(end_str, dt)
                 if ch.session_active:
                     ch.session_start_timestamp += dt
+                if getattr(ch, "_kp_clear_deadline", None):
+                    ch._kp_clear_deadline += dt
                 current_block = getattr(ch, "current_qr_block", None)
                 if current_block and current_block.get("start_time"):
                     current_block["start_time"] = add_offset_to_time(current_block["start_time"], dt)

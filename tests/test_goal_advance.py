@@ -83,9 +83,9 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.assertEqual(entry["result"], "Correct")
         self.assertEqual(entry["seq"], 4)
         self.assertEqual(self.ch._cylinder_goal_seq, 4)
-        self.assertEqual(self.ended, [True])
-        self.assertFalse(self.ch.session_active)
-        self.assertEqual(self.ch.active_goal_lines, {})
+        self.assertEqual(self.ended, [])
+        self.assertTrue(self.ch.session_active)
+        self.assertTrue(self.ch.active_goal_lines)
 
     def test_ball_outside_does_not_write(self):
         self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": (0.0, 0.0)}])

@@ -7297,12 +7297,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.repaint()
             QtWidgets.QApplication.processEvents()
 
+        # One action slice (SF-30N = 3.0s). The shared clock (3s × 10 = 30s)
+        # only decides when the rest of the test is abandoned — it must not
+        # keep the pass image up for the whole clock.
         delay = self._flash_delay_ms(on=True)
         if entry.get("budget_ms"):
-            delay = self._budget_remaining_ms(entry)
-            if delay <= 40:
+            remain = self._budget_remaining_ms(entry)
+            if remain <= 40:
                 self._abandon_budget_rest()
                 return
+            delay = min(int(delay), int(remain))
         self._flash_seq += 1
         on_sec = max(0.1, float(delay) / 1000.0)
         self._pass_shown_at = time.perf_counter()
@@ -7537,11 +7541,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             QTimer.singleShot(200, self._finish_label_action)
             return
-        # Keep the pass image up until a full 3s after it was painted.
+        # Keep the pass image up for the action slice (3s on SF-30N) after it
+        # was painted. A goal must not cut that short — the cylinder uses the
+        # same slice and they clear together.
         shown = getattr(self, "_pass_shown_at", None)
         need_ms = int(getattr(self, "_pass_on_ms", 0) or 0)
-        goal_hit = bool(getattr(self, "_goal_arrived", False))
-        if not goal_hit and shown is not None and need_ms > 0:
+        if shown is not None and need_ms > 0:
             remain = int(need_ms - (time.perf_counter() - shown) * 1000.0)
             if remain > 40:
                 self._stop_action_timer()
