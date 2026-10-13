@@ -160,13 +160,20 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertGreater(len(flower_seeds), 1)
         self.assertGreaterEqual(player.WORLD_S2_CAMO_SEVERITY, 1.4)
 
-    def test_opening_card_is_black_with_level_colored_text(self):
-        bg, fg = player._level_card_colors("L05-WorldClass/S2.T1", "", {})
-        self.assertEqual(bg, (0, 0, 0))
-        self.assertEqual(fg, player._LEVEL_BRAND_RGB["world-class"])
-        bg2, fg2 = player._level_card_colors("L04-Elite/S1.T1", "", {})
-        self.assertEqual(bg2, (0, 0, 0))
-        self.assertEqual(fg2, player._LEVEL_BRAND_RGB["elite"])
+    def test_opening_card_text_is_readable_on_level_color(self):
+        samples = {
+            "L00-Foundation/SF-30N": "foundation",
+            "L01-Entry/S1.T1": "entry",
+            "L02-Activated/S1.T1": "activated",
+            "L03-HighPerformance/S1.T1": "high-performance",
+            "L04-Elite/S1.T1": "elite",
+            "L05-WorldClass/S2.T1": "world-class",
+        }
+        for level_id, key in samples.items():
+            bg, fg = player._level_card_colors(level_id, "", {})
+            self.assertEqual(bg, player._LEVEL_PAGE_BG[key][0], key)
+            self.assertEqual(fg, player._LEVEL_PAGE_BG[key][1], key)
+            self.assertNotEqual(fg, bg, key)
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_WIDTH, 0.52 * 1.4, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_GAP_LINES, 0)
         self.assertAlmostEqual(player.OPENING_LOGO_TEXT_DOWN_FRAC, 0.20, places=3)

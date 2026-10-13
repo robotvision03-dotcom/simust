@@ -296,7 +296,7 @@ class FinishingRuleTests(unittest.TestCase):
             self.assertIsNotNone(sim.line_p0)
         other = rt.ArenaSimulator()
         other.start_action("TARGET", ["2"])
-        self.assertEqual(other.start_xy, rt.ArenaSimulator.BALL_HOME)
+        self.assertEqual(other.start_xy, other.BALL_HOME)
 
     def test_goal_aims_rotate_corners_and_upper(self):
         """Live GOAL shots must not all go to the line midpoint."""
