@@ -100,7 +100,7 @@ class MixedDetectionTests(unittest.TestCase):
 
 
 class PartnerPerfectAccuracyTests(unittest.TestCase):
-    def test_mixed_real_and_sim_always_finishes(self):
+    def test_simulated_field_always_finishes(self):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
         cam.active_fields = {"A", "B"}
         cam.simulation_fields = {"A": False, "B": True}
@@ -108,12 +108,12 @@ class PartnerPerfectAccuracyTests(unittest.TestCase):
         sim_b = rt.ArenaSimulator(field_id="B")
         cam.simulators = {"A": sim_a, "B": sim_b}
         cam._sync_simulator_partner_mode()
-        self.assertTrue(sim_a.always_correct)
+        self.assertFalse(sim_a.always_correct)
         self.assertTrue(sim_b.always_correct)
         self.assertEqual(sim_b._finish_plan(4, 12, 12), "finish")
         self.assertEqual(sim_b._next_outcome("PASS"), "correct")
 
-    def test_both_fields_simulated_keep_graded_plan(self):
+    def test_both_fields_simulated_are_always_correct(self):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
         cam.active_fields = {"A", "B"}
         cam.simulation_fields = {"A": True, "B": True}
@@ -121,9 +121,43 @@ class PartnerPerfectAccuracyTests(unittest.TestCase):
         sim_b = rt.ArenaSimulator(field_id="B")
         cam.simulators = {"A": sim_a, "B": sim_b}
         cam._sync_simulator_partner_mode()
-        self.assertFalse(sim_a.always_correct)
-        self.assertFalse(sim_b.always_correct)
-        self.assertEqual(sim_b._finish_plan(4, 3, 10), "wrong")
+        self.assertTrue(sim_a.always_correct)
+        self.assertTrue(sim_b.always_correct)
+        self.assertEqual(sim_a._finish_plan(4, 3, 10), "finish")
+        self.assertEqual(sim_b._finish_plan(2, 9, 10), "finish")
+        self.assertEqual(sim_a._next_outcome("GOAL"), "correct")
+
+    def test_both_fields_far_screens_score_correct(self):
+        """B1 and B6 used to miss: the only in-goal sample was filtered as static."""
+        for fid, name in (("A", "A4"), ("B", "B1"), ("B", "B6")):
+            sim = rt.ArenaSimulator(field_id=fid)
+            sim.always_correct = True
+            sim.start_action(
+                "PASS", [name], finish_balls=True,
+                action_in_set=9, actions_in_set=10, test_num=4,
+            )
+            data = []
+            for n in range(75):
+                t = n / 25.0
+                bx, by, px, py = sim._ball_player_for_outcome(t, 0.0)
+                bx, by = sim._clip(bx, by)
+                data.append({
+                    "t": round(t, 3),
+                    "b": [[int(bx), int(by)]],
+                    "p": [[int(px), int(py)]],
+                    "hp": [int(px), int(py)],
+                })
+            block = {
+                "id": "S9",
+                "action": "PASS",
+                "screens": [name],
+                "data": data,
+                "finish_balls": True,
+                "on_sec": 3.0,
+                "field": fid,
+            }
+            result = rt.analyze_action_with_context(block, rt.GOAL_LINES, "PASS", [block], 0)
+            self.assertEqual(result["Result"], "Correct", name)
 
 
 if __name__ == "__main__":

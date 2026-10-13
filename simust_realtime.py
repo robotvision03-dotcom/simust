@@ -2496,14 +2496,16 @@ class ArenaSimulator:
     def __init__(self, field_id="A"):
         fid = normalize_field(field_id) or "A"
         self.field_id = fid
+        cfg = field_config(fid) or {}
         if fid == "B":
-            self.PLAYER_HOME = (280.0 + 640.0, 268.0)
-            self.BALL_HOME = (302.0 + 640.0, 282.0)
-            self.wrong_xy_default = (420.0 + 640.0, 200.0)
+            player_home = cfg.get("sim_player_home") or (953.0, 134.0)
+            ball_home = cfg.get("sim_ball_home") or (975.0, 148.0)
         else:
-            self.PLAYER_HOME = (280.0, 268.0)
-            self.BALL_HOME = (302.0, 282.0)
-            self.wrong_xy_default = (420.0, 200.0)
+            player_home = cfg.get("sim_player_home") or (333.0, 154.0)
+            ball_home = cfg.get("sim_ball_home") or (355.0, 168.0)
+        self.PLAYER_HOME = (float(player_home[0]), float(player_home[1]))
+        self.BALL_HOME = (float(ball_home[0]), float(ball_home[1]))
+        self.wrong_xy_default = (self.PLAYER_HOME[0] + 140.0, self.PLAYER_HOME[1] - 68.0)
         self.action = None
         self.screens = []
         self.start_ts = 0.0
@@ -2665,6 +2667,13 @@ class ArenaSimulator:
             # Recorded player point is the body center, above the anchor.
             xy = (xy[0], xy[1] + 29.0)
         self.target_xy = xy
+        if getattr(self, "always_correct", False) and self.line_p0 and self.line_p1:
+            # Post-end aims sit on one cell. The static filter drops that cell,
+            # so a far screen never counts. Cross the middle while the ball moves.
+            self.intended = "correct"
+            self.aim_name = "center"
+            self.target_xy = self._center_inside_goal(40.0)
+            tracked = self.target_xy
         dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
         now_in = in_goal_area(
             tracked, self.line_p0, self.line_p1, depth, post_radius=post_radius_for(self.action)
@@ -2741,6 +2750,23 @@ class ArenaSimulator:
 
     def _uses_physical_ball(self):
         return self.action in ("GOAL", "TARGET")
+
+    def _center_inside_goal(self, dist=40.0):
+        """A point inside the drawn green circle, on the home side of its center."""
+        cx, cy = goal_circle_center(self.line_p0, self.line_p1)
+        screen = self.screens[0] if self.screens else ""
+        depth = arrival_depth_for(screen, self.action or "PASS") if screen else float(FINISH_DIST)
+        radius = goal_circle_radius(depth, self.line_p0, self.line_p1)
+        x0, y0 = float(self.line_p0[0]), float(self.line_p0[1])
+        x1, y1 = float(self.line_p1[0]), float(self.line_p1[1])
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / length, dx / length
+        hx, hy = self.BALL_HOME
+        if (hx - cx) * nx + (hy - cy) * ny < 0:
+            nx, ny = -nx, -ny
+        inset = min(float(dist), max(0.0, radius * 0.45))
+        return (cx + nx * inset, cy + ny * inset)
 
     def _line_target(self, screens):
         # Prefer goal-mouth screens (1/7/8) so area 7 is not skipped for a side keypoint.
@@ -3027,11 +3053,15 @@ class ArenaSimulator:
                 bx, by = px + 16, py + 10
                 return bx, by, px, py
             origin = self.start_xy or self.BALL_HOME
+            stepped = self._lerp(self.PLAYER_HOME, target, 0.22)
             if t <= 0.70:
-                bx, by = self._lerp(origin, target, t / 0.70)
+                u = t / 0.70
+                bx, by = self._lerp(origin, target, u)
+                px, py = self._lerp(self.PLAYER_HOME, stepped, u)
             else:
-                bx, by = self._lerp(target, origin, min(1.0, (t - 0.70) / 0.65))
-            px, py = self._lerp(self.PLAYER_HOME, target, min(1.0, t / 1.1) * 0.22)
+                u = min(1.0, (t - 0.70) / 0.65)
+                bx, by = self._lerp(target, origin, u)
+                px, py = self._lerp(stepped, self.PLAYER_HOME, u)
             return bx, by, px, py
 
         if intended in ("miss", "finish", "slow"):
@@ -3153,7 +3183,11 @@ class ArenaSimulator:
                 speed * (1.0 / 80.0) * (0.75 + 1.55 * min(1.0, closeness))
                 + radius * 0.35 * min(1.0, speed / 220.0),
             )
-            detected = self._physical_should_detect(closeness, speed, blur, bx, by)
+            detected = (
+                True
+                if getattr(self, "always_correct", False)
+                else self._physical_should_detect(closeness, speed, blur, bx, by)
+            )
             self._miss_streak = 0 if detected else (self._miss_streak + 1)
         self.last_ball_radius = radius
         self.last_blur = blur
@@ -3876,14 +3910,10 @@ class SimustRealtimeCamera:
         return bool((getattr(self, "simulation_fields", None) or {}).get(key))
 
     def _sync_simulator_partner_mode(self):
-        """With a real player on one field, the simulated field always scores 100%."""
-        active = set(self.active_fields) if self.active_fields else {"A", "B"}
-        sim_on = {fid for fid in ("A", "B") if fid in active and self._field_is_simulated(fid)}
-        real_on = {fid for fid in ("A", "B") if fid in active and fid not in sim_on}
-        partner = bool(sim_on and real_on)
-        for sim in (self.simulators or {}).values():
+        """A running simulator sends every ball in, so that field scores 100%."""
+        for fid, sim in (self.simulators or {}).items():
             if sim is not None:
-                sim.always_correct = partner
+                sim.always_correct = self._field_is_simulated(fid)
 
     def _mask_inactive_half(self, frame):
         """Black out the unused half so saved/live video has no inactive-field content."""

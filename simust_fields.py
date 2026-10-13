@@ -74,11 +74,12 @@ LEGACY_HW_TO_SCREEN = {
 QR_ROI_A = (0, 0, 1920, 540)
 QR_ROI_B = (1920, 0, 3840, 540)
 
-# Arena simulator homes (1280×360 canvas): A left, B right
-SIM_PLAYER_HOME_A = (280, 268)
-SIM_BALL_HOME_A = (302, 282)
-SIM_PLAYER_HOME_B = (280 + 640, 268)
-SIM_BALL_HOME_B = (302 + 640, 282)
+# Arena simulator homes (1280×360 canvas): A left, B right.
+# Player stands on the point; the ball rests just beside it and both return here.
+SIM_PLAYER_HOME_A = (333, 154)
+SIM_BALL_HOME_A = (355, 168)
+SIM_PLAYER_HOME_B = (953, 134)
+SIM_BALL_HOME_B = (975, 148)
 
 FIELD_IDS = ("A", "B")
 

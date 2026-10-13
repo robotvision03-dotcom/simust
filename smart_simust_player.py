@@ -2525,10 +2525,10 @@ def _level_brand_key(level_id: str, subdirectory: str = "", entry: dict = None) 
 
 
 def _level_card_colors(level_id: str, subdirectory: str, entry: dict):
-    """Opening information card: black background, level-brand text color."""
+    """Opening information card: level color, with text dark or light enough to read."""
     key = _level_brand_key(level_id, subdirectory, entry)
-    brand = _LEVEL_BRAND_RGB.get(key) or _LEVEL_BRAND_RGB["foundation"]
-    return (0, 0, 0), tuple(brand)
+    pair = _LEVEL_PAGE_BG.get(key) or _LEVEL_PAGE_BG["foundation"]
+    return tuple(pair[0]), tuple(pair[1])
 
 
 def _level_intro_key_from_id(level_id: str) -> Optional[str]:
@@ -6321,26 +6321,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         bits.extend(str(v or "") for v in dirs.values())
         return " ".join(bits)
 
+    def _stop_results_playback(self):
+        """Drop the previous results clip before the next opening card."""
+        if self.results_timer:
+            self.results_timer.stop()
+            self.results_timer = None
+        try:
+            self.player.stop()
+            empty = self.instance.media_new("")
+            self.player.set_media(empty)
+        except Exception:
+            pass
+        if self.videoframe:
+            self.videoframe.hide()
+
     def _begin_level_intro(self, next_index=0):
-        """Show the opening card (with band logo), then the short level clip if needed."""
+        """Every test: opening card with logo, then the starting video, then the test."""
         next_index = int(next_index)
+        self._results_epoch = int(getattr(self, "_results_epoch", 0) or 0) + 1
+        self._stop_results_playback()
         self._clear_held_results()
-        if getattr(self, "_level_card_shown_for", None) != next_index:
-            logo = _opening_logo_video_for_level(self._opening_logo_context())
-            if not logo:
-                levels = getattr(self, "_phase_field_levels", None) or {}
-                modes = getattr(self, "_phase_field_modes", None) or {}
-                for fid in self._active_fields():
-                    logo = _opening_logo_video_for_level(
-                        str(levels.get(fid) or ""),
-                        str(modes.get(fid) or ""),
-                    )
-                    if logo:
-                        break
-            # Logo already sits on the beginning-information card.
-            self._show_level_card(next_index, after="start" if logo else "intro")
-            return
-        self._play_level_intro(next_index, after="start")
+        self._show_level_card(next_index, after="intro")
 
     def _show_level_card(self, next_index, after="intro"):
         self._level_card_shown_for = int(next_index)
@@ -6424,8 +6425,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.show()
             self.image_canvas.raise_()
             self.image_canvas.update()
-            if logo_video:
-                self._play_intro_audio(logo_video)
             if self.level_card_label:
                 self.level_card_label.hide()
         else:
@@ -7807,6 +7806,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return colors
 
     def _show_waiting_overlay(self, status_text=""):
+        if self.videoframe:
+            self.videoframe.show()
+            self.videoframe.raise_()
         if self.image_canvas:
             self.image_canvas.clear()
             self.image_canvas.hide()
@@ -8024,6 +8026,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _play_intro_audio(self, video_path):
         """Play the intro soundtrack while each screen shows its own picture."""
         try:
+            if self.videoframe:
+                self.videoframe.hide()
             self.player.stop()
             media = self.instance.media_new(os.path.abspath(video_path))
             media.add_option(":no-video")
@@ -8112,11 +8116,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             QTimer.singleShot(200, lambda: self._on_per_video_results_ready(video_path))
             return
-        self._arm_timer(self._remaining_wait_ms(), lambda: self._play_per_video_results(video_path))
+        if getattr(self, "display_phase", "") != "wait_per_video":
+            logger.info("Ignoring results from an earlier test")
+            return
+        epoch = int(getattr(self, "_results_epoch", 0) or 0)
+        self._arm_timer(
+            self._remaining_wait_ms(),
+            lambda path=video_path, token=epoch: self._play_per_video_results(path, token),
+        )
 
-    def _play_per_video_results(self, video_path):
+    def _play_per_video_results(self, video_path, epoch=None):
         if self.operator_paused:
-            QTimer.singleShot(200, lambda: self._play_per_video_results(video_path))
+            QTimer.singleShot(200, lambda: self._play_per_video_results(video_path, epoch))
+            return
+        if getattr(self, "display_phase", "") != "wait_per_video":
+            return
+        current = int(getattr(self, "_results_epoch", 0) or 0)
+        if epoch is not None and int(epoch) != current:
+            logger.info("Ignoring results from an earlier test")
+            return
+        remain = self._remaining_wait_ms()
+        if remain > 40:
+            token = current if epoch is None else int(epoch)
+            self._arm_timer(
+                remain,
+                lambda path=video_path, token=token: self._play_per_video_results(path, token),
+            )
             return
         self._hide_waiting_overlay()
         if not video_path or not os.path.exists(video_path):
@@ -8142,6 +8167,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
 
     def _finish_per_video_results(self):
+        epoch = int(getattr(self, "_results_epoch", 0) or 0)
+        if getattr(self, "_results_finished_epoch", None) == epoch:
+            return
+        if getattr(self, "display_phase", "") not in ("per_video_results", "wait_per_video"):
+            return
+        self._results_finished_epoch = epoch
         if self.results_timer:
             self.results_timer.stop()
             self.results_timer = None
@@ -8364,6 +8395,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         self.video_end_called = True
         self.waiting_for_results = True
+        self._results_epoch = int(getattr(self, "_results_epoch", 0) or 0) + 1
+        self._results_finished_epoch = None
         self.display_phase = "wait_per_video"
         more_tests = getattr(self, "_post_results_index", None) is not None
         if more_tests:
@@ -8617,7 +8650,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         try:
             if getattr(self, "display_phase", "action") in (
-                "wait_per_video", "wait_final", "per_video_results", "level_intro", "prestart"
+                "wait_per_video", "wait_final", "per_video_results",
+                "level_intro", "level_card", "prestart",
             ):
                 return
             state = self.player.get_state()
