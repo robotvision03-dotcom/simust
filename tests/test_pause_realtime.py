@@ -42,6 +42,16 @@ class PauseSettingTests(unittest.TestCase):
         simust_app.write_pause_setting(False)
         self.assertFalse(simust_app.read_pause_setting())
 
+    def test_one_field_pause_does_not_pause_the_other(self):
+        simust_app.write_pause_fields({"A": True, "B": False})
+        self.assertEqual(simust_app.read_pause_fields(), {"A": True, "B": False})
+        self.assertFalse(simust_app.read_pause_setting())
+        with open(os.path.join(self.tmp, "pause.txt"), encoding="utf-8") as handle:
+            self.assertIn('"A"', handle.read())
+        simust_app.write_pause_fields({"A": True, "B": True})
+        with open(os.path.join(self.tmp, "pause.txt"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "true")
+
     def test_playback_status_shows_paused(self):
         simust_app.write_playback_status("playing", "Video 2/8")
         simust_app.write_pause_setting(True)

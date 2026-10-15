@@ -358,6 +358,65 @@
             padding: 12px 0 14px;
             background: linear-gradient(180deg, var(--portal-panel) 70%, transparent);
         }
+        .field-regions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .field-region {
+            border-radius: 14px;
+            padding: 14px;
+            border: 2px solid transparent;
+            min-width: 0;
+        }
+        .field-region-a {
+            background: rgba(39, 108, 229, 0.16);
+            border-color: #3d7ef0;
+        }
+        .field-region-b {
+            background: rgba(214, 140, 40, 0.16);
+            border-color: #e09a3a;
+        }
+        .field-region-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 1.15rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            margin-bottom: 10px;
+        }
+        .field-region-a .field-region-title { color: #9ec0ff; }
+        .field-region-b .field-region-title { color: #f3c98a; }
+        .field-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+        .field-region-a .field-swatch { background: #3d7ef0; }
+        .field-region-b .field-swatch { background: #e09a3a; }
+        .field-region .panel {
+            background: rgba(5, 14, 26, 0.62);
+            margin-bottom: 12px;
+        }
+        .field-region .transport-bar {
+            position: static;
+            background: transparent;
+            margin: 0;
+            padding: 4px 0 0;
+        }
+        .field-note {
+            font-size: 13px;
+            line-height: 1.4;
+            margin: 0 0 10px;
+        }
+        .field-region-a .field-note { color: #c5d8ff; }
+        .field-region-b .field-note { color: #f6ddb6; }
+        @media (max-width: 900px) {
+            .field-regions { grid-template-columns: 1fr; }
+        }
         html.simust-android .transport-bar {
             padding-top: 8px;
             margin-inline: -4px;
@@ -1693,6 +1752,14 @@
                     onSubdirectoryChange('');
                 }
                 setListExpanded(false);
+                setOpenMain('');
+            };
+            var chosenSubLabel = function(mainId) {
+                if (mainLevelIdOf(selectedLevel) !== mainId) return '';
+                if (mainId === 'L00-Foundation') return selectedSubdirectory || '';
+                var id = String(selectedLevel || '');
+                if (id.indexOf(mainId + '/') !== 0) return '';
+                return id.split('/').slice(1).join('/');
             };
             var visibleSubItems = subItems;
             if (!listExpanded && selectedSubValue) {
@@ -1700,7 +1767,7 @@
                 if (chosen.length) visibleSubItems = chosen;
             }
 
-            return React.createElement('div', { className: "mb-6 p-4 panel" },
+            return React.createElement('div', { className: (props.embedded ? "p-4 panel" : "mb-6 p-4 panel") },
                 React.createElement('div', { className: "flex justify-between items-center mb-3 flex-wrap gap-2" },
                     React.createElement('h3', { className: "gold-accent font-bold text-lg" }, selectorTitle),
                     !hideAddPlayer ?
@@ -1843,13 +1910,14 @@
                                     style: { background: btn.bg, color: btn.fg },
                                     onClick: function() {
                                         if (openMain === btn.id) {
-                                            setListExpanded(!listExpanded);
-                                        } else {
-                                            setOpenMain(btn.id);
-                                            setListExpanded(true);
+                                            setOpenMain('');
+                                            setListExpanded(false);
+                                            return;
                                         }
+                                        setOpenMain(btn.id);
+                                        setListExpanded(true);
                                     }
-                                }, btn.label),
+                                }, btn.label + (chosenSubLabel(btn.id) ? (' · ' + chosenSubLabel(btn.id)) : '')),
                                 isOpen ?
                                 React.createElement('div', {
                                     className: "level-sub-rows",
@@ -1871,10 +1939,7 @@
                                                 type: "button",
                                                 className: "level-sub-pick",
                                                 onClick: function() {
-                                                    if (!listExpanded && item.value === selectedSubValue) {
-                                                        setListExpanded(true);
-                                                        return;
-                                                    }
+                                                    if (!listExpanded && item.value === selectedSubValue) return;
                                                     pickSubLevel(shownMain, item.value);
                                                 }
                                             }, item.label),
@@ -2879,6 +2944,12 @@
             var realtimePausedState = useState(false);
             var realtimePaused = realtimePausedState[0];
             var setRealtimePaused = realtimePausedState[1];
+            var pausedFieldsState = useState({ A: false, B: false });
+            var pausedFields = pausedFieldsState[0];
+            var setPausedFields = pausedFieldsState[1];
+            var runningFieldsState = useState({ A: false, B: false });
+            var runningFields = runningFieldsState[0];
+            var setRunningFields = runningFieldsState[1];
             var instagramLiveState = useState(false);
             var instagramLive = instagramLiveState[0];
             var setInstagramLive = instagramLiveState[1];
@@ -3035,6 +3106,9 @@
             var autoStopDeadlineRef = useRef(0);
             var realtimeRunningRef = useRef(false);
             var realtimePausedRef = useRef(false);
+            var pausedFieldsRef = useRef({ A: false, B: false });
+            var runningFieldsRef = useRef({ A: false, B: false });
+            var sessionTogetherRef = useRef(false);
             var selectedPlayerIdRef = useRef(null);
             var activeTabRef = useRef(activeTab);
             var resultsEpochRef = useRef(0);
@@ -3286,14 +3360,14 @@
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
                 var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
                 setSelectedLevel(function(prev) {
-                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
+                    if (prev) return prev;
                     if (defaultFoundation) return "L00-Foundation";
                     if (highest) return highest;
                     if (unlocked.length > 0) return unlocked[0];
-                    return prev || "L00-Foundation";
+                    return "L00-Foundation";
                 });
                 setSelectedSubdirectory(function(prev) {
-                    if (prev && playlists.indexOf(prev) !== -1) return prev;
+                    if (prev) return prev;
                     return "";
                 });
             };
@@ -3380,15 +3454,15 @@
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
                 var defaultFoundation = playlists.length > 0 && unlocked.indexOf("L00-Foundation") !== -1;
                 setSelectedLevelB(function(prev) {
-                    if (prev && unlocked.indexOf(prev) !== -1) return prev;
+                    if (prev) return prev;
                     if (defaultFoundation) return "L00-Foundation";
                     if (highest) return highest;
                     if (unlocked.length > 0) return unlocked[0];
-                    return prev || "L00-Foundation";
+                    return "L00-Foundation";
                 });
                 setSelectedSubdirectoryB(function(prev) {
-                    if (prev && playlists.indexOf(prev) !== -1) return prev;
-                    return prev || "";
+                    if (prev) return prev;
+                    return "";
                 });
             };
 
@@ -3450,27 +3524,6 @@
             };
 
             var selectPlayerFromSearch = function(player) {
-                var progress = player.progress || {};
-                var level = progress.current_level || "";
-                if (isCombinedLevel(level)) {
-                    selectedPlayerIdRef.current = player.id;
-                    setSelectedPlayerId(player.id);
-                    setSelectedPlayerBId(player.id);
-                    setSelectedLevel(level);
-                    setSelectedLevelB(level);
-                    setSelectedSubdirectory("");
-                    setSelectedSubdirectoryB("");
-                    setScoreField("A");
-                    setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
-                    setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
-                    setShowSearchResults(false);
-                    setFilteredPlayers([]);
-                    updateProgressForPlayer(player, { preferDefaults: true });
-                    updateProgressForPlayerB(player, { preferDefaults: true });
-                    loadPlayerSessionsFromBackend(player.id);
-                    showToast("Elite / World Class plays all 12 screens. Score stays on Field A.", 'success');
-                    return;
-                }
                 if (selectedPlayerBId && player.id === selectedPlayerBId) {
                     showToast("Same player already selected for Field B — pick another for Field A", 'error');
                     return;
@@ -3511,26 +3564,6 @@
             };
 
             var selectPlayerBFromSearch = function(player) {
-                var progress = player.progress || {};
-                var level = progress.current_level || "";
-                if (isCombinedLevel(level)) {
-                    setSelectedPlayerId(player.id);
-                    setSelectedPlayerBId(player.id);
-                    setSelectedLevel(level);
-                    setSelectedLevelB(level);
-                    setSelectedSubdirectory("");
-                    setSelectedSubdirectoryB("");
-                    setScoreField("B");
-                    setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
-                    setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
-                    setShowSearchResultsB(false);
-                    setFilteredPlayersB([]);
-                    updateProgressForPlayer(player, { preferDefaults: true });
-                    updateProgressForPlayerB(player, { preferDefaults: true });
-                    loadPlayerSessionsFromBackendB(player.id);
-                    showToast("Elite / World Class plays all 12 screens. Score stays on Field B.", 'success');
-                    return;
-                }
                 if (selectedPlayerId && player.id === selectedPlayerId) {
                     showToast("Same player already selected for Field A — pick another for Field B", 'error');
                     return;
@@ -4329,9 +4362,103 @@
                 });
             };
 
-            var startRealtimePlayback = function() {
+            var joinRealtimeField = function(fid) {
+                fid = fid === "B" ? "B" : "A";
+                var isB = fid === "B";
+                var person = isB ? getSelectedPlayerB() : getSelectedPlayer();
+                var level = isB ? (selectedLevelB || "") : (selectedLevel || "");
+                var sub = isB ? (selectedSubdirectoryB || "") : (selectedSubdirectory || "");
+                if (!person || !level) {
+                    setError("Select a player and level on Field " + fid + " first.");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
+                if (isCombinedLevel(level)) {
+                    setError("Stop the live field before starting Elite or World Class.");
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
+                var payload = {
+                    field: fid,
+                    player_id: person.id,
+                    player_name: person.name,
+                    player_surname: person.surname,
+                    level: level,
+                    subdirectory: sub || ""
+                };
+                if (adminTestPlay && String(adminTestPass || "").trim()) {
+                    payload.admin_password = String(adminTestPass || "").trim();
+                    payload.admin_test = true;
+                }
+                axios.post("/join-realtime-field", payload).then(function() {
+                    var running = Object.assign({}, runningFieldsRef.current || { A: false, B: false });
+                    running[fid] = true;
+                    runningFieldsRef.current = running;
+                    setRunningFields(running);
+                    realtimeRunningRef.current = true;
+                    setRealtimeRunning(true);
+                    sessionTogetherRef.current = false;
+                    showToast("Field " + fid + " started. The other field keeps playing.", "success");
+                }).catch(function(e) {
+                    var detail = (e.response && e.response.data && e.response.data.detail)
+                        ? e.response.data.detail
+                        : (e.message || "Could not start this field");
+                    showToast(detail, "error");
+                });
+            };
+
+            var startRealtimePlayback = function(origin, opts) {
+                opts = opts || {};
+                var playBoth = !!opts.both;
+                origin = String(origin || "A").toUpperCase().charAt(0) === "B" ? "B" : "A";
                 var playerA = getSelectedPlayer();
                 var playerB = getSelectedPlayerB();
+                var levelA = playerA ? (selectedLevel || "") : "";
+                var levelB = playerB ? (selectedLevelB || "") : "";
+                var combinedA = !!(playerA && isCombinedLevel(levelA));
+                var combinedB = !!(playerB && isCombinedLevel(levelB));
+                // Play on one field starts only that field.
+                // Elite / World Class still uses both halves, because it is one 12-screen test.
+                // Play A + B starts the two fields together.
+                if (playBoth && (combinedA || combinedB)) {
+                    if (combinedA) {
+                        playerB = null;
+                        levelB = "";
+                        origin = "A";
+                    } else {
+                        playerA = null;
+                        levelA = "";
+                        origin = "B";
+                    }
+                } else if (playBoth) {
+                    if (!playerA || !playerB) {
+                        setError("Select a player and level on Field A and Field B to start both.");
+                        setTimeout(function() { setError(""); }, 3000);
+                        return;
+                    }
+                } else if (origin === "A" && combinedA) {
+                    playerB = null;
+                    levelB = "";
+                } else if (origin === "B" && combinedB) {
+                    playerA = null;
+                    levelA = "";
+                } else if (origin === "A") {
+                    if (!playerA) {
+                        setError("Please select a Field A player first");
+                        setTimeout(function() { setError(""); }, 3000);
+                        return;
+                    }
+                    playerB = null;
+                    levelB = "";
+                } else {
+                    if (!playerB) {
+                        setError("Please select a Field B player first");
+                        setTimeout(function() { setError(""); }, 3000);
+                        return;
+                    }
+                    playerA = null;
+                    levelA = "";
+                }
                 var reservedPlay = selectedPlayersAreReserved(playerA && playerA.id, playerB && playerB.id);
                 var useAdminTest = !!adminTestPlay && !reservedPlay;
                 if (!playerA && !playerB) {
@@ -4339,8 +4466,6 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                var levelA = playerA ? (selectedLevel || "") : "";
-                var levelB = playerB ? (selectedLevelB || "") : "";
                 if (playerA && !levelA) {
                     setError("Please select a training level for Field A");
                     setTimeout(function() { setError(""); }, 3000);
@@ -4383,9 +4508,37 @@
                     return;
                 }
 
+                var liveNow = runningFieldsRef.current || { A: false, B: false };
+                if (playBoth && liveNow.A && liveNow.B) return;
+                if ((liveNow.A || liveNow.B) && (combinedA || combinedB)) {
+                    setError("Stop the live field before starting Elite or World Class.");
+                    setTimeout(function() { setError(""); }, 4000);
+                    return;
+                }
+                if (!playBoth && liveNow[origin === "A" ? "B" : "A"] && !liveNow[origin]) {
+                    joinRealtimeField(origin);
+                    return;
+                }
+                if (playBoth && (liveNow.A || liveNow.B) && !(liveNow.A && liveNow.B)) {
+                    joinRealtimeField(liveNow.A ? "B" : "A");
+                    return;
+                }
+
                 setError("");
                 realtimeRunningRef.current = true;
                 setRealtimeRunning(true);
+                var together = (combinedA && !playerB) || (combinedB && !playerA);
+                sessionTogetherRef.current = together;
+                var runningNow = {
+                    A: together || !!playerA,
+                    B: together || !!playerB
+                };
+                runningFieldsRef.current = runningNow;
+                setRunningFields(runningNow);
+                pausedFieldsRef.current = { A: false, B: false };
+                setPausedFields({ A: false, B: false });
+                realtimePausedRef.current = false;
+                setRealtimePaused(false);
                 setActiveTab("main");
                 sessionSavedRef.current = false;
                 sessionAbortedRef.current = false;
@@ -4412,8 +4565,12 @@
                     },
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
-                    field: scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B"),
-                    score_field: scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B"),
+                    field: (origin === "A" && combinedA) || (origin === "B" && combinedB)
+                        ? origin
+                        : (scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B")),
+                    score_field: (origin === "A" && combinedA) || (origin === "B" && combinedB)
+                        ? origin
+                        : (scoreField === "B" && playerB ? "B" : (playerA ? "A" : "B")),
                     players: []
                 };
                 if (playerA) {
@@ -4451,7 +4608,12 @@
 
                 axios.post("/start-realtime-playback", payload).then(function() {
                     var dualMsg;
-                    if (playerA && playerB) {
+                    if ((combinedA && !playerB) || (combinedB && !playerA)) {
+                        var lead = origin === "B" ? playerB : playerA;
+                        var leadLevel = origin === "B" ? (selectedLevelB || "") : (selectedLevel || "");
+                        dualMsg = lead.name + " " + lead.surname + " — " + leadLevel +
+                            " plays both fields from Field " + origin;
+                    } else if (playerA && playerB) {
                         dualMsg = "Field A: " + playerA.name + " " + (levelA || "") +
                             (selectedSubdirectory ? " [" + selectedSubdirectory + "]" : "") +
                             " + Field B: " + playerB.name + " " + (levelB || "") +
@@ -4610,6 +4772,27 @@
                             if (statusRes.data && statusRes.data.instagram_live) {
                                 setInstagramLive(!!statusRes.data.instagram_live.on);
                             }
+                            var fieldMap = statusRes.data && statusRes.data.fields;
+                            if (fieldMap && typeof fieldMap === "object") {
+                                var nextRunning = {
+                                    A: fieldMap.A === "playing",
+                                    B: fieldMap.B === "playing"
+                                };
+                                var prevRunning = runningFieldsRef.current || { A: false, B: false };
+                                if (!!nextRunning.A !== !!prevRunning.A || !!nextRunning.B !== !!prevRunning.B) {
+                                    runningFieldsRef.current = nextRunning;
+                                    setRunningFields(nextRunning);
+                                    var nextPaused = Object.assign({}, pausedFieldsRef.current || { A: false, B: false });
+                                    if (!nextRunning.A) nextPaused.A = false;
+                                    if (!nextRunning.B) nextPaused.B = false;
+                                    pausedFieldsRef.current = nextPaused;
+                                    setPausedFields(nextPaused);
+                                    if (!nextRunning.A && !nextRunning.B) {
+                                        realtimePausedRef.current = false;
+                                        setRealtimePaused(false);
+                                    }
+                                }
+                            }
                             // Training finished — release Play as soon as final summary starts
                             // (do not wait up to ~60s for playing_final to become completed).
                             if (state === "playing_final") {
@@ -4676,23 +4859,73 @@
             };
 
             var togglePausePlayback = function() {
+                togglePauseField("A");
+            };
+
+            var togglePauseField = function(fid) {
                 if (!realtimeRunningRef.current && !realtimeRunning) return;
-                var next = !realtimePausedRef.current;
-                realtimePausedRef.current = next;
-                setRealtimePaused(next);
-                if (next) freezeAutoStopTimeout();
+                if (!sessionTogetherRef.current && !(runningFieldsRef.current && runningFieldsRef.current[fid])) return;
+                var together = !!sessionTogetherRef.current;
+                var current = pausedFieldsRef.current || { A: false, B: false };
+                var next = !current[fid];
+                var fields = together ? { A: next, B: next } : Object.assign({}, current);
+                if (!together) fields[fid] = next;
+                pausedFieldsRef.current = fields;
+                setPausedFields(fields);
+                var both = !!(fields.A && fields.B);
+                realtimePausedRef.current = both;
+                setRealtimePaused(both);
+                if (both) freezeAutoStopTimeout();
                 else resumeAutoStopTimeout();
-                axios.post("/pause-realtime", { paused: next }).then(function() {
+                var payload = together ? { paused: next, together: true } : { paused: next, field: fid };
+                axios.post("/pause-realtime", payload).then(function() {
                     showToast(next
-                        ? "Paused. Detection and saving are frozen."
-                        : "Playing. Continuing from the pause point.", 'info');
+                        ? (together
+                            ? "Both fields paused."
+                            : ("Field " + fid + " paused. The other field keeps playing."))
+                        : (together
+                            ? "Both fields playing."
+                            : ("Field " + fid + " playing.")), 'info');
                 }).catch(function(e) {
-                    realtimePausedRef.current = !next;
-                    setRealtimePaused(!next);
-                    if (next) resumeAutoStopTimeout();
-                    else freezeAutoStopTimeout();
+                    var back = Object.assign({}, fields);
+                    if (together) {
+                        back.A = !next;
+                        back.B = !next;
+                    } else {
+                        back[fid] = !next;
+                    }
+                    pausedFieldsRef.current = back;
+                    setPausedFields(back);
+                    realtimePausedRef.current = !!(back.A && back.B);
+                    setRealtimePaused(realtimePausedRef.current);
                     showToast("Could not pause/resume: " + (e.response ? e.response.data.detail : e.message), 'error');
                 });
+            };
+
+            var stopField = function(fid) {
+                var together = !!sessionTogetherRef.current;
+                var running = runningFieldsRef.current || { A: false, B: false };
+                var other = fid === "A" ? "B" : "A";
+                if (together || !running[other]) {
+                    runningFieldsRef.current = { A: false, B: false };
+                    setRunningFields({ A: false, B: false });
+                    sessionTogetherRef.current = false;
+                    stopPlayback({ abort: true });
+                    return;
+                }
+                axios.post("/stop-realtime", { field: fid, field_only: true }).then(function() {
+                    showToast("Field " + fid + " stopped. The other field keeps playing.", 'info');
+                }).catch(function() {
+                    showToast("Could not stop Field " + fid, 'error');
+                });
+                var nextRunning = Object.assign({}, running);
+                nextRunning[fid] = false;
+                runningFieldsRef.current = nextRunning;
+                setRunningFields(nextRunning);
+                var pauses = Object.assign({}, pausedFieldsRef.current || { A: false, B: false });
+                pauses[fid] = false;
+                pausedFieldsRef.current = pauses;
+                setPausedFields(pauses);
             };
 
             var stopPlayback = function(opts) {
@@ -4754,6 +4987,11 @@
                 setRealtimeRunning(false);
                 realtimePausedRef.current = false;
                 setRealtimePaused(false);
+                pausedFieldsRef.current = { A: false, B: false };
+                setPausedFields({ A: false, B: false });
+                runningFieldsRef.current = { A: false, B: false };
+                setRunningFields({ A: false, B: false });
+                sessionTogetherRef.current = false;
                 if (realtimeMonitorInterval.current) { clearTimeout(realtimeMonitorInterval.current);
                     realtimeMonitorInterval.current = null; }
                 if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current);
@@ -4987,21 +5225,6 @@
             var toggleMenu = function() { setMenuOpen(!menuOpen); };
             var closeMenu = function() { setMenuOpen(false); };
 
-            var realtimeEligible = (function() {
-                if (!selectedPlayerId && !selectedPlayerBId) return false;
-                if (realtimeRunning) return false;
-                if (selectedPlayerId && !selectedLevel) return false;
-                if (selectedPlayerBId && !selectedLevelB) return false;
-                if (adminTestPlay) return true;
-                if (selectedPlayerId && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, selectedLevel, selectedSubdirectory)) {
-                    return false;
-                }
-                if (selectedPlayerBId && !playerHasLevelUnlocked(unlockedLevelsB, unlockedPlaylistsB, selectedLevelB, selectedSubdirectoryB)) {
-                    return false;
-                }
-                return true;
-            })();
-
             // =====================================================================
             // RENDER
             // =====================================================================
@@ -5017,6 +5240,170 @@
             }
 
             var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false);
+            var fieldPlayReady = function(fid) {
+                if (labBlocked) return false;
+                if (runningFields && runningFields[fid]) return false;
+                var isB = fid === "B";
+                var playerId = isB ? selectedPlayerBId : selectedPlayerId;
+                var level = isB ? selectedLevelB : selectedLevel;
+                var sub = isB ? selectedSubdirectoryB : selectedSubdirectory;
+                var unlockedL = isB ? unlockedLevelsB : unlockedLevels;
+                var unlockedP = isB ? unlockedPlaylistsB : unlockedPlaylists;
+                if (!playerId || !level) return false;
+                if (levelNeedsSubdirectory(level) && !sub) return false;
+                if (adminTestPlay) return !!String(adminTestPass || '').trim();
+                return !!playerHasLevelUnlocked(unlockedL, unlockedP, level, sub);
+            };
+            var canPlayBoth = function() {
+                var live = runningFields || { A: false, B: false };
+                if (live.A && live.B) return false;
+                var elite = isCombinedLevel(selectedLevel) || isCombinedLevel(selectedLevelB);
+                if (elite) return !(live.A || live.B) && (fieldPlayReady("A") || fieldPlayReady("B"));
+                if (live.A && !live.B) return fieldPlayReady("B");
+                if (live.B && !live.A) return fieldPlayReady("A");
+                return fieldPlayReady("A") && fieldPlayReady("B");
+            };
+            var renderFieldRegion = function(fid) {
+                var isB = fid === "B";
+                var level = isB ? selectedLevelB : selectedLevel;
+                var combined = isCombinedLevel(level);
+                var ready = fieldPlayReady(fid);
+                var fieldRunning = !!(runningFields && runningFields[fid]);
+                var playLabel = fieldRunning ? t("playing") : t("realtimePlay");
+                return React.createElement('section', {
+                    className: "field-region field-region-" + fid.toLowerCase()
+                },
+                    React.createElement('h2', { className: "field-region-title" },
+                        React.createElement('span', { className: "field-swatch" }),
+                        "Field " + fid
+                    ),
+                    isB ?
+                    React.createElement(PlayerSelector, {
+                        players: players,
+                        selectedPlayerId: selectedPlayerBId,
+                        searchQuery: searchQueryB,
+                        showSearchResults: showSearchResultsB,
+                        filteredPlayers: filteredPlayersB,
+                        showAddPlayer: false,
+                        newPlayer: newPlayer,
+                        loadingSessions: loadingSessionsB,
+                        onSearch: performSearchB,
+                        onSelectPlayer: selectPlayerBFromSearch,
+                        onClearSelection: clearSelectionB,
+                        onAddPlayer: function() {},
+                        onNewPlayerChange: setNewPlayer,
+                        getSelectedPlayer: getSelectedPlayerB,
+                        allLevels: allLevels,
+                        unlockedLevels: unlockedLevelsB,
+                        unlockedPlaylists: unlockedPlaylistsB,
+                        sessionCredits: sessionCreditsB,
+                        eligibleLevels: eligibleLevelsB,
+                        completedLevels: completedLevelsB,
+                        currentLevel: currentLevelB,
+                        isAdmin: isAdmin,
+                        onUnlockLevel: handleUnlockLevelB,
+                        onLockLevel: handleLockLevelB,
+                        canManageLevels: isAdmin || isCoach,
+                        onLevelChange: function(next) {
+                            setSelectedLevelB(next);
+                            setSelectedSubdirectoryB("");
+                            if (isCombinedLevel(next)) {
+                                setScoreField("B");
+                                showToast("Elite / World Class plays both fields from Field B. Field A does not need a player.", 'success');
+                            }
+                        },
+                        selectedLevel: selectedLevelB,
+                        selectedSubdirectory: selectedSubdirectoryB,
+                        onSubdirectoryChange: setSelectedSubdirectoryB,
+                        t: t,
+                        fieldLabel: "Field B",
+                        hideAddPlayer: true,
+                        embedded: true
+                    }) :
+                    React.createElement(PlayerSelector, {
+                        players: players,
+                        selectedPlayerId: selectedPlayerId,
+                        searchQuery: searchQuery,
+                        showSearchResults: showSearchResults,
+                        filteredPlayers: filteredPlayers,
+                        showAddPlayer: showAddPlayer,
+                        newPlayer: newPlayer,
+                        loadingSessions: loadingSessions,
+                        onSearch: performSearch,
+                        onSelectPlayer: selectPlayerFromSearch,
+                        onClearSelection: clearSelection,
+                        onAddPlayer: addPlayerHandler,
+                        onNewPlayerChange: setNewPlayer,
+                        getSelectedPlayer: getSelectedPlayer,
+                        allLevels: allLevels,
+                        unlockedLevels: unlockedLevels,
+                        unlockedPlaylists: unlockedPlaylists,
+                        sessionCredits: sessionCredits,
+                        eligibleLevels: eligibleLevels,
+                        completedLevels: completedLevels,
+                        currentLevel: currentLevel,
+                        isAdmin: isAdmin,
+                        onUnlockLevel: handleUnlockLevel,
+                        onLockLevel: handleLockLevel,
+                        canManageLevels: isAdmin || isCoach,
+                        onLevelChange: function(next) {
+                            setSelectedLevel(next);
+                            setSelectedSubdirectory("");
+                            if (isCombinedLevel(next)) {
+                                setScoreField("A");
+                                showToast("Elite / World Class plays both fields from Field A. Field B does not need a player.", 'success');
+                            }
+                        },
+                        selectedLevel: selectedLevel,
+                        selectedSubdirectory: selectedSubdirectory,
+                        onSubdirectoryChange: setSelectedSubdirectory,
+                        t: t,
+                        fieldLabel: "Field A",
+                        hideAddPlayer: !isAdmin,
+                        embedded: true
+                    }),
+                    combined ?
+                    React.createElement('p', { className: "field-note" },
+                        "Elite / World Class plays both fields from this Play button. The other field does not need a player."
+                    ) : null,
+                    isAdmin ?
+                    React.createElement('div', { className: "flex items-center gap-3 mb-3" },
+                        React.createElement('span', { className: "text-white font-bold" }, "Sim " + fid),
+                        React.createElement('label', {
+                            className: "toggle-switch",
+                            title: "Arena simulator for Field " + fid + ". Leave OFF for a real player."
+                        },
+                            React.createElement('input', {
+                                type: "checkbox",
+                                checked: !!(simulationFields && simulationFields[fid]),
+                                onChange: function(e) { toggleSimulationField(fid, e.target.checked); }
+                            }),
+                            React.createElement('span', { className: "slider" })
+                        )
+                    ) : null,
+                    React.createElement('div', { className: "transport-bar" },
+                        React.createElement('button', {
+                            onClick: function() { startRealtimePlayback(fid); },
+                            disabled: !ready || fieldRunning,
+                            className: "btn-primary btn-realtime px-6 py-2 font-bold" +
+                                ((!ready || fieldRunning) ? ' opacity-50' : '')
+                        }, playLabel),
+                        React.createElement('button', {
+                            onClick: function() { togglePauseField(fid); },
+                            disabled: !(runningFields && runningFields[fid]),
+                            className: "btn-primary px-6 py-2 font-bold " +
+                                ((pausedFields && pausedFields[fid]) ? "btn-resume" : "btn-pause") +
+                                (!(runningFields && runningFields[fid]) ? " opacity-50" : "")
+                        }, (pausedFields && pausedFields[fid]) ? t("play") : t("pause")),
+                        React.createElement('button', {
+                            onClick: function() { stopField(fid); },
+                            disabled: !(runningFields && runningFields[fid]),
+                            className: "btn-primary btn-danger px-6 py-2 font-bold" +
+                                (!(runningFields && runningFields[fid]) ? " opacity-50" : "")
+                        }, t("stop"))
+                    )
+                );
+            };
 
             return React.createElement('div', { className: "simust-card" },
                 // HEADER
@@ -5175,92 +5562,6 @@
                     ) :
                     // MAIN TAB
                     React.createElement(React.Fragment, null,
-                        React.createElement(PlayerSelector, {
-                            players: players,
-                            selectedPlayerId: selectedPlayerId,
-                            searchQuery: searchQuery,
-                            showSearchResults: showSearchResults,
-                            filteredPlayers: filteredPlayers,
-                            showAddPlayer: showAddPlayer,
-                            newPlayer: newPlayer,
-                            loadingSessions: loadingSessions,
-                            onSearch: performSearch,
-                            onSelectPlayer: selectPlayerFromSearch,
-                            onClearSelection: clearSelection,
-                            onAddPlayer: addPlayerHandler,
-                            onNewPlayerChange: setNewPlayer,
-                            getSelectedPlayer: getSelectedPlayer,
-                            allLevels: allLevels,
-                            unlockedLevels: unlockedLevels,
-                            unlockedPlaylists: unlockedPlaylists,
-                            sessionCredits: sessionCredits,
-                            eligibleLevels: eligibleLevels,
-                            completedLevels: completedLevels,
-                            currentLevel: currentLevel,
-                            isAdmin: isAdmin,
-                            onUnlockLevel: handleUnlockLevel,
-                            onLockLevel: handleLockLevel,
-                            canManageLevels: isAdmin || isCoach,
-                            onLevelChange: function(level) {
-                                setSelectedLevel(level);
-                                setSelectedSubdirectory("");
-                                if (isCombinedLevel(level) && selectedPlayerId) {
-                                    setSelectedPlayerBId(selectedPlayerId);
-                                    setSelectedLevelB(level);
-                                    setSelectedSubdirectoryB("");
-                                    setScoreField("A");
-                                }
-                            },
-                            selectedLevel: selectedLevel,
-                            selectedSubdirectory: selectedSubdirectory,
-                            onSubdirectoryChange: setSelectedSubdirectory,
-                            t: t,
-                            fieldLabel: "Field A",
-                            hideAddPlayer: !isAdmin
-                        }),
-                        React.createElement(PlayerSelector, {
-                            players: players,
-                            selectedPlayerId: selectedPlayerBId,
-                            searchQuery: searchQueryB,
-                            showSearchResults: showSearchResultsB,
-                            filteredPlayers: filteredPlayersB,
-                            showAddPlayer: false,
-                            newPlayer: newPlayer,
-                            loadingSessions: loadingSessionsB,
-                            onSearch: performSearchB,
-                            onSelectPlayer: selectPlayerBFromSearch,
-                            onClearSelection: clearSelectionB,
-                            onAddPlayer: function() {},
-                            onNewPlayerChange: setNewPlayer,
-                            getSelectedPlayer: getSelectedPlayerB,
-                            allLevels: allLevels,
-                            unlockedLevels: unlockedLevelsB,
-                            unlockedPlaylists: unlockedPlaylistsB,
-                            sessionCredits: sessionCreditsB,
-                            eligibleLevels: eligibleLevelsB,
-                            completedLevels: completedLevelsB,
-                            currentLevel: currentLevelB,
-                            isAdmin: isAdmin,
-                            onUnlockLevel: handleUnlockLevelB,
-                            onLockLevel: handleLockLevelB,
-                            canManageLevels: isAdmin || isCoach,
-                            onLevelChange: function(level) {
-                                setSelectedLevelB(level);
-                                setSelectedSubdirectoryB("");
-                                if (isCombinedLevel(level) && selectedPlayerBId) {
-                                    setSelectedPlayerId(selectedPlayerBId);
-                                    setSelectedLevel(level);
-                                    setSelectedSubdirectory("");
-                                    setScoreField("B");
-                                }
-                            },
-                            selectedLevel: selectedLevelB,
-                            selectedSubdirectory: selectedSubdirectoryB,
-                            onSubdirectoryChange: setSelectedSubdirectoryB,
-                            t: t,
-                            fieldLabel: "Field B",
-                            hideAddPlayer: true
-                        }),
                         (selectedPlayerId || selectedPlayerBId) && bookingsReady && !selectedPlayersAreReserved(selectedPlayerId, selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",
@@ -5273,7 +5574,6 @@
                                 React.createElement('input', {
                                     type: 'checkbox',
                                     checked: adminTestPlay,
-                                    disabled: realtimeRunning,
                                     onChange: function(e) {
                                         setAdminTestPlay(e.target.checked);
                                         if (!e.target.checked) setAdminTestPass('');
@@ -5286,7 +5586,6 @@
                             React.createElement('input', {
                                 type: 'password',
                                 value: adminTestPass,
-                                disabled: realtimeRunning,
                                 autoComplete: 'current-password',
                                 placeholder: '••••••••',
                                 className: 'w-full max-w-md',
@@ -5300,9 +5599,9 @@
                                 },
                                 onChange: function(e) { setAdminTestPass(e.target.value); },
                                 onKeyDown: function(e) {
-                                    if (e.key === 'Enter' && !realtimeRunning && realtimeEligible) {
-                                        startRealtimePlayback();
-                                    }
+                                    if (e.key !== 'Enter') return;
+                                    if (fieldPlayReady("A")) startRealtimePlayback("A");
+                                    else if (fieldPlayReady("B")) startRealtimePlayback("B");
                                 }
                             }) : null
                         ) : null,
@@ -5314,55 +5613,23 @@
                                 React.createElement('input', {
                                     type: "checkbox",
                                     checked: visualizationEnabled,
-                                    onChange: function(e) { toggleVisualization(e.target
-                                            .checked); }
-                                }),
-                                React.createElement('span', { className: "slider" })
-                            ),
-                            React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
-                                "Sim A"),
-                            React.createElement('label', { className: "toggle-switch", title: "Field A arena simulator. Leave OFF for a real player; turn ON when Field B is the real player." },
-                                React.createElement('input', {
-                                    type: "checkbox",
-                                    checked: !!simulationFields.A,
-                                    onChange: function(e) { toggleSimulationField("A", e.target.checked); }
-                                }),
-                                React.createElement('span', { className: "slider" })
-                            ),
-                            React.createElement('span', { className: "text-white font-bold", style: { marginInlineStart: '12px' } },
-                                "Sim B"),
-                            React.createElement('label', { className: "toggle-switch", title: "Field B arena simulator. Optional for Elite / World Class — one field is enough; all 12 screens still play." },
-                                React.createElement('input', {
-                                    type: "checkbox",
-                                    checked: !!simulationFields.B,
-                                    onChange: function(e) { toggleSimulationField("B", e.target.checked); }
+                                    onChange: function(e) { toggleVisualization(e.target.checked); }
                                 }),
                                 React.createElement('span', { className: "slider" })
                             )
                         ) : null,
-                        React.createElement('div', { className: "transport-bar" },
+                        React.createElement('div', { className: "field-regions" },
+                            renderFieldRegion("A"),
+                            renderFieldRegion("B")
+                        ),
+                        React.createElement('div', { className: "transport-bar", style: { position: "static" } },
                             React.createElement('button', {
-                                onClick: startRealtimePlayback,
-                                disabled: labBlocked || !realtimeEligible,
+                                onClick: function() { startRealtimePlayback("A", { both: true }); },
+                                disabled: !canPlayBoth(),
+                                title: "Start Field A and Field B together",
                                 className: "btn-primary btn-realtime px-6 py-2 font-bold" +
-                                    (labBlocked || !realtimeEligible ? ' opacity-50' : '')
-                            },
-                                realtimeRunning ? t("playing") : t("realtimePlay"),
-                                !realtimeRunning ? React.createElement('span', { className: "auto-badge" },
-                                    "AUTO") : null
-                            ),
-                            React.createElement('button', {
-                                onClick: togglePausePlayback,
-                                disabled: !realtimeRunning,
-                                className: "btn-primary px-6 py-2 font-bold " + (realtimePaused ? "btn-resume" : "btn-pause") +
-                                    (!realtimeRunning ? " opacity-50" : "")
-                            }, realtimePaused ? t("play") : t("pause")),
-                            React.createElement('button', {
-                                onClick: function() { stopPlayback({ abort: true }); },
-                                disabled: !realtimeRunning,
-                                className: "btn-primary btn-danger px-6 py-2 font-bold" +
-                                    (!realtimeRunning ? " opacity-50" : "")
-                            }, t("stop")),
+                                    (!canPlayBoth() ? " opacity-50" : "")
+                            }, "Play A + B"),
                             React.createElement('button', {
                                 onClick: toggleInstagramLive,
                                 disabled: !realtimeRunning,

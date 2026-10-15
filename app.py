@@ -1332,13 +1332,50 @@ def write_pause_setting(paused: bool) -> None:
     os.replace(tmp_file, pause_file)
 
 
-def read_pause_setting() -> bool:
+def read_pause_fields() -> dict:
+    """Per-field pause. A plain true/false file still pauses both fields."""
     pause_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
     try:
         with open(pause_file, "r", encoding="utf-8") as f:
-            return f.read().strip().lower() in ("1", "true", "yes", "on", "paused")
+            raw = f.read().strip()
     except OSError:
-        return False
+        return {"A": False, "B": False}
+    lower = raw.lower()
+    if lower in ("1", "true", "yes", "on", "paused"):
+        return {"A": True, "B": True}
+    if lower in ("0", "false", "no", "off", ""):
+        return {"A": False, "B": False}
+    if raw[:1] == "{":
+        try:
+            data = json.loads(raw) or {}
+        except Exception:
+            return {"A": False, "B": False}
+        return {"A": bool(data.get("A")), "B": bool(data.get("B"))}
+    return {"A": False, "B": False}
+
+
+def write_pause_fields(fields: dict) -> None:
+    """Write one field's pause. Both the same still uses the true/false file."""
+    payload = {
+        "A": bool((fields or {}).get("A")),
+        "B": bool((fields or {}).get("B")),
+    }
+    if payload["A"] == payload["B"]:
+        write_pause_setting(payload["A"])
+        return
+    pause_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    tmp_file = pause_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, pause_file)
+
+
+def read_pause_setting() -> bool:
+    fields = read_pause_fields()
+    return bool(fields.get("A") and fields.get("B"))
 
 # ============================================================
 # Calibration
@@ -1581,6 +1618,24 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
             logger.info("Ignoring remote stop-realtime; no current test to abort")
             write_pause_setting(False)
         return {"status": "ignored", "aborted": False, "discarded": [], "message": "No active test"}
+    stop_field = str(data.get("field") or "").upper()[:1]
+    if data.get("field_only") and stop_field in ("A", "B"):
+        stop_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "field_stop.json")
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        tmp_file = stop_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as handle:
+            json.dump({"field": stop_field, "ts": time.time()}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_file, stop_file)
+        logger.info("Field-only stop requested for %s", stop_field)
+        return {
+            "status": "success",
+            "field": stop_field,
+            "field_only": True,
+            "aborted": False,
+            "message": f"Field {stop_field} stopped. The other field keeps playing.",
+        }
     abort = bool(data.get("abort") or data.get("discard") or data.get("operator_stop"))
     logger.info("Stopping realtime playback (abort=%s, remote=%s)...", abort, bool(data.get("_remote")))
     write_pause_setting(False)
@@ -2217,7 +2272,14 @@ async def start_realtime_playback(req: Request):
                 if isinstance(field_map.get(fid), dict)
                 and str(field_map[fid].get("player_id") or "").strip()
             ]
+            requested_fields = {
+                _reservation_field_id(entry)
+                for entry in (players_payload or [])
+                if isinstance(entry, dict)
+            }
             for fid, other in (("A", "B"), ("B", "A")):
+                if fid not in requested_fields:
+                    continue
                 if not bool(sim_fields.get(fid)) or fid in active_list:
                     continue
                 src = field_map.get(other) if isinstance(field_map.get(other), dict) else {}
@@ -2380,13 +2442,126 @@ async def pause_realtime(req: Request):
         logger.info("Ignoring remote pause-realtime; no active test")
         return {"status": "ignored", "paused": False, "message": "No active test"}
     paused = bool(data.get("paused"))
-    write_pause_setting(paused)
+    fid = str(data.get("field") or "").upper()[:1]
+    if data.get("together") or fid not in ("A", "B"):
+        write_pause_setting(paused)
+        fields = {"A": paused, "B": paused}
+    else:
+        fields = read_pause_fields()
+        fields[fid] = paused
+        write_pause_fields(fields)
+    both = bool(fields.get("A") and fields.get("B"))
     write_playback_status(
-        "paused" if paused else "playing",
-        "Paused — press Play to continue" if paused else "Resumed from pause",
+        "paused" if both else "playing",
+        "Paused — press Play to continue" if both else "Resumed from pause",
     )
-    logger.info("Realtime %s by operator", "paused" if paused else "resumed")
-    return {"status": "success", "paused": paused}
+    logger.info(
+        "Realtime pause fields %s (%s)",
+        fields,
+        "field " + fid if fid in ("A", "B") and not data.get("together") else "both",
+    )
+    return {"status": "success", "paused": paused, "fields": fields}
+
+
+def _join_field_directory(level_id: str, sub: str) -> str:
+    """Folder for a field that is added while the other field is already playing."""
+    base = get_level_path(level_id)
+    if level_id == "L00-Foundation":
+        if sub:
+            cand = os.path.join(base, sub)
+            extra = {name.lower() for name in simust_progress.FOUNDATION_EXTRA_PLAYLISTS}
+            if not os.path.isdir(cand) and sub.lower() in extra:
+                os.makedirs(cand, exist_ok=True)
+            if os.path.isdir(cand):
+                return cand
+        os.makedirs(base, exist_ok=True)
+        return base
+    launch = os.path.join(base, sub) if sub else base
+    if os.path.isdir(launch):
+        return launch
+    parent = os.path.dirname(launch)
+    if os.path.isdir(parent) and re.search(r"L0[1-5]-", launch, re.I):
+        return parent
+    if os.path.isdir(base):
+        return base
+    raise HTTPException(400, f"Level directory not found: {launch}")
+
+
+@app.post("/join-realtime-field")
+async def join_realtime_field(req: Request):
+    """Start one field while the other field keeps the session it already has."""
+    if not _realtime_is_running():
+        return {"status": "idle", "message": "No field is playing yet"}
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    data = data or {}
+    fid = str(data.get("field") or "").upper()[:1]
+    if fid not in ("A", "B"):
+        raise HTTPException(400, "Choose Field A or Field B")
+    level_id = str(data.get("level") or "").strip()
+    if not level_id:
+        raise HTTPException(400, "Choose a level for this field")
+    if _combined_level(level_id):
+        raise HTTPException(
+            400,
+            "Elite and World Class use both fields. Stop the live field first.",
+        )
+    player_id = str(data.get("player_id") or "").strip()
+    if not player_id:
+        raise HTTPException(400, "Choose a player for this field")
+    sub = str(data.get("subdirectory") or "").strip()
+    directory = _join_field_directory(level_id, sub)
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    fields[fid] = {
+        "player_id": player_id,
+        "player_name": str(data.get("player_name") or ""),
+        "player_surname": str(data.get("player_surname") or ""),
+        "field": fid,
+        "subdirectory": sub,
+        "level": level_id,
+        "directory": directory,
+    }
+    active = []
+    for item in payload.get("active") or []:
+        key = str(item).upper()[:1]
+        if key in ("A", "B") and key not in active:
+            active.append(key)
+    if fid not in active:
+        active.append(fid)
+    levels = payload.get("levels") if isinstance(payload.get("levels"), dict) else {}
+    levels[fid] = level_id
+    payload["fields"] = fields
+    payload["active"] = active
+    payload["levels"] = levels
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    join_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "field_join.json")
+    tmp_path = join_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump({
+            "field": fid,
+            "level": level_id,
+            "subdirectory": sub,
+            "directory": directory,
+            "player_id": player_id,
+            "ts": time.time(),
+        }, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, join_path)
+    logger.info("Field %s joining the live session (%s)", fid, level_id)
+    return {"status": "success", "field": fid, "joined": True}
 
 
 @app.post("/instagram-live")
@@ -4916,12 +5091,18 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
 # ============================================================
 # VIDEO RESULTS ENDPOINTS (UPDATED to use correct session folder)
 # ============================================================
-async def _wait_until_actions_are_scored(timeout=12.0):
+async def _wait_until_actions_are_scored(timeout=12.0, fields=None):
     """Per-video rings start after the last action of this test has been saved.
 
     The last pass is scored on a short timer after it ends. Reading results.json
     at the instant the test video ends used to omit that pass.
+    A finished field does not wait for the other field's session.
     """
+    wanted = []
+    for raw in fields or []:
+        fid = str(raw or "").upper()[:1]
+        if fid in ("A", "B") and fid not in wanted:
+            wanted.append(fid)
     path = os.path.join(SIMUST_PLAYER_DIRECTORY, "analysis_status.json")
     deadline = time.time() + float(timeout)
     saw_status = False
@@ -4932,7 +5113,15 @@ async def _wait_until_actions_are_scored(timeout=12.0):
             stamp = float(status.get("ts") or 0)
             if time.time() - stamp < 2.0:
                 saw_status = True
-                if not status.get("session_active") and not status.get("pending"):
+                by_field = status.get("fields") if isinstance(status.get("fields"), dict) else None
+                if wanted and by_field:
+                    if not any(
+                        (by_field.get(fid) or {}).get("session_active")
+                        or (by_field.get(fid) or {}).get("pending")
+                        for fid in wanted
+                    ):
+                        return
+                elif not status.get("session_active") and not status.get("pending"):
                     return
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
@@ -4971,7 +5160,9 @@ async def create_video_results(req: Request):
             else:
                 return {"status": "error", "message": "No session folder found"}
 
-        await _wait_until_actions_are_scored()
+        await _wait_until_actions_are_scored(
+            fields=data.get("fields") or data.get("active_fields"),
+        )
 
         # Normalize to session root when pointed at field_A / field_B
         session_root = directory
@@ -5051,6 +5242,18 @@ async def create_video_results(req: Request):
 
         if not panels or primary_rows is None:
             return {"status": "error", "message": "No results available"}
+
+        if data.get("make_video") is False:
+            logger.info(
+                "Projecting results for fields %s, test %s (no video)",
+                ",".join(sorted(panels.keys())),
+                video_index,
+            )
+            return {
+                "status": "success",
+                "panels": panels,
+                "video_path": "",
+            }
 
         # One results video: only active fields' rings (A and/or B)
         # Separate field phases → distinct files so A then B do not overwrite.
@@ -5246,6 +5449,24 @@ async def create_results_video(req: Request):
 
             if not panels or primary_rows is None:
                 return {"status": "error", "message": "No results found"}
+
+            if data.get("make_video") is False:
+                progress_info = {}
+                if data.get("update_progress") is not False:
+                    try:
+                        progress_info = apply_final_results_progress(field_metrics)
+                    except Exception:
+                        logger.exception("Final results could not update the player's level")
+                logger.info(
+                    "Projecting final results for fields %s (no video)",
+                    ",".join(sorted(panels.keys())),
+                )
+                return {
+                    "status": "success",
+                    "panels": panels,
+                    "video_path": "",
+                    "progress": progress_info,
+                }
 
             extra = []
             if "A" in panels and "B" in panels:

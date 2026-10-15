@@ -175,14 +175,18 @@ class IndependentEntryHpAccuracyTests(unittest.TestCase):
             "wrong",
         )
 
-        # Finish remaining actions; playlist ends only when both are done.
+        # Finish remaining actions. The shorter field drops out first.
         inst._advance_independent_field("A")  # A -> 3
-        inst._advance_independent_field("B")  # B done
+        inst._advance_independent_field("B")  # B done, A still playing
         self.assertTrue(inst._independent_done["B"])
+        self.assertFalse(inst._independent_done["A"])
         self.assertFalse(finished)
-        inst._advance_independent_field("A")  # A done → finish
+        self.assertNotIn("B", inst.video_files[0]["field_screens"])
+        inst._advance_independent_field("A")  # A done too
         self.assertTrue(inst._independent_done["A"])
-        self.assertEqual(finished, [True])
+        self.assertFalse(finished)
+        self.assertEqual(inst._field_result_state["A"]["phase"], "wait")
+        self.assertEqual(inst._field_result_state["B"]["phase"], "wait")
         self.assertEqual(len(reloads), 4)
 
 
