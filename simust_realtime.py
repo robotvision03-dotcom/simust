@@ -2458,9 +2458,32 @@ def read_simulation_setting():
     return bool(fields.get("A") or fields.get("B"))
 
 
+def read_pause_fields() -> dict:
+    """Per-field pause. Legacy true/false still means both fields."""
+    try:
+        if not os.path.exists(PAUSE_FILE):
+            return {"A": False, "B": False}
+        with open(PAUSE_FILE, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+    except Exception:
+        return {"A": False, "B": False}
+    lower = raw.lower()
+    if lower in ("true", "1", "yes", "on", "paused"):
+        return {"A": True, "B": True}
+    if lower in ("false", "0", "no", "off", ""):
+        return {"A": False, "B": False}
+    if raw[:1] == "{":
+        try:
+            data = json.loads(raw) or {}
+        except Exception:
+            return {"A": False, "B": False}
+        return {"A": bool(data.get("A")), "B": bool(data.get("B"))}
+    return {"A": False, "B": False}
+
+
 def read_pause_setting():
-    flag = _read_flag_file(PAUSE_FILE)
-    return bool(flag)
+    fields = read_pause_fields()
+    return bool(fields.get("A") and fields.get("B"))
 
 
 class ArenaSimulator:
@@ -2510,6 +2533,7 @@ class ArenaSimulator:
         self.screens = []
         self.start_ts = 0.0
         self.active = False
+        self.parked = False
         self.late_phase = False
         self.late_start_ts = 0.0
         self.intended = "correct"
@@ -2557,6 +2581,7 @@ class ArenaSimulator:
         return finish_balls_sim_plan(test_num, action_in_set, actions_in_set)
 
     def start_action(self, action, screens, finish_balls=False, action_in_set=0, actions_in_set=0, test_num=0):
+        self.parked = False
         self.action = (action or "").upper()
         self.screens = [str(s) for s in (screens or [])]
         self.finish_balls = bool(finish_balls)
@@ -2684,6 +2709,14 @@ class ArenaSimulator:
             f"dist={dist:.1f} proj_t={proj_t:.3f} band={'IN' if now_in else 'OUT'} "
             f"depth={depth:.0f}"
         )
+
+    def stop(self):
+        """Simulation is off for this field. Leave no player, ball, or late roll."""
+        self.active = False
+        self.late_phase = False
+        self.hold_finish = False
+        self.action = None
+        self.parked = True
 
     def end_action(self):
         self.active = False
@@ -3145,6 +3178,8 @@ class ArenaSimulator:
         return self._goal_rng.random() > p_miss
 
     def step(self, frame_w, frame_h):
+        if getattr(self, "parked", False):
+            return [], [], (None, None)
         sx = frame_w / float(SIM_FRAME_WIDTH)
         sy = frame_h / float(SIM_FRAME_HEIGHT)
         now = time.time()
@@ -3224,6 +3259,8 @@ class ArenaSimulator:
         return balls, players, hip
 
     def draw_on_frame(self, frame, balls, players):
+        if getattr(self, "parked", False):
+            return frame
         for player in players:
             x1, y1, x2, y2 = player["bbox"]
             overlay = frame.copy()
@@ -4866,12 +4903,19 @@ class SimustRealtimeCamera:
         """Tell the results page whether the last action is still being scored."""
         active = False
         pending = False
+        fields = {}
         for ch in self.channels.values():
             if not self._field_is_active(ch.field_id):
                 continue
+            fid = str(ch.field_id or "").upper()[:1]
+            field_pending = ch.pending_analysis is not None or ch.analysis_timer is not None
+            fields[fid] = {
+                "session_active": bool(ch.session_active),
+                "pending": bool(field_pending),
+            }
             if ch.session_active:
                 active = True
-            if ch.pending_analysis is not None or ch.analysis_timer is not None:
+            if field_pending:
                 pending = True
         path = os.path.join(SIMUST_PLAYER_DIRECTORY, "analysis_status.json")
         try:
@@ -4879,7 +4923,12 @@ class SimustRealtimeCamera:
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(
-                    {"session_active": active, "pending": pending, "ts": time.time()},
+                    {
+                        "session_active": active,
+                        "pending": pending,
+                        "fields": fields,
+                        "ts": time.time(),
+                    },
                     handle,
                 )
             os.replace(tmp, path)
@@ -4951,15 +5000,16 @@ class SimustRealtimeCamera:
             ch.qr_blocks.append(block_copy)
 
             video_index_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "current_video_index.txt")
-            video_index = 1
+            file_index = 1
             if os.path.exists(video_index_file):
                 try:
                     with open(video_index_file, 'r') as f:
-                        video_index = int(f.read().strip())
+                        file_index = int(f.read().strip())
                 except Exception:
-                    video_index = 1
-            if video_index < 1:
-                video_index = 1
+                    file_index = 1
+            from smart_simust_player import _result_video_index
+            block_test = (ch.current_qr_block or {}).get("test_num")
+            video_index = _result_video_index(block_test, file_index)
 
             self._flush_pending_analysis_locked(ch)
 
@@ -5211,8 +5261,11 @@ class SimustRealtimeCamera:
         cue = self._read_image_action_cue()
         cue_active = bool(isinstance(cue, dict) and cue.get("active"))
 
+        paused_fields = set(getattr(self, "_paused_fields", None) or set())
         for fid, ch in self.channels.items():
             if not self._field_is_active(fid):
+                continue
+            if str(fid).upper()[:1] in paused_fields:
                 continue
 
             hit = self._image_cue_for_field(cue, fid) if cue_active else None
@@ -5224,36 +5277,60 @@ class SimustRealtimeCamera:
             # arrives during the tail of the 3s hold).
             just_armed = False
             if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
-                # Do not drop the current cylinder here. The next cue is written
-                # when the pass timer ends, 17 frames (0.9s) before that pass
-                # leaves the camera. Clearing now made a synced 3s cylinder
-                # last 2.1s. The appear countdown below ends the old session
-                # after those 17 frames, together with the pass.
-                on_sec = _cue_on_sec(cue)
-                hold_frames = _on_hold_frames(on_sec)
-                ch._frame_sync_cue_raw = cue_raw
-                ch._pending_cue_info = {
-                    "action": hit["action"],
-                    "screens": list(hit["screens"]),
-                    "keypoints": list(hit.get("keypoints") or []),
-                    "on_sec": on_sec,
-                    "efficiency_max_sec": (cue or {}).get("efficiency_max_sec"),
-                    "finish_balls": bool((cue or {}).get("finish_balls")),
-                    "budget_elapsed_sec": (cue or {}).get("budget_elapsed_sec"),
-                    "budget_total_sec": (cue or {}).get("budget_total_sec"),
-                    "action_in_set": (cue or {}).get("action_in_set"),
-                    "actions_in_set": (cue or {}).get("actions_in_set"),
-                    "test_num": (cue or {}).get("test_num"),
-                    "raw": cue_raw,
-                    "seq": (cue or {}).get("seq", 0),
-                    "hold_frames": hold_frames,
-                }
-                ch.kp_appear_frames_left = shift
-                just_armed = True
-                print(
-                    f"[{ch.label}] cue ON → keypoints in {shift}f, "
-                    f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
-                )
+                # The other field rewrites this cue on every goal. A new seq
+                # for the same screen must not restart this cylinder.
+                block = ch.current_qr_block if isinstance(ch.current_qr_block, dict) else {}
+                same_action = False
+                if ch.session_active and block:
+                    try:
+                        same_test = int(hit.get("test_num") or 0) == int(block.get("test_num") or 0)
+                        same_step = int(hit.get("action_in_set") or 0) == int(block.get("action_in_set") or 0)
+                    except (TypeError, ValueError):
+                        same_test = False
+                        same_step = False
+                    same_screens = [str(s) for s in (hit.get("screens") or [])] == [
+                        str(s) for s in (ch.current_screens or [])
+                    ]
+                    same_action = bool(same_test and same_step and same_screens)
+                if same_action:
+                    ch._frame_sync_cue_raw = cue_raw
+                else:
+                    # Do not drop the current cylinder here. The next cue is written
+                    # when the pass timer ends, 17 frames before that pass leaves
+                    # the camera. Clearing now made a synced 3s cylinder last 2.1s.
+                    on_sec = hit.get("on_sec")
+                    if on_sec is None:
+                        on_sec = _cue_on_sec(cue)
+                    hold_frames = _on_hold_frames(on_sec)
+                    ch._frame_sync_cue_raw = cue_raw
+                    ch._pending_cue_info = {
+                        "action": hit["action"],
+                        "screens": list(hit["screens"]),
+                        "keypoints": list(hit.get("keypoints") or []),
+                        "on_sec": on_sec,
+                        "efficiency_max_sec": hit.get("efficiency_max_sec")
+                        if hit.get("efficiency_max_sec") is not None
+                        else (cue or {}).get("efficiency_max_sec"),
+                        "finish_balls": bool((cue or {}).get("finish_balls")),
+                        "budget_elapsed_sec": hit.get("budget_elapsed_sec")
+                        if hit.get("budget_elapsed_sec") is not None
+                        else (cue or {}).get("budget_elapsed_sec"),
+                        "budget_total_sec": hit.get("budget_total_sec")
+                        if hit.get("budget_total_sec") is not None
+                        else (cue or {}).get("budget_total_sec"),
+                        "action_in_set": hit.get("action_in_set") if hit.get("action_in_set") is not None else (cue or {}).get("action_in_set"),
+                        "actions_in_set": hit.get("actions_in_set") if hit.get("actions_in_set") is not None else (cue or {}).get("actions_in_set"),
+                        "test_num": hit.get("test_num") if hit.get("test_num") is not None else (cue or {}).get("test_num"),
+                        "raw": cue_raw,
+                        "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
+                        "hold_frames": hold_frames,
+                    }
+                    ch.kp_appear_frames_left = shift
+                    just_armed = True
+                    print(
+                        f"[{ch.label}] cue ON → keypoints in {shift}f, "
+                        f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
+                    )
 
             # --- Appear countdown runs even while the previous hold is still up ---
             if not just_armed and ch.kp_appear_frames_left is not None:
@@ -5327,8 +5404,13 @@ class SimustRealtimeCamera:
                 else:
                     ch.kp_appear_frames_left -= 1
 
-            # --- Hold until the same wall-clock On as the pass image ---
-            if ch.session_active and getattr(ch, "_kp_clear_deadline", None):
+            # A real field keeps this cylinder until a ball arrives.
+            # A simulated field clears on the pass's wall-clock On, not camera FPS.
+            if (
+                ch.kp_clear_frames_left is not None
+                and ch.session_active
+                and self._field_is_simulated(fid)
+            ):
                 if (
                     ch.kp_clear_frames_left == int(IMAGE_CUE_EDGE_SHIFT_FRAMES)
                     and not getattr(ch, "_gap_display_sent", False)
@@ -5337,9 +5419,12 @@ class SimustRealtimeCamera:
                     ch._live_display_at = 0
                     ch._live_display_busy = False
                     self._schedule_live_display(ch)
-                if ch.kp_clear_frames_left is not None and ch.kp_clear_frames_left > 0:
+                if ch.kp_clear_frames_left > 0:
                     ch.kp_clear_frames_left -= 1
-                if time.time() >= float(ch._kp_clear_deadline):
+                deadline = getattr(ch, "_kp_clear_deadline", None)
+                wall_done = deadline is not None and time.time() >= float(deadline)
+                frame_done = deadline is None and ch.kp_clear_frames_left <= 0
+                if wall_done or frame_done:
                     ch.kp_clear_frames_left = None
                     ch._kp_clear_deadline = None
                     with self.session_lock:
@@ -5347,7 +5432,7 @@ class SimustRealtimeCamera:
                             self._end_session_locked(
                                 current_time_str, current_timestamp, ch
                             )
-                    print(f"[{ch.label}] keypoints CLEAR (On wall-clock done)")
+                    print(f"[{ch.label}] keypoints CLEAR (On countdown done)")
 
     def _tick_keypoint_hold(self, ch, current_timestamp=None):
         """Hold keypoints for On; image-cue mode clears on cue OFF instead."""
@@ -5470,6 +5555,12 @@ class SimustRealtimeCamera:
         balls, players = [], []
         hips = {"A": (None, None), "B": (None, None)}
         h, w = frame.shape[:2]
+        for fid in ("A", "B"):
+            if fid in sim_ids:
+                continue
+            sim = (self.simulators or {}).get(fid)
+            if sim is not None and not getattr(sim, "parked", False):
+                sim.stop()
         if real_ids:
             balls, players = self.tracker.detect_objects(frame, active_fields=real_ids)
             for fid in real_ids:
@@ -5478,7 +5569,10 @@ class SimustRealtimeCamera:
                     frame, players, fid, current_timestamp, ch.session_start_timestamp or current_timestamp
                 )
                 hips[fid] = (sx, sy)
+        paused = {str(name).upper()[:1] for name in (getattr(self, "_paused_fields", None) or set())}
         for fid in sim_ids:
+            if fid in paused:
+                continue
             sim = self.simulators.get(fid)
             if sim is None:
                 continue
@@ -5554,6 +5648,8 @@ class SimustRealtimeCamera:
         """Finish-balls: as soon as the ball is in the cylinder, score Correct."""
         if self.operator_paused or not ch.session_active:
             return
+        if str(ch.field_id).upper()[:1] in getattr(self, "_paused_fields", set()):
+            return
         block = ch.current_qr_block
         if not isinstance(block, dict) or not block.get("finish_balls"):
             return
@@ -5574,6 +5670,8 @@ class SimustRealtimeCamera:
             for ball in field_balls or []:
                 center = ball.get("center") if isinstance(ball, dict) else None
                 if center is None:
+                    continue
+                if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
                     continue
                 if in_goal_area(center, p0, p1, depth):
                     ch._cylinder_goal_seq = seq
@@ -5665,14 +5763,48 @@ class SimustRealtimeCamera:
         if not action or not screens:
             return empty
         seq = cue.get("seq", 0)
+        if entry.get("seq") is not None:
+            try:
+                seq = int(entry.get("seq"))
+            except (TypeError, ValueError):
+                seq = cue.get("seq", 0)
         raw = f"IMAGE|{seq}|{action}|{','.join(screens)}"
+        def _field_int(key):
+            if entry.get(key) is None:
+                return None
+            try:
+                return int(entry.get(key))
+            except (TypeError, ValueError):
+                return None
+
+        test_num = _field_int("test_num")
+        action_in_set = _field_int("action_in_set")
+        if test_num is not None or action_in_set is not None:
+            # Same seq must not restart the field that is still on this action.
+            raw += f"|t{0 if test_num is None else test_num}|a{0 if action_in_set is None else action_in_set}"
+
+        def _field_float(key):
+            if entry.get(key) is None:
+                return None
+            try:
+                return float(entry.get(key))
+            except (TypeError, ValueError):
+                return None
+
         return {
             "raw": raw,
             "action": action,
             "screens": screens,
             "keypoints": [],
             "bbox": None,
-            "on_sec": _cue_on_sec(cue),
+            "on_sec": _field_float("on_sec") if _field_float("on_sec") is not None else _cue_on_sec(cue),
+            "efficiency_max_sec": _field_float("efficiency_max_sec"),
+            "budget_elapsed_sec": _field_float("budget_elapsed_sec"),
+            "budget_total_sec": _field_float("budget_total_sec"),
+            "action_in_set": _field_int("action_in_set"),
+            "actions_in_set": _field_int("actions_in_set"),
+            "test_num": _field_int("test_num"),
+            "seq": seq,
         }
 
     def _force_end_image_cue_sessions(self, current_time_str, current_timestamp):
@@ -6182,7 +6314,11 @@ class SimustRealtimeCamera:
                         test_num=block.get("test_num") or 0,
                     )
             else:
-                sim.end_action()
+                sim.stop()
+                ch = self.channels.get(fid)
+                if ch is not None:
+                    # Dropping the simulator must not score the ball it left behind.
+                    ch._cylinder_goal_seq = getattr(ch, "_display_seq", None)
 
     # ---- Main loop ----
     def run(self):
@@ -6217,8 +6353,11 @@ class SimustRealtimeCamera:
                 current_timestamp = time.time()
                 current_time_str = get_current_time_ms()
 
-                paused = read_pause_setting()
-                if paused:
+                pause_fields = read_pause_fields()
+                self._paused_fields = {
+                    fid for fid, on in pause_fields.items() if on
+                }
+                if pause_fields.get("A") and pause_fields.get("B"):
                     if not self.operator_paused:
                         self._freeze_for_pause()
                     if self.visualization_enabled and last_stitched is not None:

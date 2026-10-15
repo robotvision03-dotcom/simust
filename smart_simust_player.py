@@ -250,6 +250,8 @@ OPENING_LOGO_MAX_HEIGHT = 0.42
 OPENING_LOGO_TEXT_GAP_LINES = 0
 # Extra downward shift of opening-card text (fraction of screen height).
 OPENING_LOGO_TEXT_DOWN_FRAC = 0.20
+# Pull that text back up by this many lines.
+OPENING_LOGO_TEXT_LIFT_LINES = 1
 # World Class digits: keep clear of the top/bottom screen edges.
 WC_TEXT_EDGE_MARGIN = 0.10
 LEVEL_OPENING_LOGO_FILES = {
@@ -307,7 +309,8 @@ def _screen_name(fid: str, number) -> Optional[str]:
     if n < 1 or n > 6:
         return None
     return f"{str(fid).upper()[:1]}{n}"
-# Scripted SF: 3 tests × 10 actions. On=3.0s, Gap=0.5s, fixed (no speed scale).
+# Scripted SF: 5 tests × 10 actions. On=3.0s, Gap=0.5s, fixed (no speed scale).
+SF_TEST_COUNT = 5
 SF_SCRIPTED_ON_MS = 3000
 SF_SCRIPTED_GAP_MS = 500
 SF110N_GAP_MS = SF_SCRIPTED_GAP_MS  # alias
@@ -326,23 +329,22 @@ _SF180_T1 = [
 ]
 
 
-def _sf_three_tests(*pair_lists):
-    """3 tests, 10 actions each. Extra tests reuse the last stored pair list."""
-    lists = [list(p)[:10] for p in pair_lists if p]
-    if not lists:
+def _sf_series(*pair_lists, tests=SF_TEST_COUNT):
+    """5 tests, 10 actions each. Later tests repeat the stored screen order."""
+    source = [list(p)[:10] for p in pair_lists if p]
+    if not source:
         return {}
-    while len(lists) < 3:
-        lists.append(list(lists[-1]))
+    count = max(1, int(tests or SF_TEST_COUNT))
     return {
-        i: {"on_ms": SF_SCRIPTED_ON_MS, "pairs": lists[i - 1]}
-        for i in range(1, 4)
+        i: {"on_ms": SF_SCRIPTED_ON_MS, "pairs": list(source[(i - 1) % len(source)])}
+        for i in range(1, count + 1)
     }
 
 
-SF30N_SCRIPT = _sf_three_tests(_SF30_T1, _SF30_T2, _SF30_T1)
-SF60N_SCRIPT = _sf_three_tests(_SF60_T1, _SF60_T2, _SF60_T1)
-SF110N_SCRIPT = _sf_three_tests(_SF110_T1)
-SF180N_SCRIPT = _sf_three_tests(_SF180_T1)
+SF30N_SCRIPT = _sf_series(_SF30_T1, _SF30_T2)
+SF60N_SCRIPT = _sf_series(_SF60_T1, _SF60_T2)
+SF110N_SCRIPT = _sf_series(_SF110_T1)
+SF180N_SCRIPT = _sf_series(_SF180_T1)
 # Entry: 5 tests × 12 actions. Screens are named 1–6 per field.
 # On starts at 3.0s and gap at 1.0s; each later test is 10% shorter.
 # Floors: on 1.8s, gap 0.5s. Same pass-image / keypoint clock as Foundation.
@@ -1953,88 +1955,119 @@ def _build_entry_playlist(series_num: int, active_fields) -> List[dict]:
     return _stamp_finish_balls(playlist)
 
 
-def _zip_field_action_playlists(parts: dict) -> List[dict]:
-    """One timeline. Each step keeps the screens and images of every field that still has an action."""
-    fields = [fid for fid in ("A", "B") if parts.get(fid)]
-    if not fields:
-        return []
-    length = max(len(parts[fid]) for fid in fields)
-    merged = []
-    for index in range(length):
-        field_screens = {}
-        screen_images = {}
-        gap_screen_images = {}
-        on_ms = None
-        gap_ms = None
-        labels = []
-        entry_digits = False
-        test_num = 1
-        action_in_set = index + 1
-        for fid in fields:
-            playlist = parts[fid]
-            if index >= len(playlist):
-                continue
-            step = playlist[index] or {}
-            owned = step.get("field_screens") or {}
-            if fid in owned:
-                field_screens[fid] = list(owned[fid])
-            elif len(owned) == 1:
-                field_screens[fid] = list(next(iter(owned.values())))
-            screen_images.update(step.get("screen_images") or {})
-            gap_screen_images.update(step.get("gap_screen_images") or {})
-            if step.get("entry_digits"):
-                entry_digits = True
-            if step.get("on_ms") is not None:
-                on_ms = int(step["on_ms"]) if on_ms is None else max(int(on_ms), int(step["on_ms"]))
-            if step.get("gap_ms") is not None:
-                gap_ms = int(step["gap_ms"]) if gap_ms is None else max(int(gap_ms), int(step["gap_ms"]))
-            if step.get("label"):
-                labels.append(str(step["label"]))
-            test_num = step.get("test_num") or test_num
-            action_in_set = step.get("action_in_set") or action_in_set
-        if not field_screens or not screen_images:
+def _compose_independent_entry(parts: dict, indices: dict, skip=None) -> Optional[dict]:
+    """One live step. Each field keeps its own action; a finished field is left out."""
+    skip = {str(fid).upper()[:1] for fid in (skip or set())}
+    field_screens = {}
+    screen_images = {}
+    gap_screen_images = {}
+    field_meta = {}
+    on_ms = None
+    gap_ms = None
+    labels = []
+    entry_digits = False
+    budgets = []
+    efficiencies = []
+    for fid in ("A", "B"):
+        if fid in skip:
             continue
-        merged.append({
-            "kind": "labeled_action",
-            "index": len(merged) + 1,
-            "test_num": test_num,
-            "action_in_set": action_in_set,
-            "actions_in_set": length,
-            "is_last_in_set": index == length - 1,
-            "timing_scale": 1.0,
-            "fixed_timing": on_ms is not None,
-            "on_ms": on_ms,
-            "gap_ms": gap_ms,
-            "action_num": action_in_set,
-            "action": "PASS",
-            "no_fillers": True,
-            "entry_digits": entry_digits,
-            "field_screens": field_screens,
-            "screen_images": screen_images,
-            "gap_screen_images": gap_screen_images or None,
-            "advance_on_goal": any(bool((step or {}).get("advance_on_goal")) for step in (
-                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
-            )),
-            "skip_gap": any(bool((step or {}).get("skip_gap")) for step in (
-                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
-            )),
-            "finish_balls": any(bool((step or {}).get("finish_balls")) for step in (
-                (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
-            )),
-            "budget_ms": max(
-                [int((step or {}).get("budget_ms") or 0) for step in (
-                    (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
-                )] or [0]
-            ) or None,
-            "efficiency_max_sec": max(
-                [float((step or {}).get("efficiency_max_sec") or 0) for step in (
-                    (parts[fid][index] if index < len(parts[fid]) else {}) for fid in fields
-                )] or [0]
-            ) or None,
-            "label": " | ".join(labels) if labels else f"fields {','.join(fields)} a{index + 1}",
-            "path": f"image://independent/{index + 1}",
-        })
-    return merged
+        playlist = (parts or {}).get(fid) or []
+        try:
+            index = int((indices or {}).get(fid, 0))
+        except (TypeError, ValueError):
+            index = 0
+        if index < 0 or index >= len(playlist) or not isinstance(playlist[index], dict):
+            continue
+        step = playlist[index]
+        owned = step.get("field_screens") or {}
+        if fid in owned:
+            field_screens[fid] = list(owned[fid])
+        elif len(owned) == 1:
+            field_screens[fid] = list(next(iter(owned.values())))
+        screen_images.update(step.get("screen_images") or {})
+        gap_screen_images.update(step.get("gap_screen_images") or {})
+        if step.get("entry_digits"):
+            entry_digits = True
+        if step.get("on_ms") is not None:
+            on_ms = int(step["on_ms"]) if on_ms is None else max(int(on_ms), int(step["on_ms"]))
+        if step.get("gap_ms") is not None:
+            gap_ms = int(step["gap_ms"]) if gap_ms is None else max(int(gap_ms), int(step["gap_ms"]))
+        if step.get("label"):
+            labels.append(str(step["label"]))
+        try:
+            budget = int(step.get("budget_ms") or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if budget > 0:
+            budgets.append(budget)
+        try:
+            eff = float(step.get("efficiency_max_sec") or 0)
+        except (TypeError, ValueError):
+            eff = 0.0
+        if eff > 0:
+            efficiencies.append(eff)
+        field_meta[fid] = {
+            "test_num": int(step.get("test_num") or 1),
+            "action_in_set": int(step.get("action_in_set") or (index + 1)),
+            "actions_in_set": int(step.get("actions_in_set") or 1),
+            "on_ms": step.get("on_ms"),
+            "budget_ms": step.get("budget_ms"),
+            "finish_balls": bool(step.get("finish_balls")),
+            "index": index,
+        }
+    if not field_screens or not screen_images:
+        return None
+    primary = field_meta.get("A") or next(iter(field_meta.values()))
+    return {
+        "kind": "labeled_action",
+        "index": 1,
+        "test_num": primary.get("test_num") or 1,
+        "action_in_set": primary.get("action_in_set") or 1,
+        "actions_in_set": max(int(meta.get("actions_in_set") or 1) for meta in field_meta.values()),
+        "is_last_in_set": False,
+        "timing_scale": 1.0,
+        "fixed_timing": on_ms is not None,
+        "on_ms": on_ms,
+        "gap_ms": gap_ms,
+        "action_num": primary.get("action_in_set") or 1,
+        "action": "PASS",
+        "no_fillers": True,
+        "entry_digits": entry_digits,
+        "independent_fields": True,
+        "field_meta": field_meta,
+        "field_screens": field_screens,
+        "screen_images": screen_images,
+        "gap_screen_images": gap_screen_images or None,
+        "advance_on_goal": True,
+        "skip_gap": True,
+        "finish_balls": any(bool(meta.get("finish_balls")) for meta in field_meta.values()),
+        "budget_ms": max(budgets) if budgets else None,
+        "efficiency_max_sec": max(efficiencies) if efficiencies else None,
+        "label": " | ".join(labels) if labels else "independent fields",
+        "path": "image://independent/live",
+    }
+
+
+def _result_video_index(test_num, file_index=1) -> int:
+    """Each field's own test number. A shared file cannot name two tests at once."""
+    try:
+        number = int(test_num)
+    except (TypeError, ValueError):
+        number = 0
+    if number >= 1:
+        return number
+    try:
+        fallback = int(file_index)
+    except (TypeError, ValueError):
+        fallback = 1
+    return fallback if fallback >= 1 else 1
+
+
+def _zip_field_action_playlists(parts: dict) -> List[dict]:
+    """One live step. Each field advances on its own action count."""
+    indices = {fid: 0 for fid in ("A", "B") if (parts or {}).get(fid)}
+    entry = _compose_independent_entry(parts, indices)
+    return [entry] if entry else []
 
 
 def _build_dual_field_playlist(
@@ -2312,6 +2345,28 @@ def _screens_for_active_fields(step, active_fields):
         if name:
             screens.append(name)
     return screens
+
+
+def _images_for_fields(entry, field_ids) -> dict:
+    """Pictures for these fields only, from the live step."""
+    wanted = {str(fid).upper()[:1] for fid in (field_ids or set())}
+    images = {}
+    for sid, path in ((entry or {}).get("screen_images") or {}).items():
+        name = _sid(sid) or str(sid)
+        if path and _field_for_screen(name) in wanted:
+            images[name] = path
+    return images
+
+
+def _without_field_screens(existing, replace_fields) -> dict:
+    """Drop one field's old pictures. The other field's screens stay."""
+    replace = {str(fid).upper()[:1] for fid in (replace_fields or set())}
+    kept = {}
+    for name, pix in (existing or {}).items():
+        if _field_for_screen(name) in replace:
+            continue
+        kept[name] = pix
+    return kept
 
 
 def _field_for_screen(screen_id):
@@ -3007,6 +3062,69 @@ def _rotation_field_slot(active_fields) -> dict:
     if "B" in active:
         slot["B"] = [random.choice(ROTATION_ARC_B)]
     return slot
+
+
+def _result_ring_specs(panel) -> dict:
+    """Screen name → ring label, center lines, and fill percent. No video."""
+    if not isinstance(panel, dict):
+        return {}
+    specs = {}
+
+    def add(screen, label, lines, percent):
+        name = str(screen or "").strip()
+        if not name:
+            return
+        shown = []
+        for line in lines:
+            text = str(line or "").strip()
+            if not text or text == "-":
+                continue
+            shown.append(text)
+        if not shown:
+            shown = ["-"]
+        try:
+            value = float(percent or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        specs[name] = {
+            "label": label,
+            "lines": shown[:2],
+            "percent": max(0.0, min(100.0, value)),
+        }
+
+    add(
+        panel.get("slice_aet"),
+        "Execution Time",
+        [panel.get("aet_display") or "-", panel.get("aet_session_display") or ""],
+        panel.get("aet_percent"),
+    )
+    try:
+        accuracy = float(panel.get("aac") or 0)
+    except (TypeError, ValueError):
+        accuracy = 0.0
+    add(
+        panel.get("slice_acc"),
+        "Accuracy",
+        [f"{accuracy:.0f}%" if accuracy > 0 else "-"],
+        accuracy,
+    )
+    add(
+        panel.get("slice_ae"),
+        "Efficiency",
+        [panel.get("ae_display") or "-"],
+        panel.get("avg_ae"),
+    )
+    try:
+        metres = int(panel.get("distance_shown") or 0)
+    except (TypeError, ValueError):
+        metres = 0
+    add(
+        panel.get("slice_disp"),
+        "Displacement",
+        [f"{metres}m" if metres > 0 else "-"],
+        panel.get("economy_percent"),
+    )
+    return specs
 
 
 def _field_all_screens(fid: str) -> List[str]:
@@ -4227,7 +4345,7 @@ def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
     return placements
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None):
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None, field_meta=None, field_seqs=None):
     """Tell simust_realtime which screens are lit (no QR on canvas).
 
     force_end=True: sequence finished — realtime must clear keypoints now.
@@ -4284,10 +4402,50 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
         for fid, screens in field_screens.items():
             if not screens:
                 continue
-            payload["fields"][str(fid).upper()] = {
+            fid_key = str(fid).upper()
+            meta = {}
+            if isinstance(field_meta, dict):
+                meta = field_meta.get(fid_key) or field_meta.get(fid) or {}
+            field_payload = {
                 "action": action_name,
                 "screens": [str(s) for s in screens],
             }
+            for key, fallback in (
+                ("action_in_set", action_in_set),
+                ("actions_in_set", actions_in_set),
+                ("test_num", test_num),
+            ):
+                value = meta.get(key, fallback) if isinstance(meta, dict) else fallback
+                if value is None:
+                    continue
+                try:
+                    field_payload[key] = int(value)
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(meta, dict):
+                for key in (
+                    "on_sec",
+                    "budget_elapsed_sec",
+                    "budget_total_sec",
+                    "efficiency_max_sec",
+                ):
+                    if meta.get(key) is None:
+                        continue
+                    try:
+                        field_payload[key] = float(meta.get(key))
+                    except (TypeError, ValueError):
+                        pass
+            own_seq = None
+            if isinstance(field_seqs, dict):
+                own_seq = field_seqs.get(fid_key, field_seqs.get(fid))
+            if own_seq is None and isinstance(meta, dict):
+                own_seq = meta.get("seq")
+            if own_seq is not None:
+                try:
+                    field_payload["seq"] = int(own_seq)
+                except (TypeError, ValueError):
+                    pass
+            payload["fields"][fid_key] = field_payload
     try:
         os.makedirs(os.path.dirname(IMAGE_ACTION_CUE_FILE), exist_ok=True)
         with open(IMAGE_ACTION_CUE_FILE, "w", encoding="utf-8") as f:
@@ -4501,9 +4659,26 @@ class ImageActionCanvas(QtWidgets.QWidget):
         if not opened:
             self.update()
             return
-        self._video_groups = opened
-        self._video_screens = {sid for group in opened for sid in group["screens"]}
-        self.active_screens = set(self._video_screens)
+        logo_names = {sid for group in opened for sid in group["screens"]}
+        kept = []
+        for group in list(getattr(self, "_video_groups", None) or []):
+            screens = {_sid(sid) for sid in (group.get("screens") or set()) if _sid(sid)}
+            if screens & logo_names:
+                cap = group.get("cap")
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                continue
+            kept.append(group)
+        old_timer = getattr(self, "_video_timer", None)
+        if old_timer is not None:
+            try:
+                old_timer.stop()
+            except Exception:
+                pass
+        self._video_groups = kept + opened
         self._tick_screen_video()
         interval = max(20, int(round(1000.0 / fps)))
         self._video_timer = QtCore.QTimer(self)
@@ -4526,21 +4701,50 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 self._screen_pixmaps[sid] = self._fallback
         self.update()
 
-    def set_screen_images(self, screen_to_path, scale=1.0):
+    def set_screen_images(self, screen_to_path, scale=1.0, keep_videos=False, replace_fields=None):
         """Map screen id → image path (action, filler, or gap)."""
-        self._stop_bounce_motion()
-        self._stop_screen_video()
-        self._summary_lines = []
-        self._summary_screens = None
-        self._summary_by_screen = {}
-        if not getattr(self, "_keep_text_overlays", False):
+        replace = {str(fid).upper()[:1] for fid in (replace_fields or set()) if str(fid).upper()[:1] in ("A", "B")}
+        if replace:
+            bounce = {
+                name for name in (getattr(self, "_bounce_screens", None) or set())
+                if _field_for_screen(name) not in replace
+            }
+            self._bounce_screens = bounce
+            if not bounce:
+                self._stop_bounce_motion()
+            overlays = getattr(self, "_image_overlays", None) or {}
+            self._image_overlays = {
+                name: pix for name, pix in overlays.items()
+                if _field_for_screen(name) not in replace
+            }
+            texts = getattr(self, "_text_overlays", None) or {}
+            self._text_overlays = {
+                name: text for name, text in texts.items()
+                if _field_for_screen(name) not in replace
+            }
+        else:
+            self._stop_bounce_motion()
+        if replace:
+            self._release_field_videos(replace)
+            self._clear_field_summary(replace)
+            fill = set(getattr(self, "_video_fill_screens", None) or set())
+            for name in list(fill):
+                if _field_for_screen(name) in replace:
+                    fill.discard(name)
+            self._video_fill_screens = fill
+        elif not keep_videos:
+            self._stop_screen_video()
+            self._summary_lines = []
+            self._summary_screens = None
+            self._summary_by_screen = {}
+            self._video_fill_screens = set()
+        if not replace and not getattr(self, "_keep_text_overlays", False):
             self._text_overlays = {}
             self._text_overlay_positions = {}
             self._image_overlays = {}
         self._keep_text_overlays = False
         self._content_scale = float(scale or 1.0)
-        self._screen_pixmaps = {}
-        self.active_screens = set()
+        stills = {}
         for sid, path in (screen_to_path or {}).items():
             pix = self._load_pixmap(path)
             if pix is None or pix.isNull():
@@ -4548,9 +4752,74 @@ class ImageActionCanvas(QtWidgets.QWidget):
             key = _sid(sid)
             if not key:
                 continue
-            self._screen_pixmaps[key] = pix
-            self.active_screens.add(key)
+            stills[key] = pix
+        band = set(getattr(self, "_band_screens", None) or set())
+        if keep_videos or replace:
+            for key in stills:
+                band.discard(key)
+            if replace:
+                for name in list(band):
+                    if _field_for_screen(name) in replace:
+                        band.discard(name)
+        else:
+            band = set()
+        self._band_screens = band
+        if replace or keep_videos:
+            merged = _without_field_screens(getattr(self, "_screen_pixmaps", None) or {}, replace)
+            kept_stills = _without_field_screens(getattr(self, "_still_pixmaps", None) or {}, replace)
+            if not replace:
+                merged = dict(getattr(self, "_screen_pixmaps", None) or {})
+                kept_stills = dict(getattr(self, "_still_pixmaps", None) or {})
+            merged.update(stills)
+            kept_stills.update(stills)
+            self._screen_pixmaps = merged
+            self._still_pixmaps = kept_stills
+        else:
+            self._screen_pixmaps = dict(stills)
+            self._still_pixmaps = dict(stills)
+        self.active_screens = set(self._screen_pixmaps)
         self.update()
+
+    def play_band_on_screens(self, video_path, screen_ids):
+        """Play one full-band results clip, cropped onto this field's screens."""
+        screens = {_sid(sid) for sid in (screen_ids or []) if _sid(sid) and _sid(sid) in SLICE_ORDER}
+        path = str(video_path or "")
+        if not screens or not path or not os.path.isfile(path):
+            return False
+        try:
+            import cv2
+        except Exception as exc:
+            logger.warning("OpenCV unavailable for field results: %s", exc)
+            return False
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            logger.warning("Could not open field results: %s", path)
+            return False
+        kept = []
+        for group in list(getattr(self, "_video_groups", None) or []):
+            if screens.intersection(group.get("screens") or set()):
+                try:
+                    group["cap"].release()
+                except Exception:
+                    pass
+                continue
+            kept.append(group)
+        kept.append({
+            "cap": cap,
+            "screens": set(screens),
+            "path": path,
+            "full_band": True,
+        })
+        self._video_groups = kept
+        self._video_screens = {sid for group in kept for sid in group["screens"]}
+        self._tick_screen_video()
+        if self._video_timer is None:
+            rate = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+            interval = max(20, int(round(1000.0 / rate)))
+            self._video_timer = QtCore.QTimer(self)
+            self._video_timer.timeout.connect(self._tick_screen_video)
+            self._video_timer.start(interval)
+        return True
 
     def set_screen_video(self, screen_ids, video_path, scale=None):
         """Play the same pass.mp4 (looping) on each listed screen tile."""
@@ -4638,6 +4907,136 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_timer.timeout.connect(self._tick_screen_video)
         self._video_timer.start(interval)
 
+    def _clear_field_summary(self, field_ids):
+        """Remove the opening card from these fields. The other field's card stays."""
+        replace = {str(fid).upper()[:1] for fid in (field_ids or set())}
+        by_screen = dict(getattr(self, "_summary_by_screen", None) or {})
+        for name in list(by_screen):
+            if _field_for_screen(name) in replace:
+                by_screen.pop(name, None)
+        screens = {
+            name for name in (getattr(self, "_summary_screens", None) or set())
+            if _field_for_screen(name) not in replace
+        }
+        self._summary_by_screen = by_screen
+        self._summary_screens = screens or None
+        self._summary_lines = [" "] if by_screen else []
+        if not by_screen:
+            self._summary_logo = False
+
+    def show_field_opening(self, fid, card):
+        """Opening information on this field only. The other field keeps its test."""
+        fid = str(fid or "").upper()[:1]
+        screens = [name for name in _field_all_screens(fid) if name]
+        if not screens or not isinstance(card, dict):
+            return
+        self._release_field_videos({fid})
+        kept = {}
+        for source in (
+            getattr(self, "_still_pixmaps", None) or {},
+            getattr(self, "_screen_pixmaps", None) or {},
+        ):
+            for sid, pix in source.items():
+                name = _sid(sid)
+                if name and _field_for_screen(name) != fid and pix is not None:
+                    kept[name] = pix
+        stills = kept
+        self._still_pixmaps = stills
+        self._screen_pixmaps = dict(stills)
+        by_screen = dict(getattr(self, "_summary_by_screen", None) or {})
+        chosen = set(getattr(self, "_summary_screens", None) or set())
+        for name in screens:
+            by_screen[name] = {
+                "lines": [str(line) for line in (card.get("lines") or []) if str(line).strip()],
+                "bg": tuple(int(v) for v in (card.get("bg") or (0, 0, 0))[:3]),
+                "fg": tuple(int(v) for v in (card.get("fg") or (255, 255, 255))[:3]),
+            }
+            chosen.add(name)
+        self._summary_by_screen = by_screen
+        self._summary_screens = chosen
+        self._summary_lines = [" "] if by_screen else []
+        saved_scale = float(getattr(self, "_content_scale", 1.0) or 1.0)
+        saved_fill = bool(getattr(self, "_video_fill", False))
+        logo = card.get("logo")
+        if logo:
+            self._start_summary_logos({name: logo for name in screens})
+            self._content_scale = saved_scale
+            self._video_fill = saved_fill
+        else:
+            self._summary_logo = False
+            self.update()
+
+    def play_field_intro(self, fid, video_path):
+        """Starting video on this field only."""
+        fid = str(fid or "").upper()[:1]
+        screens = {_sid(name) for name in _field_all_screens(fid) if _sid(name)}
+        self._clear_field_summary({fid})
+        self._release_field_videos({fid})
+        path = str(video_path or "")
+        if not screens or not path or not os.path.isfile(path):
+            self.update()
+            return False
+        stills = {}
+        for source in (
+            getattr(self, "_still_pixmaps", None) or {},
+            getattr(self, "_screen_pixmaps", None) or {},
+        ):
+            for sid, pix in source.items():
+                name = _sid(sid)
+                if name and name not in screens and pix is not None:
+                    stills[name] = pix
+        self._still_pixmaps = stills
+        try:
+            import cv2
+        except Exception:
+            self.update()
+            return False
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            self.update()
+            return False
+        groups = list(getattr(self, "_video_groups", None) or [])
+        groups.append({"cap": cap, "screens": set(screens), "path": path})
+        self._video_groups = groups
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        fill |= set(screens)
+        self._video_fill_screens = fill
+        self._video_screens = {sid for group in groups for sid in (group.get("screens") or set())}
+        if getattr(self, "_video_timer", None) is None:
+            self._tick_screen_video()
+            self._video_timer = QtCore.QTimer(self)
+            self._video_timer.timeout.connect(self._tick_screen_video)
+            rate = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+            self._video_timer.start(max(20, int(round(1000.0 / rate))))
+        return True
+
+    def _release_field_videos(self, field_ids):
+        """Stop this field's clips. The other field's clip keeps playing."""
+        replace = {str(fid).upper()[:1] for fid in (field_ids or set())}
+        groups = []
+        for group in list(getattr(self, "_video_groups", None) or []):
+            screens = { _sid(sid) for sid in (group.get("screens") or set()) if _sid(sid) }
+            if any(_field_for_screen(name) in replace for name in screens):
+                try:
+                    group["cap"].release()
+                except Exception:
+                    pass
+                continue
+            groups.append(group)
+        self._video_groups = groups
+        self._video_screens = {sid for group in groups for sid in (group.get("screens") or set())}
+        if groups:
+            return
+        timer = getattr(self, "_video_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:
+                pass
+            self._video_timer = None
+        self._video_frame = None
+
     def _stop_screen_video(self):
         if self._video_timer is not None:
             try:
@@ -4661,6 +5060,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_fill = False
         self._video_frame = None
         self._video_screens = set()
+        self._band_screens = set()
         self._summary_logo = False
 
     def _stop_bounce_motion(self):
@@ -4771,9 +5171,13 @@ class ImageActionCanvas(QtWidgets.QWidget):
             return
         pixmaps = {name: pix for name in screens}
         self._video_frame = pix
-        self._screen_pixmaps = pixmaps
+        kept = _without_field_screens(getattr(self, "_screen_pixmaps", None) or {}, [
+            _field_for_screen(name) for name in screens
+        ])
+        kept.update(pixmaps)
+        self._screen_pixmaps = kept
         self._video_screens = set(screens)
-        self.active_screens = set(screens)
+        self.active_screens = set(kept)
         self.update()
 
     def _tick_screen_video(self):
@@ -4782,12 +5186,14 @@ class ImageActionCanvas(QtWidgets.QWidget):
             return
         try:
             import cv2
-            pixmaps = {}
-            screens = set()
+            pixmaps = dict(getattr(self, "_still_pixmaps", None) or {})
+            screens = set(pixmaps)
             for group in groups:
                 cap = group["cap"]
                 ok, frame = cap.read()
                 if not ok or frame is None:
+                    if group.get("full_band"):
+                        continue
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     ok, frame = cap.read()
                 if not ok or frame is None:
@@ -4802,8 +5208,17 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     name = _sid(sid)
                     if not name:
                         continue
-                    pixmaps[name] = pix
+                    tile = pix
+                    if group.get("full_band") and name in SLICE_ORDER and w > 0:
+                        index = SLICE_ORDER.index(name)
+                        x0, x1 = slice_x_span(index, w, len(SLICE_ORDER))
+                        tile = pix.copy(int(x0), 0, max(1, int(x1) - int(x0)), h)
+                    pixmaps[name] = tile
                     screens.add(name)
+                    if group.get("full_band"):
+                        band = set(getattr(self, "_band_screens", None) or set())
+                        band.add(name)
+                        self._band_screens = band
             if not pixmaps:
                 return
             self._video_frame = next(iter(pixmaps.values()))
@@ -4912,11 +5327,12 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 painter.drawPixmap(logo_x, logo_y, scaled)
                 logo_bottom = logo_y + scaled.height()
             if logo_mode and logo_pix is not None and not logo_pix.isNull():
-                # Below the logo, then an extra downward shift for readability.
+                # Below the logo, then an extra downward shift, then one line up.
                 first_top = (
                     logo_bottom
                     + OPENING_LOGO_TEXT_GAP_LINES * spacing
                     + int(round(self.height() * float(OPENING_LOGO_TEXT_DOWN_FRAC)))
+                    - OPENING_LOGO_TEXT_LIFT_LINES * spacing
                 )
             else:
                 mid = len(lines) // 2
@@ -5005,10 +5421,32 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 painter.drawText(rect, QtCore.Qt.AlignCenter, label)
             painter.setClipping(False)
 
+    def _paint_band_slice(self, painter, pix, name):
+        """Put a results frame on the same slice the video was drawn for."""
+        index = SLICE_ORDER.index(name)
+        x0, x1 = slice_x_span(index, self.width(), len(SLICE_ORDER))
+        dest = QtCore.QRect(int(x0), 0, max(1, int(x1) - int(x0)), max(1, self.height()))
+        painter.setClipRect(dest)
+        if pix is not None and not pix.isNull():
+            scaled = pix.scaled(
+                dest.width(),
+                dest.height(),
+                QtCore.Qt.IgnoreAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+            painter.drawPixmap(dest.topLeft(), scaled)
+        painter.setClipping(False)
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtGui.QColor(0, 0, 0))
-        if self._summary_lines:
+        summary_screens = set(getattr(self, "_summary_screens", None) or set())
+        other_pix = {
+            sid: pix
+            for sid, pix in (getattr(self, "_screen_pixmaps", None) or {}).items()
+            if _sid(sid) not in summary_screens
+        }
+        if self._summary_lines and not other_pix:
             self._paint_level_summary(painter)
             painter.end()
             return
@@ -5022,9 +5460,15 @@ class ImageActionCanvas(QtWidgets.QWidget):
         ):
             painter.end()
             return
+        band_screens = set(getattr(self, "_band_screens", None) or set())
         for sid, pix in self._screen_pixmaps.items():
             name = _sid(sid)
             if not name or name not in SLICE_ORDER:
+                continue
+            if summary_screens and name in summary_screens:
+                continue
+            if name in band_screens:
+                self._paint_band_slice(painter, pix, name)
                 continue
             index = SLICE_ORDER.index(name)
             left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
@@ -5032,7 +5476,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
             placed = QtCore.QRect(left, 0, rect_w, self.height())
             painter.setClipRect(placed)
             if not pix.isNull():
-                scale = 1.0 if self._video_fill else float(self._content_scale or 1.0)
+                fill_screens = set(getattr(self, "_video_fill_screens", None) or set())
+                scale = 1.0 if name in fill_screens or self._video_fill else float(self._content_scale or 1.0)
                 draw_w = max(1, int(round(rect_w * scale)))
                 draw_h = max(1, int(round(self.height() * scale)))
                 scaled = pix.scaled(
@@ -5102,6 +5547,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     line = QtCore.QRect(left, cy - metrics.height() // 2, rect_w, metrics.height())
                     painter.drawText(line, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, str(text))
                 painter.setClipping(False)
+        if self._summary_lines:
+            self._paint_level_summary(painter)
         self._paint_result_badges(painter)
         painter.end()
 
@@ -5167,11 +5614,11 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.ring_radius = RING_RADIUS
         self.active_fields = {"A", "B"}
         self.active_slice_nums = set(self.slice_order)
-        self.set_active_fields(active_fields)
-
-        # Balls per slice (will be created on first paint)
         self.balls_by_slice = None
         self.level_colors = {}
+        # Set before set_active_fields. That call reads this flag.
+        self.punch_inactive = False
+        self.set_active_fields(active_fields)
 
         # Audio player (optional)
         self.audio_player = QMediaPlayer()
@@ -5195,7 +5642,36 @@ class WaitingOverlay(QtWidgets.QWidget):
         self.active_slice_nums = set(_active_field_screens(active))
         # Rebuild balls next paint so they stay inside the live half
         self.balls_by_slice = None
+        if getattr(self, "punch_inactive", False):
+            self._apply_field_mask()
         self.update()
+
+    def set_punch_inactive(self, enabled):
+        """Cover only the finished field so the other field stays visible."""
+        self.punch_inactive = bool(enabled)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, bool(enabled))
+        self.setAutoFillBackground(not enabled)
+        self._apply_field_mask()
+        self.update()
+
+    def _apply_field_mask(self):
+        if not self.punch_inactive:
+            self.clearMask()
+            return
+        w = max(1, self.width())
+        h = max(1, self.height())
+        region = QtGui.QRegion()
+        for i, slice_num in enumerate(self.slice_order):
+            if slice_num not in self.active_slice_nums:
+                continue
+            x0, x1 = slice_x_span(i, w, len(self.slice_order))
+            region = region.united(QtGui.QRegion(int(x0), 0, max(1, int(x1) - int(x0)), h))
+        self.setMask(region)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "punch_inactive", False):
+            self._apply_field_mask()
 
     def set_level_colors(self, colors):
         """Background and text colors, one pair per field, matching the opening card."""
@@ -5259,7 +5735,8 @@ class WaitingOverlay(QtWidgets.QWidget):
         h = self.height()
         if w <= 0 or h <= 0:
             return
-        painter.fillRect(self.rect(), QColor(10, 12, 18))
+        if not self.punch_inactive:
+            painter.fillRect(self.rect(), QColor(10, 12, 18))
         for i, slice_num in enumerate(self.slice_order):
             if slice_num is None or slice_num not in self.active_slice_nums:
                 continue
@@ -5377,6 +5854,116 @@ class WaitingOverlay(QtWidgets.QWidget):
         super().hideEvent(event)
 
 
+class ResultsOverlay(QtWidgets.QWidget):
+    """Paint result rings and numbers on the field screens. No results video."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.panels = {}
+        self.specs = {}
+        self.slice_order = list(DISPLAY_SLICE_ORDER)
+        self.active_slice_nums = set()
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+
+    def set_panels(self, panels):
+        cleaned = {}
+        specs = {}
+        for fid, panel in (panels or {}).items():
+            key = str(fid or "").upper()[:1]
+            if key not in ("A", "B") or not isinstance(panel, dict):
+                continue
+            cleaned[key] = panel
+            specs.update(_result_ring_specs(panel))
+        self.panels = cleaned
+        self.specs = specs
+        self.active_slice_nums = set()
+        for fid in cleaned:
+            self.active_slice_nums.update(_field_all_screens(fid))
+        self._apply_field_mask()
+        self.update()
+
+    def _apply_field_mask(self):
+        w = max(1, self.width())
+        h = max(1, self.height())
+        region = QtGui.QRegion()
+        for i, slice_num in enumerate(self.slice_order):
+            if slice_num not in self.active_slice_nums:
+                continue
+            x0, x1 = slice_x_span(i, w, len(self.slice_order))
+            region = region.united(QtGui.QRegion(int(x0), 0, max(1, int(x1) - int(x0)), h))
+        if region.isEmpty():
+            self.clearMask()
+        else:
+            self.setMask(region)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_field_mask()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        w = self.width()
+        h = self.height()
+        if w <= 0 or h <= 0:
+            return
+        for i, slice_num in enumerate(self.slice_order):
+            if slice_num is None or slice_num not in self.active_slice_nums:
+                continue
+            left, _right, rect_w = content_x_box(i, slice_num, w, len(self.slice_order))
+            rect = QtCore.QRect(int(left), 0, int(rect_w), h)
+            painter.setClipRect(rect)
+            painter.fillRect(rect, QColor(10, 12, 18))
+            spec = self.specs.get(slice_num)
+            if spec:
+                cx = rect.center().x()
+                cy = (
+                    CHART_CENTER_Y
+                    + screen_content_offset_y(slice_num)
+                    + int(round(h * RESULTS_BAND_DROP))
+                )
+                radius = min(RING_RADIUS, max(8, rect.width() // 2 - 8))
+                painter.setPen(QPen(QColor(60, 60, 80), RING_THICKNESS))
+                painter.drawEllipse(cx - radius, cy - radius, 2 * radius, 2 * radius)
+                percent = float(spec.get("percent") or 0)
+                if percent > 0:
+                    painter.setPen(QPen(QColor(255, 193, 7), RING_THICKNESS))
+                    painter.drawArc(
+                        cx - radius,
+                        cy - radius,
+                        2 * radius,
+                        2 * radius,
+                        90 * 16,
+                        int(round(-360.0 * (percent / 100.0) * 16)),
+                    )
+                lines = list(spec.get("lines") or ["-"])
+                painter.setPen(QColor(255, 255, 255))
+                point = 12 if len(lines) > 1 else 16
+                font = QFont("Segoe UI", point, QFont.Bold)
+                painter.setFont(font)
+                metrics = painter.fontMetrics()
+                spacing = max(1, metrics.lineSpacing())
+                total_h = spacing * len(lines)
+                y0 = cy - total_h // 2 + metrics.ascent()
+                for n, line in enumerate(lines):
+                    tw = metrics.width(str(line))
+                    painter.drawText(cx - tw // 2, y0 + n * spacing, str(line))
+                label = str(spec.get("label") or "")
+                if label:
+                    painter.setFont(QFont("Segoe UI", 11, QFont.Bold))
+                    label_metrics = painter.fontMetrics()
+                    ly = cy + radius + 28
+                    painter.drawText(
+                        cx - label_metrics.width(label) // 2,
+                        ly,
+                        label,
+                    )
+            painter.setClipping(False)
+
+
 # ============================================================
 # SMART PLAYER MAIN WINDOW
 # ============================================================
@@ -5384,6 +5971,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     # Signals emit the video path (or empty string on failure)
     final_summary_done = pyqtSignal(str)
     per_video_results_ready = pyqtSignal(str)
+    field_results_ready = pyqtSignal(str, str)
+    independent_close_ready = pyqtSignal(str)
 
     def __init__(self, video_directory, player_speed=1.0, screen_index=1, status_file=None):
         super().__init__()
@@ -5448,6 +6037,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         self.final_summary_done.connect(self._on_final_summary_done)
         self.per_video_results_ready.connect(self._on_per_video_results_ready)
+        self.field_results_ready.connect(self._on_field_results_ready)
+        self.independent_close_ready.connect(self._on_independent_close_ready)
 
         # Speed / control files (needed before building image playlist)
         self.speed_file_dir = "C:/Users/siama/Documents/simust_player"
@@ -5645,18 +6236,97 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _update_status_file(self, state, current_video, total_videos, message):
         try:
-            status_data = {
+            status_data = {}
+            if os.path.isfile(self.status_file):
+                try:
+                    with open(self.status_file, "r", encoding="utf-8") as handle:
+                        loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        status_data = loaded
+                except Exception:
+                    status_data = {}
+            status_data.update({
                 "state": state,
                 "current_video": current_video,
                 "total_videos": total_videos,
                 "progress": (current_video / total_videos * 100) if total_videos > 0 else 0,
                 "message": message,
-                "timestamp": time.time()
-            }
-            with open(self.status_file, 'w') as f:
-                json.dump(status_data, f)
+                "timestamp": time.time(),
+            })
+            with open(self.status_file, "w", encoding="utf-8") as handle:
+                json.dump(status_data, handle)
         except Exception:
             pass
+
+    def _control_fields_playing(self):
+        """Fields whose Stop button should stay down. A finished series releases it."""
+        if self._player_attr("playlist_finished", False):
+            return []
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if parts:
+            playing = []
+            for fid, rows in parts.items():
+                key = str(fid).upper()[:1]
+                if rows and not self._field_series_finished(key):
+                    playing.append(key)
+            return playing
+        return [
+            str(fid).upper()[:1]
+            for fid in (getattr(self, "_phase_active", None) or [])
+            if str(fid).upper()[:1] in ("A", "B")
+        ]
+
+    def _publish_field_controls(self):
+        """Tell the operator page which fields are still playing."""
+        try:
+            playing = set(self._control_fields_playing())
+            current = {}
+            if os.path.isfile(self.status_file):
+                try:
+                    with open(self.status_file, "r", encoding="utf-8") as handle:
+                        loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        current = loaded
+                except Exception:
+                    current = {}
+            current["fields"] = {
+                "A": "playing" if "A" in playing else "idle",
+                "B": "playing" if "B" in playing else "idle",
+            }
+            current["timestamp"] = time.time()
+            with open(self.status_file, "w", encoding="utf-8") as handle:
+                json.dump(current, handle)
+        except Exception:
+            pass
+
+    def _player_attr(self, name, default=None):
+        try:
+            return object.__getattribute__(self, name)
+        except Exception:
+            return default
+
+    def _field_epoch(self, fid):
+        fid = str(fid or "").upper()[:1]
+        try:
+            return int((self._player_attr("_field_epochs") or {}).get(fid) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _bump_field_epoch(self, fid):
+        """Invalidate timers from this field's previous start or stop."""
+        fid = str(fid or "").upper()[:1]
+        epochs = dict(self._player_attr("_field_epochs") or {})
+        epochs[fid] = self._field_epoch(fid) + 1
+        self._field_epochs = epochs
+        return epochs[fid]
+
+    def _field_epoch_current(self, fid, epoch):
+        if epoch is None:
+            return True
+        try:
+            return int(epoch) == self._field_epoch(fid)
+        except (TypeError, ValueError):
+            return False
 
     # ====== MODIFIED: only list videos directly in the given directory (NO recursion) ======
     def _field_levels_differ(self):
@@ -5768,15 +6438,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._label_mode = False
             return []
 
-        if not getattr(self, "_one_field_build", False) and (
-            self._field_levels_differ() or self._field_modes_differ()
-        ):
+        if not getattr(self, "_one_field_build", False) and len(active) >= 2:
             parts = {}
             for fid in ("A", "B"):
                 if fid not in active:
                     continue
                 parts[fid] = self._build_one_field_playlist(fid)
             self._field_opening_playlists = parts
+            self._independent_index = {fid: 0 for fid in parts}
+            self._independent_done = {fid: False for fid in parts}
+            self._field_result_state = {}
             playlist = _zip_field_action_playlists(parts)
             if playlist:
                 self._label_mode = True
@@ -6883,6 +7554,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elapsed = (time.perf_counter() - float(self._budget_started_at)) * 1000.0
         return int(round(budget - elapsed))
 
+    def _label_action_delay_ms(self, entry) -> int:
+        """How long this action stays up. 0 means a shared clock is already finished.
+
+        Independent fields each keep their own On time. The longer test's clock
+        must not be the hold for one shot: that shot would use the whole clock,
+        and the next step would end both fields.
+        """
+        if isinstance(entry, dict) and entry.get("independent_fields"):
+            return self._flash_delay_ms(on=True)
+        if isinstance(entry, dict) and entry.get("budget_ms"):
+            delay = self._budget_remaining_ms(entry)
+            if delay <= 40:
+                return 0
+            return delay
+        return self._flash_delay_ms(on=True)
+
     def _abandon_budget_rest(self):
         """The shared clock is finished. Actions not reached are Wrong."""
         files = self.video_files or []
@@ -7004,10 +7691,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._stop_goal_advance_poll()
             return
         try:
-            want_seq = int(getattr(self, "_flash_seq", 0) or 0)
+            shared_seq = int(getattr(self, "_flash_seq", 0) or 0)
         except (TypeError, ValueError):
-            want_seq = 0
+            shared_seq = 0
+        field_seqs = getattr(self, "_field_cue_seq", None) or {}
         cue_wall = float(getattr(self, "_action_cue_wall", 0) or 0)
+        action_walls = getattr(self, "_field_action_wall", None) or {}
         try:
             with open(LIVE_ACTION_RESULT_FILE, "r", encoding="utf-8") as handle:
                 payload = json.load(handle) or {}
@@ -7020,12 +7709,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             str(name).upper()[:1]
             for name in (entry.get("field_screens") or {})
         }
+        try:
+            paused_fields = self._pause_fields()
+        except Exception:
+            paused_fields = {}
+        arrived = set()
         for fid in self._active_fields():
             if wanted and str(fid).upper()[:1] not in wanted:
                 continue
             item = fields.get(fid) or {}
             if not isinstance(item, dict):
                 continue
+            fid_key = str(fid).upper()[:1]
+            if paused_fields.get(fid_key):
+                continue
+            try:
+                want_seq = int(field_seqs.get(fid_key) or shared_seq or 0)
+            except (TypeError, ValueError):
+                want_seq = shared_seq
             by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
             chosen = by_seq.get(str(want_seq)) if want_seq else None
             if not isinstance(chosen, dict):
@@ -7042,16 +7743,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 stamped = 0
             if want_seq and item_seq and item_seq != want_seq:
                 continue
-            if cue_wall and stamped + 0.05 < cue_wall:
+            field_wall = float(action_walls.get(fid_key) or 0)
+            if field_wall and stamped + 0.05 < field_wall:
+                continue
+            # A goal on the other field must not throw this field's result away.
+            if not entry.get("independent_fields") and cue_wall and stamped + 0.05 < cue_wall:
                 continue
             name = str(chosen.get("result") or "").strip().lower()
             if name != "correct":
+                continue
+            if entry.get("independent_fields"):
+                arrived.add(str(fid).upper()[:1])
                 continue
             self._goal_arrived = True
             self._stop_goal_advance_poll()
             logger.info("Ball reached the goal on %s (%s) — next screen", fid, name)
             self._finish_label_action()
             return
+        if entry.get("independent_fields") and arrived:
+            # Each field moves on its own ball. The other field keeps this action.
+            holds = dict(getattr(self, "_field_hold_until", None) or {})
+            for fid in arrived:
+                holds[fid] = 0.0
+            self._field_hold_until = holds
+            self._stop_goal_advance_poll()
+            logger.info("Ball reached the goal on %s — that field continues", ", ".join(sorted(arrived)))
+            self._finish_label_action()
 
     def _start_gap_result_poll(self):
         """Finish marks stay off the action screens."""
@@ -7246,6 +7963,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             lit_screens.extend(sids)
         if not lit_screens:
             lit_screens = list(action_screens)
+        continuing = set()
+        if entry.get("independent_fields"):
+            continuing = self._independent_continuing_fields(entry, field_screens)
 
         video_path = entry.get("motion_bg") or entry.get("screen_video")
         pass_scale = 1.0
@@ -7289,18 +8009,44 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     continue_prev=False,
                 )
             else:
-                self.image_canvas.set_screen_images(screen_images, scale=pass_scale)
+                keep_videos = any(
+                    ((getattr(self, "_field_result_state", None) or {}).get(fid) or {}).get("phase") == "playing"
+                    for fid in ("A", "B")
+                )
+                replace_fields = None
+                paint = screen_images
+                if entry.get("independent_fields"):
+                    replace_fields = {
+                        _field_for_screen(sid)
+                        for sid in screen_images
+                        if _field_for_screen(sid) in ("A", "B")
+                        and _field_for_screen(sid) not in continuing
+                    }
+                    if continuing:
+                        paint = _images_for_fields(entry, replace_fields)
+                if replace_fields:
+                    self.image_canvas.set_screen_images(
+                        paint,
+                        scale=pass_scale,
+                        keep_videos=True,
+                        replace_fields=replace_fields,
+                    )
+                elif not entry.get("independent_fields"):
+                    self.image_canvas.set_screen_images(
+                        paint,
+                        scale=pass_scale,
+                        keep_videos=keep_videos,
+                    )
             self._apply_held_results()
             # Paint now. The old timer started before the second monitor showed
             # the image, so Kinovea measured ~2.6s of a 3.0s hold.
             self.image_canvas.repaint()
             QtWidgets.QApplication.processEvents()
 
-        # One action slice (SF-30N = 3.0s). The shared clock (3s × 10 = 30s)
-        # only decides when the rest of the test is abandoned — it must not
-        # keep the pass image up for the whole clock.
+        # One action slice (SF-30N = 3.0s). Independent fields use that slice
+        # on their own clock. A shared clock only abandons what was not reached.
         delay = self._flash_delay_ms(on=True)
-        if entry.get("budget_ms"):
+        if entry.get("budget_ms") and not entry.get("independent_fields"):
             remain = self._budget_remaining_ms(entry)
             if remain <= 40:
                 self._abandon_budget_rest()
@@ -7314,7 +8060,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._goal_arrived = False
         budget_elapsed = None
         budget_total = None
-        if entry.get("finish_balls") and entry.get("budget_ms"):
+        if entry.get("independent_fields"):
+            self._stamp_field_clocks(entry)
+            meta = entry.get("field_meta") or {}
+            primary = meta.get("A") or (next(iter(meta.values())) if meta else {})
+            if primary.get("budget_total_sec") is not None:
+                budget_elapsed = float(primary.get("budget_elapsed_sec") or 0.0)
+                budget_total = float(primary.get("budget_total_sec") or 0.0)
+        elif entry.get("finish_balls") and entry.get("budget_ms"):
             started = getattr(self, "_budget_started_at", None)
             budget_elapsed = 0.0 if not started else max(0.0, time.perf_counter() - started)
             budget_total = float(entry.get("budget_ms") or 0) / 1000.0
@@ -7331,6 +8084,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             action_in_set=entry.get("action_in_set"),
             actions_in_set=entry.get("actions_in_set"),
             test_num=entry.get("test_num"),
+            field_meta=entry.get("field_meta"),
+            field_seqs=self._bump_field_cue_seqs(
+                [fid for fid in field_screens if str(fid).upper()[:1] not in continuing]
+            ),
         )
         logger.info(
             "Labeled action %s %s ON screens %s (+%s fillers) for %sms [test %s scale=%.2f on=%.3fs]",
@@ -7343,6 +8100,30 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             float(entry.get("timing_scale") or 1.0),
             on_sec,
         )
+        if entry.get("independent_fields"):
+            now = time.perf_counter()
+            old_holds = dict(getattr(self, "_field_hold_until", None) or {})
+            holds = {}
+            identities = dict(getattr(self, "_field_cue_identity", None) or {})
+            walls = dict(getattr(self, "_field_action_wall", None) or {})
+            started = time.time()
+            for fid, info in (entry.get("field_meta") or {}).items():
+                key = str(fid).upper()[:1]
+                if key in continuing and old_holds.get(key) is not None:
+                    holds[key] = float(old_holds[key])
+                    continue
+                try:
+                    on_ms = int(info.get("on_ms") or delay)
+                except (TypeError, ValueError):
+                    on_ms = int(delay)
+                holds[key] = now + max(80, on_ms) / 1000.0
+                walls[key] = started
+                identities[key] = self._field_action_identity(entry, field_screens, key)
+            self._field_hold_until = holds
+            self._field_cue_identity = identities
+            self._field_action_wall = walls
+            if holds:
+                delay = max(40, int(round((min(holds.values()) - now) * 1000.0)))
         self._stop_action_timer()
         self.action_timer = QtCore.QTimer(singleShot=True)
         self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
@@ -7534,15 +8315,1193 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.action_timer.timeout.connect(self._tick_rotation_spin)
         self.action_timer.start(max(20, int(ROTATION_STEP_MS)))
 
+    def _advance_independent_field(self, fid, reload=True):
+        """Move one field to its next action. A finished test does not stop the other field."""
+        fid = str(fid or "").upper()[:1]
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        playlist = parts.get(fid) or []
+        if not isinstance(getattr(self, "_independent_index", None), dict):
+            self._independent_index = {name: 0 for name in parts}
+        if not isinstance(getattr(self, "_independent_done", None), dict):
+            self._independent_done = {}
+        cur_i = int(self._independent_index.get(fid, 0))
+        step = playlist[cur_i] if 0 <= cur_i < len(playlist) and isinstance(playlist[cur_i], dict) else None
+        nxt = cur_i + 1
+        same_test = False
+        if step and nxt < len(playlist) and isinstance(playlist[nxt], dict):
+            same_test = int(playlist[nxt].get("test_num") or 0) == int(step.get("test_num") or 0)
+        if same_test:
+            self._independent_index[fid] = nxt
+            self._independent_done[fid] = False
+        else:
+            self._independent_done[fid] = True
+            try:
+                canvas = object.__getattribute__(self, "image_canvas")
+            except Exception:
+                canvas = None
+            if canvas is not None:
+                try:
+                    canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+                except Exception:
+                    pass
+            if step:
+                self._queue_field_results(fid, step)
+        if reload:
+            self._reload_independent_entry()
+
+    def _stop_independent_field(self, fid):
+        """End this field only. The other field keeps its current screen and clock."""
+        fid = str(fid or "").upper()[:1]
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        playlist = parts.get(fid) or []
+        if not playlist:
+            return
+        if not isinstance(getattr(self, "_independent_done", None), dict):
+            self._independent_done = {}
+        if not isinstance(getattr(self, "_independent_index", None), dict):
+            self._independent_index = {name: 0 for name in parts}
+        if self._independent_done.get(fid) and self._field_series_finished(fid):
+            self._publish_field_controls()
+            return
+        self._bump_field_epoch(fid)
+        try:
+            opening = set(object.__getattribute__(self, "_fields_opening") or set())
+        except Exception:
+            opening = set()
+        opening.discard(fid)
+        self._fields_opening = opening
+        self._independent_index[fid] = max(0, len(playlist) - 1)
+        self._independent_done[fid] = True
+        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        holds.pop(fid, None)
+        self._field_hold_until = holds
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is not None:
+            try:
+                canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+            except Exception:
+                pass
+        logger.info("Operator stop: field %s only", fid)
+        try:
+            stopped = dict(object.__getattribute__(self, "_field_operator_stopped") or {})
+        except Exception:
+            stopped = {}
+        stopped[fid] = True
+        self._field_operator_stopped = stopped
+        for name in ("_field_result_state", "_field_final_queued", "_field_final_done"):
+            try:
+                bucket = dict(object.__getattribute__(self, name) or {})
+            except Exception:
+                bucket = {}
+            bucket.pop(fid, None)
+            setattr(self, name, bucket)
+        try:
+            self._hide_field_result_rings(fid)
+        except Exception:
+            pass
+        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except Exception:
+                pass
+        live = []
+        for name, rows in parts.items():
+            key = str(name).upper()[:1]
+            if not rows or key == fid:
+                continue
+            if self._field_series_finished(key):
+                continue
+            live.append(key)
+        if live:
+            self._phase_active = list(live)
+            _write_players_fields_active(live)
+        logger.info("Field %s stopped and cleared. Ready for the next start.", fid)
+        try:
+            threading.Thread(
+                target=self._request_field_final,
+                args=(fid,),
+                kwargs={"display": False},
+                daemon=True,
+            ).start()
+        except Exception:
+            logger.exception("Field %s progress save after stop failed", fid)
+        self._reload_independent_entry(restart_fields=set())
+        self._publish_field_controls()
+
+    def _remaining_field_steps(self, fid):
+        """Actions this field still has, including the one on screen now."""
+        fid = str(fid or "").upper()[:1]
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        playlist = parts.get(fid) or []
+        if playlist:
+            # A results pause sets done while later tests are still in the list.
+            # Dropping those tests is what blanked the other field.
+            if self._field_series_finished(fid):
+                return []
+            try:
+                index = int((getattr(self, "_independent_index", None) or {}).get(fid) or 0)
+            except (TypeError, ValueError):
+                index = 0
+            return [step for step in playlist[index:] if isinstance(step, dict)]
+        files = [step for step in (getattr(self, "video_files", None) or []) if isinstance(step, dict)]
+        if files and files[0].get("independent_fields"):
+            return []
+        try:
+            start = int(getattr(self, "current_video_index", 0) or 0)
+        except (TypeError, ValueError):
+            start = 0
+        return files[start:]
+
+    def _join_independent_field(self, fid, info=None):
+        """Start this field beside the one already playing. Do not restart that field."""
+        fid = str(fid or "").upper()[:1]
+        info = info or {}
+        level = str(info.get("level") or "")
+        if _combined_level_band(level):
+            logger.warning("Field %s is Elite/World Class. Stop the live field before starting it.", fid)
+            return False
+        active = [str(name).upper()[:1] for name in (getattr(self, "_phase_active", None) or [])]
+        done = getattr(self, "_independent_done", None) or {}
+        if fid in active and not done.get(fid):
+            return False
+        levels = dict(getattr(self, "_phase_field_levels", None) or {})
+        if any(_combined_level_band(value) for value in levels.values()):
+            logger.warning("Elite/World Class is on screen. Stop it before starting another field.")
+            return False
+        levels[fid] = level
+        self._phase_field_levels = levels
+        dirs = dict(getattr(self, "_phase_field_directories", None) or {})
+        directory = str(info.get("directory") or "")
+        if directory:
+            dirs[fid] = directory
+        self._phase_field_directories = dirs
+        modes = dict(getattr(self, "_phase_field_modes", None) or {})
+        modes[fid] = str(info.get("subdirectory") or info.get("mode_id") or "")
+        self._phase_field_modes = modes
+        self._bump_field_epoch(fid)
+        fresh = list(self._build_one_field_playlist(fid) or [])
+        if not fresh:
+            logger.error("No playlist to start Field %s", fid)
+            return False
+        parts = {}
+        for other in ("A", "B"):
+            if other == fid:
+                continue
+            remaining = self._remaining_field_steps(other)
+            if remaining:
+                parts[other] = remaining
+        parts[fid] = fresh
+        self._field_opening_playlists = parts
+        self._independent_index = {name: 0 for name in parts}
+        previous_done = dict(getattr(self, "_independent_done", None) or {})
+        self._independent_done = {
+            name: bool(previous_done.get(name)) and name != fid
+            for name in parts
+        }
+        try:
+            stopped = dict(object.__getattribute__(self, "_field_operator_stopped") or {})
+        except Exception:
+            stopped = {}
+        stopped.pop(fid, None)
+        self._field_operator_stopped = stopped
+        for name in ("_field_final_queued", "_field_final_done", "_field_result_state"):
+            try:
+                bucket = dict(object.__getattribute__(self, name) or {})
+            except Exception:
+                bucket = {}
+            bucket.pop(fid, None)
+            setattr(self, name, bucket)
+        try:
+            self._hide_field_result_rings(fid)
+        except Exception:
+            pass
+        now = time.perf_counter()
+        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        holds.pop(fid, None)
+        for name, steps in parts.items():
+            if name == fid or holds.get(name) is not None or not steps:
+                continue
+            if self._independent_done.get(name):
+                continue
+            try:
+                on_ms = int(steps[0].get("on_ms") or 3000)
+            except (TypeError, ValueError):
+                on_ms = 3000
+            holds[name] = now + max(80, on_ms) / 1000.0
+        self._field_hold_until = holds
+        self._phase_active = [name for name in ("A", "B") if parts.get(name)]
+        _write_players_fields_active(self._phase_active)
+        self._label_mode = True
+        self.playlist_finished = False
+        entry = _compose_independent_entry(parts, self._independent_index)
+        if not entry:
+            return False
+        self.video_files = [entry]
+        self.current_video_index = 0
+        logger.info("Field %s opening beside %s", fid, [name for name in parts if name != fid])
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is None:
+            self._reload_independent_entry(restart_fields={fid})
+            return True
+        try:
+            opening = set(object.__getattribute__(self, "_fields_opening") or set())
+        except Exception:
+            opening = set()
+        opening.add(fid)
+        self._fields_opening = opening
+        held = _compose_independent_entry(parts, self._independent_index, skip=opening)
+        if held:
+            self.video_files = [held]
+            self.current_video_index = 0
+        holds[fid] = now + (LEVEL_CARD_MS + LEVEL_INTRO_MS) / 1000.0 + 2.0
+        self._field_hold_until = holds
+        self._begin_joined_field_opening(fid)
+        return True
+
+    def _begin_joined_field_opening(self, fid):
+        """Opening card, then the starting video, then this field's test."""
+        fid = str(fid or "").upper()[:1]
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        cards = _opening_cards_for_fields(
+            [fid],
+            getattr(self, "_phase_field_levels", None) or {},
+            getattr(self, "_phase_field_modes", None) or {},
+            parts,
+            {},
+            parts.get(fid) or [],
+            1,
+        )
+        card = cards.get(fid) or {}
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is not None and card:
+            try:
+                canvas.show_field_opening(fid, card)
+            except Exception:
+                logger.exception("Field %s opening card failed", fid)
+        logger.info("Field %s beginning information", fid)
+        epoch = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            LEVEL_CARD_MS,
+            lambda field=fid, token=epoch: self._play_joined_field_intro(field, token),
+        )
+
+    def _play_joined_field_intro(self, fid, epoch=None):
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        if fid not in (getattr(self, "_field_opening_playlists", None) or {}):
+            return
+        if (getattr(self, "_independent_done", None) or {}).get(fid):
+            return
+        intro = None
+        try:
+            intro = self._intro_video_for_field(fid)
+        except Exception:
+            intro = None
+        played = False
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is not None and intro:
+            try:
+                played = bool(canvas.play_field_intro(fid, intro))
+            except Exception:
+                logger.exception("Field %s starting video failed", fid)
+                played = False
+        if not played:
+            self._start_joined_field_test(fid)
+            return
+        logger.info("Field %s starting video", fid)
+        epoch = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            LEVEL_INTRO_MS,
+            lambda field=fid, token=epoch: self._start_joined_field_test(field, token),
+        )
+
+    def _start_joined_field_test(self, fid, epoch=None):
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        if fid not in (getattr(self, "_field_opening_playlists", None) or {}):
+            return
+        if (getattr(self, "_independent_done", None) or {}).get(fid):
+            return
+        try:
+            opening = set(object.__getattribute__(self, "_fields_opening") or set())
+        except Exception:
+            opening = set()
+        opening.discard(fid)
+        self._fields_opening = opening
+        logger.info("Field %s test starts after its opening", fid)
+        self._reload_independent_entry(restart_fields={fid})
+
+    def _consume_field_joins(self):
+        directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
+        path = os.path.join(directory, "field_join.json")
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+        except Exception:
+            data = {}
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        fid = str((data or {}).get("field") or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return
+        self._join_independent_field(fid, data)
+
+    def _finish_due_independent_fields(self):
+        """Advance only the fields whose own action time, or own goal, is done."""
+        cur = self.video_files[self.current_video_index] if self.video_files else {}
+        if not isinstance(cur, dict):
+            return
+        screens = [str(fid).upper()[:1] for fid in (cur.get("field_screens") or {})]
+        now = time.perf_counter()
+        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        meta = cur.get("field_meta") or {}
+        for fid in screens:
+            if holds.get(fid) is not None:
+                continue
+            info = meta.get(fid) or {}
+            try:
+                on_ms = int(info.get("on_ms") or cur.get("on_ms") or 3000)
+            except (TypeError, ValueError):
+                on_ms = 3000
+            holds[fid] = now + max(80, on_ms) / 1000.0
+        self._field_hold_until = holds
+        paused = {}
+        try:
+            paused = self._pause_fields()
+        except Exception:
+            paused = {}
+        due = []
+        for fid in screens:
+            if paused.get(fid):
+                continue
+            deadline = holds.get(fid)
+            if deadline is None:
+                continue
+            deadline_f = float(deadline)
+            if now + 0.04 < deadline_f:
+                continue
+            # A real field stays on this screen. Only a goal (deadline 0) moves it.
+            if deadline_f > 1.0 and not self._field_uses_simulator(fid):
+                holds[fid] = now + 3600.0
+                continue
+            due.append(fid)
+        self._field_hold_until = holds
+        if not due:
+            self._arm_independent_timer()
+            return
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
+        for fid in due:
+            holds.pop(fid, None)
+            self._advance_independent_field(fid, reload=False)
+        self._field_hold_until = holds
+        self._reload_independent_entry(restart_fields=set(due))
+
+    def _finish_independent_step(self):
+        cur = self.video_files[self.current_video_index] if self.video_files else {}
+        fids = list((cur.get("field_screens") or {}) if isinstance(cur, dict) else [])
+        for fid in fids:
+            self._advance_independent_field(fid, reload=False)
+        self._reload_independent_entry(restart_fields=set(fids))
+
+    def _reload_independent_entry(self, restart_fields=None):
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        indices = getattr(self, "_independent_index", None) or {}
+        skip = {
+            fid for fid, done in (getattr(self, "_independent_done", None) or {}).items() if done
+        }
+        try:
+            opening = set(object.__getattribute__(self, "_fields_opening") or set())
+        except Exception:
+            opening = set()
+        skip |= {str(name).upper()[:1] for name in opening}
+        entry = _compose_independent_entry(parts, indices, skip=skip)
+        if not entry:
+            return None
+        files = list(self.video_files or [])
+        if files:
+            files[0] = entry
+        else:
+            files = [entry]
+        self.video_files = files
+        self.current_video_index = 0
+        live = {str(fid).upper()[:1] for fid in (entry.get("field_screens") or {})}
+        if restart_fields is not None:
+            self._patch_independent_fields(
+                entry,
+                {str(fid).upper()[:1] for fid in restart_fields} & live,
+            )
+            return entry
+        try:
+            phase = object.__getattribute__(self, "display_phase")
+        except AttributeError:
+            phase = "action"
+        if phase == "action":
+            try:
+                apply = object.__getattribute__(self, "_apply_label_phase")
+            except AttributeError:
+                apply = None
+            if callable(apply):
+                apply()
+        try:
+            overlays = object.__getattribute__(self, "_field_wait_overlays")
+        except AttributeError:
+            overlays = None
+        for overlay in (overlays or {}).values():
+            try:
+                if overlay.isVisible():
+                    overlay.raise_()
+            except Exception:
+                pass
+        return entry
+
+    def _stamp_field_clocks(self, entry):
+        """Each field keeps its own test clock. The other field's On time is not this clock."""
+        if not isinstance(entry, dict) or not entry.get("independent_fields"):
+            return
+        meta = entry.get("field_meta") or {}
+        try:
+            clocks = dict(object.__getattribute__(self, "_field_budget_started") or {})
+        except Exception:
+            clocks = {}
+        now = time.perf_counter()
+        for fid, info in meta.items():
+            if not isinstance(info, dict):
+                continue
+            key = str(fid).upper()[:1]
+            try:
+                test_num = int(info.get("test_num") or 0)
+            except (TypeError, ValueError):
+                test_num = 0
+            try:
+                on_ms = int(info.get("on_ms") or 0)
+            except (TypeError, ValueError):
+                on_ms = 0
+            if on_ms > 0:
+                info["on_sec"] = max(0.1, on_ms / 1000.0)
+            try:
+                budget_ms = int(info.get("budget_ms") or 0)
+            except (TypeError, ValueError):
+                budget_ms = 0
+            if budget_ms <= 0 or not info.get("finish_balls"):
+                continue
+            prev = clocks.get(key)
+            if not isinstance(prev, tuple) or int(prev[0]) != test_num:
+                clocks[key] = (test_num, now)
+                elapsed = 0.0
+            else:
+                elapsed = max(0.0, now - float(prev[1]))
+            info["budget_elapsed_sec"] = elapsed
+            info["budget_total_sec"] = budget_ms / 1000.0
+            info["efficiency_max_sec"] = budget_ms / 1000.0
+        self._field_budget_started = clocks
+
+    def _field_series_finished(self, fid):
+        """True only after this field's last action. A results pause still has tests left."""
+        fid = str(fid or "").upper()[:1]
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        playlist = parts.get(fid) or []
+        if not playlist:
+            return True
+        try:
+            idx = int((getattr(self, "_independent_index", None) or {}).get(fid, 0))
+        except (TypeError, ValueError):
+            idx = 0
+        done = bool((getattr(self, "_independent_done", None) or {}).get(fid))
+        return done and idx + 1 >= len(playlist)
+
+    def _every_independent_series_finished(self):
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        names = [fid for fid, rows in parts.items() if rows]
+        return bool(names) and all(self._field_series_finished(fid) for fid in names)
+
+    def _bump_field_cue_seqs(self, field_ids):
+        """New result identity for these fields only. The other field keeps its seq."""
+        seqs = dict(getattr(self, "_field_cue_seq", None) or {})
+        for fid in field_ids or []:
+            key = str(fid).upper()[:1]
+            if key not in ("A", "B"):
+                continue
+            seqs[key] = int(seqs.get(key) or 0) + 1
+        self._field_cue_seq = seqs
+        return seqs
+
+    def _field_action_identity(self, entry, field_screens, fid):
+        """Screen + test + action. A cue rewrite with this same identity is not a new pass."""
+        key = str(fid or "").upper()[:1]
+        info = {}
+        if isinstance(entry, dict):
+            meta = entry.get("field_meta") or {}
+            info = meta.get(key) or meta.get(fid) or {}
+        screens = tuple(
+            str(s) for s in ((field_screens or {}).get(key) or (field_screens or {}).get(fid) or [])
+        )
+        try:
+            test_num = int(info.get("test_num") or 0)
+        except (TypeError, ValueError):
+            test_num = 0
+        try:
+            action_in_set = int(info.get("action_in_set") or 0)
+        except (TypeError, ValueError):
+            action_in_set = 0
+        return (test_num, action_in_set, screens)
+
+    def _independent_continuing_fields(self, entry, field_screens):
+        """Fields still inside this On window. The other field's goal must not restart them."""
+        if not isinstance(entry, dict) or not entry.get("independent_fields"):
+            return set()
+        now = time.perf_counter()
+        old_holds = getattr(self, "_field_hold_until", None) or {}
+        old_ids = getattr(self, "_field_cue_identity", None) or {}
+        continuing = set()
+        for fid in (entry.get("field_meta") or {}):
+            key = str(fid).upper()[:1]
+            deadline = old_holds.get(key)
+            ident = self._field_action_identity(entry, field_screens, key)
+            if (
+                old_ids.get(key) == ident
+                and deadline is not None
+                and float(deadline) > now + 0.05
+            ):
+                continuing.add(key)
+        return continuing
+
+    def _arm_independent_timer(self):
+        cur = self.video_files[0] if self.video_files else {}
+        live = set((cur.get("field_screens") or {})) if isinstance(cur, dict) else set()
+        holds = getattr(self, "_field_hold_until", None) or {}
+        now = time.perf_counter()
+        soon = None
+        for fid in live:
+            deadline = holds.get(fid)
+            if deadline is None:
+                continue
+            soon = float(deadline) if soon is None else min(soon, float(deadline))
+        if soon is None:
+            return
+        delay = max(40, int(round((soon - now) * 1000.0)))
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
+        self.action_timer.timeout.connect(self._finish_label_action)
+        self.action_timer.start(delay)
+
+    def _patch_independent_fields(self, entry, restart_fields):
+        """Start these fields' next action without restarting the field still playing."""
+        restart_fields = {str(fid).upper()[:1] for fid in (restart_fields or set())}
+        now = time.perf_counter()
+        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        meta = entry.get("field_meta") or {}
+        for fid in restart_fields:
+            info = meta.get(fid) or {}
+            try:
+                on_ms = int(info.get("on_ms") or entry.get("on_ms") or 3000)
+            except (TypeError, ValueError):
+                on_ms = 3000
+            holds[fid] = now + max(80, on_ms) / 1000.0
+        self._field_hold_until = holds
+        identities = dict(getattr(self, "_field_cue_identity", None) or {})
+        for fid in restart_fields:
+            identities[fid] = self._field_action_identity(
+                entry, entry.get("field_screens") or {}, fid,
+            )
+        self._field_cue_identity = identities
+        if restart_fields:
+            seqs = self._bump_field_cue_seqs(restart_fields)
+            walls = dict(getattr(self, "_field_action_wall", None) or {})
+            started = time.time()
+            for fid in restart_fields:
+                walls[fid] = started
+            self._field_action_wall = walls
+        else:
+            seqs = dict(getattr(self, "_field_cue_seq", None) or {})
+        images = _images_for_fields(entry, restart_fields)
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is not None and restart_fields:
+            band = set(getattr(canvas, "_band_screens", None) or set())
+            for name in list(band):
+                if _field_for_screen(name) in restart_fields:
+                    band.discard(name)
+            for name in images:
+                band.discard(name)
+            canvas._band_screens = band
+            try:
+                canvas.set_screen_images(
+                    images, keep_videos=True, replace_fields=restart_fields,
+                )
+            except Exception:
+                pass
+        on_ms = 3000
+        if restart_fields:
+            info = meta.get(next(iter(restart_fields))) or {}
+            try:
+                on_ms = int(info.get("on_ms") or entry.get("on_ms") or 3000)
+            except (TypeError, ValueError):
+                on_ms = 3000
+        try:
+            seq = int(getattr(self, "_flash_seq", 0) or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        self._stamp_field_clocks(entry)
+        _write_image_action_cue(
+            True,
+            entry.get("field_screens") or {},
+            seq=seq,
+            action=str(entry.get("action") or "PASS"),
+            on_sec=max(0.1, on_ms / 1000.0),
+            efficiency_max_sec=entry.get("efficiency_max_sec"),
+            finish_balls=bool(entry.get("finish_balls")),
+            action_in_set=entry.get("action_in_set"),
+            actions_in_set=entry.get("actions_in_set"),
+            test_num=entry.get("test_num"),
+            field_meta=meta,
+            field_seqs=seqs,
+        )
+        if restart_fields:
+            self._action_cue_wall = time.time()
+        self._arm_independent_timer()
+        if entry.get("advance_on_goal"):
+            self._start_goal_advance_poll()
+
+    def _queue_field_results(self, fid, step):
+        """This field's test is over. Show its results without stopping the other field."""
+        fid = str(fid or "").upper()[:1]
+        try:
+            state = object.__getattribute__(self, "_field_result_state")
+        except AttributeError:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        try:
+            test_num = int((step or {}).get("test_num") or 1)
+        except (TypeError, ValueError):
+            test_num = 1
+        state[fid] = {
+            "phase": "wait",
+            "started": time.time(),
+            "path": "",
+            "test_num": test_num,
+            "epoch": self._field_epoch(fid),
+        }
+        self._field_result_state = state
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except AttributeError:
+            return
+        if canvas is None:
+            return
+        self._show_field_processing(fid)
+        token = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            WAIT_ANIMATION_MS,
+            lambda field=fid, stamp=token: self._reveal_field_results(field, stamp),
+        )
+        thread = threading.Thread(
+            target=self._request_field_results, args=(fid, test_num), daemon=True,
+        )
+        thread.start()
+
+    def _show_field_processing(self, fid):
+        """Processing rings on the finished field only. The other field keeps playing."""
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        if not isinstance(getattr(self, "_field_wait_overlays", None), dict):
+            self._field_wait_overlays = {}
+        overlay = self._field_wait_overlays.get(fid)
+        host = self.image_canvas or self
+        if overlay is None:
+            overlay = WaitingOverlay(host, active_fields=[fid])
+            self._field_wait_overlays[fid] = overlay
+        elif overlay.parent() is not host:
+            overlay.setParent(host)
+        overlay.set_active_fields([fid])
+        overlay.set_punch_inactive(True)
+        colors = getattr(self, "_opening_card_colors", None)
+        if callable(colors):
+            overlay.set_level_colors(colors())
+        overlay.set_status_text("")
+        overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
+        overlay._apply_field_mask()
+        overlay.show()
+        overlay.raise_()
+
+    def _request_field_results(self, fid, test_num):
+        report_path = self._find_latest_report()
+        video_path = ""
+        if report_path:
+            session_dir = os.path.dirname(report_path)
+            base = os.path.basename(session_dir.rstrip("\\/"))
+            if base in ("field_A", "field_B"):
+                session_dir = os.path.dirname(session_dir)
+            payload = {
+                "report_path": report_path,
+                "directory": session_dir,
+                "start_time": self._set_start_time or self.video_start_time,
+                "end_time": time.time(),
+                "video_index": int(test_num),
+                "total_videos": self.total_videos,
+                "display": False,
+                "make_video": False,
+                "fields": [fid],
+            }
+            try:
+                if HAS_REQUESTS:
+                    response = requests.post(
+                        "http://127.0.0.1:8000/create-video-results", json=payload, timeout=90,
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        panel = (data.get("panels") or {}).get(fid) or {}
+                        if isinstance(panel, dict) and panel:
+                            video_path = json.dumps(panel)
+                else:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        "http://127.0.0.1:8000/create-video-results",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        data = json.loads(resp.read().decode("utf-8") or "{}")
+                        panel = (data.get("panels") or {}).get(fid) or {}
+                        if isinstance(panel, dict) and panel:
+                            video_path = json.dumps(panel)
+            except Exception as exc:
+                logger.warning("Field %s results request failed: %s", fid, exc)
+        self.field_results_ready.emit(fid, video_path)
+
+    def _on_field_results_ready(self, fid, video_path):
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid)
+        if not isinstance(state, dict):
+            return
+        panel = None
+        raw = str(video_path or "")
+        if raw.startswith("{"):
+            try:
+                panel = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                panel = None
+        if isinstance(panel, dict) and panel.get("slice_aet"):
+            state["panel"] = panel
+        phase = state.get("phase")
+        stamp = state.get("epoch")
+        if stamp is not None and not self._field_epoch_current(fid, stamp):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        ready = (time.time() - float(state.get("started") or 0)) * 1000.0 >= WAIT_ANIMATION_MS - 40
+        if phase == "wait" and ready:
+            self._reveal_field_results(fid, stamp)
+        elif phase == "final_wait" and ready:
+            self._reveal_field_final(fid, stamp)
+
+    def _show_field_result_rings(self, fid, panel):
+        """Draw this field's rings on its screens. The other field stays uncovered."""
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        if not isinstance(getattr(self, "_field_result_overlays", None), dict):
+            self._field_result_overlays = {}
+        host = self.image_canvas or self
+        overlay = self._field_result_overlays.get(fid)
+        if overlay is None or overlay.parent() is not host:
+            overlay = ResultsOverlay(host)
+            self._field_result_overlays[fid] = overlay
+        overlay.set_panels({fid: panel})
+        overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
+        overlay.show()
+        overlay.raise_()
+
+    def _hide_field_result_rings(self, fid):
+        try:
+            overlays = object.__getattribute__(self, "_field_result_overlays")
+        except Exception:
+            overlays = None
+        overlay = (overlays or {}).get(fid) if isinstance(overlays, dict) else None
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except Exception:
+                pass
+
+    def _show_projected_results(self, panels):
+        """Draw every finished field's rings on the canvas. No results video."""
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        host = self.image_canvas or self
+        overlay = getattr(self, "_projected_results", None)
+        if overlay is None or overlay.parent() is not host:
+            overlay = ResultsOverlay(host)
+            self._projected_results = overlay
+        overlay.set_panels(panels)
+        overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
+        overlay.show()
+        overlay.raise_()
+        return True
+
+    def _hide_projected_results(self):
+        try:
+            overlay = object.__getattribute__(self, "_projected_results")
+        except Exception:
+            overlay = None
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except Exception:
+                pass
+
+    def _reveal_field_results(self, fid, epoch=None):
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid)
+        if not isinstance(state, dict) or state.get("phase") != "wait":
+            return
+        panel = state.get("panel") if isinstance(state.get("panel"), dict) else None
+        if not panel or not panel.get("slice_aet"):
+            if time.time() - float(state.get("started") or 0) < 30.0:
+                token = self._field_epoch(fid)
+                QtCore.QTimer.singleShot(
+                    200, lambda field=fid, stamp=token: self._reveal_field_results(field, stamp),
+                )
+                return
+            overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+            if overlay is not None:
+                overlay.hide()
+            state["phase"] = "done"
+            self._continue_field_after_results(fid, epoch)
+            return
+        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            overlay.hide()
+        state["phase"] = "playing"
+        self._show_field_result_rings(fid, panel)
+        logger.info("Field %s results drawn on its screens while the other field continues", fid)
+        token = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            PER_VIDEO_RESULTS_MS,
+            lambda field=fid, stamp=token: self._finish_field_results(field, stamp),
+        )
+
+    def _finish_field_results(self, fid, epoch=None):
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid)
+        if not isinstance(state, dict) or state.get("phase") == "done":
+            return
+        state["phase"] = "done"
+        self._continue_field_after_results(fid, epoch)
+
+    def _show_field_final(self, fid):
+        """This field's series is over. Draw its final rings while the other field plays."""
+        fid = str(fid or "").upper()[:1]
+        queued = dict(getattr(self, "_field_final_queued", None) or {})
+        if queued.get(fid):
+            return
+        queued[fid] = True
+        self._field_final_queued = queued
+        state = dict(getattr(self, "_field_result_state", None) or {})
+        state[fid] = {
+            "phase": "final_wait",
+            "started": time.time(),
+            "path": "",
+            "test_num": 0,
+            "epoch": self._field_epoch(fid),
+        }
+        self._field_result_state = state
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is None:
+            return
+        self._show_field_processing(fid)
+        token = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            WAIT_ANIMATION_MS,
+            lambda field=fid, stamp=token: self._reveal_field_final(field, stamp),
+        )
+        thread = threading.Thread(target=self._request_field_final, args=(fid,), daemon=True)
+        thread.start()
+
+    def _request_field_final(self, fid, display=True):
+        fid = str(fid or "").upper()[:1]
+        if not display:
+            stopped = True
+        else:
+            try:
+                stopped = bool((object.__getattribute__(self, "_field_operator_stopped") or {}).get(fid))
+            except Exception:
+                stopped = False
+        if stopped and display:
+            # Let the camera close this field's last action before the totals.
+            time.sleep(1.2)
+        report_path = self._find_latest_report()
+        video_path = ""
+        if report_path:
+            session_dir = os.path.dirname(report_path)
+            base = os.path.basename(session_dir.rstrip("\\/"))
+            if base in ("field_A", "field_B"):
+                session_dir = os.path.dirname(session_dir)
+            payload = {
+                "report_path": report_path,
+                "directory": session_dir,
+                "display": False,
+                "make_video": False,
+                "update_progress": stopped,
+                "fields": [fid],
+            }
+            try:
+                if HAS_REQUESTS:
+                    response = requests.post(
+                        "http://127.0.0.1:8000/create-results-video", json=payload, timeout=90,
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        panel = (data.get("panels") or {}).get(fid) or {}
+                        if isinstance(panel, dict) and panel:
+                            video_path = json.dumps(panel)
+                else:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        "http://127.0.0.1:8000/create-results-video",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        data = json.loads(resp.read().decode("utf-8") or "{}")
+                        panel = (data.get("panels") or {}).get(fid) or {}
+                        if isinstance(panel, dict) and panel:
+                            video_path = json.dumps(panel)
+            except Exception as exc:
+                logger.warning("Field %s final results request failed: %s", fid, exc)
+        if not display:
+            return
+        self.field_results_ready.emit(fid, video_path)
+
+    def _reveal_field_final(self, fid, epoch=None):
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid)
+        if not isinstance(state, dict) or state.get("phase") != "final_wait":
+            return
+        panel = state.get("panel") if isinstance(state.get("panel"), dict) else None
+        if not panel or not panel.get("slice_aet"):
+            if time.time() - float(state.get("started") or 0) < 30.0:
+                token = self._field_epoch(fid)
+                QtCore.QTimer.singleShot(
+                    200, lambda field=fid, stamp=token: self._reveal_field_final(field, stamp),
+                )
+                return
+            overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+            if overlay is not None:
+                overlay.hide()
+            self._finish_field_final(fid)
+            return
+        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            overlay.hide()
+        state["phase"] = "final_playing"
+        self._show_field_result_rings(fid, panel)
+        logger.info("Field %s final results drawn while the other field continues", fid)
+        token = self._field_epoch(fid)
+        QtCore.QTimer.singleShot(
+            PER_VIDEO_RESULTS_MS,
+            lambda field=fid, stamp=token: self._finish_field_final(field, stamp),
+        )
+
+    def _finish_field_final(self, fid, epoch=None):
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid)
+        if isinstance(state, dict):
+            if state.get("phase") == "final_done":
+                return
+            state["phase"] = "final_done"
+        self._hide_field_result_rings(fid)
+        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except Exception:
+                pass
+        done = dict(getattr(self, "_field_final_done", None) or {})
+        done[fid] = True
+        self._field_final_done = done
+        self._blank_retired_field(fid)
+        if not self._independent_finals_complete():
+            return
+        if getattr(self, "_independent_close_started", False):
+            return
+        self._independent_close_started = True
+        thread = threading.Thread(target=self._request_independent_close, daemon=True)
+        thread.start()
+
+    def _blank_retired_field(self, fid):
+        """After this field's own final, black only its screens. The other field stays."""
+        fid = str(fid or "").upper()[:1]
+        if not self._field_series_finished(fid):
+            return
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is not None:
+            try:
+                canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+            except Exception:
+                pass
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        live = [
+            str(name).upper()[:1]
+            for name, rows in parts.items()
+            if rows and not self._field_series_finished(name)
+        ]
+        if live:
+            self._phase_active = list(live)
+            _write_players_fields_active(live)
+        self._publish_field_controls()
+
+    def _independent_finals_complete(self):
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        names = [str(fid).upper()[:1] for fid, rows in parts.items() if rows]
+        done = getattr(self, "_field_final_done", None) or {}
+        return bool(names) and all(
+            self._field_series_finished(fid) and done.get(fid) for fid in names
+        )
+
+    def _request_independent_close(self):
+        """Save level progress once both fields have shown their own final results."""
+        report_path = self._find_latest_report()
+        progress = {}
+        if report_path:
+            session_dir = os.path.dirname(report_path)
+            base = os.path.basename(session_dir.rstrip("\\/"))
+            if base in ("field_A", "field_B"):
+                session_dir = os.path.dirname(session_dir)
+            parts = getattr(self, "_field_opening_playlists", None) or {}
+            fields = [str(fid).upper()[:1] for fid, rows in parts.items() if rows]
+            payload = {
+                "report_path": report_path,
+                "directory": session_dir,
+                "display": False,
+                "make_video": False,
+                "update_progress": True,
+                "fields": fields or self._active_fields(),
+            }
+            try:
+                if HAS_REQUESTS:
+                    response = requests.post(
+                        "http://127.0.0.1:8000/create-results-video", json=payload, timeout=120,
+                    )
+                    if response.status_code == 200:
+                        progress = response.json().get("progress") or {}
+            except Exception as exc:
+                logger.warning("Independent final progress failed: %s", exc)
+        self.independent_close_ready.emit(json.dumps({"progress": progress}))
+
+    def _on_independent_close_ready(self, payload):
+        info = {}
+        if isinstance(payload, str) and payload.startswith("{"):
+            try:
+                info = json.loads(payload).get("progress") or {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                info = {}
+        self._after_final = info if isinstance(info, dict) else {}
+        self._on_field_final_finished()
+
+    def _continue_field_after_results(self, fid, epoch=None):
+        """This field's results are done. Start its next test without waiting."""
+        fid = str(fid or "").upper()[:1]
+        if not self._field_epoch_current(fid, epoch):
+            return
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
+        state = dict(getattr(self, "_field_result_state", None) or {})
+        state.pop(fid, None)
+        self._field_result_state = state
+        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except Exception:
+                pass
+        self._hide_field_result_rings(fid)
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            band = set(getattr(canvas, "_band_screens", None) or set())
+            for name in _field_all_screens(fid):
+                band.discard(name)
+            canvas._band_screens = band
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        playlist = parts.get(fid) or []
+        idx = int((getattr(self, "_independent_index", None) or {}).get(fid, 0))
+        if idx + 1 >= len(playlist):
+            self._independent_done[fid] = True
+            entry = self._reload_independent_entry(restart_fields=set())
+            if entry is None:
+                self._stop_action_timer()
+                self._stop_goal_advance_poll()
+            self._show_field_final(fid)
+            return
+        self._independent_index[fid] = idx + 1
+        self._independent_done[fid] = False
+        self.display_phase = "action"
+        if getattr(self, "_action_phase", "") != "label":
+            self._action_phase = "label"
+        self._reload_independent_entry(restart_fields={fid})
+
     def _finish_label_action(self):
         if self.display_phase != "action" or self._action_phase != "label":
             return
         if self.operator_paused:
             QTimer.singleShot(200, self._finish_label_action)
             return
-        # Keep the pass image up for the action slice (3s on SF-30N) after it
-        # was painted. A goal must not cut that short — the cylinder uses the
-        # same slice and they clear together.
+        cur = self.video_files[self.current_video_index] if self.video_files else {}
+        independent = isinstance(cur, dict) and bool(cur.get("independent_fields"))
+        if independent:
+            self._finish_due_independent_fields()
+            return
+        # Keep the pass image up for the action slice (3s on SF-30N). A goal
+        # must not cut that short — the cylinder uses the same slice.
         shown = getattr(self, "_pass_shown_at", None)
         need_ms = int(getattr(self, "_pass_on_ms", 0) or 0)
         if shown is not None and need_ms > 0:
@@ -7563,6 +9522,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._goal_arrived = False
         self._stop_goal_advance_poll()
         self._stop_action_timer()
+        if independent:
+            self._finish_independent_step()
+            return
         if self.image_canvas:
             self.image_canvas.clear()
         # Pass image goes off here. Keypoints clear themselves after the cue-ON
@@ -7910,7 +9872,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         self.video_count = len(self.video_files)
         if self.image_based and self._label_mode:
-            # Prefer highest test_num in playlist (SF-110N = 4; others = 5)
+            # Prefer the highest test number in this field's playlist. Foundation is 5.
             max_test = 0
             for e in (self.video_files or []):
                 if isinstance(e, dict) and e.get("test_num"):
@@ -8081,6 +10043,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "video_index": video_num,
             "total_videos": self.total_videos,
             "display": False,
+            "make_video": False,
             "fields": self._active_fields(),
         }
         try:
@@ -8093,12 +10056,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                             "Per-video results error for test %s: %s",
                             video_num, data.get("message") or data,
                         )
-                    candidate = data.get("video_path") or ""
-                    if candidate and os.path.exists(candidate):
-                        video_path = candidate
-                        logger.info("Results video for test %s generated.", video_num)
+                    panels = data.get("panels") or {}
+                    if isinstance(panels, dict) and panels:
+                        video_path = json.dumps({"panels": panels})
+                        logger.info("Results for test %s ready to project.", video_num)
                     else:
-                        logger.error("Per-video results missing file: %s", data)
+                        logger.error("Per-video results missing rings: %s", data)
                 else:
                     logger.error("Backend error: %s", response.text)
             else:
@@ -8110,9 +10073,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 )
                 with urllib.request.urlopen(req, timeout=90) as resp:
                     data = json.loads(resp.read().decode("utf-8") or "{}")
-                    candidate = data.get("video_path") or ""
-                    if candidate and os.path.exists(candidate):
-                        video_path = candidate
+                    panels = data.get("panels") or {}
+                    if isinstance(panels, dict) and panels:
+                        video_path = json.dumps({"panels": panels})
         except Exception as e:
             logger.error("Per-video results request failed: %s", e)
         self.per_video_results_ready.emit(video_path)
@@ -8149,6 +10112,29 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
             return
         self._hide_waiting_overlay()
+        panels = None
+        if isinstance(video_path, str) and video_path.startswith("{"):
+            try:
+                panels = json.loads(video_path).get("panels")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                panels = None
+        if isinstance(panels, dict) and panels:
+            self.display_phase = "per_video_results"
+            self.waiting_for_results = True
+            self.completion_label.hide()
+            self._show_projected_results(panels)
+            self._update_status_file(
+                "playing_results",
+                self._current_test_num(),
+                self.total_videos,
+                "Showing per-video results...",
+            )
+            logger.info(
+                "Projecting results for test %s/%s",
+                self._current_test_num(), self.total_videos,
+            )
+            self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
+            return
         if not video_path or not os.path.exists(video_path):
             logger.warning("Per-video results missing; continuing sequence")
             self._finish_per_video_results()
@@ -8181,6 +10167,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.results_timer:
             self.results_timer.stop()
             self.results_timer = None
+        self._hide_projected_results()
         try:
             self.player.stop()
         except Exception:
@@ -8240,6 +10227,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     "report_path": report_path,
                     "directory": session_dir,
                     "display": False,
+                    "make_video": False,
                     "fields": self._active_fields(),
                 },
                 timeout=120,
@@ -8248,9 +10236,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 data = response.json()
                 if data.get("status") == "success":
                     self._after_final = data.get("progress") or {}
-                    video_path = data.get("video_path")
-                    if video_path and os.path.exists(video_path):
-                        self.final_summary_done.emit(video_path)
+                    panels = data.get("panels") or {}
+                    if isinstance(panels, dict) and panels:
+                        self.final_summary_done.emit(json.dumps({"panels": panels}))
                         return
             self.final_summary_done.emit("")
         except Exception as e:
@@ -8268,6 +10256,23 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             QTimer.singleShot(200, lambda: self._play_final_after_wait(video_path))
             return
         self._hide_waiting_overlay()
+        panels = None
+        if isinstance(video_path, str) and video_path.startswith("{"):
+            try:
+                panels = json.loads(video_path).get("panels")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                panels = None
+        if isinstance(panels, dict) and panels:
+            self.display_phase = "final"
+            self._show_projected_results(panels)
+            self.completion_label.hide()
+            self.playlist_finished = True
+            if self._force_close_timer:
+                self._force_close_timer.stop()
+            self._force_close_timer = QtCore.QTimer(singleShot=True)
+            self._force_close_timer.timeout.connect(self._on_field_final_finished)
+            self._force_close_timer.start(PER_VIDEO_RESULTS_MS)
+            return
         if video_path and os.path.exists(video_path):
             self.display_phase = "final"
             phase = (
@@ -8316,6 +10321,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self._force_close_timer = None
+        self._hide_projected_results()
         try:
             self.player.stop()
         except Exception:
@@ -8502,13 +10508,104 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.status_timer.start(timeout)
 
     def _read_pause_file(self):
+        fields = self._pause_fields()
+        return bool(fields.get("A") and fields.get("B"))
+
+    def _pause_fields(self):
+        """Pause for one field, or both when the file is the legacy true/false flag."""
+        path = getattr(self, "pause_file_path", None)
+        if not path or not os.path.exists(path):
+            return {"A": False, "B": False}
         try:
-            if not os.path.exists(self.pause_file_path):
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read().strip()
+        except Exception:
+            return {"A": False, "B": False}
+        lower = raw.lower()
+        if lower in ("1", "true", "yes", "on", "paused"):
+            return {"A": True, "B": True}
+        if lower in ("0", "false", "no", "off", ""):
+            return {"A": False, "B": False}
+        if raw[:1] == "{":
+            try:
+                data = json.loads(raw) or {}
+            except Exception:
+                return {"A": False, "B": False}
+            return {"A": bool(data.get("A")), "B": bool(data.get("B"))}
+        return {"A": False, "B": False}
+
+    def _field_uses_simulator(self, fid):
+        """True only while this field's simulator switch is on."""
+        directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
+        path = os.path.join(directory, "arena_simulation.txt")
+        try:
+            if not os.path.exists(path):
                 return False
-            with open(self.pause_file_path, "r", encoding="utf-8") as f:
-                return f.read().strip().lower() in ("1", "true", "yes", "on", "paused")
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read().strip()
         except Exception:
             return False
+        lower = raw.lower()
+        if lower in ("1", "true", "yes", "on"):
+            return True
+        if lower in ("0", "false", "no", "off", ""):
+            return False
+        key = str(fid or "").upper()[:1]
+        if raw[:1] == "{":
+            try:
+                data = json.loads(raw) or {}
+            except Exception:
+                return False
+            return bool(data.get(key))
+        tokens = {
+            part.strip().upper()[:1]
+            for part in raw.replace(";", ",").split(",")
+            if part.strip()
+        }
+        return key in tokens
+
+    def _hold_paused_fields(self, paused):
+        """Keep a paused field's On clock from expiring while the other field plays."""
+        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        now = time.perf_counter()
+        prev = dict(getattr(self, "_field_pause_on", None) or {})
+        remains = dict(getattr(self, "_field_pause_remain", None) or {})
+        changed = False
+        for fid in ("A", "B"):
+            on = bool((paused or {}).get(fid))
+            if on and not prev.get(fid):
+                deadline = holds.get(fid)
+                remains[fid] = 0.2 if deadline is None else max(0.2, float(deadline) - now)
+            if on and fid in holds:
+                holds[fid] = now + float(remains.get(fid) or 0.2)
+                changed = True
+            prev[fid] = on
+        self._field_pause_on = prev
+        self._field_pause_remain = remains
+        if changed:
+            self._field_hold_until = holds
+
+    def _consume_field_stops(self):
+        directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
+        path = os.path.join(directory, "field_stop.json")
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+        except Exception:
+            data = {}
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        fid = str((data or {}).get("field") or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return
+        cur = self.video_files[self.current_video_index] if getattr(self, "video_files", None) else {}
+        if not isinstance(cur, dict) or not cur.get("independent_fields"):
+            return
+        self._stop_independent_field(fid)
 
     def _set_vlc_paused(self, paused):
         try:
@@ -8637,11 +10734,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 continue
         self._frozen_qt_timers = []
 
+    def _live_control_fields(self):
+        """Fields that are on screen and can be paused or stopped on their own."""
+        live = []
+        for fid in (getattr(self, "_phase_active", None) or []):
+            key = str(fid).upper()[:1]
+            if key in ("A", "B") and key not in live:
+                live.append(key)
+        return live or ["A", "B"]
+
+    def _all_live_fields_paused(self, paused):
+        live = self._live_control_fields()
+        return bool(live) and all(bool((paused or {}).get(fid)) for fid in live)
+
     def _check_operator_pause(self):
+        try:
+            self._publish_field_controls()
+        except Exception:
+            pass
         if self._is_closing or self.playlist_finished:
             return
         try:
-            self._apply_operator_pause(self._read_pause_file())
+            fields = self._pause_fields()
+            self._hold_paused_fields(fields)
+            self._consume_field_stops()
+            self._consume_field_joins()
+            self._apply_operator_pause(self._all_live_fields_paused(fields))
         except Exception as exc:
             logger.warning("Pause control check failed: %s", exc)
 

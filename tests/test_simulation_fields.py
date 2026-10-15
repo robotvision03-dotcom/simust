@@ -98,6 +98,132 @@ class MixedDetectionTests(unittest.TestCase):
         self.assertFalse(cam._field_is_simulated("A"))
         self.assertTrue(cam._field_is_simulated("B"))
 
+    def test_sim_off_field_is_stopped_and_not_stepped(self):
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.active_fields = {"A", "B"}
+        cam.simulation_fields = {"A": True, "B": False}
+        cam.channels = {
+            "A": types.SimpleNamespace(session_start_timestamp=0),
+            "B": types.SimpleNamespace(session_start_timestamp=0),
+        }
+        stepped = []
+
+        class OffSim:
+            def __init__(self):
+                self.active = True
+                self.late_phase = True
+                self.hold_finish = True
+                self.parked = False
+                self.action = "PASS"
+
+            def stop(self):
+                rt.ArenaSimulator.stop(self)
+
+            def step(self, w, h):
+                stepped.append("B")
+                return [], [], (None, None)
+
+            def draw_on_frame(self, frame, balls, players):
+                stepped.append("draw")
+                return frame
+
+        cam.simulators = {
+            "A": types.SimpleNamespace(
+                step=lambda w, h: ([{"center": [10, 10]}], [{"center": [12, 12]}], (12, 12)),
+                draw_on_frame=lambda frame, balls, players: frame,
+                parked=False,
+            ),
+            "B": OffSim(),
+        }
+        cam.tracker = types.SimpleNamespace(
+            detect_objects=lambda frame, active_fields=None: ([], []),
+            get_player_tracking_point_for_field=lambda *a, **k: (None, None),
+        )
+        frame = types.SimpleNamespace(shape=(360, 1280, 3))
+        _out, balls, _players, _hips = cam._detections_for_frame(frame, 1.0)
+        self.assertEqual(stepped, [])
+        self.assertTrue(cam.simulators["B"].parked)
+        self.assertFalse(cam.simulators["B"].active)
+        self.assertEqual({item["field"] for item in balls}, {"A"})
+
+    def test_same_screen_cue_rewrite_does_not_restart_the_cylinder(self):
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.active_fields = {"A", "B"}
+        cam.simulation_fields = {"A": True, "B": True}
+        ch = types.SimpleNamespace(
+            session_active=True,
+            current_screens=["B1"],
+            current_qr_block={"test_num": 1, "action_in_set": 1, "finish_balls": True},
+            kp_clear_frames_left=40,
+            kp_appear_frames_left=None,
+            _frame_sync_cue_raw="IMAGE|1|PASS|B1|t1|a1",
+            _pending_cue_info=None,
+            _gap_display_sent=False,
+            field_id="B",
+            label="B",
+        )
+        cam.channels = {"B": ch}
+        cam._read_image_action_cue = lambda: {
+            "active": True,
+            "finish_balls": True,
+            "seq": 9,
+            "timestamp": __import__("time").time(),
+            "on_sec": 3.0,
+            "fields": {
+                "B": {
+                    "action": "PASS",
+                    "screens": ["B1"],
+                    "seq": 4,
+                    "test_num": 1,
+                    "action_in_set": 1,
+                    "on_sec": 3.0,
+                }
+            },
+        }
+        cam._tick_image_cue_frame_sync("00:00:00.000", 1.0)
+        self.assertTrue(ch.session_active)
+        self.assertEqual(ch.kp_clear_frames_left, 39)
+        self.assertIsNone(ch.kp_appear_frames_left)
+        self.assertEqual(ch._frame_sync_cue_raw, "IMAGE|4|PASS|B1|t1|a1")
+
+    def test_real_field_cylinder_stays_on_the_current_screen(self):
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.active_fields = {"A", "B"}
+        cam.simulation_fields = {"A": True, "B": False}
+        ch = types.SimpleNamespace(
+            session_active=True,
+            current_screens=["B1"],
+            current_qr_block={"test_num": 1, "action_in_set": 1, "finish_balls": True},
+            kp_clear_frames_left=40,
+            kp_appear_frames_left=None,
+            _frame_sync_cue_raw="IMAGE|4|PASS|B1|t1|a1",
+            _pending_cue_info=None,
+            _gap_display_sent=False,
+            field_id="B",
+            label="B",
+        )
+        cam.channels = {"B": ch}
+        cam._read_image_action_cue = lambda: {
+            "active": True,
+            "finish_balls": True,
+            "seq": 4,
+            "timestamp": __import__("time").time(),
+            "on_sec": 3.0,
+            "fields": {
+                "B": {
+                    "action": "PASS",
+                    "screens": ["B1"],
+                    "seq": 4,
+                    "test_num": 1,
+                    "action_in_set": 1,
+                    "on_sec": 3.0,
+                }
+            },
+        }
+        cam._tick_image_cue_frame_sync("00:00:00.000", 1.0)
+        self.assertTrue(ch.session_active)
+        self.assertEqual(ch.kp_clear_frames_left, 40)
+
 
 class PartnerPerfectAccuracyTests(unittest.TestCase):
     def test_simulated_field_always_finishes(self):

@@ -177,6 +177,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_WIDTH, 0.52 * 1.4, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_GAP_LINES, 0)
         self.assertAlmostEqual(player.OPENING_LOGO_TEXT_DOWN_FRAC, 0.20, places=3)
+        self.assertEqual(player.OPENING_LOGO_TEXT_LIFT_LINES, 1)
 
 
 if __name__ == "__main__":
