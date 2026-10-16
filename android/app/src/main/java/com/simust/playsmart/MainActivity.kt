@@ -68,7 +68,8 @@ class MainActivity : AppCompatActivity() {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
-        settings.loadWithOverviewMode = true
+        // Honor the page viewport meta; do not shrink a desktop-width layout.
+        settings.loadWithOverviewMode = false
         settings.useWideViewPort = true
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
@@ -79,8 +80,8 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowContentAccess = true
         settings.allowFileAccess = false
-        settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.9"
+        settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+        settings.userAgentString = settings.userAgentString + " SIMUSTAndroid/2.15"
         applyTextZoom()
 
         webView.webViewClient = object : WebViewClient() {

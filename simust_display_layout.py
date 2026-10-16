@@ -42,7 +42,8 @@ SCREEN_CONTENT_OFFSET = {
     "A2": -29,
     "A3": -46,
     "A4": -16,
-    "A5": -36,
+    # Was -36 — pulled Field A screen 5 left so content was cut on one side.
+    "A5": -16,
     "A6": -52,
     "B1": -72,
     "B2": -90,

@@ -9,7 +9,7 @@ Phone and tablet console that uses the same operator UI as `index.html`. Works o
 This is the supported phone model for remote operator use.
 
 - Package: `com.simust.playsmart`
-- Version: **2.14** (versionCode 16)
+- Version: **2.15** (versionCode 17)
 - Targets **Android 16** (API 36)
 - Uses the **phone internet** (SIM or Wi‑Fi). It does not need the lab Wi‑Fi.
 - Default operator URL: `http://157.180.47.98/operator`

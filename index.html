@@ -303,18 +303,21 @@
             .simust-card { width: 100%; min-height: 100dvh; max-width: none; border-radius: 0; border: none; box-shadow: none; }
             .simust-header { padding: 8px 10px; gap: 8px; }
             .simust-header h1 { font-size: 0.95rem !important; line-height: 1.15; }
-            .simust-header .header-brand { gap: 8px !important; }
-            .simust-tabs { padding: 0 6px; }
-            .simust-body { min-height: 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
+            .simust-header .header-brand { gap: 8px !important; flex: 1 1 auto; min-width: 0; }
+            .simust-tabs { padding: 0 6px; -webkit-overflow-scrolling: touch; }
+            .simust-body { min-height: 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; }
             .simust-footer { display: none; }
             .level-main-row { gap: 4px; }
             .level-main-btn { height: 44px; min-height: 44px; font-size: 9px; padding: 2px 1px; letter-spacing: 0; border-radius: 6px; }
             .level-sub-pick, .level-sub-lock, .level-sub-unlock { font-size: 12px; min-height: 40px; }
             .tab-button { padding: 8px 10px; font-size: 11px; min-height: 40px; white-space: nowrap; }
-            .transport-bar { gap: 6px; margin-bottom: 12px; padding: 8px 0; }
+            .transport-bar { gap: 6px; margin-bottom: 12px; padding: 8px 0; width: 100%; }
             .transport-bar .btn-primary { flex: 1 1 calc(50% - 6px); min-width: 0; min-height: 44px; padding: 8px 6px; font-size: 12px; }
             .transport-bar .btn-realtime { flex: 1 1 100%; min-width: 0; min-height: 48px; font-size: 14px; }
             .transport-bar .auto-badge { display: none; }
+            .field-regions { grid-template-columns: 1fr; gap: 10px; }
+            .field-region { padding: 10px; }
+            .panel { max-width: 100%; }
             .op-res-wrap { gap: 10px; }
             .op-res-panel { padding: 12px; border-radius: 12px; }
             .op-res-panel h2 { font-size: 16px; }
@@ -322,25 +325,49 @@
             .op-res-grid { grid-template-columns: 48px 1fr 1fr; min-width: 0; }
             .op-res-slot { min-height: 36px; font-size: 11px; }
             .op-res-grid-wrap { max-height: 48vh; }
-            .login-overlay { padding: 12px; }
-            .login-layout { max-width: 100%; }
+            .login-overlay { padding: 12px; align-items: flex-start; }
+            .login-layout { max-width: 100%; flex-direction: column; }
+            .today-schedule-panel { max-width: 100%; }
             .hamburger-btn { font-size: 26px; padding: 4px 8px; }
             .dropdown-menu { min-width: 160px; }
+            .homography-table { display: block; overflow-x: auto; max-width: 100%; }
+            .homography-table input { width: 72px; }
         }
-        @media (max-width:768px) { .simust-card, .simust-body { min-height: 0; } .stat-number { font-size:1.6rem; } .player-card { padding:8px 12px; font-size:13px; } .metric-ring .value { font-size:18px; } .table-wrap table { font-size:9px; min-width:680px; } .player-profile { flex-direction:column; align-items:center; text-align:center; } .player-info .player-details { justify-content:center; } .login-box { padding:32px 24px; } .level-progress .level-item { font-size:10px; padding:2px 8px; } .level-progress .level-category .cat-label { font-size:9px; min-width:60px; } }
+        @media (max-width:768px) {
+            .simust-card, .simust-body { min-height: 0; }
+            .simust-card { min-height: 100dvh; }
+            .stat-number { font-size:1.6rem; }
+            .player-card { padding:8px 12px; font-size:13px; }
+            .metric-ring .value { font-size:18px; }
+            .table-wrap { max-width: 100%; }
+            .table-wrap table { font-size:9px; min-width:0; width: max-content; max-width: none; }
+            .player-profile { flex-direction:column; align-items:center; text-align:center; }
+            .player-info .player-details { justify-content:center; }
+            .login-box { padding:32px 24px; max-width: 100%; }
+            .level-progress .level-item { font-size:10px; padding:2px 8px; }
+            .level-progress .level-category .cat-label { font-size:9px; min-width:60px; }
+            .level-main-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+            .level-main-btn { height: 48px; min-height: 48px; font-size: 11px; padding: 4px 2px; }
+            .toggle-row, .controls-row, .search-row { flex-wrap: wrap; gap: 8px; width: 100%; }
+        }
         @media (max-width:480px) {
-            .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; }
-            .chart-container canvas { min-width:400px; height:160px; }
+            .result-row { grid-template-columns:35px 35px 45px 45px 45px 45px 40px 35px 40px; font-size:8px; gap:1px; padding:3px 4px; min-width: 0; }
+            .chart-container { overflow-x: auto; max-width: 100%; }
+            .chart-container canvas { min-width:280px; width: 100% !important; height:140px; }
             .player-avatar { width:80px; height:80px; font-size:32px; }
             .login-box { padding:24px 16px; }
             .level-progress .level-item { font-size:9px; padding:2px 6px; }
             .level-progress .level-category .cat-label { font-size:8px; min-width:50px; }
-            .level-main-btn { font-size: 8px; height: 42px; min-height: 42px; }
+            .level-main-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .level-main-btn { font-size: 10px; height: 46px; min-height: 46px; }
             .simust-header h1 { font-size: 0.88rem !important; }
+            .simust-header { flex-wrap: wrap; }
+            .field-region-title { font-size: 1rem; }
+            .btn-realtime { width: 100%; }
         }
-        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; overflow-x: hidden; }
-        html.simust-android .simust-card { min-height: 100dvh; border-radius: 0; max-width: none; }
-        html.simust-android .simust-body { min-height: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; width: 100%; max-width: 100%; overflow-x: hidden; }
+        html.simust-android .simust-card { min-height: 100dvh; width: 100%; border-radius: 0; max-width: none; }
+        html.simust-android .simust-body { min-height: 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; max-width: 100%; }
         html.simust-android .simust-header { padding: 12px 16px; gap: 10px; }
         html.simust-android .simust-tabs { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
         html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn, html.simust-android .btn-logout, html.simust-android .btn-results, html.simust-android .btn-danger, html.simust-android .btn-pause, html.simust-android .btn-resume { min-height: 48px; padding: 12px 20px; font-size: 16px; }
@@ -352,6 +379,14 @@
         html.simust-android .slider::before { height: 26px; width: 26px; }
         html.simust-android input:checked + .slider::before { transform: translateX(32px); }
         html.simust-android .lab-link-banner { font-size: 13px; padding: 10px 16px; }
+        html.simust-android .field-regions { grid-template-columns: 1fr; }
+        html.simust-android .level-main-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+        html.simust-android .level-main-btn { height: 48px; min-height: 48px; font-size: 11px; }
+        html.simust-android .transport-bar .btn-primary,
+        html.simust-android .transport-bar .btn-realtime { flex: 1 1 100%; min-width: 0; width: 100%; }
+        @media (max-width: 480px) {
+            html.simust-android .level-main-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
         .transport-bar {
             position: sticky;
             top: 0;

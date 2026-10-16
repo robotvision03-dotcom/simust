@@ -250,10 +250,10 @@ LEVEL_INTRO_FILES = {
     "elite": ("eite.mp4", "elite.mp4"),
     "world-class": ("world-class.mp4",),
 }
-# Opening card: small logo above the beginning information (all bands).
-# 40% larger than the previous 0.52 / 0.30 opening logo.
-OPENING_LOGO_MAX_WIDTH = 0.728
-OPENING_LOGO_MAX_HEIGHT = 0.42
+# Opening card: logo above the beginning information (all bands).
+# +30% vs prior 0.728 / 0.42 box (was already +40% over the original 0.52 / 0.30).
+OPENING_LOGO_MAX_WIDTH = 0.946
+OPENING_LOGO_MAX_HEIGHT = 0.546
 # Text under the opening logo.
 OPENING_LOGO_TEXT_GAP_LINES = 0
 # Extra downward shift of opening-card text (fraction of screen height).
@@ -4788,6 +4788,16 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._summary_logo = True
         self._video_fill = False
         self._content_scale = float(OPENING_LOGO_MAX_WIDTH)
+        # Opening logos paint via the summary path only — drop leftover results
+        # logo-scale and saver stamps so a second darker clip cannot overlap.
+        logo_names = {sid for screens in groups.values() for sid in screens}
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        saver = set(getattr(self, "_screensaver_scale_screens", None) or set())
+        for name in logo_names:
+            logo_scale.discard(name)
+            saver.discard(name)
+        self._logo_scale_screens = logo_scale
+        self._screensaver_scale_screens = saver
         try:
             import cv2
         except Exception as exc:
@@ -5342,6 +5352,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_screens = set()
         self._band_screens = set()
         self._summary_logo = False
+        self._logo_scale_screens = set()
         if clear_screensaver:
             self._screensaver_scale_screens = set()
             self._saver_pix = None
@@ -5354,9 +5365,11 @@ class ImageActionCanvas(QtWidgets.QWidget):
         if pix is None or not saver_screens:
             return
         bounce = set(getattr(self, "_bounce_screens", None) or set())
+        summary = set(getattr(self, "_summary_screens", None) or set())
+        logo = set(getattr(self, "_logo_scale_screens", None) or set())
         for name in saver_screens:
-            # Never paint saver over a live action tile on the busy field.
-            if name in bounce:
+            # Never paint saver over a live action, opening card, or results logo.
+            if name in bounce or name in summary or name in logo:
                 continue
             pixmaps[name] = pix
             screens.add(name)
@@ -7519,7 +7532,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         fid = str(fid or "").upper()
         level = str((getattr(self, "_phase_field_levels", None) or {}).get(fid) or "").strip()
         if level:
-            hit = _intro_video_for_key(_level_intro_key_from_id(level))
+            key = _level_intro_key_from_id(level)
+            # Foundation beginning-info already loops logo_video_foundation.mp4.
+            # Playing static/foundation.mp4 next was a second, darker logo on top.
+            if key == "foundation":
+                return None
+            hit = _intro_video_for_key(key)
             if hit:
                 return hit
             # This field has its own level. Do not borrow the other field's intro.
@@ -7528,10 +7546,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if directory:
             for pat, key in _LEVEL_INTRO_PATH_RULES:
                 if pat.search(directory):
+                    if key == "foundation":
+                        return None
                     hit = _intro_video_for_key(key)
                     if hit:
                         return hit
-        return _find_level_intro_video(directory or self.video_directory or self._level_root)
+        root = directory or self.video_directory or self._level_root
+        if _detect_level_intro_key(root) == "foundation":
+            return None
+        return _find_level_intro_video(root)
 
     def _opening_logo_context(self) -> str:
         levels = getattr(self, "_phase_field_levels", None) or {}
@@ -9919,9 +9942,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "",
             {},
         )
-        # Foundation results: one logo only — no coach clip on screens 3/4.
+        # Foundation results: one logo only — no coach / foundation.mp4 overlay.
         allow_coach = brand != "foundation"
         coach = str((panel or {}).get("coach_video") or "")
+        coach_base = os.path.basename(coach).lower()
+        if coach_base in ("foundation.mp4", "logo_video_foundation.mp4"):
+            allow_coach = False
         allow_coach = bool(allow_coach and coach and os.path.isfile(coach))
         if allow_coach:
             other = "B" if fid == "A" else "A"
