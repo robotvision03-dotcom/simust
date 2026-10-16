@@ -6828,6 +6828,7 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "lock-level",
     "stop-realtime",
     "pause-realtime",
+    "join-realtime-field",
     "set-simulation",
     "set-visualization",
     "homography-capture",

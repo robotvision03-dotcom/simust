@@ -46,6 +46,7 @@ LAB_ONLY_PREFIXES = (
     "/get-levels",
     "/playback-status",
     "/start-realtime",
+    "/join-realtime",
     "/stop-realtime",
     "/pause-realtime",
     "/instagram-live",

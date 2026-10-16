@@ -63,6 +63,15 @@ class RemoteQueueTests(unittest.TestCase):
         self.assertEqual(item["action"], "cabinet-controls")
         self.assertTrue(item["payload"]["screensaver_on"])
 
+    def test_join_realtime_field_action_is_allowed(self):
+        item = simust_remote.enqueue(
+            "join-realtime-field",
+            {"field": "B", "level": "L01-Entry", "player_id": "james"},
+            "admin",
+        )
+        self.assertEqual(item["action"], "join-realtime-field")
+        self.assertEqual(item["payload"]["field"], "B")
+
     def test_status_roundtrip(self):
         simust_remote.set_status({"playback-status": {"state": "playing"}})
         status = simust_remote.get_status()

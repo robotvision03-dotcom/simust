@@ -4890,6 +4890,13 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 if _field_for_screen(name) in replace:
                     fill.discard(name)
             self._video_fill_screens = fill
+            # Joining / restarting a field must drop its .ssav ownership or the
+            # coded saver keeps painting over realtime actions on that half.
+            saver_scale = set(getattr(self, "_screensaver_scale_screens", None) or set())
+            for name in list(saver_scale):
+                if _field_for_screen(name) in replace:
+                    saver_scale.discard(name)
+            self._screensaver_scale_screens = saver_scale
         elif not keep_videos:
             self._stop_screen_video()
             self._summary_lines = []
@@ -5367,9 +5374,17 @@ class ImageActionCanvas(QtWidgets.QWidget):
         bounce = set(getattr(self, "_bounce_screens", None) or set())
         summary = set(getattr(self, "_summary_screens", None) or set())
         logo = set(getattr(self, "_logo_scale_screens", None) or set())
+        stills = set(getattr(self, "_still_pixmaps", None) or {})
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
         for name in saver_screens:
             # Never paint saver over a live action, opening card, or results logo.
-            if name in bounce or name in summary or name in logo:
+            if (
+                name in bounce
+                or name in summary
+                or name in logo
+                or name in stills
+                or name in fill
+            ):
                 continue
             pixmaps[name] = pix
             screens.add(name)
@@ -9182,8 +9197,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._bump_field_epoch(fid)
         # Leaving full-cabinet idle saver — this field is now in realtime play.
         self._idle_screensaver_mode = False
-        if str(self._player_attr("display_phase") or "") == "idle":
+        if str(self._player_attr("display_phase") or "") in ("idle", "ready"):
             self.display_phase = "action"
+        # Hold saver off this field through opening + first action paint.
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        hold[fid] = time.time() + 45.0
+        self._screensaver_hold_until = hold
         try:
             self._stop_field_screensaver(fid)
         except Exception:
@@ -10511,24 +10530,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return False
 
     def _stop_field_screensaver(self, fid):
-        """Clear screensaver tiles on one field without touching the other."""
+        """Clear screensaver tiles on one field without touching the other.
+
+        Always strip this field's .ssav ownership even if `_screensaver_fields`
+        is out of sync — otherwise join/realtime stills get stamped over.
+        """
         fid = str(fid or "").upper()[:1]
-        active = set(self._player_attr("_screensaver_fields") or set())
-        if fid not in active:
+        if fid not in ("A", "B"):
             return
+        active = set(self._player_attr("_screensaver_fields") or set())
+        had = fid in active
         active.discard(fid)
         self._screensaver_fields = active
         canvas = getattr(self, "image_canvas", None)
         if canvas is None:
             return
         try:
-            if hasattr(canvas, "_release_field_videos"):
-                canvas._release_field_videos({fid})
             saver = set(getattr(canvas, "_screensaver_scale_screens", None) or set())
+            had_tiles = any(_field_for_screen(name) == fid for name in saver)
             for name in list(saver):
                 if _field_for_screen(name) == fid:
                     saver.discard(name)
             canvas._screensaver_scale_screens = saver
+            if not had and not had_tiles:
+                return
+            if hasattr(canvas, "_release_field_videos"):
+                canvas._release_field_videos({fid})
             canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
             if not getattr(canvas, "_screensaver_scale_screens", None):
                 canvas._saver_pix = None

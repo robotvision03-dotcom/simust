@@ -1388,5 +1388,67 @@ class SeriesRestartTests(unittest.TestCase):
                 )
 
 
+class JoinClearsScreensaverTests(unittest.TestCase):
+    def test_stop_screensaver_clears_tiles_even_when_field_not_tracked(self):
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._screensaver_fields = set()  # out of sync on purpose
+        cleared = []
+
+        class Canvas:
+            def __init__(self):
+                self._screensaver_scale_screens = {"B1", "B2", "B3", "B4", "B5", "B6", "A1"}
+                self._saver_pix = object()
+
+            def _release_field_videos(self, fields):
+                cleared.append(("release", set(fields)))
+
+            def set_screen_images(self, mapping, keep_videos=False, replace_fields=None):
+                cleared.append(("images", set(replace_fields or set())))
+
+            def repaint(self):
+                cleared.append("repaint")
+
+            def _stop_coded_screensaver_timer(self):
+                cleared.append("timer")
+
+        canvas = Canvas()
+        inst.image_canvas = canvas
+        player.QtWidgets = types.SimpleNamespace(
+            QApplication=types.SimpleNamespace(processEvents=lambda: None)
+        )
+        inst._stop_field_screensaver("B")
+        self.assertFalse(any(name.startswith("B") for name in canvas._screensaver_scale_screens))
+        self.assertIn("A1", canvas._screensaver_scale_screens)
+        self.assertIn(("images", {"B"}), cleared)
+
+    def test_set_screen_images_drops_saver_ownership_for_replaced_field(self):
+        canvas = player.ImageActionCanvas.__new__(player.ImageActionCanvas)
+        canvas._bounce_screens = set()
+        canvas._image_overlays = {}
+        canvas._text_overlays = {}
+        canvas._text_overlay_positions = {}
+        canvas._keep_text_overlays = False
+        canvas._video_fill_screens = set()
+        canvas._logo_scale_screens = set()
+        canvas._band_screens = set()
+        canvas._screensaver_scale_screens = {"A1", "A2", "B1", "B2"}
+        canvas._screen_pixmaps = {"A1": object(), "B1": object()}
+        canvas._still_pixmaps = {}
+        canvas._pixmap_cache = {}
+        canvas._summary_lines = []
+        canvas._summary_screens = None
+        canvas._summary_by_screen = {}
+        canvas._result_badges = {}
+        canvas._release_field_videos = lambda fields: None
+        canvas._clear_field_summary = lambda fields: None
+        canvas._stop_bounce_motion = lambda: None
+        canvas._stop_screen_video = lambda: None
+        canvas._load_pixmap = lambda path: None
+        canvas._stamp_screensaver_pixels = lambda pixmaps, screens: None
+        canvas.update = lambda: None
+        canvas.set_screen_images({}, keep_videos=True, replace_fields={"B"})
+        self.assertEqual(canvas._screensaver_scale_screens, {"A1", "A2"})
+
+
 if __name__ == "__main__":
     unittest.main()
