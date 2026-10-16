@@ -71,6 +71,7 @@ LAB_ONLY_PREFIXES = (
     "/delete-player-report",
     "/stop-realtime-camera",
     "/homography",
+    "/cabinet-controls",
 )
 
 

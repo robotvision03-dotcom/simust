@@ -273,6 +273,8 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
+# Score early so display can clear before light/camera/YOLO lag catches up.
+APPROACH_FINISH_EXTRA_PX = 95.0
 GOAL_POST_SLACK = 0.10  # posts of screens 1 / 7 / 8 count as the goal mouth
 GOAL_POST_RADIUS = 30.0  # GOAL mouth endpoints
 PASS_POST_RADIUS = 45.0  # PASS/TARGET graze near left/right keypoints
@@ -2248,7 +2250,7 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             # is a goal. There is no late, miss, or return check.
             finish_balls = bool((action_data or {}).get("finish_balls"))
             late_by_time = (not finish_balls) and arrival_in_late_window(arrive_t, session_duration)
-            if finish_balls:
+            if finish_balls or bool((action_data or {}).get("cylinder_correct")):
                 result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
@@ -2298,7 +2300,23 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
                     min_dist_display = late_dist
                     best_proj_t = late_proj
         else:
-            if action_end_time is not None and not bool((action_data or {}).get("finish_balls")):
+            # Live cylinder already cleared this finish-balls action, but the
+            # sampled track never recorded an in-cylinder point.
+            if bool((action_data or {}).get("finish_balls")) and bool(
+                (action_data or {}).get("cylinder_correct")
+            ):
+                result = 'Correct'
+                winning_screen = str(
+                    (action_data or {}).get("cylinder_screen")
+                    or ((screens or ["N/A"])[0] if screens else "N/A")
+                )
+                # Ball was already in the approach zone when live advance fired.
+                arrive_guess = min(0.80, float(session_duration or 0.80) or 0.80)
+                display_time = f"{arrive_guess:.3f}"
+                display_duration = (
+                    f"{float(session_duration):.3f}" if session_duration else f"{arrive_guess:.3f}"
+                )
+            elif action_end_time is not None and not bool((action_data or {}).get("finish_balls")):
                 found_late, late_screen, late_time, late_dist, late_proj = search_late_across_blocks(
                     action_index, all_data, screens, goal_lines, key, action_end_time, action_type,
                     late_window=late_window,
@@ -4823,6 +4841,8 @@ class SimustRealtimeCamera:
                 "block_id": str(block_id or ""),
                 "seq": new_seq,
                 "ts": time.time(),
+                # Player clears the pass image as soon as this flag is seen.
+                "clear_now": str(result or "").strip().lower() == "correct",
             }
             by_seq = existing.get("by_seq") if isinstance(existing.get("by_seq"), dict) else {}
             by_seq = dict(by_seq)
@@ -5295,9 +5315,9 @@ class SimustRealtimeCamera:
                 if same_action:
                     ch._frame_sync_cue_raw = cue_raw
                 else:
-                    # Do not drop the current cylinder here. The next cue is written
-                    # when the pass timer ends, 17 frames before that pass leaves
-                    # the camera. Clearing now made a synced 3s cylinder last 2.1s.
+                    finish_balls = bool((cue or {}).get("finish_balls"))
+                    if ch.session_active and finish_balls:
+                        self._clear_goal_area_now(ch, current_timestamp)
                     on_sec = hit.get("on_sec")
                     if on_sec is None:
                         on_sec = _cue_on_sec(cue)
@@ -5388,24 +5408,14 @@ class SimustRealtimeCamera:
                     hold = int(info.get("hold_frames") or ch.kp_clear_frames_left or 0)
                     if hold > 0:
                         ch.kp_clear_frames_left = hold
-                    try:
-                        hold_sec = float(info.get("on_sec") or 0)
-                    except (TypeError, ValueError):
-                        hold_sec = 0.0
-                    if hold_sec <= 0 and hold > 0:
-                        hold_sec = hold / float(IMAGE_CUE_FPS)
-                    # Wall clock, not camera FPS. At ~25 fps a 60-frame hold
-                    # cleared the cylinder in ~2.4s while the pass stayed 3s.
-                    ch._kp_clear_deadline = time.time() + max(0.1, hold_sec)
                     print(
                         f"[{ch.label}] keypoints APPEAR → clear in "
-                        f"{hold_sec:.2f}s ({ch.kp_clear_frames_left}f)"
+                        f"{ch.kp_clear_frames_left}f"
                     )
                 else:
                     ch.kp_appear_frames_left -= 1
 
-            # A real field keeps this cylinder until a ball arrives.
-            # A simulated field clears on the pass's wall-clock On, not camera FPS.
+            # A simulated field counts its own frames. A real field waits for the ball.
             if (
                 ch.kp_clear_frames_left is not None
                 and ch.session_active
@@ -5419,20 +5429,16 @@ class SimustRealtimeCamera:
                     ch._live_display_at = 0
                     ch._live_display_busy = False
                     self._schedule_live_display(ch)
-                if ch.kp_clear_frames_left > 0:
-                    ch.kp_clear_frames_left -= 1
-                deadline = getattr(ch, "_kp_clear_deadline", None)
-                wall_done = deadline is not None and time.time() >= float(deadline)
-                frame_done = deadline is None and ch.kp_clear_frames_left <= 0
-                if wall_done or frame_done:
+                if ch.kp_clear_frames_left <= 0:
                     ch.kp_clear_frames_left = None
-                    ch._kp_clear_deadline = None
                     with self.session_lock:
                         if ch.session_active:
                             self._end_session_locked(
                                 current_time_str, current_timestamp, ch
                             )
                     print(f"[{ch.label}] keypoints CLEAR (On countdown done)")
+                else:
+                    ch.kp_clear_frames_left -= 1
 
     def _tick_keypoint_hold(self, ch, current_timestamp=None):
         """Hold keypoints for On; image-cue mode clears on cue OFF instead."""
@@ -5667,14 +5673,22 @@ class SimustRealtimeCamera:
             if p0 is None or p1 is None:
                 continue
             depth = arrival_depth_for(str(screen_name), action)
+            # Accept a ball that is already close to the green finish zone so the
+            # pass image can clear and the next screen can start without a lag.
+            approach = float(depth) + float(APPROACH_FINISH_EXTRA_PX)
             for ball in field_balls or []:
                 center = ball.get("center") if isinstance(ball, dict) else None
                 if center is None:
                     continue
                 if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
                     continue
-                if in_goal_area(center, p0, p1, depth):
+                if in_goal_area(center, p0, p1, approach):
                     ch._cylinder_goal_seq = seq
+                    # Stamp the block so final analysis matches the live Correct
+                    # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
+                    if isinstance(block, dict):
+                        block["cylinder_correct"] = True
+                        block["cylinder_screen"] = str(screen_name)
                     self._publish_live_result(
                         ch.field_id,
                         "Correct",
@@ -5683,9 +5697,7 @@ class SimustRealtimeCamera:
                         ch.current_block_id,
                         seq=seq,
                     )
-                    # Score now, but keep the green cylinder until the 3s On
-                    # ends with the pass image. Clearing here made the zone
-                    # vanish as soon as the ball arrived.
+                    self._clear_goal_area_now(ch, current_timestamp)
                     return
 
     def process_dual_fields_frame(self, frame, current_timestamp):
@@ -6246,8 +6258,6 @@ class SimustRealtimeCamera:
                         ch.pending_end_time_str = add_offset_to_time(end_str, dt)
                 if ch.session_active:
                     ch.session_start_timestamp += dt
-                if getattr(ch, "_kp_clear_deadline", None):
-                    ch._kp_clear_deadline += dt
                 current_block = getattr(ch, "current_qr_block", None)
                 if current_block and current_block.get("start_time"):
                     current_block["start_time"] = add_offset_to_time(current_block["start_time"], dt)

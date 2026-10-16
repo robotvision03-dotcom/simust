@@ -1530,6 +1530,57 @@ def force_kill_smart_player():
     gc.collect()
 
 
+def kill_arena_python_scripts() -> None:
+    """System/power off: stop every SIMUST Python helper on this lab PC."""
+    global smart_player_process, realtime_camera_process, _realtime_session_active
+    write_pause_setting(False)
+    try:
+        import simust_instagram_live
+        simust_instagram_live.stop_live()
+    except Exception:
+        pass
+    force_kill_smart_player()
+    kill_process_tree(realtime_camera_process)
+    realtime_camera_process = None
+    _realtime_session_active = False
+    kill_screen2_result_helpers()
+    if sys.platform != "win32":
+        return
+    patterns = (
+        "*smart_simust_player*",
+        "*simust_realtime*",
+        "*play_results_video*",
+        "*waiting.py*",
+        "*simust_gazebo*",
+        "*capture_camera_snapshot*",
+        "*screen_offset_gui*",
+    )
+    for pattern in patterns:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "python.exe", "/FI", f"CMDLine eq {pattern}"],
+                capture_output=True,
+                timeout=8,
+            )
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "pythonw.exe", "/FI", f"CMDLine eq {pattern}"],
+                capture_output=True,
+                timeout=8,
+            )
+        except Exception:
+            pass
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/FI", "WINDOWTITLE eq Smart Player*"],
+            capture_output=True,
+            timeout=8,
+        )
+    except Exception:
+        pass
+    write_playback_status("idle", "System off — arena cleared")
+    gc.collect()
+
+
 def clear_live_snapshot(player_id: str) -> None:
     player_id = (player_id or "").strip()
     if not player_id:
@@ -2046,6 +2097,10 @@ def playback_status_snapshot() -> dict:
     if paused and status.get("state") not in ("aborted", "completed", "idle"):
         status["state"] = "paused"
         status["message"] = status.get("message") or "Paused — press Play to continue"
+    try:
+        status["cabinet"] = read_cabinet_controls()
+    except Exception:
+        status["cabinet"] = {"system_on": True, "screensaver_on": False}
     return status
 
 
@@ -2062,6 +2117,8 @@ async def start_realtime_playback(req: Request):
     global smart_player_process, realtime_camera_process, current_results_dir
     global realtime_aborted, realtime_active_player_id, _realtime_dirs_at_start
     global _realtime_session_active, _realtime_session_started_at
+    if not read_cabinet_controls().get("system_on", True):
+        raise HTTPException(409, "System is off. Turn System on before Realtime Play.")
     realtime_aborted = False
     _realtime_session_active = True
     _realtime_session_started_at = time.time()
@@ -2123,6 +2180,8 @@ async def start_realtime_playback(req: Request):
             data.get("admin_password") or data.get("adminPassword") or ""
         ).strip()
         admin_test_override = False
+        if data.get("admin_test") and not admin_password:
+            raise HTTPException(401, "Enter the admin password to start a test play.")
         if admin_password:
             if not _verify_operator_override_password(users, admin_password):
                 raise HTTPException(401, "Password is not correct")
@@ -2490,6 +2549,8 @@ def _join_field_directory(level_id: str, sub: str) -> str:
 @app.post("/join-realtime-field")
 async def join_realtime_field(req: Request):
     """Start one field while the other field keeps the session it already has."""
+    if not read_cabinet_controls().get("system_on", True):
+        raise HTTPException(409, "System is off. Turn System on before Realtime Play.")
     if not _realtime_is_running():
         return {"status": "idle", "message": "No field is playing yet"}
     try:
@@ -2512,6 +2573,24 @@ async def join_realtime_field(req: Request):
     if not player_id:
         raise HTTPException(400, "Choose a player for this field")
     sub = str(data.get("subdirectory") or "").strip()
+    users = load_users()
+    admin_password = str(
+        data.get("admin_password") or data.get("adminPassword") or ""
+    ).strip()
+    admin_test_override = False
+    if data.get("admin_test") or admin_password:
+        if not admin_password:
+            raise HTTPException(401, "Enter the admin password to start a test play.")
+        if not _verify_operator_override_password(users, admin_password):
+            raise HTTPException(401, "Password is not correct")
+        admin_test_override = True
+    if player_id not in users:
+        raise HTTPException(404, f"Player not found: {player_id}")
+    if not admin_test_override:
+        progress = simust_progress.ensure_progress(users[player_id])
+        ok, reason = simust_progress.can_play(progress, level_id, sub)
+        if not ok:
+            raise HTTPException(403, f"{player_id}: {reason}")
     directory = _join_field_directory(level_id, sub)
     path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
     try:
@@ -2562,6 +2641,185 @@ async def join_realtime_field(req: Request):
     os.replace(tmp_path, join_path)
     logger.info("Field %s joining the live session (%s)", fid, level_id)
     return {"status": "success", "field": fid, "joined": True}
+
+
+def _cabinet_controls_path() -> str:
+    return os.path.join(SIMUST_PLAYER_DIRECTORY, "cabinet_controls.json")
+
+
+def read_cabinet_controls() -> dict:
+    path = _cabinet_controls_path()
+    defaults = {"system_on": True, "screensaver_on": False}
+    if not os.path.isfile(path):
+        return dict(defaults)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return dict(defaults)
+        return {
+            "system_on": bool(data.get("system_on", True)),
+            "screensaver_on": bool(data.get("screensaver_on", False)),
+        }
+    except Exception:
+        return dict(defaults)
+
+
+def write_cabinet_controls(system_on: bool, screensaver_on: bool) -> dict:
+    path = _cabinet_controls_path()
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    payload = {
+        "system_on": bool(system_on),
+        "screensaver_on": bool(screensaver_on) if system_on else False,
+        "timestamp": time.time(),
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    return payload
+
+
+def _smart_player_cmdline_running() -> bool:
+    """True if any smart_simust_player.py process is alive (tracked or orphaned)."""
+    if smart_player_is_running():
+        return True
+    if sys.platform != "win32":
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "wmic",
+                "process",
+                "where",
+                "CommandLine like '%smart_simust_player%'",
+                "get",
+                "ProcessId",
+                "/value",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        text = result.stdout or ""
+        return any(line.strip().startswith("ProcessId=") for line in text.splitlines())
+    except Exception:
+        pass
+    try:
+        # Fallback when wmic is unavailable.
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq python.exe", "/V", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return "smart_simust_player" in (result.stdout or "")
+    except Exception:
+        return False
+
+
+def ensure_idle_screensaver_player() -> bool:
+    """Keep a player window alive so the coded screensaver can paint all screens.
+
+    Only when System + Screen saver are on and no realtime session is running.
+    """
+    global smart_player_process
+    controls = read_cabinet_controls()
+    if not controls.get("system_on", True) or not controls.get("screensaver_on", False):
+        return False
+    # Only block if a realtime camera/player session is actually still running.
+    try:
+        if realtime_camera_process is not None and realtime_camera_process.poll() is None:
+            return False
+    except Exception:
+        pass
+    if _smart_player_cmdline_running():
+        write_playback_status("idle", "Screensaver on — all screens")
+        return True
+    # Stale session flag must not block the coded screensaver after Play ends.
+    global _realtime_session_active
+    if _realtime_session_active and not smart_player_is_running():
+        _realtime_session_active = False
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    smart_script = os.path.join(script_dir, "smart_simust_player.py")
+    if not os.path.exists(smart_script):
+        smart_script = os.path.join(os.getcwd(), "smart_simust_player.py")
+    if not os.path.exists(smart_script):
+        logger.error("Cannot start idle screensaver — smart_simust_player.py missing")
+        return False
+    python_exe = sys.executable
+    args = [python_exe, smart_script, "__screensaver__", "1", "1"]
+    try:
+        # Same launch style as a realtime session so Screen 2 Qt display works.
+        if sys.platform == "win32":
+            CREATE_NO_WINDOW = 0x08000000
+            smart_player_process = subprocess.Popen(
+                args,
+                shell=False,
+                cwd=script_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE | CREATE_NO_WINDOW,
+            )
+        else:
+            smart_player_process = subprocess.Popen(args, shell=False, cwd=script_dir)
+        time.sleep(0.4)
+        if smart_player_process.poll() is not None:
+            logger.error(
+                "Idle screensaver player exited immediately (code %s)",
+                smart_player_process.returncode,
+            )
+            smart_player_process = None
+            return False
+        logger.info("Idle screensaver player launched (pid %s)", getattr(smart_player_process, "pid", "?"))
+        write_playback_status("idle", "Screensaver on — all screens")
+        return True
+    except Exception:
+        logger.exception("Could not launch idle screensaver player")
+        smart_player_process = None
+        return False
+
+
+@app.get("/cabinet-controls")
+async def get_cabinet_controls():
+    return {"status": "success", **read_cabinet_controls()}
+
+
+@app.post("/cabinet-controls")
+async def set_cabinet_controls(req: Request):
+    """System + Screensaver switches for the arena cabinets."""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    data = data or {}
+    current = read_cabinet_controls()
+    system_on = bool(data["system_on"]) if "system_on" in data else current["system_on"]
+    screensaver_on = (
+        bool(data["screensaver_on"]) if "screensaver_on" in data else current["screensaver_on"]
+    )
+    if not system_on:
+        screensaver_on = False
+    # Write first so a still-running player can flash black before we kill it.
+    saved = write_cabinet_controls(system_on, screensaver_on)
+    if not system_on:
+        try:
+            await asyncio.sleep(0.35)
+        except Exception:
+            time.sleep(0.35)
+        try:
+            kill_arena_python_scripts()
+        except Exception:
+            logger.exception("System off could not kill arena Python scripts")
+        saved = write_cabinet_controls(False, False)
+        saved["killed"] = True
+    elif screensaver_on:
+        try:
+            saved["screensaver_player"] = bool(ensure_idle_screensaver_player())
+        except Exception:
+            logger.exception("Could not ensure idle screensaver player")
+            saved["screensaver_player"] = False
+    return {"status": "success", **saved}
 
 
 @app.post("/instagram-live")
@@ -3945,14 +4203,19 @@ def finish_balls_clock(results_list):
         budget = _parse_positive_float(row.get("balls_budget_sec"))
         if budget:
             budgets.append(budget)
-        if str(row.get("result") or "") == "Correct":
+        if str(row.get("result") or row.get("Result") or "").strip().lower() == "correct":
             clock = _parse_positive_float(row.get("balls_clock_sec"))
             if clock:
                 clocks.append(clock)
     if not saw and not budgets:
         return None
     budget = max(budgets) if budgets else 0.0
-    correct = sum(1 for row in results_list if str(row.get("result") or "") == "Correct")
+
+    def _fb_result(row):
+        return str((row or {}).get("result") or (row or {}).get("Result") or "").strip().lower()
+
+    correct = sum(1 for row in results_list if _fb_result(row) == "correct")
+    late = sum(1 for row in results_list if _fb_result(row) == "late")
     total = len(results_list)
     all_in = total > 0 and correct == total
     if all_in and clocks and budget > 0:
@@ -3964,7 +4227,8 @@ def finish_balls_clock(results_list):
     percent = 0.0
     if budget > 0:
         percent = max(0.0, min(100.0, (1.0 - (used / budget)) * 100.0))
-    accuracy = (correct / total) * 100.0 if total else 0.0
+    # Same AAC rule as normal tests: Correct + Late over all actions.
+    accuracy = ((correct + late) / total) * 100.0 if total else 0.0
     return {
         "finish_balls": True,
         "aac": accuracy,
@@ -4039,10 +4303,13 @@ def summarize_results_section_metrics(results_list):
         except (TypeError, ValueError):
             pass
 
-    correct = sum(1 for r in results_list if r.get("result") == "Correct")
-    late = sum(1 for r in results_list if r.get("result") == "Late")
-    wrong = sum(1 for r in results_list if r.get("result") == "Wrong")
-    miss = sum(1 for r in results_list if r.get("result") == "Miss")
+    def _row_result(row):
+        return str((row or {}).get("result") or (row or {}).get("Result") or "").strip()
+
+    correct = sum(1 for r in results_list if _row_result(r).lower() == "correct")
+    late = sum(1 for r in results_list if _row_result(r).lower() == "late")
+    wrong = sum(1 for r in results_list if _row_result(r).lower() == "wrong")
+    miss = sum(1 for r in results_list if _row_result(r).lower() == "miss")
     total_actions = len(results_list)
     aac = ((correct + late) / total_actions) * 100 if total_actions > 0 else 0.0
 
@@ -4064,8 +4331,9 @@ def summarize_results_section_metrics(results_list):
     session_durs = []
 
     for r in results_list:
-        res = r.get("result")
-        if res not in ("Correct", "Miss", "Late"):
+        res = _row_result(r)
+        res_key = res.lower()
+        if res_key not in ("correct", "miss", "late"):
             continue
         tm = r.get("finishing_time")
         if tm is None or tm == 0 or tm == "0" or tm == "-" or tm == "":
@@ -4076,7 +4344,7 @@ def summarize_results_section_metrics(results_list):
         if sd is not None:
             session_durs.append(sd)
         # Miss with no stamped entry → count full session as goal-entry
-        if tm is None and res == "Miss" and sd is not None:
+        if tm is None and res_key == "miss" and sd is not None:
             tm = sd
         # Goal-entry must not exceed session window
         if tm is not None and sd is not None and tm > sd:
@@ -4267,6 +4535,19 @@ def build_results_ring_panel(metrics, field="A"):
     else:
         distance_shown = distance_m_display(total_distance)
     economy_percent = min(100.0, (total_distance / 77.0) * 100) if total_distance > 0 else 0.0
+    try:
+        aac_val = float(metrics.get("aac"))
+    except (TypeError, ValueError):
+        aac_val = 0.0
+    # Prefer count-based AAC when the stored value is missing/zero but actions scored.
+    try:
+        total_actions = int(metrics.get("total_actions") or 0)
+        correct_n = int(metrics.get("correct") or 0)
+        late_n = int(metrics.get("late") or 0)
+    except (TypeError, ValueError):
+        total_actions = correct_n = late_n = 0
+    if total_actions > 0 and (correct_n + late_n) > 0 and aac_val <= 0:
+        aac_val = ((correct_n + late_n) / total_actions) * 100.0
     return {
         "slice_aet": slices.get("aet") or "A1",
         "slice_acc": slices.get("accuracy") or "A2",
@@ -4277,7 +4558,10 @@ def build_results_ring_panel(metrics, field="A"):
         "aet_session_display": metrics.get("aet_session_display"),
         "avg_ae": float(metrics.get("avg_ae") or 0.0),
         "ae_display": metrics.get("ae_display") or "-",
-        "aac": float(metrics.get("aac") or 0.0),
+        "aac": float(aac_val),
+        "correct": correct_n,
+        "late": late_n,
+        "total_actions": total_actions,
         "economy_percent": economy_percent,
         "distance_shown": distance_shown,
     }
@@ -4771,8 +5055,17 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                     draw_text_inside_ring_on_pil(draw, center_x, center_y + RING_TEXT_Y_OFFSET, [ed if ed != "-" else "-"])
                     draw_metric_label(draw, "Efficiency", center_x, rect_y)
                 elif kind == "acc":
-                    aac_v = float(panel.get("aac") or 0)
-                    draw_text_inside_ring_on_pil(draw, center_x, center_y + RING_TEXT_Y_OFFSET, [f"{aac_v:.0f}%" if aac_v > 0 else "-"])
+                    if panel.get("aac") is None:
+                        aac_lines = ["-"]
+                    else:
+                        try:
+                            aac_v = float(panel.get("aac"))
+                        except (TypeError, ValueError):
+                            aac_v = 0.0
+                        aac_lines = [f"{aac_v:.0f}%"]
+                    draw_text_inside_ring_on_pil(
+                        draw, center_x, center_y + RING_TEXT_Y_OFFSET, aac_lines,
+                    )
                     draw_metric_label(draw, "Accuracy", center_x, rect_y)
                 elif kind == "disp":
                     ds = int(panel.get("distance_shown") or 0)
@@ -5457,6 +5750,19 @@ async def create_results_video(req: Request):
                         progress_info = apply_final_results_progress(field_metrics)
                     except Exception:
                         logger.exception("Final results could not update the player's level")
+                try:
+                    profiles = _field_player_profiles()
+                    for fid, panel in panels.items():
+                        profile = profiles.get(fid) or {}
+                        coach_path = select_coach_video(
+                            profile.get("gender") or "Male",
+                            profile.get("age") or 16,
+                            panel.get("aac"),
+                        )
+                        if coach_path:
+                            panel["coach_video"] = coach_path
+                except Exception:
+                    logger.exception("Final coach clip could not be chosen")
                 logger.info(
                     "Projecting final results for fields %s (no video)",
                     ",".join(sorted(panels.keys())),
@@ -6530,6 +6836,7 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "homography-reset",
     "homography-test",
     "instagram-live",
+    "cabinet-controls",
 }
 
 
@@ -6655,6 +6962,10 @@ def _publish_lab_status() -> None:
         status["homography"] = homography_status_snapshot()
     except Exception:
         status["homography"] = {"cameras": [], "frames": {}}
+    try:
+        status["cabinet-controls"] = read_cabinet_controls()
+    except Exception:
+        status["cabinet-controls"] = {"system_on": True, "screensaver_on": False}
     simust_push.push_lab_status(status)
 
 

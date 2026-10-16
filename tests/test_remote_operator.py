@@ -54,6 +54,15 @@ class RemoteQueueTests(unittest.TestCase):
         item = simust_remote.enqueue("homography-save", {"camera": "camera-1"}, "admin")
         self.assertEqual(item["action"], "homography-save")
 
+    def test_cabinet_controls_action_is_allowed(self):
+        item = simust_remote.enqueue(
+            "cabinet-controls",
+            {"system_on": True, "screensaver_on": True},
+            "admin",
+        )
+        self.assertEqual(item["action"], "cabinet-controls")
+        self.assertTrue(item["payload"]["screensaver_on"])
+
     def test_status_roundtrip(self):
         simust_remote.set_status({"playback-status": {"state": "playing"}})
         status = simust_remote.get_status()

@@ -99,6 +99,13 @@ class FinishBallsTests(unittest.TestCase):
         self.assertEqual(score["aet"], 30.0)
         self.assertEqual(score["aet_percent"], 0.0)
 
+    def test_late_counts_toward_finish_balls_accuracy(self):
+        score = finish_balls_clock([
+            {"result": "Correct", "finish_balls": True, "balls_budget_sec": 30, "balls_clock_sec": 10},
+            {"result": "Late", "finish_balls": True, "balls_budget_sec": 30},
+        ])
+        self.assertEqual(score["aac"], 100.0)
+
     def test_efficiency_uses_aet_in_the_action_formula(self):
         # Correct pass, player still, AET 50 → 0.40×70 + 0.30×100 + 0.20×50 = 68
         correct = {"action": "PASS", "result": "Correct", "movement": 0}

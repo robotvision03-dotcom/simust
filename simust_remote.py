@@ -27,6 +27,7 @@ ALLOWED_ACTIONS = {
     "homography-reset",
     "homography-test",
     "instagram-live",
+    "cabinet-controls",
 }
 
 GET_STATUS_KEYS = {
@@ -34,6 +35,7 @@ GET_STATUS_KEYS = {
     "realtime-results": "realtime-results",
     "results": "results",
     "homography": "homography",
+    "cabinet-controls": "cabinet-controls",
 }
 
 COMMANDS_FILE = os.environ.get("SIMUST_REMOTE_FILE", "remote_commands.json")

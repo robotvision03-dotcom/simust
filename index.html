@@ -56,6 +56,12 @@
         .btn-results { background: linear-gradient(105deg, var(--blue), #1d5bc4); color: white; }
         .btn-logout { background: transparent; color: #a8c6ff; border: 1px solid var(--line); padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer; transition: 0.2s; }
         .btn-logout:hover { background: #ffffff0a; color: var(--ink); }
+        .header-cabinet-switches { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+        .cabinet-switch { display: inline-flex; align-items: center; gap: 8px; color: #dce7f5; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; user-select: none; }
+        .cabinet-switch .slider { background: #3a4a63; }
+        .cabinet-switch input:checked + .slider { background: #2ecc71; }
+        .cabinet-switch.is-saver input:checked + .slider { background: #276ce5; }
+        .cabinet-switch.is-off { opacity: 0.55; }
         .live-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-inline-end: 8px; animation: pulse 1.5s infinite; }
         .live-dot.active { background: var(--green); }
         .live-dot.paused { background: #f59e0b; }
@@ -580,14 +586,16 @@
                 'homography/compute': true,
                 'homography/save': true,
                 'homography/reset': true,
-                'homography/test': true
+                'homography/test': true,
+                'cabinet-controls': true
             };
             var labGet = {
                 'playback-status': true,
                 'realtime-results': true,
                 'results': true,
                 'get-levels': true,
-                'homography/status': true
+                'homography/status': true,
+                'cabinet-controls': true
             };
             axios.interceptors.request.use(function(config) {
                 if (window.SIMUST_PUBLIC && window.SIMUST_TOKEN) {
@@ -2956,9 +2964,17 @@
             var adminTestPlayState = useState(false);
             var adminTestPlay = adminTestPlayState[0];
             var setAdminTestPlay = adminTestPlayState[1];
-            var adminTestPassState = useState('');
+            var adminTestPassState = useState('sina27');
             var adminTestPass = adminTestPassState[0];
             var setAdminTestPass = adminTestPassState[1];
+            var systemOnState = useState(true);
+            var systemOn = systemOnState[0];
+            var setSystemOn = systemOnState[1];
+            var screensaverOnState = useState(false);
+            var screensaverOn = screensaverOnState[0];
+            var setScreensaverOn = screensaverOnState[1];
+            var systemOnRef = useRef(true);
+            var screensaverOnRef = useRef(false);
             var playBookingsState = useState([]);
             var playBookings = playBookingsState[0];
             var setPlayBookings = playBookingsState[1];
@@ -4386,7 +4402,11 @@
                     level: level,
                     subdirectory: sub || ""
                 };
-                if (adminTestPlay && String(adminTestPass || "").trim()) {
+                if (adminTestPlay) {
+                    if (!String(adminTestPass || "").trim()) {
+                        showToast(t('adminTestPassRequired', 'Enter the admin password to start a test play.'), "error");
+                        return;
+                    }
                     payload.admin_password = String(adminTestPass || "").trim();
                     payload.admin_test = true;
                 }
@@ -4404,11 +4424,21 @@
                         ? e.response.data.detail
                         : (e.message || "Could not start this field");
                     showToast(detail, "error");
+                    var running = Object.assign({}, runningFieldsRef.current || { A: false, B: false });
+                    running[fid] = false;
+                    runningFieldsRef.current = running;
+                    setRunningFields(running);
                 });
             };
 
             var startRealtimePlayback = function(origin, opts) {
                 opts = opts || {};
+                if (!systemOnRef.current) {
+                    setError("System is off. Turn System on before Realtime Play.");
+                    showToast("System is off.", "error");
+                    setTimeout(function() { setError(""); }, 3000);
+                    return;
+                }
                 var playBoth = !!opts.both;
                 origin = String(origin || "A").toUpperCase().charAt(0) === "B" ? "B" : "A";
                 var playerA = getSelectedPlayer();
@@ -4521,6 +4551,17 @@
                 }
                 if (playBoth && (liveNow.A || liveNow.B) && !(liveNow.A && liveNow.B)) {
                     joinRealtimeField(liveNow.A ? "B" : "A");
+                    return;
+                }
+                // Series finished but the player is still up — start the next level
+                // on that same process instead of killing it mid-save.
+                if (!liveNow.A && !liveNow.B && realtimeRunningRef.current && !sessionSavedRef.current) {
+                    if (playBoth) {
+                        joinRealtimeField("A");
+                        setTimeout(function() { joinRealtimeField("B"); }, 900);
+                        return;
+                    }
+                    joinRealtimeField(origin);
                     return;
                 }
 
@@ -4662,6 +4703,10 @@
                         if (!realtimeRunningRef.current && sessionSavedRef.current) return;
                         realtimeRunningRef.current = false;
                         setRealtimeRunning(false);
+                        runningFieldsRef.current = { A: false, B: false };
+                        setRunningFields({ A: false, B: false });
+                        pausedFieldsRef.current = { A: false, B: false };
+                        setPausedFields({ A: false, B: false });
                         if (liveIntervalRef.current) {
                             clearInterval(liveIntervalRef.current);
                             liveIntervalRef.current = null;
@@ -4804,6 +4849,19 @@
                                 finishFromStatus();
                                 return;
                             }
+                            if (state === "ready") {
+                                // Independent series finished. Stop buttons are idle;
+                                // keep the session open for the next level Play.
+                                sawActivePlayback = true;
+                                if (runningFieldsRef.current.A || runningFieldsRef.current.B) {
+                                    runningFieldsRef.current = { A: false, B: false };
+                                    setRunningFields({ A: false, B: false });
+                                    pausedFieldsRef.current = { A: false, B: false };
+                                    setPausedFields({ A: false, B: false });
+                                }
+                                realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
+                                return;
+                            }
                             if (state === "error") {
                                 failLabStart("Playback error occurred");
                                 return;
@@ -4829,6 +4887,13 @@
                     showToast(detail, 'error');
                     realtimeRunningRef.current = false;
                     setRealtimeRunning(false);
+                    runningFieldsRef.current = { A: false, B: false };
+                    setRunningFields({ A: false, B: false });
+                    sessionSavedRef.current = true;
+                    if (realtimeMonitorInterval.current) {
+                        clearTimeout(realtimeMonitorInterval.current);
+                        realtimeMonitorInterval.current = null;
+                    }
                 });
             };
 
@@ -5061,6 +5126,22 @@
                     } catch (e) {}
                 }
                 applySimulationFields(startFields, false);
+                var storedSystem = localStorage.getItem('simust-system-on');
+                var storedSaver = localStorage.getItem('simust-screensaver-on');
+                var bootSystem = storedSystem === null ? true : storedSystem === '1';
+                var bootSaver = storedSaver === '1';
+                systemOnRef.current = bootSystem;
+                screensaverOnRef.current = bootSystem && bootSaver;
+                setSystemOn(bootSystem);
+                setScreensaverOn(bootSystem && bootSaver);
+                axios.get('/cabinet-controls').then(function(res) {
+                    var cab = res.data || {};
+                    var sys = cab.system_on !== undefined ? !!cab.system_on : bootSystem;
+                    var sav = cab.screensaver_on !== undefined ? !!cab.screensaver_on : bootSaver;
+                    pushCabinetControls(sys, sav);
+                }).catch(function() {
+                    pushCabinetControls(bootSystem, bootSaver);
+                });
                 var storedOn = localStorage.getItem('simust_teammate_on_sec');
                 if (storedOn !== null) {
                     var onN = parseFloat(storedOn);
@@ -5239,7 +5320,54 @@
                 });
             }
 
-            var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false);
+            var pushCabinetControls = function(nextSystem, nextSaver) {
+                var system = nextSystem !== undefined ? !!nextSystem : !!systemOnRef.current;
+                var saver = nextSaver !== undefined ? !!nextSaver : !!screensaverOnRef.current;
+                if (!system) saver = false;
+                systemOnRef.current = system;
+                screensaverOnRef.current = saver;
+                setSystemOn(system);
+                setScreensaverOn(saver);
+                try {
+                    localStorage.setItem('simust-system-on', system ? '1' : '0');
+                    localStorage.setItem('simust-screensaver-on', saver ? '1' : '0');
+                } catch (e) {}
+                axios.post('/cabinet-controls', {
+                    system_on: system,
+                    screensaver_on: saver
+                }).catch(function() {});
+            };
+            var toggleSystemOn = function() {
+                var next = !systemOnRef.current;
+                // System on → screensaver on idle cabinets (not during starting videos).
+                pushCabinetControls(next, next ? true : false);
+                if (!next) {
+                    showToast('System off — killing Python scripts and clearing arena.', 'info');
+                    runningFieldsRef.current = { A: false, B: false };
+                    setRunningFields({ A: false, B: false });
+                    pausedFieldsRef.current = { A: false, B: false };
+                    setPausedFields({ A: false, B: false });
+                    realtimeRunningRef.current = false;
+                    setRealtimeRunning(false);
+                    realtimePausedRef.current = false;
+                    setRealtimePaused(false);
+                    if (realtimeMonitorInterval.current) {
+                        clearTimeout(realtimeMonitorInterval.current);
+                        realtimeMonitorInterval.current = null;
+                    }
+                } else {
+                    showToast('System on — screen saver on idle fields.', 'info');
+                }
+            };
+            var toggleScreensaverOn = function() {
+                if (!systemOnRef.current) {
+                    showToast('Turn System on first.', 'error');
+                    return;
+                }
+                pushCabinetControls(true, !screensaverOnRef.current);
+            };
+
+            var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false) || !systemOn;
             var fieldPlayReady = function(fid) {
                 if (labBlocked) return false;
                 if (runningFields && runningFields[fid]) return false;
@@ -5447,7 +5575,37 @@
                             React.createElement('span', { className: "text-white" }, " PLAY IT SMART")
                         )
                     ),
-                    React.createElement('div', { className: "flex items-center gap-2" })
+                    React.createElement('div', { className: "header-cabinet-switches" },
+                        React.createElement('label', {
+                            className: "cabinet-switch" + (systemOn ? "" : " is-off"),
+                            title: "System on/off. When off, nothing runs on the arena."
+                        },
+                            React.createElement('span', null, "System"),
+                            React.createElement('span', { className: "toggle-switch" },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: !!systemOn,
+                                    onChange: toggleSystemOn
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            )
+                        ),
+                        React.createElement('label', {
+                            className: "cabinet-switch is-saver" + (systemOn ? "" : " is-off"),
+                            title: "Loop screen saver on idle fields while System is on."
+                        },
+                            React.createElement('span', null, "Screen saver"),
+                            React.createElement('span', { className: "toggle-switch" },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: !!screensaverOn && !!systemOn,
+                                    disabled: !systemOn,
+                                    onChange: toggleScreensaverOn
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            )
+                        )
+                    )
                 ),
 
                 // TABS
@@ -5576,7 +5734,13 @@
                                     checked: adminTestPlay,
                                     onChange: function(e) {
                                         setAdminTestPlay(e.target.checked);
-                                        if (!e.target.checked) setAdminTestPass('');
+                                        if (e.target.checked) {
+                                            if (!String(adminTestPass || '').trim()) {
+                                                setAdminTestPass('sina27');
+                                            }
+                                        } else {
+                                            setAdminTestPass('sina27');
+                                        }
                                     }
                                 }),
                                 React.createElement('span', { className: 'font-semibold' },
@@ -5587,7 +5751,7 @@
                                 type: 'password',
                                 value: adminTestPass,
                                 autoComplete: 'current-password',
-                                placeholder: '••••••••',
+                                placeholder: 'sina27',
                                 className: 'w-full max-w-md',
                                 style: {
                                     background: 'rgba(0,0,0,0.45)',

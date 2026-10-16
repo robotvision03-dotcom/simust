@@ -50,6 +50,7 @@ class CylinderGoalPublishTests(unittest.TestCase):
             target.current_keypoints = []
 
         cam._end_session_locked = fake_end
+        cam._field_is_simulated = lambda fid: False
         self.cam = cam
         line = rt.GOAL_LINES["13"]
         self.ch = types.SimpleNamespace(
@@ -63,10 +64,18 @@ class CylinderGoalPublishTests(unittest.TestCase):
             current_block_id="S4",
             field_id="A",
             current_keypoints=["13"],
+            kp_clear_frames_left=40,
+            label="A",
         )
-        cx = (line["p0"][0] + line["p1"][0]) / 2.0
-        cy = (line["p0"][1] + line["p1"][1]) / 2.0
+        cx, cy = rt.goal_circle_center(line["p0"], line["p1"])
         self.inside = (cx, cy)
+        depth = rt.arrival_depth_for("13", "PASS")
+        radius = rt.goal_circle_radius(depth, line["p0"], line["p1"])
+        approach = rt.goal_circle_radius(
+            depth + float(rt.APPROACH_FINISH_EXTRA_PX), line["p0"], line["p1"],
+        )
+        # Halfway between the drawn cylinder and the approach band.
+        self.near = (cx + (radius + approach) * 0.5, cy)
 
     def tearDown(self):
         self.path_patch.stop()
@@ -83,9 +92,17 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.assertEqual(entry["result"], "Correct")
         self.assertEqual(entry["seq"], 4)
         self.assertEqual(self.ch._cylinder_goal_seq, 4)
-        self.assertEqual(self.ended, [])
-        self.assertTrue(self.ch.session_active)
-        self.assertTrue(self.ch.active_goal_lines)
+        self.assertEqual(self.ended, [True])
+        self.assertFalse(self.ch.session_active)
+        self.assertEqual(self.ch.active_goal_lines, {})
+
+    def test_ball_near_cylinder_clears_and_scores(self):
+        self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": self.near}])
+        with open(self.tmp.name, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.assertEqual(payload["fields"]["A"]["result"], "Correct")
+        self.assertEqual(self.ended, [True])
+        self.assertFalse(self.ch.session_active)
 
     def test_ball_outside_does_not_write(self):
         self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": (0.0, 0.0)}])
@@ -107,7 +124,10 @@ class EliteGoalAdvancePollTests(unittest.TestCase):
         inst._goal_arrived = False
         inst.current_video_index = 0
         inst._flash_seq = 4
+        inst._field_cue_seq = {}
+        inst._field_action_wall = {}
         inst._action_cue_wall = 1.0
+        inst.image_canvas = None
         inst._active_fields = lambda: ["A", "B"]
         inst._stop_goal_advance_poll = lambda: None
         inst.finished = []

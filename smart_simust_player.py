@@ -229,10 +229,18 @@ def _reset_live_action_results():
 
 WAIT_ANIMATION_MS = 5000
 PER_VIDEO_RESULTS_MS = 20000
-# Level intro clip played before every test (replaces "starting" ring animation).
+# Fallback if the starting video length cannot be read.
 LEVEL_INTRO_MS = 4000
+# Keep the last frame of the starting video on screen this long after it ends.
+LEVEL_INTRO_HOLD_MS = 1000
 LEVEL_CARD_MS = 5000
 LEVEL_INTRO_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+SCREEN_SAVER_VIDEO = "screen_saver.mp4"
+CABINET_CONTROLS_FILE = "cabinet_controls.json"
+# Launch token from app.py when System + Screen saver are on and no realtime is running.
+IDLE_SCREENSAVER_ARG = "__screensaver__"
+# Idle saver box: 40% smaller than full-cabinet (0.60 of width/height).
+SCREEN_SAVER_SCALE = 0.60
 # Key → candidate filenames (elite file is currently misspelled "eite.mp4").
 LEVEL_INTRO_FILES = {
     "foundation": ("foundation.mp4",),
@@ -260,7 +268,8 @@ LEVEL_OPENING_LOGO_FILES = {
     "activated": ("logo_video_activated.mp4",),
     "high-performance": ("logo_video_high_performance.mp4",),
     "elite": ("logo_video_Elite.mp4",),
-    "world-class": ("logo_video_world_class.mp4",),
+    # Current static name is logo_image_world_class.mp4 (kept legacy aliases too).
+    "world-class": ("logo_image_world_class.mp4", "logo_video_world_class.mp4"),
 }
 # Keep old name for any callers that still reference it.
 ACTIVATED_LOGO_VIDEO = "logo_video_activated.mp4"
@@ -1164,20 +1173,15 @@ def _a1_digit_pair(width: int) -> Tuple[str, str]:
 
 
 def _a1_similar_letter_pair() -> Tuple[str, str]:
-    """ABA triple like LOL, with one similar odd triple like TOL."""
+    """ABA triple like KOK; the odd screen only changes the middle letter (KUK)."""
     groups = [g for g in ACTIVATED_A1_LETTER_GROUPS if len(g) >= 2]
     outer_group = random.choice(groups)
-    outer_same, outer_odd = random.sample(list(outer_group), 2)
-    mid_choices = [g for g in ACTIVATED_A1_LETTER_GROUPS if g is not outer_group]
+    outer = random.choice(outer_group)
+    mid_choices = [g for g in ACTIVATED_A1_LETTER_GROUPS if g is not outer_group and len(g) >= 2]
     mid_group = random.choice(mid_choices or groups)
-    mid = random.choice(mid_group)
-    # Prefer changing the first letter (LOL → TOL); sometimes change the last.
-    if random.random() < 0.5:
-        same = f"{outer_same}{mid}{outer_same}"
-        odd = f"{outer_odd}{mid}{outer_same}"
-    else:
-        same = f"{outer_same}{mid}{outer_same}"
-        odd = f"{outer_same}{mid}{outer_odd}"
+    mid_same, mid_odd = random.sample(list(mid_group), 2)
+    same = f"{outer}{mid_same}{outer}"
+    odd = f"{outer}{mid_odd}{outer}"
     return same, odd
 
 
@@ -1211,7 +1215,17 @@ def _build_activated_a1_playlist(series_num: int, active_fields) -> List[dict]:
                 odd_screen = random.randint(1, ENTRY_ACTIONS_PER_TEST)
                 for screen in range(1, ENTRY_ACTIONS_PER_TEST + 1):
                     text = odd if screen == odd_screen else same
-                    png = _render_entry_digit_image(str(text), bg=bg)
+                    if len(str(text)) == 3 and str(text).isalpha():
+                        # Middle letter only gets a distinct background patch.
+                        png = _render_middle_colored_text_image(
+                            str(text),
+                            bg,
+                            (255, 255, 255),
+                            (20, 24, 32),
+                            mid_bg=(255, 196, 64),
+                        )
+                    else:
+                        png = _render_entry_digit_image(str(text), bg=bg)
                     if not png:
                         continue
                     sid = _hw_screen_for_field(fid, (screen, screen))
@@ -1291,11 +1305,11 @@ def _build_high_performance_s2_playlist(series_num: int, active_fields) -> List[
                     text = odd if screen == odd_screen else same
                     mid_fg = mid_odd if screen == odd_screen else mid_same
                     overlay = _render_middle_colored_text_image(
-                        text, None, outer_fg, mid_fg
+                        text, None, outer_fg, (20, 24, 32), mid_bg=mid_fg,
                     )
                     # Instant solid-bg stills; motion video attaches when ready.
                     png = _render_middle_colored_text_image(
-                        text, HP_S2_BG, outer_fg, mid_fg
+                        text, HP_S2_BG, outer_fg, (20, 24, 32), mid_bg=mid_fg,
                     )
                     if not png:
                         continue
@@ -2652,6 +2666,36 @@ def _intro_video_for_key(key: Optional[str]) -> Optional[str]:
     return None
 
 
+def _screen_saver_video_path() -> Optional[str]:
+    """Muted looping idle clip — same folder as beginning logo videos."""
+    path = os.path.join(LEVEL_INTRO_STATIC_DIR, SCREEN_SAVER_VIDEO)
+    return path if os.path.isfile(path) else None
+
+
+def _cabinet_controls_path(directory: str = None) -> str:
+    root = directory or "C:/Users/siama/Documents/simust_player"
+    return os.path.join(root, CABINET_CONTROLS_FILE)
+
+
+def _read_cabinet_controls(directory: str = None) -> dict:
+    """Operator System / Screensaver switches written by the frontend."""
+    path = _cabinet_controls_path(directory)
+    defaults = {"system_on": True, "screensaver_on": False}
+    if not os.path.isfile(path):
+        return dict(defaults)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return dict(defaults)
+        return {
+            "system_on": bool(data.get("system_on", True)),
+            "screensaver_on": bool(data.get("screensaver_on", False)),
+        }
+    except Exception:
+        return dict(defaults)
+
+
 def _opening_logo_video_for_level(level_id: str = "", subdirectory: str = "") -> Optional[str]:
     """Small logo clip shown above beginning information for that band."""
     text = f"{level_id or ''} {subdirectory or ''}".strip()
@@ -2678,6 +2722,42 @@ def _activated_logo_video() -> Optional[str]:
 def _find_level_intro_video(directory: str = None) -> Optional[str]:
     """Return absolute path to static/<level>.mp4 for the current level."""
     return _intro_video_for_key(_detect_level_intro_key(directory))
+
+
+def _video_duration_ms(path: str, fallback_ms: int = LEVEL_INTRO_MS) -> int:
+    """Length of an mp4 in milliseconds. Falls back when OpenCV cannot probe it."""
+    path = str(path or "")
+    try:
+        fallback = max(500, int(fallback_ms or LEVEL_INTRO_MS))
+    except (TypeError, ValueError):
+        fallback = LEVEL_INTRO_MS
+    if not path or not os.path.isfile(path):
+        return fallback
+    try:
+        import cv2
+    except Exception:
+        return fallback
+    cap = None
+    try:
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            return fallback
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
+        frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if frames > 0 and fps > 0:
+            return max(500, int(round(1000.0 * frames / fps)))
+        msec = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0)
+        if msec > 0:
+            return max(500, int(round(msec)))
+    except Exception:
+        return fallback
+    finally:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+    return fallback
 
 
 def _scan_label_assets(directory):
@@ -3098,16 +3178,30 @@ def _result_ring_specs(panel) -> dict:
         [panel.get("aet_display") or "-", panel.get("aet_session_display") or ""],
         panel.get("aet_percent"),
     )
-    try:
-        accuracy = float(panel.get("aac") or 0)
-    except (TypeError, ValueError):
-        accuracy = 0.0
-    add(
-        panel.get("slice_acc"),
-        "Accuracy",
-        [f"{accuracy:.0f}%" if accuracy > 0 else "-"],
-        accuracy,
-    )
+    raw_aac = panel.get("aac")
+    accuracy = None
+    if raw_aac is not None:
+        try:
+            accuracy = float(raw_aac)
+        except (TypeError, ValueError):
+            accuracy = None
+    if accuracy is None or accuracy <= 0:
+        try:
+            total_n = int(panel.get("total_actions") or 0)
+            hit_n = int(panel.get("correct") or 0) + int(panel.get("late") or 0)
+        except (TypeError, ValueError):
+            total_n = hit_n = 0
+        if total_n > 0 and hit_n > 0:
+            accuracy = (hit_n / total_n) * 100.0
+    if accuracy is None:
+        add(panel.get("slice_acc"), "Accuracy", ["-"], 0.0)
+    else:
+        add(
+            panel.get("slice_acc"),
+            "Accuracy",
+            [f"{accuracy:.0f}%"],
+            accuracy,
+        )
     add(
         panel.get("slice_ae"),
         "Efficiency",
@@ -3373,10 +3467,12 @@ def _render_entry_digit_image(digit: str, bg=None) -> Optional[str]:
     return path
 
 
-def _render_middle_colored_text_image(text: str, bg, outer_fg, mid_fg) -> Optional[str]:
-    """Three-character text; the middle glyph uses a different color."""
+def _render_middle_colored_text_image(
+    text: str, bg, outer_fg, mid_fg, mid_bg=None,
+) -> Optional[str]:
+    """Three-character text; only the middle glyph gets a different background."""
     raw = str(text or "").strip()
-    if len(raw) != 3 or not outer_fg or not mid_fg:
+    if len(raw) != 3 or not outer_fg:
         return None
     try:
         os.makedirs(MATH_EQ_CACHE_DIR, exist_ok=True)
@@ -3388,15 +3484,24 @@ def _render_middle_colored_text_image(text: str, bg, outer_fg, mid_fg) -> Option
     else:
         br, bgc, bb = (int(bg[0]), int(bg[1]), int(bg[2]))
     or_, og, ob = (int(outer_fg[0]), int(outer_fg[1]), int(outer_fg[2]))
+    if mid_bg is None and mid_fg:
+        # Older callers passed a mid text color; treat it as the mid patch color.
+        mid_bg = mid_fg
+        mid_fg = (20, 24, 32)
+    if mid_bg is None:
+        mid_bg = (255, 196, 64)
+    if not mid_fg:
+        mid_fg = (20, 24, 32)
     mr, mg, mb = (int(mid_fg[0]), int(mid_fg[1]), int(mid_fg[2]))
+    bgr, bgg, bgb = (int(mid_bg[0]), int(mid_bg[1]), int(mid_bg[2]))
     path = os.path.join(
         MATH_EQ_CACHE_DIR,
-        f"midcolor_{br}_{bgc}_{bb}_{or_}_{og}_{ob}_{mr}_{mg}_{mb}_{raw}.png",
+        f"midbg_{br}_{bgc}_{bb}_{or_}_{og}_{ob}_{mr}_{mg}_{mb}_{bgr}_{bgg}_{bgb}_{raw}.png",
     )
     if os.path.isfile(path):
         return path
     try:
-        from PyQt5.QtGui import QImage, QPainter, QColor, QFont
+        from PyQt5.QtGui import QImage, QPainter, QColor, QFont, QBrush
         from PyQt5.QtCore import Qt as QtCoreQt
     except Exception as exc:
         logger.warning("Cannot render middle-colored text (no Qt): %s", exc)
@@ -3410,16 +3515,32 @@ def _render_middle_colored_text_image(text: str, bg, outer_fg, mid_fg) -> Option
     painter = QPainter(img)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
-    font = QFont("Segoe UI", 48, QFont.Bold)
+    # Same point size as entry digits so letter triples match digit screens.
+    font = QFont("Segoe UI", 50, QFont.Bold)
     painter.setFont(font)
     metrics = painter.fontMetrics()
-    total_w = sum(metrics.width(ch) for ch in raw)
+    widths = [metrics.width(ch) for ch in raw]
+    total_w = sum(widths)
     x = (w - total_w) // 2
     cy = _ring_value_center_y(h)
+    # Patch behind the middle letter only.
+    mid_x = x + widths[0]
+    mid_w = max(1, widths[1])
+    pad_x = max(8, mid_w // 5)
+    pad_y = max(10, metrics.height() // 5)
+    patch = QtCore.QRect(
+        mid_x - pad_x,
+        cy - metrics.ascent() // 2 - pad_y,
+        mid_w + 2 * pad_x,
+        metrics.height() + 2 * pad_y,
+    )
+    painter.setPen(QtCoreQt.NoPen)
+    painter.setBrush(QBrush(QColor(bgr, bgg, bgb, 255)))
+    painter.drawRoundedRect(patch, 12, 12)
     for index, ch in enumerate(raw):
         color = (mr, mg, mb) if index == 1 else (or_, og, ob)
         painter.setPen(QColor(color[0], color[1], color[2]))
-        ch_w = metrics.width(ch)
+        ch_w = widths[index]
         painter.drawText(
             QtCore.QRect(x, cy - h, ch_w, h * 2),
             QtCoreQt.AlignCenter,
@@ -4464,6 +4585,8 @@ def _clear_image_action_cue(force_end=False):
 class ImageActionCanvas(QtWidgets.QWidget):
     """3840×512 coach band on screen 2. Fourteen frames, Field A left, Field B right."""
 
+    saver_pixels_ready = pyqtSignal(object, int)
+
     # Pass pictures are 10% smaller than the previous size (81% of the calibrator rectangle).
     # Digits and equations stay full size.
     PASS_IMAGE_SCALE = 0.81
@@ -4503,9 +4626,34 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._bounce_base_rgb = None
         self._bounce_screens = set()
         self._bounce_size = 512
+        self._field_level_colors = {}
+        self._saver_jpegs = None
+        self._saver_index = 0
+        self._saver_pix = None
+        self._saver_timer = None
+        self._saver_loading = False
+        self.saver_pixels_ready.connect(self._on_saver_pixels_ready)
+
+    def set_field_level_colors(self, colors):
+        """Per-field brand fills behind scaled logo / coach / screensaver clips."""
+        cleaned = {}
+        for fid, pair in (colors or {}).items():
+            key = str(fid or "").upper()[:1]
+            if key not in ("A", "B") or not isinstance(pair, (list, tuple)) or len(pair) < 1:
+                continue
+            bg = pair[0] if isinstance(pair[0], (list, tuple)) else pair
+            cleaned[key] = tuple(int(v) for v in bg[:3])
+        self._field_level_colors = cleaned
+        self.update()
+
+    def _field_level_qcolor(self, fid):
+        rgb = (self._field_level_colors or {}).get(str(fid or "").upper()[:1])
+        if not rgb:
+            return QtGui.QColor(0, 0, 0)
+        return QtGui.QColor(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
     def clear(self):
-        self._stop_screen_video()
+        self._stop_screen_video(clear_screensaver=True)
         self._stop_bounce_motion()
         self.active_screens = set()
         self._screen_pixmaps = {}
@@ -4753,6 +4901,17 @@ class ImageActionCanvas(QtWidgets.QWidget):
             if not key:
                 continue
             stills[key] = pix
+        # Action stills must never keep the opening/results logo box size.
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        for key in stills:
+            logo_scale.discard(key)
+        if replace:
+            for name in list(logo_scale):
+                if _field_for_screen(name) in replace:
+                    logo_scale.discard(name)
+        elif not keep_videos:
+            logo_scale = set()
+        self._logo_scale_screens = logo_scale
         band = set(getattr(self, "_band_screens", None) or set())
         if keep_videos or replace:
             for key in stills:
@@ -4772,6 +4931,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 kept_stills = dict(getattr(self, "_still_pixmaps", None) or {})
             merged.update(stills)
             kept_stills.update(stills)
+            # Keep free-field coded .ssav tiles when only the busy field is replaced.
+            named = set(merged)
+            self._stamp_screensaver_pixels(merged, named)
             self._screen_pixmaps = merged
             self._still_pixmaps = kept_stills
         else:
@@ -4828,7 +4990,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             scale=self.PASS_IMAGE_SCALE if scale is None else scale,
         )
 
-    def set_screen_videos(self, screen_to_path, fill=False, scale=None, start_frame=0):
+    def set_screen_videos(self, screen_to_path, fill=False, scale=None, start_frame=0, loop=True):
         """Play a full video on each screen. Screens that share a path share one decoder."""
         self._stop_bounce_motion()
         self._stop_screen_video()
@@ -4845,6 +5007,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             scale = 1.0 if fill else self.PASS_IMAGE_SCALE
         self._content_scale = float(scale)
         start_frame = max(0, int(start_frame or 0))
+        loop = bool(loop)
         groups = {}
         for sid, path in (screen_to_path or {}).items():
             key = _sid(sid)
@@ -4892,7 +5055,12 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame % total)
                 else:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            opened.append({"cap": cap, "screens": set(screens), "path": path})
+            opened.append({
+                "cap": cap,
+                "screens": set(screens),
+                "path": path,
+                "loop": loop,
+            })
         if not opened:
             if stills:
                 self.set_screen_images(stills, scale=self._content_scale)
@@ -4930,6 +5098,13 @@ class ImageActionCanvas(QtWidgets.QWidget):
         screens = [name for name in _field_all_screens(fid) if name]
         if not screens or not isinstance(card, dict):
             return
+        # Beginning-info logos are not the screensaver path.
+        try:
+            player = self.parent()
+            if player is not None and hasattr(player, "_stop_field_screensaver"):
+                player._stop_field_screensaver(fid)
+        except Exception:
+            pass
         self._release_field_videos({fid})
         kept = {}
         for source in (
@@ -4996,7 +5171,12 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self.update()
             return False
         groups = list(getattr(self, "_video_groups", None) or [])
-        groups.append({"cap": cap, "screens": set(screens), "path": path})
+        groups.append({
+            "cap": cap,
+            "screens": set(screens),
+            "path": path,
+            "loop": False,
+        })
         self._video_groups = groups
         fill = set(getattr(self, "_video_fill_screens", None) or set())
         fill |= set(screens)
@@ -5008,6 +5188,93 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self._video_timer.timeout.connect(self._tick_screen_video)
             rate = float(cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0
             self._video_timer.start(max(20, int(round(1000.0 / rate))))
+        else:
+            self._tick_screen_video()
+        return True
+
+    def play_layered_clips(self, layers):
+        """Play clips on named screens without stopping the other field.
+
+        Each layer is (screen → path, loop[, fill]). Earlier layers sit under
+        later ones, so a logo can show once a coach clip that does not loop has
+        finished. fill=False keeps the opening-logo size (not full-bleed).
+        """
+        try:
+            import cv2
+        except Exception:
+            return False
+        opened = []
+        new_screens = set()
+        fill_screens = set()
+        for item in layers or []:
+            mapping = item[0]
+            loop = bool(item[1])
+            fill = bool(item[2]) if len(item) > 2 else True
+            by_path = {}
+            for sid, path in (mapping or {}).items():
+                name = _sid(sid)
+                path = str(path or "")
+                if not name or not path or not os.path.isfile(path):
+                    continue
+                by_path.setdefault(os.path.abspath(path), set()).add(name)
+            for path, screens in by_path.items():
+                cap = cv2.VideoCapture(path)
+                if not cap.isOpened():
+                    continue
+                opened.append({
+                    "cap": cap,
+                    "screens": set(screens),
+                    "path": path,
+                    "loop": loop,
+                    "fill": fill,
+                })
+                new_screens |= set(screens)
+                if fill:
+                    fill_screens |= set(screens)
+        if not opened:
+            return False
+        kept = []
+        for group in list(getattr(self, "_video_groups", None) or []):
+            screens = {_sid(sid) for sid in (group.get("screens") or set()) if _sid(sid)}
+            if screens & new_screens:
+                try:
+                    group["cap"].release()
+                except Exception:
+                    pass
+                continue
+            kept.append(group)
+        stills = {}
+        for source in (
+            getattr(self, "_still_pixmaps", None) or {},
+            getattr(self, "_screen_pixmaps", None) or {},
+        ):
+            for sid, pix in source.items():
+                name = _sid(sid)
+                if name and name not in new_screens and pix is not None:
+                    stills[name] = pix
+        self._still_pixmaps = stills
+        self._video_groups = kept + opened
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        for name in new_screens:
+            fill.discard(name)
+            logo_scale.discard(name)
+        fill |= fill_screens
+        for group in opened:
+            if not group.get("fill", True):
+                logo_scale |= set(group.get("screens") or set())
+        self._video_fill_screens = fill
+        self._logo_scale_screens = logo_scale
+        if logo_scale:
+            self._content_scale = float(OPENING_LOGO_MAX_WIDTH)
+        self._video_screens = {sid for group in self._video_groups for sid in (group.get("screens") or set())}
+        if getattr(self, "_video_timer", None) is None:
+            self._tick_screen_video()
+            self._video_timer = QtCore.QTimer(self)
+            self._video_timer.timeout.connect(self._tick_screen_video)
+            self._video_timer.start(40)
+        else:
+            self._tick_screen_video()
         return True
 
     def _release_field_videos(self, field_ids):
@@ -5025,6 +5292,18 @@ class ImageActionCanvas(QtWidgets.QWidget):
             groups.append(group)
         self._video_groups = groups
         self._video_screens = {sid for group in groups for sid in (group.get("screens") or set())}
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        for name in list(logo_scale):
+            if _field_for_screen(name) in replace:
+                logo_scale.discard(name)
+        self._logo_scale_screens = logo_scale
+        # Do not clear coded .ssav saver tiles here — free-field saver is independent
+        # of the busy field's OpenCV clips. Bounce/stop_field_screensaver manage it.
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        for name in list(fill):
+            if _field_for_screen(name) in replace:
+                fill.discard(name)
+        self._video_fill_screens = fill
         if groups:
             return
         timer = getattr(self, "_video_timer", None)
@@ -5037,7 +5316,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self._video_timer = None
         self._video_frame = None
 
-    def _stop_screen_video(self):
+    def _stop_screen_video(self, clear_screensaver: bool = False):
+        """Stop OpenCV clip groups. Coded .ssav screensaver keeps running unless asked."""
         if self._video_timer is not None:
             try:
                 self._video_timer.stop()
@@ -5062,6 +5342,124 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_screens = set()
         self._band_screens = set()
         self._summary_logo = False
+        if clear_screensaver:
+            self._screensaver_scale_screens = set()
+            self._saver_pix = None
+            self._stop_coded_screensaver_timer()
+
+    def _stamp_screensaver_pixels(self, pixmaps, screens):
+        """Keep coded .ssav frames on free-field tiles when action/bounce redraws."""
+        pix = getattr(self, "_saver_pix", None)
+        saver_screens = set(getattr(self, "_screensaver_scale_screens", None) or set())
+        if pix is None or not saver_screens:
+            return
+        bounce = set(getattr(self, "_bounce_screens", None) or set())
+        for name in saver_screens:
+            # Never paint saver over a live action tile on the busy field.
+            if name in bounce:
+                continue
+            pixmaps[name] = pix
+            screens.add(name)
+
+    def _stop_coded_screensaver_timer(self):
+        timer = getattr(self, "_saver_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:
+                pass
+        self._saver_timer = None
+
+    def play_coded_screensaver(self, screen_ids):
+        """Loop extracted screensaver pixels on these screens. No video decode at play time.
+
+        Never steals logo / results tiles — those stay on _logo_scale_screens.
+        """
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        screens = set()
+        for sid in screen_ids or []:
+            name = _sid(sid)
+            if not name:
+                continue
+            # Do not replace opening / results logo videos with the saver.
+            if name in logo_scale:
+                continue
+            screens.add(name)
+        if not screens:
+            return False
+        saver_scale = set(getattr(self, "_screensaver_scale_screens", None) or set())
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        for name in screens:
+            fill.discard(name)
+            saver_scale.add(name)
+        self._video_fill_screens = fill
+        self._screensaver_scale_screens = saver_scale
+        frames = getattr(self, "_saver_jpegs", None)
+        if frames:
+            self._ensure_saver_timer()
+            self._tick_coded_screensaver()
+            return True
+        if not getattr(self, "_saver_loading", False):
+            self._saver_loading = True
+            threading.Thread(target=self._load_saver_pixels, daemon=True).start()
+        return True
+
+    def _load_saver_pixels(self):
+        frames, interval_ms = [], 33
+        try:
+            from screen_saver_anim import load_screensaver_pixels
+            path = _screen_saver_video_path()
+            if path:
+                frames, interval_ms = load_screensaver_pixels(path)
+        except Exception:
+            logger.exception("Could not extract screensaver pixels")
+            frames, interval_ms = [], 33
+        try:
+            self.saver_pixels_ready.emit(list(frames or []), int(interval_ms or 33))
+        except Exception:
+            logger.exception("Could not publish screensaver pixels")
+
+    def _on_saver_pixels_ready(self, frames, interval_ms):
+        self._saver_loading = False
+        frames = list(frames or [])
+        if not frames:
+            return
+        self._saver_jpegs = frames
+        self._saver_interval_ms = max(16, int(interval_ms or 33))
+        if getattr(self, "_screensaver_scale_screens", None):
+            self._ensure_saver_timer()
+            self._tick_coded_screensaver()
+
+    def _ensure_saver_timer(self):
+        if getattr(self, "_saver_timer", None) is not None:
+            return
+        interval = max(16, int(getattr(self, "_saver_interval_ms", 33) or 33))
+        timer = QtCore.QTimer(self)
+        timer.timeout.connect(self._tick_coded_screensaver)
+        timer.start(interval)
+        self._saver_timer = timer
+
+    def _tick_coded_screensaver(self):
+        screens = set(getattr(self, "_screensaver_scale_screens", None) or set())
+        frames = list(getattr(self, "_saver_jpegs", None) or [])
+        if not screens or not frames:
+            if not screens:
+                self._stop_coded_screensaver_timer()
+            return
+        index = int(getattr(self, "_saver_index", 0) or 0) % len(frames)
+        self._saver_index = index + 1
+        image = QtGui.QImage.fromData(frames[index])
+        if image.isNull():
+            return
+        pix = QtGui.QPixmap.fromImage(image)
+        self._saver_pix = pix
+        pixmaps = dict(getattr(self, "_screen_pixmaps", None) or {})
+        named = set()
+        self._stamp_screensaver_pixels(pixmaps, named)
+        self._screen_pixmaps = pixmaps
+        self.active_screens = set(pixmaps) | set(getattr(self, "active_screens", None) or set())
+        self.update()
 
     def _stop_bounce_motion(self):
         timer = getattr(self, "_bounce_timer", None)
@@ -5093,14 +5491,30 @@ class ImageActionCanvas(QtWidgets.QWidget):
         screens = {_sid(s) for s in (screen_ids or []) if _sid(s) and _sid(s) in SLICE_ORDER}
         if not screens:
             return
-        self._stop_screen_video()
+        # Stop clip decode on these fields only — never kill the other field's .ssav saver.
+        replace = {_field_for_screen(name) for name in screens}
+        self._release_field_videos(replace)
+        logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
+        for name in screens:
+            logo_scale.discard(name)
+        self._logo_scale_screens = logo_scale
+        # Bounce owns these tiles; coded saver must not cover them.
+        saver_scale = set(getattr(self, "_screensaver_scale_screens", None) or set())
+        for name in screens:
+            saver_scale.discard(name)
+        self._screensaver_scale_screens = saver_scale
+        # Full-bleed only on bounce tiles — never set global _video_fill (that
+        # used to enlarge the free field's coded screensaver).
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        fill |= set(screens)
+        self._video_fill_screens = fill
+        self._video_fill = False
+        self._content_scale = 1.0
         self._summary_lines = []
         self._summary_screens = None
         self._summary_by_screen = {}
-        self._video_fill = True
-        self._content_scale = 1.0
         self._bounce_screens = set(screens)
-        self.active_screens = set(screens)
+        self.active_screens = set(screens) | set(saver_scale)
         size = int(getattr(self, "_bounce_size", 512) or 512)
         keep = (
             continue_prev
@@ -5175,6 +5589,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
             _field_for_screen(name) for name in screens
         ])
         kept.update(pixmaps)
+        # Re-stamp coded .ssav tiles on any free field after bounce redraw.
+        named = set(kept)
+        self._stamp_screensaver_pixels(kept, named)
         self._screen_pixmaps = kept
         self._video_screens = set(screens)
         self.active_screens = set(kept)
@@ -5192,7 +5609,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 cap = group["cap"]
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    if group.get("full_band"):
+                    if group.get("full_band") or group.get("loop") is False:
                         continue
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     ok, frame = cap.read()
@@ -5219,6 +5636,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
                         band = set(getattr(self, "_band_screens", None) or set())
                         band.add(name)
                         self._band_screens = band
+            if not pixmaps and not getattr(self, "_saver_pix", None):
+                return
+            self._stamp_screensaver_pixels(pixmaps, screens)
             if not pixmaps:
                 return
             self._video_frame = next(iter(pixmaps.values()))
@@ -5477,17 +5897,53 @@ class ImageActionCanvas(QtWidgets.QWidget):
             painter.setClipRect(placed)
             if not pix.isNull():
                 fill_screens = set(getattr(self, "_video_fill_screens", None) or set())
-                scale = 1.0 if name in fill_screens or self._video_fill else float(self._content_scale or 1.0)
-                draw_w = max(1, int(round(rect_w * scale)))
-                draw_h = max(1, int(round(self.height() * scale)))
-                scaled = pix.scaled(
-                    draw_w,
-                    draw_h,
-                    QtCore.Qt.KeepAspectRatioByExpanding,
-                    QtCore.Qt.SmoothTransformation,
-                )
-                px = left + (rect_w - scaled.width()) // 2
-                py = (self.height() - scaled.height()) // 2 + dy
+                logo_screens = set(getattr(self, "_logo_scale_screens", None) or set())
+                saver_screens = set(getattr(self, "_screensaver_scale_screens", None) or set())
+                # Coded .ssav saver always keeps its own size — never follow action fill.
+                if name in saver_screens:
+                    painter.fillRect(placed, QtGui.QColor(0, 0, 0))
+                    draw_w = max(24, int(round(rect_w * float(SCREEN_SAVER_SCALE))))
+                    draw_h = max(24, int(round(self.height() * float(SCREEN_SAVER_SCALE))))
+                    scaled = pix.scaled(
+                        draw_w,
+                        draw_h,
+                        QtCore.Qt.KeepAspectRatio,
+                        QtCore.Qt.SmoothTransformation,
+                    )
+                    px = left + (rect_w - scaled.width()) // 2
+                    py = (self.height() - scaled.height()) // 2 + int(dy or 0)
+                elif name in logo_screens and not (name in fill_screens or self._video_fill):
+                    # Results / opening logo — level brand fill only (not screensaver).
+                    painter.fillRect(placed, self._field_level_qcolor(_field_for_screen(name)))
+                    # Same box as the beginning-information logo.
+                    draw_w = max(24, int(round(rect_w * float(OPENING_LOGO_MAX_WIDTH))))
+                    draw_h = max(24, int(round(self.height() * float(OPENING_LOGO_MAX_HEIGHT))))
+                    scaled = pix.scaled(
+                        draw_w,
+                        draw_h,
+                        QtCore.Qt.KeepAspectRatio,
+                        QtCore.Qt.SmoothTransformation,
+                    )
+                    cy = (
+                        CHART_CENTER_Y
+                        + int(dy or 0)
+                        + int(round(self.height() * RESULTS_BAND_DROP))
+                    )
+                    px = left + (rect_w - scaled.width()) // 2
+                    py = cy - scaled.height() // 2
+                else:
+                    fill = name in fill_screens or self._video_fill
+                    scale = 1.0 if fill else float(self._content_scale or 1.0)
+                    draw_w = max(1, int(round(rect_w * scale)))
+                    draw_h = max(1, int(round(self.height() * scale)))
+                    scaled = pix.scaled(
+                        draw_w,
+                        draw_h,
+                        QtCore.Qt.KeepAspectRatioByExpanding,
+                        QtCore.Qt.SmoothTransformation,
+                    )
+                    px = left + (rect_w - scaled.width()) // 2
+                    py = (self.height() - scaled.height()) // 2 + dy
                 painter.drawPixmap(px, py, scaled)
             painter.setClipping(False)
         if image_overlays:
@@ -5861,11 +6317,33 @@ class ResultsOverlay(QtWidgets.QWidget):
         super().__init__(parent)
         self.panels = {}
         self.specs = {}
+        self.level_colors = {}
         self.slice_order = list(DISPLAY_SLICE_ORDER)
         self.active_slice_nums = set()
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
+
+    def set_level_colors(self, colors):
+        """Background fill per field — same brand color as the opening card."""
+        cleaned = {}
+        for fid, pair in (colors or {}).items():
+            key = str(fid or "").upper()[:1]
+            if key not in ("A", "B") or not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            cleaned[key] = (
+                tuple(int(v) for v in pair[0][:3]),
+                tuple(int(v) for v in pair[1][:3]),
+            )
+        self.level_colors = cleaned
+        self.update()
+
+    def _level_bg(self, fid):
+        pair = (self.level_colors or {}).get(fid)
+        if not pair:
+            return QColor(10, 12, 18)
+        rgb = pair[0]
+        return QColor(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
     def set_panels(self, panels):
         cleaned = {}
@@ -5880,7 +6358,11 @@ class ResultsOverlay(QtWidgets.QWidget):
         self.specs = specs
         self.active_slice_nums = set()
         for fid in cleaned:
-            self.active_slice_nums.update(_field_all_screens(fid))
+            for name in _field_all_screens(fid):
+                # Screens 3 and 4 play the logo and coach video under this overlay.
+                if str(name)[-1:] in ("3", "4"):
+                    continue
+                self.active_slice_nums.add(name)
         self._apply_field_mask()
         self.update()
 
@@ -5916,7 +6398,7 @@ class ResultsOverlay(QtWidgets.QWidget):
             left, _right, rect_w = content_x_box(i, slice_num, w, len(self.slice_order))
             rect = QtCore.QRect(int(left), 0, int(rect_w), h)
             painter.setClipRect(rect)
-            painter.fillRect(rect, QColor(10, 12, 18))
+            painter.fillRect(rect, self._level_bg(_field_for_screen(slice_num)))
             spec = self.specs.get(slice_num)
             if spec:
                 cx = rect.center().x()
@@ -6031,6 +6513,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._run_phases = []
         self._phase_index = 0
         self._level_root = video_directory
+        self._idle_screensaver_mode = (
+            str(video_directory or "").strip().lower() in (
+                IDLE_SCREENSAVER_ARG,
+                "--screensaver",
+                "screensaver",
+            )
+        )
+        self.video_files = []
 
         # Waiting overlay (initially None)
         self.waiting_overlay = None
@@ -6045,18 +6535,35 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.speed_file_path = os.path.join(self.speed_file_dir, "simust_speed.txt")
         self.pause_file_path = os.path.join(self.speed_file_dir, "pause.txt")
         self.video_index_file = os.path.join(self.speed_file_dir, "current_video_index.txt")
+        self._screensaver_fields = set()
+        self._screensaver_hold_until = {}
+        self._coach_audio_field = None
+        self._cabinet_controls = {"system_on": True, "screensaver_on": False}
         try:
             os.makedirs(self.speed_file_dir, exist_ok=True)
             with open(self.speed_file_path, 'w') as f:
                 f.write(str(self.player_speed))
         except:
             pass
+        self._screensaver_timer = QtCore.QTimer(self)
+        self._screensaver_timer.timeout.connect(self._sync_screensaver)
+        self._screensaver_timer.start(250)
 
         # Field A and Field B run as separate phases (own playlist, tests, conclusion)
-        self._run_phases = _build_separate_field_phases(self._level_root)
-        self._phase_index = 0
-        if not self._apply_run_phase(0, fatal=True):
-            return
+        if self._idle_screensaver_mode:
+            self._run_phases = []
+            self._phase_index = 0
+            self._phase_active = []
+            self._field_opening_playlists = {}
+            self._fields_opening = set()
+            self.display_phase = "idle"
+            self._realtime_stopped = True  # no camera session behind idle saver
+            logger.info("Idle screensaver mode — coded saver on all screens")
+        else:
+            self._run_phases = _build_separate_field_phases(self._level_root)
+            self._phase_index = 0
+            if not self._apply_run_phase(0, fatal=True):
+                return
 
         logger.info(
             "Separate field run: %s phase(s): %s",
@@ -6162,11 +6669,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elif sys.platform == "darwin":
             self.player.set_nsobject(int(self.videoframe.winId()))
 
-        # Level intro clip before each test (replaces "starting" ring animation)
-        self._begin_level_intro(0)
-
-        self.speed_monitor_timer.start()
-        self._show_playlist_status()
+        if self._idle_screensaver_mode:
+            # No level playlist — show the coded saver immediately if Switch is on.
+            self.speed_monitor_timer.start()
+            self._update_status_file("idle", 0, 0, "Screensaver idle")
+            # Force the same Screen-2 coach-band layout as waiting / actions.
+            for delay in (20, 60, 120, 250, 400, 600):
+                QtCore.QTimer.singleShot(delay, self._force_top_512)
+            QtCore.QTimer.singleShot(300, self._sync_screensaver)
+        else:
+            # Level intro clip before each test (replaces "starting" ring animation)
+            self._begin_level_intro(0)
+            self.speed_monitor_timer.start()
+            self._show_playlist_status()
 
         atexit.register(self._force_cleanup)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -6228,11 +6743,50 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         gc.collect()
 
     def _auto_close(self, delay_ms=2000):
+        # Keep the projector window alive for the coded screensaver when Switch is on.
+        controls = _read_cabinet_controls(self._player_attr("speed_file_dir"))
+        if bool(controls.get("system_on", True)) and bool(controls.get("screensaver_on", False)):
+            logger.info("Series done — staying open for coded screensaver")
+            self._enter_idle_screensaver()
+            return
         if self.close_timer:
             self.close_timer.stop()
         self.close_timer = QtCore.QTimer(singleShot=True)
         self.close_timer.timeout.connect(self.close)
         self.close_timer.start(delay_ms)
+
+    def _enter_idle_screensaver(self):
+        """Clear session state and loop the coded saver on every screen."""
+        self._idle_screensaver_mode = True
+        self.display_phase = "idle"
+        self.playlist_finished = False
+        self._status_completed = False
+        self._screensaver_hold_until = {}
+        self._field_opening_playlists = {}
+        self._independent_index = {}
+        self._independent_done = {}
+        self._field_final_queued = {}
+        self._field_final_done = {}
+        self._field_result_state = {}
+        self._phase_active = []
+        self._fields_opening = set()
+        self.video_files = []
+        try:
+            self._hide_projected_results()
+        except Exception:
+            pass
+        for fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(fid)
+            except Exception:
+                pass
+        if self.close_timer:
+            try:
+                self.close_timer.stop()
+            except Exception:
+                pass
+            self.close_timer = None
+        self._flash_idle_display(then_screensaver=True)
 
     def _update_status_file(self, state, current_video, total_videos, message):
         try:
@@ -7023,6 +7577,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         level_id = ""
         subdirectory = str(getattr(self, "_phase_subdirectory", "") or "")
         active_fields = list(self._active_fields())
+        # Only clear saver on fields that are opening — free field keeps its saver.
+        for fid in active_fields:
+            try:
+                self._stop_field_screensaver(fid)
+            except Exception:
+                pass
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
         for fid in active_fields:
             if levels.get(fid):
                 level_id = str(levels.get(fid))
@@ -7138,6 +7702,28 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._level_intro_shown_for = int(next_index)
         self._hide_waiting_overlay()
         active = self._active_fields()
+        # Hold/stop saver only on fields that are starting — free field keeps looping.
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        until = time.time() + 30.0
+        for fid in active:
+            key = str(fid).upper()[:1]
+            if key not in ("A", "B"):
+                continue
+            hold[key] = until
+            try:
+                self._stop_field_screensaver(key)
+            except Exception:
+                pass
+        # Drop stale holds on fields that are not starting so their saver can continue.
+        for key in ("A", "B"):
+            if key not in {str(f).upper()[:1] for f in active}:
+                hold.pop(key, None)
+        self._screensaver_hold_until = hold
+        self.display_phase = "level_intro"
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
         screen_to_video = {}
         by_field = {}
         for fid in active:
@@ -7163,7 +7749,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             fid: (os.path.basename(path) if path else "missing")
             for fid, path in by_field.items()
         }
-        self.display_phase = "level_intro"
+        intro_ms = max(
+            (_video_duration_ms(path) for path in set(screen_to_video.values())),
+            default=LEVEL_INTRO_MS,
+        ) + int(LEVEL_INTRO_HOLD_MS)
         self._update_status_file(
             "starting",
             max(0, self._current_test_num() - 1),
@@ -7172,7 +7761,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         logger.info(
             "Level intro %sms on fields %s screens %s clips %s (then %s, index %s)",
-            LEVEL_INTRO_MS, active, sorted(screen_to_video), names, after, next_index,
+            intro_ms, active, sorted(screen_to_video), names, after, next_index,
         )
 
         played = False
@@ -7184,7 +7773,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
             self.image_canvas.show()
             self.image_canvas.raise_()
-            self.image_canvas.set_screen_videos(screen_to_video, fill=True)
+            self.image_canvas.set_screen_videos(screen_to_video, fill=True, loop=False)
             played = bool(self.image_canvas.active_screens)
             if played and len(set(screen_to_video.values())) == 1:
                 self._play_intro_audio(next(iter(screen_to_video.values())))
@@ -7212,7 +7801,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
         else:
             self.play_delay_timer.timeout.connect(self._after_level_intro)
-        self.play_delay_timer.start(LEVEL_INTRO_MS)
+        self.play_delay_timer.start(intro_ms)
 
     def _after_level_intro(self):
         if self.operator_paused:
@@ -7228,18 +7817,47 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.player.stop()
         except Exception:
             pass
-        if self.image_canvas:
-            self.image_canvas.clear()
+        # Hold saver only on fields that just finished starting video.
+        # Never canvas.clear() — that kills the free field's coded screensaver.
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        until = time.time() + 8.0
+        starting = {str(f).upper()[:1] for f in self._active_fields() if str(f).upper()[:1] in ("A", "B")}
+        for key in starting:
+            try:
+                hold[key] = max(float(hold.get(key) or 0), until)
+            except (TypeError, ValueError):
+                hold[key] = until
+            try:
+                self._stop_field_screensaver(key)
+            except Exception:
+                pass
+        for key in ("A", "B"):
+            if key not in starting:
+                hold.pop(key, None)
+        self._screensaver_hold_until = hold
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            try:
+                # Clear only the starting field(s); keep the free field's saver tiles.
+                if hasattr(canvas, "_release_field_videos"):
+                    canvas._release_field_videos(starting)
+                canvas.set_screen_images({}, keep_videos=True, replace_fields=starting)
+            except Exception:
+                logger.exception("Could not clear starting field after level intro")
         self._clear_held_results()
         self._prestart_done = True
         self.is_first_video = False
         self._hide_waiting_overlay()
         idx = int(getattr(self, "_level_intro_next_index", 0) or 0)
         self.display_phase = "action"
-        if self.image_canvas:
-            self.image_canvas.show()
-            self.image_canvas.raise_()
+        if canvas is not None:
+            canvas.show()
+            canvas.raise_()
         self._load_video(idx)
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
 
     def _begin_prestart_waiting(self):
         """Backward-compatible alias → level intro video."""
@@ -7674,29 +8292,31 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """Omid: leave this screen as soon as the ball reaches its goal."""
         self._stop_goal_advance_poll()
         self._goal_advance_timer = QtCore.QTimer(self)
+        self._goal_advance_timer.setTimerType(QtCore.Qt.PreciseTimer)
         self._goal_advance_timer.timeout.connect(self._poll_goal_advance)
-        self._goal_advance_timer.start(16)
+        # Poll as fast as the UI loop allows; camera lag is the remaining delay.
+        self._goal_advance_timer.start(8)
 
     def _poll_goal_advance(self):
         if self.operator_paused:
             return
-        if self.display_phase != "action" or getattr(self, "_label_phase", "") != "action":
+        if self.display_phase != "action" or self._player_attr("_label_phase", "") != "action":
             return
-        if getattr(self, "_goal_arrived", False):
+        if self._player_attr("_goal_arrived", False):
             return
         files = self.video_files or []
-        idx = int(getattr(self, "current_video_index", 0) or 0)
+        idx = int(self._player_attr("current_video_index", 0) or 0)
         entry = files[idx] if 0 <= idx < len(files) and isinstance(files[idx], dict) else {}
         if not entry.get("advance_on_goal"):
             self._stop_goal_advance_poll()
             return
         try:
-            shared_seq = int(getattr(self, "_flash_seq", 0) or 0)
+            shared_seq = int(self._player_attr("_flash_seq", 0) or 0)
         except (TypeError, ValueError):
             shared_seq = 0
-        field_seqs = getattr(self, "_field_cue_seq", None) or {}
-        cue_wall = float(getattr(self, "_action_cue_wall", 0) or 0)
-        action_walls = getattr(self, "_field_action_wall", None) or {}
+        field_seqs = self._player_attr("_field_cue_seq") or {}
+        cue_wall = float(self._player_attr("_action_cue_wall", 0) or 0)
+        action_walls = self._player_attr("_field_action_wall") or {}
         try:
             with open(LIVE_ACTION_RESULT_FILE, "r", encoding="utf-8") as handle:
                 payload = json.load(handle) or {}
@@ -7757,6 +8377,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 continue
             self._goal_arrived = True
             self._stop_goal_advance_poll()
+            # Drop the pass image now so the next screen is not blocked by it.
+            self._clear_field_action_now(str(fid).upper()[:1])
             logger.info("Ball reached the goal on %s (%s) — next screen", fid, name)
             self._finish_label_action()
             return
@@ -7765,10 +8387,29 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             holds = dict(getattr(self, "_field_hold_until", None) or {})
             for fid in arrived:
                 holds[fid] = 0.0
+                self._clear_field_action_now(fid)
             self._field_hold_until = holds
             self._stop_goal_advance_poll()
             logger.info("Ball reached the goal on %s — that field continues", ", ".join(sorted(arrived)))
             self._finish_label_action()
+
+    def _clear_field_action_now(self, fid):
+        """Black this field's pass/number screens immediately (goal arrival)."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is None:
+            return
+        try:
+            canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+            # Paint now; do not processEvents here — that adds switch lag.
+            canvas.repaint()
+        except Exception:
+            logger.exception("Could not clear Field %s screens after the goal", fid)
 
     def _start_gap_result_poll(self):
         """Finish marks stay off the action screens."""
@@ -7986,6 +8627,26 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                      or entry.get("overlay_images"))
             )
             if wants_motion and theme:
+                # Paint solid stills first so leftover logo-scale / digit tiles
+                # on screens 3–4 cannot linger smaller than the other cabinets.
+                replace_fields = None
+                paint = screen_images
+                if entry.get("independent_fields"):
+                    replace_fields = {
+                        _field_for_screen(sid)
+                        for sid in screen_images
+                        if _field_for_screen(sid) in ("A", "B")
+                        and _field_for_screen(sid) not in continuing
+                    }
+                    if continuing:
+                        paint = _images_for_fields(entry, replace_fields)
+                if paint:
+                    self.image_canvas.set_screen_images(
+                        paint,
+                        scale=1.0,
+                        keep_videos=True,
+                        replace_fields=replace_fields,
+                    )
                 overlay_images = entry.get("overlay_images") or {}
                 if overlay_images:
                     self.image_canvas.set_image_overlays(overlay_images)
@@ -8008,6 +8669,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     start_frame=int(entry.get("motion_start_frame") or 0),
                     continue_prev=False,
                 )
+                # Free field must keep coded .ssav saver during this field's action.
+                try:
+                    self._sync_screensaver()
+                except Exception:
+                    pass
             else:
                 keep_videos = any(
                     ((getattr(self, "_field_result_state", None) or {}).get(fid) or {}).get("phase") == "playing"
@@ -8043,15 +8709,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.image_canvas.repaint()
             QtWidgets.QApplication.processEvents()
 
-        # One action slice (SF-30N = 3.0s). Independent fields use that slice
-        # on their own clock. A shared clock only abandons what was not reached.
-        delay = self._flash_delay_ms(on=True)
-        if entry.get("budget_ms") and not entry.get("independent_fields"):
-            remain = self._budget_remaining_ms(entry)
-            if remain <= 40:
-                self._abandon_budget_rest()
-                return
-            delay = min(int(delay), int(remain))
+        delay = self._label_action_delay_ms(entry)
+        if (
+            entry.get("budget_ms")
+            and not entry.get("independent_fields")
+            and delay <= 40
+        ):
+            self._abandon_budget_rest()
+            return
         self._flash_seq += 1
         on_sec = max(0.1, float(delay) / 1000.0)
         self._pass_shown_at = time.perf_counter()
@@ -8431,6 +9096,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.exception("Field %s progress save after stop failed", fid)
         self._reload_independent_entry(restart_fields=set())
         self._publish_field_controls()
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        hold.pop(fid, None)
+        self._screensaver_hold_until = hold
+        # This field is free again — resume saver here; other field unchanged.
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
 
     def _remaining_field_steps(self, fid):
         """Actions this field still has, including the one on screen now."""
@@ -8482,7 +9155,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         modes = dict(getattr(self, "_phase_field_modes", None) or {})
         modes[fid] = str(info.get("subdirectory") or info.get("mode_id") or "")
         self._phase_field_modes = modes
+        self._cancel_independent_session_close()
         self._bump_field_epoch(fid)
+        # Leaving full-cabinet idle saver — this field is now in realtime play.
+        self._idle_screensaver_mode = False
+        if str(self._player_attr("display_phase") or "") == "idle":
+            self.display_phase = "action"
+        try:
+            self._stop_field_screensaver(fid)
+        except Exception:
+            pass
         fresh = list(self._build_one_field_playlist(fid) or [])
         if not fresh:
             logger.error("No playlist to start Field %s", fid)
@@ -8560,7 +9242,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if held:
             self.video_files = [held]
             self.current_video_index = 0
-        holds[fid] = now + (LEVEL_CARD_MS + LEVEL_INTRO_MS) / 1000.0 + 2.0
+        intro = None
+        try:
+            intro = self._intro_video_for_field(fid)
+        except Exception:
+            intro = None
+        intro_ms = (
+            _video_duration_ms(intro) if intro else LEVEL_INTRO_MS
+        ) + int(LEVEL_INTRO_HOLD_MS)
+        holds[fid] = now + (LEVEL_CARD_MS + intro_ms) / 1000.0 + 2.0
         self._field_hold_until = holds
         self._begin_joined_field_opening(fid)
         return True
@@ -8568,6 +9258,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _begin_joined_field_opening(self, fid):
         """Opening card, then the starting video, then this field's test."""
         fid = str(fid or "").upper()[:1]
+        try:
+            self._stop_field_screensaver(fid)
+        except Exception:
+            pass
+        # Free field keeps its saver while this field opens.
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
         parts = getattr(self, "_field_opening_playlists", None) or {}
         cards = _opening_cards_for_fields(
             [fid],
@@ -8624,10 +9323,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not played:
             self._start_joined_field_test(fid)
             return
-        logger.info("Field %s starting video", fid)
+        intro_ms = _video_duration_ms(intro) + int(LEVEL_INTRO_HOLD_MS)
+        logger.info("Field %s starting video (%sms)", fid, intro_ms)
         epoch = self._field_epoch(fid)
         QtCore.QTimer.singleShot(
-            LEVEL_INTRO_MS,
+            intro_ms,
             lambda field=fid, token=epoch: self._start_joined_field_test(field, token),
         )
 
@@ -8649,6 +9349,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._fields_opening = opening
         logger.info("Field %s test starts after its opening", fid)
         self._reload_independent_entry(restart_fields={fid})
+        # Keep coded saver looping on any free field beside this test.
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
 
     def _consume_field_joins(self):
         directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
@@ -9124,9 +9829,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _show_field_result_rings(self, fid, panel):
         """Draw this field's rings on its screens. The other field stays uncovered."""
+        try:
+            self._stop_field_screensaver(fid)
+        except Exception:
+            pass
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
+            try:
+                self.image_canvas.set_field_level_colors(self._opening_card_colors())
+            except Exception:
+                pass
         if not isinstance(getattr(self, "_field_result_overlays", None), dict):
             self._field_result_overlays = {}
         host = self.image_canvas or self
@@ -9134,10 +9847,103 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if overlay is None or overlay.parent() is not host:
             overlay = ResultsOverlay(host)
             self._field_result_overlays[fid] = overlay
+        try:
+            overlay.set_level_colors(self._opening_card_colors())
+        except Exception:
+            pass
         overlay.set_panels({fid: panel})
         overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
         overlay.show()
         overlay.raise_()
+        self._play_result_side_videos(fid, panel)
+
+    def _result_logo_for_field(self, fid):
+        levels = self._player_attr("_phase_field_levels") or {}
+        modes = self._player_attr("_phase_field_modes") or {}
+        dirs = self._player_attr("_phase_field_directories") or {}
+        level = str(levels.get(fid) or "")
+        mode = str(modes.get(fid) or "")
+        directory = str(dirs.get(fid) or getattr(self, "video_directory", "") or "")
+        context = " ".join([level, mode, directory])
+        # Foundation results: only static/logo_video_foundation.mp4 — never foundation.mp4.
+        key = _level_brand_key(context, mode, {})
+        if key == "foundation":
+            hit = os.path.join(LEVEL_INTRO_STATIC_DIR, "logo_video_foundation.mp4")
+            return hit if os.path.isfile(hit) else _opening_logo_video_for_level(level, mode)
+        return _opening_logo_video_for_level(level, mode) or _opening_logo_video_for_level(level)
+
+    def _play_result_side_videos(self, fid, panel):
+        """Logo on screens 3 and 4. Final may also play the coach clip.
+
+        Foundation: only logo_video_foundation.mp4 (no second logo / no coach overlay).
+        Never replaced by the coded screensaver.
+        """
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None or not hasattr(canvas, "play_layered_clips"):
+            return
+        fid = str(fid or "").upper()[:1]
+        try:
+            self._stop_field_screensaver(fid)
+        except Exception:
+            pass
+        try:
+            canvas.set_field_level_colors(self._opening_card_colors())
+        except Exception:
+            pass
+        screens = [f"{fid}3", f"{fid}4"]
+        wanted = {_sid(name) for name in screens}
+        # Drop any leftover saver scale on these logo tiles.
+        saver = set(getattr(canvas, "_screensaver_scale_screens", None) or set())
+        for name in wanted:
+            saver.discard(name)
+        canvas._screensaver_scale_screens = saver
+        for attr in ("_screen_pixmaps", "_still_pixmaps"):
+            current = dict(getattr(canvas, attr, None) or {})
+            for name in list(current):
+                if _sid(name) in wanted:
+                    current.pop(name, None)
+            setattr(canvas, attr, current)
+        layers = []
+        logo = self._result_logo_for_field(fid)
+        if logo:
+            # Same size as the beginning-information logo (not full-bleed).
+            layers.append(({name: logo for name in screens}, True, False))
+        levels = self._player_attr("_phase_field_levels") or {}
+        dirs = self._player_attr("_phase_field_directories") or {}
+        brand = _level_brand_key(
+            " ".join([
+                str(levels.get(fid) or ""),
+                str(dirs.get(fid) or ""),
+                str(getattr(self, "video_directory", "") or ""),
+            ]),
+            "",
+            {},
+        )
+        # Foundation results: one logo only — no coach clip on screens 3/4.
+        allow_coach = brand != "foundation"
+        coach = str((panel or {}).get("coach_video") or "")
+        allow_coach = bool(allow_coach and coach and os.path.isfile(coach))
+        if allow_coach:
+            other = "B" if fid == "A" else "A"
+            owner = str(self._player_attr("_coach_audio_field") or "").upper()[:1]
+            other_state = (getattr(self, "_field_result_state", None) or {}).get(other) or {}
+            other_phase = str(other_state.get("phase") or "")
+            other_wants_coach = bool(
+                other_phase in ("final_wait", "final_playing", "playing", "wait")
+                and isinstance(other_state.get("panel"), dict)
+                and str((other_state.get("panel") or {}).get("coach_video") or "")
+            )
+            if owner and owner != fid:
+                allow_coach = False
+            elif fid == "B" and other_wants_coach and owner != "B":
+                # Both finals arrived together — Field A keeps the voice.
+                allow_coach = False
+            else:
+                self._coach_audio_field = fid
+        if allow_coach:
+            layers.append(({name: coach for name in screens}, False, True))
+        if layers:
+            canvas.play_layered_clips(layers)
 
     def _hide_field_result_rings(self, fid):
         try:
@@ -9156,15 +9962,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
+            try:
+                self.image_canvas.set_field_level_colors(self._opening_card_colors())
+            except Exception:
+                pass
         host = self.image_canvas or self
         overlay = getattr(self, "_projected_results", None)
         if overlay is None or overlay.parent() is not host:
             overlay = ResultsOverlay(host)
             self._projected_results = overlay
+        try:
+            overlay.set_level_colors(self._opening_card_colors())
+        except Exception:
+            pass
         overlay.set_panels(panels)
         overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
         overlay.show()
         overlay.raise_()
+        for fid, panel in (panels or {}).items():
+            self._play_result_side_videos(fid, panel)
         return True
 
     def _hide_projected_results(self):
@@ -9223,6 +10039,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not isinstance(state, dict) or state.get("phase") == "done":
             return
         state["phase"] = "done"
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None and hasattr(canvas, "_release_field_videos"):
+            canvas._release_field_videos({fid})
         self._continue_field_after_results(fid, epoch)
 
     def _show_field_final(self, fid):
@@ -9242,6 +10061,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "epoch": self._field_epoch(fid),
         }
         self._field_result_state = state
+        # Series is done for this field — release its Stop button now, not after
+        # the final rings and coach clip finish.
+        self._publish_field_controls()
         try:
             canvas = object.__getattribute__(self, "image_canvas")
         except Exception:
@@ -9357,6 +10179,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 return
             state["phase"] = "final_done"
         self._hide_field_result_rings(fid)
+        if str(self._player_attr("_coach_audio_field") or "").upper()[:1] == fid:
+            self._coach_audio_field = None
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None and hasattr(canvas, "_release_field_videos"):
+            canvas._release_field_videos({fid})
         overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
         if overlay is not None:
             try:
@@ -9366,13 +10193,58 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         done = dict(getattr(self, "_field_final_done", None) or {})
         done[fid] = True
         self._field_final_done = done
+        # Field is free again — drop intro/action holds so saver can return.
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        hold.pop(fid, None)
+        self._screensaver_hold_until = hold
         self._blank_retired_field(fid)
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
         if not self._independent_finals_complete():
             return
-        if getattr(self, "_independent_close_started", False):
+        self._start_independent_session_close()
+
+    def _cancel_independent_session_close(self):
+        """A new Play must not be killed by a late close from the previous series."""
+        try:
+            token = int(self._player_attr("_independent_close_token", 0) or 0) + 1
+        except (TypeError, ValueError):
+            token = 1
+        self._independent_close_token = token
+        self._independent_close_started = False
+        self._status_completed = False
+        self.playlist_finished = False
+        close_timer = self._player_attr("close_timer")
+        if close_timer is not None:
+            try:
+                close_timer.stop()
+            except Exception:
+                pass
+            self.close_timer = None
+        force_timer = self._player_attr("_force_close_timer")
+        if force_timer is not None:
+            try:
+                force_timer.stop()
+            except Exception:
+                pass
+            self._force_close_timer = None
+
+    def _start_independent_session_close(self):
+        if self._player_attr("_independent_close_started", False):
             return
+        try:
+            token = int(self._player_attr("_independent_close_token", 0) or 0) + 1
+        except (TypeError, ValueError):
+            token = 1
+        self._independent_close_token = token
         self._independent_close_started = True
-        thread = threading.Thread(target=self._request_independent_close, daemon=True)
+        thread = threading.Thread(
+            target=self._request_independent_close,
+            args=(token,),
+            daemon=True,
+        )
         thread.start()
 
     def _blank_retired_field(self, fid):
@@ -9408,7 +10280,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._field_series_finished(fid) and done.get(fid) for fid in names
         )
 
-    def _request_independent_close(self):
+    def _request_independent_close(self, token=None):
         """Save level progress once both fields have shown their own final results."""
         report_path = self._find_latest_report()
         progress = {}
@@ -9436,17 +10308,389 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         progress = response.json().get("progress") or {}
             except Exception as exc:
                 logger.warning("Independent final progress failed: %s", exc)
-        self.independent_close_ready.emit(json.dumps({"progress": progress}))
+        self.independent_close_ready.emit(
+            json.dumps({"progress": progress, "token": token})
+        )
 
     def _on_independent_close_ready(self, payload):
         info = {}
+        token = None
         if isinstance(payload, str) and payload.startswith("{"):
             try:
-                info = json.loads(payload).get("progress") or {}
+                parsed = json.loads(payload) or {}
             except (TypeError, ValueError, json.JSONDecodeError):
-                info = {}
+                parsed = {}
+            info = parsed.get("progress") or {}
+            token = parsed.get("token")
+        try:
+            want = int(self._player_attr("_independent_close_token", 0) or 0)
+            got = int(token) if token is not None else want
+        except (TypeError, ValueError):
+            want, got = 0, -1
+        if got != want:
+            logger.info("Ignoring stale series-close after a new field start")
+            return
+        if not self._player_attr("_independent_close_started", False):
+            return
         self._after_final = info if isinstance(info, dict) else {}
-        self._on_field_final_finished()
+        self._finish_independent_session()
+
+    def _finish_independent_session(self):
+        """Both fields finished this series. Release Stop and stay ready for the next Play."""
+        self._independent_close_started = False
+        self.playlist_finished = False
+        self._status_completed = False
+        self._field_opening_playlists = {}
+        self._independent_index = {}
+        self._independent_done = {}
+        self._field_final_queued = {}
+        self._field_final_done = {}
+        self._field_result_state = {}
+        self._phase_active = []
+        self._fields_opening = set()
+        controls = _read_cabinet_controls(self._player_attr("speed_file_dir"))
+        if bool(controls.get("system_on", True)) and bool(controls.get("screensaver_on", False)):
+            self._enter_idle_screensaver()
+        else:
+            self._flash_idle_display(then_screensaver=False)
+        self._publish_field_controls()
+        self._update_status_file(
+            "ready", 0, 0, "Series complete — ready for the next level",
+        )
+        logger.info("Independent series complete — Stop released, ready for next Play")
+        info = self._player_attr("_after_final") or {}
+        if not isinstance(info, dict):
+            info = {}
+        try:
+            seconds_left = float(info.get("seconds_left") or 0)
+        except (TypeError, ValueError):
+            seconds_left = 0
+        if info.get("continue_play") and seconds_left > 30:
+            try:
+                if self._restart_highest_level(info):
+                    return
+            except Exception:
+                logger.exception("Could not auto-continue the next booked level")
+            return
+        # No next Play yet — close the camera feed window and stop the camera.
+        self._close_camera_feed_display()
+
+    def _close_camera_feed_display(self):
+        """Turn off the realtime camera window when nothing is playing."""
+        directory = (
+            self._player_attr("speed_file_dir")
+            or "C:/Users/siama/Documents/simust_player"
+        )
+        try:
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, "visualization.txt")
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write("false")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            logger.exception("Could not turn off camera visualization")
+        try:
+            if HAS_REQUESTS:
+                requests.post(
+                    "http://127.0.0.1:8000/set-visualization",
+                    json={"enabled": False},
+                    timeout=3,
+                )
+        except Exception:
+            pass
+        self._stop_camera_only()
+
+    def _flash_idle_display(self, then_screensaver=True):
+        """Black the cabinet and hide results when both fields are done."""
+        self._screensaver_fields = set()
+        self._coach_audio_field = None
+        for fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(fid)
+            except Exception:
+                pass
+            overlay = (self._player_attr("_field_wait_overlays") or {}).get(fid)
+            if overlay is not None:
+                try:
+                    overlay.hide()
+                except Exception:
+                    pass
+        try:
+            self._hide_projected_results()
+        except Exception:
+            pass
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is None:
+            if then_screensaver:
+                self._sync_screensaver()
+            return
+        try:
+            if hasattr(canvas, "_release_field_videos"):
+                canvas._release_field_videos({"A", "B"})
+            if hasattr(canvas, "clear"):
+                canvas.clear()
+            else:
+                canvas.set_screen_images({}, keep_videos=False, replace_fields={"A", "B"})
+            canvas.repaint()
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            logger.exception("Could not flash idle display after the series")
+        if then_screensaver:
+            self._sync_screensaver()
+
+    def _field_is_live(self, fid) -> bool:
+        """True only while THIS field owns realtime / opening / results.
+
+        The other field's state never makes this field look busy — free field
+        can show coded .ssav saver the whole time.
+        """
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return False
+        if self._player_attr("_idle_screensaver_mode", False):
+            return False
+        phase = str(self._player_attr("display_phase") or "")
+        if phase in ("idle", "ready"):
+            return False
+        # Hold only applies to the field that is starting — never inherited.
+        hold = getattr(self, "_screensaver_hold_until", None) or {}
+        try:
+            if float(hold.get(fid) or 0) > time.time():
+                return True
+        except (TypeError, ValueError):
+            pass
+        if fid in (getattr(self, "_fields_opening", None) or set()):
+            return True
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if parts.get(fid) and not self._field_series_finished(fid):
+            return True
+        state = (getattr(self, "_field_result_state", None) or {}).get(fid) or {}
+        if str(state.get("phase") or "") in (
+            "wait", "playing", "final_wait", "final_playing",
+        ):
+            return True
+        # Legacy single-playlist: only fields in _phase_active are live.
+        if not parts and self.video_files and not self._player_attr("playlist_finished", False):
+            active = {str(x).upper()[:1] for x in (self._player_attr("_phase_active") or [])}
+            if fid in active and phase in (
+                "level_card", "level_intro", "intro", "starting", "opening", "action",
+            ):
+                return True
+        return False
+
+    def _stop_field_screensaver(self, fid):
+        """Clear screensaver tiles on one field without touching the other."""
+        fid = str(fid or "").upper()[:1]
+        active = set(self._player_attr("_screensaver_fields") or set())
+        if fid not in active:
+            return
+        active.discard(fid)
+        self._screensaver_fields = active
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None:
+            return
+        try:
+            if hasattr(canvas, "_release_field_videos"):
+                canvas._release_field_videos({fid})
+            saver = set(getattr(canvas, "_screensaver_scale_screens", None) or set())
+            for name in list(saver):
+                if _field_for_screen(name) == fid:
+                    saver.discard(name)
+            canvas._screensaver_scale_screens = saver
+            canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+            if not getattr(canvas, "_screensaver_scale_screens", None):
+                canvas._saver_pix = None
+                if hasattr(canvas, "_stop_coded_screensaver_timer"):
+                    canvas._stop_coded_screensaver_timer()
+            canvas.repaint()
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            logger.exception("Could not clear screensaver on Field %s", fid)
+
+    def _raise_screensaver_surface(self):
+        """Project saver/action band on Screen 2 like waiting animation."""
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None:
+            return
+        try:
+            self.setFixedSize(self.video_width, self.video_height)
+            if self.videoframe:
+                self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
+                self.videoframe.show()
+            canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            canvas.show()
+            canvas.raise_()
+            self.show()
+            self.raise_()
+        except Exception:
+            logger.exception("Could not raise screensaver canvas on Screen 2")
+
+    def _play_field_screensaver(self, fid):
+        """Loop coded .ssav pixels on every screen of one idle field (no video play)."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return False
+        path = _screen_saver_video_path()
+        ssav = ""
+        if path:
+            ssav = os.path.join(os.path.dirname(path), "screen_saver_pixels.ssav")
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None or not hasattr(canvas, "play_coded_screensaver"):
+            return False
+        if not ((path and os.path.isfile(path)) or (ssav and os.path.isfile(ssav))):
+            return False
+        screens = _field_all_screens(fid)
+        if not screens:
+            return False
+        self._raise_screensaver_surface()
+        ok = canvas.play_coded_screensaver(screens)
+        if ok:
+            active = set(self._player_attr("_screensaver_fields") or set())
+            active.add(fid)
+            self._screensaver_fields = active
+            for delay in (50, 150, 400, 800):
+                QtCore.QTimer.singleShot(delay, self._raise_screensaver_canvas)
+            logger.info(
+                "Coded screensaver on Field %s (%s screens, Screen %s coach band)",
+                fid,
+                len(screens),
+                int(self._player_attr("screen_index", 1)) + 1,
+            )
+        return bool(ok)
+
+    def _all_cabinet_screens(self):
+        """Every projector tile on Field A and Field B."""
+        screens = []
+        for fid in ("A", "B"):
+            screens.extend(_field_all_screens(fid))
+        # Deduplicate while keeping order.
+        seen = set()
+        ordered = []
+        for name in screens:
+            key = _sid(name)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+        return ordered
+
+    def _stop_all_screensaver(self):
+        """Clear the coded saver from every cabinet screen."""
+        for fid in ("A", "B"):
+            self._stop_field_screensaver(fid)
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None:
+            self._screensaver_fields = set()
+            return
+        try:
+            canvas._screensaver_scale_screens = set()
+            canvas._saver_pix = None
+            if hasattr(canvas, "_stop_coded_screensaver_timer"):
+                canvas._stop_coded_screensaver_timer()
+        except Exception:
+            logger.exception("Could not clear full-cabinet screensaver")
+        self._screensaver_fields = set()
+
+    def _play_all_screensaver(self):
+        """Loop coded screensaver on every Field A and Field B screen."""
+        ok_a = self._play_field_screensaver("A")
+        ok_b = self._play_field_screensaver("B")
+        return bool(ok_a or ok_b)
+
+    def _raise_screensaver_canvas(self):
+        """Keep the saver visible above the black VLC frame on monitor 2."""
+        if not self._player_attr("_screensaver_fields"):
+            return
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None:
+            return
+        try:
+            canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            canvas.show()
+            canvas.raise_()
+            canvas.update()
+        except Exception:
+            pass
+
+    def _field_blocks_screensaver(self, fid) -> bool:
+        """True only when THIS field is busy — independent of the other field."""
+        fid = str(fid or "").upper()[:1]
+        if self._field_is_live(fid):
+            return True
+        overlay = (getattr(self, "_field_result_overlays", None) or {}).get(fid)
+        if overlay is not None:
+            try:
+                if overlay.isVisible():
+                    return True
+            except Exception:
+                pass
+        wait = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        if wait is not None:
+            try:
+                if wait.isVisible():
+                    return True
+            except Exception:
+                pass
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            summary = set(getattr(canvas, "_summary_screens", None) or set())
+            if any(_field_for_screen(name) == fid for name in summary):
+                return True
+            # This field's opening/results logo only — not the other field's logo.
+            logo = set(getattr(canvas, "_logo_scale_screens", None) or set())
+            if any(_field_for_screen(name) == fid for name in logo):
+                return True
+            bounce = set(getattr(canvas, "_bounce_screens", None) or set())
+            if any(_field_for_screen(name) == fid for name in bounce):
+                return True
+        return False
+
+    def _field_wants_screensaver(self, fid) -> bool:
+        """Free field → coded .ssav saver. Not tied to the other field's phase."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return False
+        return not self._field_blocks_screensaver(fid)
+
+    def _sync_screensaver(self):
+        """Per-field coded .ssav saver whenever Screen saver switch is on.
+
+        Free field always gets saver immediately — never waits for the other
+        field's results. Busy field never gets saver. No video decode at play.
+        """
+        controls = _read_cabinet_controls(self._player_attr("speed_file_dir"))
+        prev = dict(self._player_attr("_cabinet_controls") or {})
+        self._cabinet_controls = controls
+        system_on = bool(controls.get("system_on", True))
+        saver_on = bool(controls.get("screensaver_on", False))
+        if not system_on:
+            if prev.get("system_on", True) or self._player_attr("_screensaver_fields"):
+                try:
+                    self._flash_idle_display(then_screensaver=False)
+                except Exception:
+                    self._screensaver_fields = set()
+            return
+        want = set()
+        if saver_on:
+            for fid in ("A", "B"):
+                if self._field_wants_screensaver(fid):
+                    want.add(fid)
+        active = set(self._player_attr("_screensaver_fields") or set())
+        for fid in list(active - want):
+            self._stop_field_screensaver(fid)
+        canvas = getattr(self, "image_canvas", None)
+        saver_tiles = set(getattr(canvas, "_screensaver_scale_screens", None) or set()) if canvas else set()
+        for fid in want:
+            field_tiles = {_sid(n) for n in _field_all_screens(fid)}
+            # Re-attach coded tiles if action/bounce dropped them mid-play.
+            if fid not in active or not field_tiles.issubset(saver_tiles):
+                self._play_field_screensaver(fid)
 
     def _continue_field_after_results(self, fid, epoch=None):
         """This field's results are done. Start its next test without waiting."""
@@ -9500,11 +10744,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if independent:
             self._finish_due_independent_fields()
             return
-        # Keep the pass image up for the action slice (3s on SF-30N). A goal
-        # must not cut that short — the cylinder uses the same slice.
+        # A received ball ends this screen now. Otherwise hold the pass image
+        # until its On time (or the test clock) runs out.
+        goal_hit = bool(getattr(self, "_goal_arrived", False))
         shown = getattr(self, "_pass_shown_at", None)
         need_ms = int(getattr(self, "_pass_on_ms", 0) or 0)
-        if shown is not None and need_ms > 0:
+        if (not goal_hit) and shown is not None and need_ms > 0:
             remain = int(need_ms - (time.perf_counter() - shown) * 1000.0)
             if remain > 40:
                 self._stop_action_timer()
@@ -10483,11 +11728,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.videoframe.setGeometry(0, 0, self.video_width, self.video_height)
         self.setFixedSize(self.video_width, self.video_height)
         self.videoframe.raise_()
-        if self.image_canvas and self.image_based and self.display_phase in ("action", "level_intro", "level_card"):
+        saver_on = bool(self._player_attr("_screensaver_fields"))
+        show_canvas = (
+            self.image_canvas
+            and self.image_based
+            and (
+                self.display_phase in ("action", "level_intro", "level_card", "idle")
+                or saver_on
+                or self._player_attr("_idle_screensaver_mode", False)
+            )
+        )
+        if show_canvas:
+            # Same projector band as waiting / actions — canvas must sit above the black frame.
             self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
             self.image_canvas.show()
             self.image_canvas.raise_()
-            if self.display_phase == "level_card":
+            if self.display_phase in ("level_card", "idle") or saver_on:
                 self.image_canvas.update()
         elif self.display_phase == "level_card" and self.level_card_label and self.level_card_label.isVisible():
             self.level_card_label.raise_()
@@ -10924,7 +12180,12 @@ def main():
         sys.exit(1)
 
     video_dir = sys.argv[1]
-    if not IMAGE_BASED_ACTIONS and not os.path.isdir(video_dir):
+    idle_saver = str(video_dir or "").strip().lower() in (
+        IDLE_SCREENSAVER_ARG,
+        "--screensaver",
+        "screensaver",
+    )
+    if not idle_saver and not IMAGE_BASED_ACTIONS and not os.path.isdir(video_dir):
         app = QtWidgets.QApplication(sys.argv)
         QtWidgets.QMessageBox.critical(None, "Error", f"Directory not found:\n{video_dir}")
         sys.exit(1)
