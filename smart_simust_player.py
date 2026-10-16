@@ -9134,7 +9134,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.exception("Field %s progress save after stop failed", fid)
         self._reload_independent_entry(restart_fields=set())
         self._publish_field_controls()
-        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        hold = dict(self._player_attr("_screensaver_hold_until") or {})
         hold.pop(fid, None)
         self._screensaver_hold_until = hold
         # This field is free again — resume saver here; other field unchanged.
@@ -9165,7 +9165,65 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             start = int(getattr(self, "current_video_index", 0) or 0)
         except (TypeError, ValueError):
             start = 0
+        # Single-field per-video wait already finished this action — resume at the
+        # next test, not the last action of the completed one.
+        post = getattr(self, "_post_results_index", None)
+        if post is not None:
+            try:
+                start = max(start, int(post))
+            except (TypeError, ValueError):
+                pass
         return files[start:]
+
+    def _abort_single_field_results_pipeline(self):
+        """Cancel cabinet-wide wait/final so a mid-session join keeps playing.
+
+        Single-field play uses wait_per_video → _do_continue → _show_final_summary
+        on the flat playlist. After a join, video_files is one independent entry,
+        so a late continue would open final results after only a few Field B actions.
+        """
+        self._post_results_index = None
+        try:
+            epoch = int(object.__getattribute__(self, "_results_epoch") or 0) + 1
+        except Exception:
+            epoch = 1
+        self._results_epoch = epoch
+        self._results_finished_epoch = epoch
+        self.waiting_for_results = False
+        self.video_end_called = False
+        self.playlist_finished = False
+        self._status_completed = False
+        try:
+            timer = object.__getattribute__(self, "results_timer")
+        except Exception:
+            timer = None
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            self.results_timer = None
+        try:
+            self._hide_waiting_overlay()
+        except Exception:
+            pass
+        try:
+            self._hide_projected_results()
+        except Exception:
+            pass
+        try:
+            phase = str(object.__getattribute__(self, "display_phase") or "")
+        except Exception:
+            phase = ""
+        if phase in (
+            "wait_per_video",
+            "per_video_results",
+            "wait_final",
+            "final",
+            "idle",
+            "ready",
+        ):
+            self.display_phase = "action"
 
     def _join_independent_field(self, fid, info=None):
         """Start this field beside the one already playing. Do not restart that field."""
@@ -9197,10 +9255,20 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._bump_field_epoch(fid)
         # Leaving full-cabinet idle saver — this field is now in realtime play.
         self._idle_screensaver_mode = False
+        # Capture the live field's remaining steps before clearing single-field
+        # wait/final state (that clear drops _post_results_index).
+        parts = {}
+        for other in ("A", "B"):
+            if other == fid:
+                continue
+            remaining = self._remaining_field_steps(other)
+            if remaining:
+                parts[other] = remaining
+        self._abort_single_field_results_pipeline()
         if str(self._player_attr("display_phase") or "") in ("idle", "ready"):
             self.display_phase = "action"
         # Hold saver off this field through opening + first action paint.
-        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        hold = dict(self._player_attr("_screensaver_hold_until") or {})
         hold[fid] = time.time() + 45.0
         self._screensaver_hold_until = hold
         try:
@@ -9211,17 +9279,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not fresh:
             logger.error("No playlist to start Field %s", fid)
             return False
-        parts = {}
-        for other in ("A", "B"):
-            if other == fid:
-                continue
-            remaining = self._remaining_field_steps(other)
-            if remaining:
-                parts[other] = remaining
         parts[fid] = fresh
         self._field_opening_playlists = parts
         self._independent_index = {name: 0 for name in parts}
-        previous_done = dict(getattr(self, "_independent_done", None) or {})
+        previous_done = dict(self._player_attr("_independent_done") or {})
         self._independent_done = {
             name: bool(previous_done.get(name)) and name != fid
             for name in parts
@@ -11484,6 +11545,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _do_continue(self):
         """After per-video results: level intro, then next test's first action (or final)."""
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if parts:
+            # A mid-session join already owns the timeline. A late single-field
+            # continue must not treat the 1-entry independent playlist as "done".
+            logger.info("Ignoring single-field continue — independent fields are live")
+            self._post_results_index = None
+            self.waiting_for_results = False
+            self.display_phase = "action"
+            return
         if getattr(self, "_post_results_index", None) is not None:
             next_idx = int(self._post_results_index)
             self._post_results_index = None
@@ -11497,6 +11567,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._show_final_summary()
 
     def _show_final_summary(self):
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if parts and not self._every_independent_series_finished():
+            logger.info("Ignoring cabinet final — independent fields still playing")
+            self.waiting_for_results = False
+            self.display_phase = "action"
+            return
         logger.info("All action sets done; showing the same wait animation then final results")
         self.display_phase = "wait_final"
         self.waiting_for_results = True
@@ -11701,6 +11777,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.display_phase != "action":
             return
         if self.operator_paused or self.video_end_called or self.waiting_for_results:
+            return
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if parts:
+            # Independent A/B play uses per-field results, not the cabinet wait.
+            logger.info("Ignoring single-field video-ended — independent fields are live")
             return
         self.video_end_called = True
         self.waiting_for_results = True

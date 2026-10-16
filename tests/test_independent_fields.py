@@ -1349,8 +1349,16 @@ class SeriesRestartTests(unittest.TestCase):
         inst._independent_close_token = 3
         inst._realtime_stopped = False
         closed = []
-        inst._flash_idle_display = lambda: closed.append("flash")
+        inst._flash_idle_display = lambda *args, **kwargs: closed.append("flash")
         inst._close_camera_feed_display = lambda: closed.append("camera")
+        # Keep System/Saver off so finish stays on the ready path (no idle saver).
+        inst._enter_idle_screensaver = lambda: closed.append("idle")
+        original_read = player._read_cabinet_controls
+        player._read_cabinet_controls = lambda *_args, **_kwargs: {
+            "system_on": True,
+            "screensaver_on": False,
+        }
+        self.addCleanup(lambda: setattr(player, "_read_cabinet_controls", original_read))
         inst._finish_independent_session()
         self.assertEqual(inst._field_opening_playlists, {})
         self.assertEqual(inst._control_fields_playing(), [])
@@ -1386,6 +1394,199 @@ class SeriesRestartTests(unittest.TestCase):
                     [row[1] for row in sim.closed if row[0] == "B"],
                     list(range(1, b_tests + 1)),
                 )
+
+
+class SingleFieldThenJoinTests(unittest.TestCase):
+    """Operator starts Field A alone, then joins Field B mid-session."""
+
+    def _row(self, fid, test_num, action, actions):
+        screen = f"{fid}{((action - 1) % 6) + 1}"
+        return {
+            "test_num": test_num,
+            "action_in_set": action,
+            "actions_in_set": actions,
+            "on_ms": 3000,
+            "field_screens": {fid: [screen]},
+            "screen_images": {screen: f"{fid}-t{test_num}-a{action}.png"},
+        }
+
+    def _series(self, fid, tests=5, actions=10):
+        return [
+            self._row(fid, test_num, action, actions)
+            for test_num in range(1, tests + 1)
+            for action in range(1, actions + 1)
+        ]
+
+    def _single_field_player(self, fid="A", progressed=6):
+        playlist = self._series(fid)
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._field_opening_playlists = {}
+        inst._independent_index = {}
+        inst._independent_done = {}
+        inst._field_result_state = {}
+        inst._field_final_queued = {}
+        inst._field_final_done = {}
+        inst._field_hold_until = {}
+        inst._field_wait_overlays = {}
+        inst._field_epochs = {}
+        inst._field_operator_stopped = {}
+        inst._fields_opening = set()
+        inst._phase_active = [fid]
+        inst._phase_field_levels = {fid: "L00-Foundation"}
+        inst._phase_field_directories = {}
+        inst._phase_field_modes = {}
+        inst._independent_close_started = False
+        inst._independent_close_token = 0
+        inst._status_completed = False
+        inst.playlist_finished = False
+        inst.close_timer = None
+        inst._force_close_timer = None
+        inst.results_timer = None
+        inst._after_final = {}
+        inst._post_results_index = None
+        inst._results_epoch = 0
+        inst._results_finished_epoch = None
+        inst.waiting_for_results = False
+        inst.video_end_called = False
+        inst.operator_paused = False
+        inst.image_canvas = None
+        inst.video_files = list(playlist)
+        inst.current_video_index = int(progressed)
+        inst.display_phase = "action"
+        inst._action_phase = "label"
+        inst._label_mode = True
+        inst._flash_seq = 1
+        inst._screensaver_hold_until = {}
+        inst._idle_screensaver_mode = False
+        inst._apply_label_phase = lambda: None
+        inst._stop_action_timer = lambda: None
+        inst._stop_goal_advance_poll = lambda: None
+        inst._start_goal_advance_poll = lambda: None
+        inst._patch_independent_fields = lambda entry, fields: None
+        inst._queue_field_results = lambda field, step: None
+        inst._request_field_final = lambda field, display=True: None
+        finals = []
+        inst._show_field_final = lambda field: finals.append(field)
+        inst._hide_field_result_rings = lambda field: None
+        inst._hide_waiting_overlay = lambda: None
+        inst._hide_projected_results = lambda: None
+        inst._intro_video_for_field = lambda field: None
+        inst._begin_level_intro = lambda idx: None
+        inst._show_waiting_overlay = lambda: None
+        original_write = player._write_players_fields_active
+        player._write_players_fields_active = lambda active: None
+        self.addCleanup(lambda: setattr(player, "_write_players_fields_active", original_write))
+        inst._finals = finals
+        return inst
+
+    def _play_through(self, inst, fid, count):
+        for _ in range(count):
+            if inst._field_series_finished(fid):
+                break
+            if inst._independent_done.get(fid):
+                inst._continue_field_after_results(fid)
+            else:
+                inst._advance_independent_field(fid, reload=False)
+                if not inst._independent_done.get(fid):
+                    inst._reload_independent_entry(restart_fields={fid})
+
+    def test_join_from_flat_playlist_keeps_full_second_field_series(self):
+        """A alone (flat video_files) → join B → B must run all 5 tests, not final early."""
+        inst = self._single_field_player("A", progressed=6)
+        full_b = self._series("B")
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else self._series(fid))
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L00-Foundation",
+            "directory": "foundation",
+            "subdirectory": "SF-30N",
+        }))
+        self.assertEqual(len(inst._field_opening_playlists["A"]), 50 - 6)
+        self.assertEqual(len(inst._field_opening_playlists["B"]), 50)
+        # Play through test 1 only — must not jump to final.
+        self._play_through(inst, "B", 11)
+        self.assertEqual(
+            inst._field_opening_playlists["B"][inst._independent_index["B"]]["test_num"],
+            2,
+        )
+        self.assertNotIn("B", inst._finals)
+        # Finish the rest of B's series (continue after last action shows final).
+        guard = 0
+        while "B" not in inst._finals and guard < 80:
+            guard += 1
+            if inst._independent_done.get("B"):
+                inst._continue_field_after_results("B")
+            else:
+                inst._advance_independent_field("B", reload=False)
+        self.assertEqual(inst._finals, ["B"])
+        self.assertTrue(inst._field_series_finished("B"))
+        # A must still have later tests left — cabinet final must not have wiped B early.
+        self.assertFalse(inst._field_series_finished("A"))
+        self.assertEqual(len(inst._field_opening_playlists["B"]), 50)
+
+    def test_join_during_single_field_results_does_not_open_cabinet_final(self):
+        """Pending wait_per_video → _do_continue must not final after join."""
+        inst = self._single_field_player("A", progressed=9)
+        # End of test 1: single-field path armed the next-test index.
+        inst._post_results_index = 10
+        inst.display_phase = "wait_per_video"
+        inst.waiting_for_results = True
+        inst.video_end_called = True
+        full_b = self._series("B")
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else self._series(fid))
+        cabinet_finals = []
+        inst._show_waiting_overlay = lambda: cabinet_finals.append("wait")
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L00-Foundation",
+            "directory": "foundation",
+            "subdirectory": "SF-30N",
+        }))
+        self.assertEqual(inst.display_phase, "action")
+        self.assertIsNone(inst._post_results_index)
+        self.assertFalse(inst.waiting_for_results)
+        # A's remaining starts at test 2 (index 10), not the finished last action.
+        self.assertEqual(inst._field_opening_playlists["A"][0]["test_num"], 2)
+        self.assertEqual(len(inst._field_opening_playlists["B"]), 50)
+        # Late single-field continue must be ignored.
+        inst._do_continue()
+        inst._show_final_summary()
+        self.assertEqual(cabinet_finals, [])
+        self.assertEqual(inst.display_phase, "action")
+        self._play_through(inst, "B", 12)
+        self.assertFalse(inst._field_series_finished("B"))
+        self.assertEqual(inst._finals, [])
+
+    def test_sim_a_then_b_both_complete_all_tests(self):
+        """Sim: advance A a few actions, join B, both finish every test."""
+        inst = self._single_field_player("A", progressed=4)
+        full_a = self._series("A")
+        full_b = self._series("B")
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else full_a)
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L01-Entry",
+            "directory": "entry",
+            "subdirectory": "S1.T1",
+        }))
+        # Drain both fields through all remaining/full actions + finals.
+        guard = 0
+        while sorted(inst._finals) != ["A", "B"] and guard < 200:
+            guard += 1
+            progressed = False
+            for fid in ("A", "B"):
+                if fid in inst._finals:
+                    continue
+                if inst._independent_done.get(fid):
+                    inst._continue_field_after_results(fid)
+                    progressed = True
+                else:
+                    inst._advance_independent_field(fid, reload=False)
+                    progressed = True
+            if not progressed:
+                break
+        self.assertEqual(sorted(inst._finals), ["A", "B"])
+        self.assertTrue(inst._field_series_finished("A"))
+        self.assertTrue(inst._field_series_finished("B"))
+        self.assertEqual(len(inst._field_opening_playlists["A"]), 46)
+        self.assertEqual(len(inst._field_opening_playlists["B"]), 50)
 
 
 class JoinClearsScreensaverTests(unittest.TestCase):
