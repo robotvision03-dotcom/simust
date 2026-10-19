@@ -1,0 +1,187 @@
+OMIID MORADTALAB
+AI & Robotics Engineer  ·  Computer Vision  ·  Perception Systems
+
+Yousef Abad, Tehran, Iran
++98 903 290 1549
+moradtalab.o@gmail.com
+Updated: 19 October 2026
+
+================================================================================
+1. PROFESSIONAL SUMMARY
+================================================================================
+AI and Robotics Engineer with an MSc in Computer Vision & AI and 10+ years of experience developing perception systems. Expert in Python, OpenCV, YOLO, and deep learning for object detection and image segmentation. Proven track record in autonomous systems, computer vision research, and leading innovative robotics projects with multiple international awards and patents.
+
+================================================================================
+2. EDUCATION
+================================================================================
+University of Bourgogne | France  ·  2014–2016
+Master's in Robotics and Computer Vision Engineering — Artificial Intelligence
+World Education Services (WES) GPA: B+
+Thesis: "Automatic Detection of the Cardiac Contours on Delayed Enhanced MRI"
+
+University of Tabriz | Iran  ·  2011–2013
+Master of Science — Electrical Engineering
+
+Islamic Azad University (IAU) | Iran  ·  2006–2010
+Bachelor of Science — Electrical Engineering
+
+================================================================================
+3. TECHNICAL SKILLS
+================================================================================
+Programming:            Python (Advanced), C++, MATLAB
+
+Computer Vision & ML:   OpenCV (Advanced), YOLO (v5/v8/v9), Object Detection,
+                        Image Segmentation, Roboflow, Model Training & Optimization,
+                        Scikit-image, Keras, PyTorch, Scikit-learn, Pandas, NumPy, SciPy
+
+Robotics & Perception:  ROS/ROS2, Sensor Fusion (LIDAR, IMU, Camera), Intel RealSense,
+                        3D Perception, Navigation Stack, MoveIt, Gazebo
+
+Tools & OS:             Linux (Ubuntu), Docker, Git/GitHub/GitLab, CI/CD, Jupyter, LaTeX
+
+Hardware:               NVIDIA Xavier AGX, Arduino, Raspberry Pi, Schneider PLC, SIEMENS S7
+
+================================================================================
+4. HONORS & AWARDS
+================================================================================
+• Selected as one of Canada's 30 Best Startups with Potential for Massive Impact; Winner of 2022 Ocean Startup Challenge for "Intelligent ROV for Underwater Welding Operations"
+• Selected as Top 5 Canadian Startup Owner at pitch competition for "Biofriendly Mining Robot for Seabed Applications" as CEO of Tesla Robotics Inc.
+• Silver Medal for Invention: "Instrument for Putting on Socks with Fuzzy Control" at 6th International Exhibition in China, Certificate No. 06GJ02175
+• Member of Iran's National Elites Foundation (INEF) since 2008
+• Best Researcher Award, Young Researchers Club (2009, 2010)
+• Country Representative, Mehrafarin Inventions Festival (2008)
+• Invention Fellowship under Iran's Elites National Organization programs
+• Provincially selected invention for "Automated Mosaic Construction Machine" at Kharazmi Festival (2009)
+
+================================================================================
+5. PROFESSIONAL EXPERIENCE
+================================================================================
+Stealth Startup | Netherlands (Remote)
+Computer Vision Engineer — Football Analysis  ·  2024 – Present
+• Developing computer vision systems for professional football analysis and player performance tracking
+• Implementing YOLO-based object detection models (YOLOv8/v9) to track players, referees, and ball movements in match footage
+• Managing an end-to-end dataset pipeline including data collection, annotation using Roboflow, and dataset versioning
+• Training and fine-tuning custom YOLO detection models on large-scale football match datasets for high accuracy
+• Optimizing detection algorithms for real-time processing of multiple camera feeds
+• Collaborating with a remote international team to deliver advanced sports analytics solutions
+
+Intel Vision Technologies | Vancouver, Canada
+Co-Founder and Chief Technology Officer (CTO)  ·  2022 – 2024
+• Co-founded company focused on advanced robotic solutions for industrial underwater applications
+• Spearheaded development of intelligent ROV for underwater welding operations
+• Selected as one of Canada's 30 best startups in 2022 Ocean Startup Challenge
+
+Eleos Robotics Company | Vancouver, Canada
+Chief Technology Officer (CTO)  ·  Nov 2020 – Oct 2021
+• Led team developing RoboWeeder, an AI-powered weeding robot using patent-pending precision heating technology
+• Implemented mapping using 2D Sick LIDAR and Google Cartographer for autonomous navigation
+• Applied computer vision techniques for object detection using YOLO, Intel RealSense Camera, Python, and C++
+• Developed robot arm using MoveIt and ClearPath Servomotors on Linux Kernel V5
+• Integrated Xsens IMU and RoboteQ Drive Motors for enhanced robot performance
+
+Amazon / JLL Company | Vancouver, Canada
+Reliability and Maintenance Engineering (RME) Tech III  ·  2020 – 2022
+• Maintained and repaired conveyor systems and automated material handling equipment
+• Attained over 25 professional certifications in reliability maintenance and technical skills
+
+Enerpro Systems | Vancouver, Canada
+IoT Control Panel Designer  ·  2019
+• Designed Energy Management System control panels
+• Implemented remote databases using Python and MySQL for data management
+
+CNRS-Le2i (French National Research Center) | France
+Computer Vision Software Developer  ·  2016
+• Developed medical imaging software using Python, PyQt, OpenCV, and scikit-image on Linux
+• Implemented image processing algorithms and data analysis pipelines for research applications
+
+Fraunhofer Institute | Germany
+Computer Vision Software Developer  ·  Jun 2015 – Sep 2015
+• Developed algorithms to detect thin cracks on road surfaces using C++, Linux, and ToolIP
+• Optimized computer vision solutions for industrial infrastructure monitoring
+
+TurboTeck | Tehran, Iran
+Software Developer and Team Leader  ·  2018
+• Developed IIoT solutions using Python, Django, Linux, and ThingsBoard dashboards
+• Managed SQL/NoSQL databases for industrial monitoring applications
+
+Green Energy Group — GDL | Tehran, Iran
+Technical and Sales Engineer  ·  2017
+• Provided technical expertise for solar panel system design and installation
+
+Pars Saman | Tehran, Iran
+Electrical and Control Leader  ·  Jan 2014 – Sep 2014
+• Automated oil and gas pipeline monitoring using Schneider PLC
+• Designed industrial control panels
+
+Oil Turbo Compressors Group | Tehran, Iran
+Electrical and Control Engineer  ·  Jan 2013 – Dec 2013
+• Maintained and troubleshoot SIEMENS SGT Turbo Compressors
+• Programmed SIEMENS S7 PLCs (200, 300, 400 series)
+• Site supervisor for automation, maintenance, and installation of electrical and control equipment
+
+================================================================================
+6. SELECTED PROJECTS
+================================================================================
+• Football Player Detection & Tracking — Python, YOLOv8, Roboflow, OpenCV, Multi-camera fusion
+• Mobile Robot Navigation — ROS, RVIZ, Gazebo, Python, C++
+• YOLO Object Detection for Robotics — Python, YOLO, OpenCV, Intel RealSense, ROS
+• KURABot — Restaurant Assistant Robot — ROS, Linux, OpenCV, Lidar, Python
+
+================================================================================
+7. PATENTS
+================================================================================
+• Automatic Gearshift Bicycle for Inclines and Declines (2008) — Registration No. 53418
+• Intelligent Control of Car Overtaking by GPS (2008) — Registration No. 51636
+• Freezer Plastic Bag Opener Set (2008) — Registration No. 51509
+• Counter Digital Data Checking by Wireless Remote Control (2007) — Registration No. 43884
+• Device for Assisting Disabled People in Removing Socks (2005) — Registration No. 32445
+• Electric Engine Intelligent Control (2008) — Registration No. 53413
+• Robot Guidance by Fuzzy Control (2008) — Registration No. 51510
+• 2 US patents pending registration
+
+================================================================================
+8. PUBLICATIONS (Selected from 15+)
+================================================================================
+• O. Moradtalab, A. Lalande, S. Bricq. "Automatic Detection of the Cardiac Contours on Delayed Enhanced MRI", Vibot Master's Day
+• O. Moradtalab, R. Moradtalab. "New Approaches for Face Recognition Using Neural Networks", 8th WSEAS International Conference (Best Paper Award)
+• K. Shafafi, E. Saremian, O. Moradtalab. "Optimizing Pictorial Compacted Data Detection in Noisy Environments", IEEE MWOC 2009
+• O. Moradtalab, M.B.B. Sharifian, R. Moradtalab. "Uninterrupted Operation of Wind Power Plant After Grid Disconnection", 2nd Green Energy Conference
+• Multiple publications in IEEE conferences, WSEAS proceedings, and national journals
+
+================================================================================
+9. PROFESSIONAL MEMBERSHIPS
+================================================================================
+• Member, Institute of Electrical and Electronics Engineers (IEEE)
+• Member, Iran's Elites National Organization
+• Member, Young Researchers Club
+• Member, International Federation of Inventors' Associations
+• Reviewer: IEEE Transactions, World Applied Sciences Journal, Springer NDT 2010
+
+================================================================================
+10. LANGUAGES
+================================================================================
+• Persian: Native
+• English: Professional Working Proficiency (Advanced)
+• Kurdish: Conversational
+
+================================================================================
+11. ACADEMIC REFERENCES
+================================================================================
+Prof. Fabrice MERIAUDEAU
+UMR CNRS 6306, Le2i Laboratoire, Université de Bourgogne
+I.U.T. Le Creusot, 12 rue de la fonderie, 71200 Le Creusot, France
+Email: fabrice.meriaudeau@u-bourgogne.fr
+
+Prof. Alain LALANDE
+Pôle Imagerie Médicale et Santé, LE2I, UMR CNRS 6306
+Faculté de Médecine, Université de Bourgogne
+Email: alain.lalande@u-bourgogne.fr
+
+Dr. Olivier Morel
+Associate Professor, LE2I UMR6306, CNRS, ENSAM, Univ. Bourgogne Franche-Comté
+IUT Le Creusot, 12 rue de la Fonderie, 71200 Le Creusot, France
+Email: olivier.morel@u-bourgogne.fr
+
+================================================================================
+End of curriculum vitae  ·  Omiid Moradtalab
+================================================================================
