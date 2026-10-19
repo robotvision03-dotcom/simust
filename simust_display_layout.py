@@ -42,9 +42,8 @@ SCREEN_CONTENT_OFFSET = {
     "A2": -29,
     "A3": -46,
     "A4": -16,
-    # Was -36 — pulled Field A screen 5 left so content was cut on one side.
-    "A5": -16,
-    "A6": -52,
+    "A5": -34,
+    "A6": -54,
     "B1": -72,
     "B2": -90,
     "B3": -108,
@@ -93,14 +92,58 @@ def content_width(tile_w) -> int:
 
 
 def content_x_box(index, screen_id, width=None, count=None):
-    """Left, right, and width of that rectangle after the saved offset."""
+    """Left, right, and width of that rectangle after the saved offset.
+
+    Beginning information and test results both use this box so rings, logos,
+    and text stay on the same calibrated center.
+    """
     width = COACH_BAND_WIDTH if width is None else int(width)
     count = SLICE_COUNT if count is None else max(1, int(count))
     x0, x1 = slice_x_span(index, width, count)
-    rect_w = content_width(x1 - x0)
+    tile_w = max(1, x1 - x0)
+    rect_w = min(content_width(tile_w), tile_w)
     center = (x0 + x1) // 2 + screen_content_offset(screen_id)
     left = center - rect_w // 2
     return left, left + rect_w, rect_w
+
+
+def content_band_center_x(index, screen_id, width=None, count=None) -> int:
+    """Horizontal center of the calibrated content box (same as opening card)."""
+    left, _right, rect_w = content_x_box(index, screen_id, width, count)
+    return int(left) + int(rect_w) // 2
+
+
+def content_band_center_y(screen_id, height=None) -> int:
+    """Vertical center shared by opening logo, waiting rings, and results rings."""
+    height = COACH_BAND_HEIGHT if height is None else int(height)
+    return (
+        int(CHART_CENTER_Y)
+        + int(screen_content_offset_y(screen_id) or 0)
+        + int(round(int(height) * float(RESULTS_BAND_DROP)))
+    )
+
+
+def content_band_layout(index, screen_id, width=None, height=None, count=None):
+    """left, rect_w, cx, cy — one layout for beginning info and test results."""
+    left, _right, rect_w = content_x_box(index, screen_id, width, count)
+    cx = int(left) + int(rect_w) // 2
+    cy = content_band_center_y(screen_id, height)
+    return int(left), int(rect_w), cx, cy
+
+
+def content_band_mask_span(index, screen_id, width=None, height=None, count=None):
+    """Pixel x0, x1 covering both the raw slice and the calibrated content box.
+
+    Large negative offsets (A5 / B5 / …) shift content into the previous frame.
+    Processing overlays include screens 3–4 so that overflow stays visible;
+    results rings skip 3–4 for the logo — the mask must still cover the shift
+    or screen 5 looks cut while Field B processing looked centered.
+    """
+    width = COACH_BAND_WIDTH if width is None else int(width)
+    count = SLICE_COUNT if count is None else max(1, int(count))
+    x0, x1 = slice_x_span(index, width, count)
+    left, rect_w, _cx, _cy = content_band_layout(index, screen_id, width, height, count)
+    return min(int(x0), int(left)), max(int(x1), int(left) + int(rect_w))
 
 
 _OFFSETS_MTIME = None

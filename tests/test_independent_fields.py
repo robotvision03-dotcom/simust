@@ -411,7 +411,9 @@ class FieldContinuesAloneTests(unittest.TestCase):
         self.assertEqual(inst._field_opening_playlists["A"][0]["action_in_set"], 2)
         self.assertEqual(len(inst._field_opening_playlists["B"]), 2)
         self.assertEqual(inst._phase_active, ["A", "B"])
-        self.assertEqual(reloaded, [{"B"}])
+        # Live field A is resumed immediately; B reloads when its opening finishes.
+        self.assertIn({"A"}, reloaded)
+        self.assertIn({"B"}, reloaded)
         self.assertFalse(inst._all_live_fields_paused({"A": True, "B": False}))
         inst._phase_active = ["A"]
         self.assertTrue(inst._all_live_fields_paused({"A": True, "B": False}))
@@ -431,10 +433,18 @@ class FieldContinuesAloneTests(unittest.TestCase):
         inst._phase_field_levels = {"A": "L00-Foundation"}
         inst._phase_field_directories = {}
         inst._phase_field_modes = {}
+        inst._field_result_state = {}
+        inst._field_final_queued = {}
+        inst._field_final_done = {}
+        inst._field_wait_overlays = {}
+        inst._hide_field_result_rings = lambda fid: None
         inst._build_one_field_playlist = lambda fid: [row(fid, 1)]
         opened = []
         inst.image_canvas = types.SimpleNamespace(
             show_field_opening=lambda fid, card: opened.append(fid),
+            show=lambda: None,
+            raise_=lambda: None,
+            _clear_field_summary=lambda fields: None,
         )
         reloaded = []
         inst._reload_independent_entry = lambda restart_fields=None: reloaded.append(set(restart_fields or []))
@@ -447,10 +457,12 @@ class FieldContinuesAloneTests(unittest.TestCase):
             "subdirectory": "A-T1",
         }))
         self.assertEqual(opened, ["B"])
-        self.assertEqual(reloaded, [])
+        # Live Field A must be repainted immediately so it does not stay blank
+        # while B shows its opening card.
+        self.assertEqual(reloaded, [{"A"}])
         self.assertIn("B", inst._fields_opening)
         inst._start_joined_field_test("B")
-        self.assertEqual(reloaded, [{"B"}])
+        self.assertEqual(reloaded, [{"A"}, {"B"}])
         self.assertNotIn("B", inst._fields_opening)
 
     def test_starting_one_field_during_results_keeps_the_other(self):
@@ -989,8 +1001,11 @@ class IndependentAdvanceTests(unittest.TestCase):
         inst._label_phase = "action"
         inst._goal_arrived = False
         inst.action_timer = None
-        calls = []
-        inst._apply_label_phase = lambda: calls.append("reload")
+        patched = []
+        inst._patch_independent_fields = lambda entry, fields: patched.append(
+            (set(fields or []), dict((entry or {}).get("field_screens") or {}))
+        )
+        inst._apply_label_phase = lambda: None
         inst._stop_action_timer = lambda: None
         inst._advance_independent_field("A")
         self.assertEqual(inst._independent_index["A"], 1)
@@ -998,7 +1013,10 @@ class IndependentAdvanceTests(unittest.TestCase):
         entry = inst.video_files[0]
         self.assertEqual(entry["field_screens"]["A"], ["A2"])
         self.assertEqual(entry["field_screens"]["B"], ["B3"])
-        self.assertEqual(calls, ["reload"])
+        self.assertEqual(len(patched), 1)
+        self.assertEqual(patched[0][0], {"A"})
+        self.assertEqual(patched[0][1]["A"], ["A2"])
+        self.assertEqual(patched[0][1]["B"], ["B3"])
 
 
 def _scripted_series(fid, tests, actions, on_ms, budget_ms):
@@ -1197,6 +1215,97 @@ class DualSeriesSimTests(unittest.TestCase):
             4,
         )
 
+    def test_one_field_alone_finishes_all_five_tests(self):
+        """Single-field Foundation-style series must close every test before final."""
+        parts = {"A": _scripted_series("A", 5, 10, 3000, 30000)}
+        sim = DualSeriesSimulator(parts)
+        sim.play_all()
+        self.assertEqual(sim.summaries, 1)
+        self.assertEqual(sim.finals, ["A"])
+        closed = [row for row in sim.closed if row[0] == "A"]
+        self.assertEqual([row[1] for row in closed], [1, 2, 3, 4, 5])
+        self.assertTrue(all(row[2] == 10 and row[3] == 10 for row in closed))
+        self.assertTrue(sim.inst._field_series_finished("A"))
+
+    def test_both_fields_together_finish_all_tests(self):
+        """A and B started together each complete their full series."""
+        parts = {
+            "A": _scripted_series("A", 5, 10, 3000, 30000),
+            "B": _scripted_series("B", 5, 6, 2700, 16200),
+        }
+        sim = self._expect(parts, (("A", 5, 10), ("B", 5, 6)))
+        self.assertEqual(sorted(sim.finals), ["A", "B"])
+
+    def test_a_runs_then_b_joins_after_20_seconds_both_finish(self):
+        """A alone ~20s, then B joins; both must finish every test (no early saver/final)."""
+        full_a = _scripted_series("A", 5, 10, 3000, 30000)
+        full_b = _scripted_series("B", 5, 6, 2700, 16200)
+        sim = DualSeriesSimulator({"A": list(full_a)})
+        elapsed_ms = 0
+        join_after_ms = 20_000
+        # Drain A actions until ~20s of On time have elapsed (not yet whole series).
+        guard = 0
+        while elapsed_ms < join_after_ms and guard < 80:
+            guard += 1
+            if sim.inst._field_series_finished("A"):
+                break
+            if sim.inst._independent_done.get("A"):
+                sim.finish_results("A")
+                continue
+            idx = int(sim.inst._independent_index.get("A", 0))
+            step = (sim.inst._field_opening_playlists.get("A") or [])[idx]
+            elapsed_ms += int(step.get("on_ms") or 3000)
+            sim.advance("A")
+        self.assertGreaterEqual(elapsed_ms, join_after_ms)
+        self.assertFalse(sim.inst._field_series_finished("A"))
+        self.assertNotIn("A", sim.finals)
+
+        # Join B beside the live A series (same path as operator mid-session Play).
+        remaining_a = list(sim.inst._field_opening_playlists.get("A") or [])
+        a_index = int(sim.inst._independent_index.get("A", 0))
+        a_done = bool(sim.inst._independent_done.get("A"))
+        # Rebuild as independent dual parts from current A progress + fresh B.
+        parts = {"A": remaining_a, "B": list(full_b)}
+        sim.inst._field_opening_playlists = parts
+        sim.inst._independent_index = {"A": a_index, "B": 0}
+        sim.inst._independent_done = {"A": a_done, "B": False}
+        sim.inst._phase_active = ["A", "B"]
+        sim.inst.display_phase = "action"
+        sim.inst._idle_screensaver_mode = False
+        sim.inst._screensaver_fields = set()
+
+        # Finish both fields completely.
+        guard = 0
+        while sim.summaries == 0 and guard < 500:
+            guard += 1
+            moved = False
+            for fid in ("A", "B"):
+                rows = (sim.inst._field_opening_playlists or {}).get(fid) or []
+                if not rows:
+                    continue
+                if sim.inst._field_series_finished(fid):
+                    if fid not in sim.finals:
+                        sim.finish_results(fid)
+                        moved = True
+                    continue
+                if sim.inst._independent_done.get(fid):
+                    sim.finish_results(fid)
+                else:
+                    sim.advance(fid)
+                moved = True
+            if not moved:
+                break
+        self.assertEqual(sim.summaries, 1)
+        self.assertEqual(sorted(sim.finals), ["A", "B"])
+        closed_a = [row for row in sim.closed if row[0] == "A"]
+        closed_b = [row for row in sim.closed if row[0] == "B"]
+        # A must still produce every remaining test close including those after join.
+        self.assertEqual([row[1] for row in closed_a], list(range(1, 6)))
+        self.assertEqual([row[1] for row in closed_b], [1, 2, 3, 4, 5])
+        self.assertTrue(all(row[2] == 10 for row in closed_a))
+        self.assertTrue(all(row[2] == 6 for row in closed_b))
+        self.assertTrue(sim.inst._every_independent_series_finished())
+
 
 class SeriesRestartTests(unittest.TestCase):
     """After both fields finish, the next level must keep going past the first tests."""
@@ -1349,6 +1458,7 @@ class SeriesRestartTests(unittest.TestCase):
         inst._independent_close_token = 3
         inst._realtime_stopped = False
         closed = []
+        scheduled = []
         inst._flash_idle_display = lambda *args, **kwargs: closed.append("flash")
         inst._close_camera_feed_display = lambda: closed.append("camera")
         # Keep System/Saver off so finish stays on the ready path (no idle saver).
@@ -1359,16 +1469,58 @@ class SeriesRestartTests(unittest.TestCase):
             "screensaver_on": False,
         }
         self.addCleanup(lambda: setattr(player, "_read_cabinet_controls", original_read))
+        original_shot = player.QtCore.QTimer.singleShot
+        player.QtCore.QTimer.singleShot = lambda ms, cb: scheduled.append((ms, cb))
+        self.addCleanup(lambda: setattr(player.QtCore.QTimer, "singleShot", original_shot))
         inst._finish_independent_session()
         self.assertEqual(inst._field_opening_playlists, {})
         self.assertEqual(inst._control_fields_playing(), [])
         self.assertFalse(inst.playlist_finished)
         self.assertFalse(inst._status_completed)
         self.assertEqual(closed, ["flash", "camera"])
+        self.assertTrue(scheduled)
+        self.assertEqual(scheduled[0][0], 1200)
         with open(inst.status_file, "r", encoding="utf-8") as handle:
             status = json.load(handle)
         self.assertEqual(status.get("state"), "ready")
         self.assertEqual(status.get("fields"), {"A": "idle", "B": "idle"})
+
+    def test_cabinet_final_phases_release_stop(self):
+        """Single-field finish-process / final must idle Stop even if phase_active is stale."""
+        inst = self._base_player()
+        inst._field_opening_playlists = {}
+        inst._phase_active = ["A"]
+        inst.playlist_finished = False
+        for phase in ("wait_final", "final", "completed"):
+            inst.display_phase = phase
+            self.assertEqual(
+                inst._control_fields_playing(),
+                [],
+                msg=f"Stop should release during {phase}",
+            )
+        inst.display_phase = "action"
+        self.assertEqual(inst._control_fields_playing(), ["A"])
+
+    def test_results_overlay_text_contrasts_level_background(self):
+        """Ring numbers/labels must not share the brand fill color on any level."""
+        from PyQt5 import QtWidgets
+
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            app = QtWidgets.QApplication([])
+        overlay = player.ResultsOverlay()
+        colors = {}
+        for key, pair in player._LEVEL_PAGE_BG.items():
+            colors["A"] = (pair[0], pair[1])
+            overlay.set_level_colors(colors)
+            fg = overlay._level_fg("A")
+            bg = overlay._level_bg("A")
+            fg_rgb = (fg.red(), fg.green(), fg.blue())
+            bg_rgb = (bg.red(), bg.green(), bg.blue())
+            self.assertTrue(
+                player._colors_are_visible(fg_rgb, bg_rgb),
+                msg=f"{key}: fg={fg_rgb} on bg={bg_rgb}",
+            )
 
     def test_levels_can_run_one_after_another(self):
         cases = [
@@ -1588,8 +1740,311 @@ class SingleFieldThenJoinTests(unittest.TestCase):
         self.assertEqual(len(inst._field_opening_playlists["A"]), 46)
         self.assertEqual(len(inst._field_opening_playlists["B"]), 50)
 
+    def test_join_after_field_a_test1_wait_resumes_a_action(self):
+        """After A's first test finishes (cabinet wait), joining B must repaint A."""
+        # End of test 1 (10 actions) — operator starts B during processing/results.
+        inst = self._single_field_player("A", progressed=9)
+        inst._post_results_index = 10
+        inst.display_phase = "wait_per_video"
+        inst.waiting_for_results = True
+        full_a = self._series("A", tests=5, actions=10)
+        full_b = self._series("B", tests=5, actions=6)
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else full_a)
+        resumed = []
+        cleared = []
+        shown = []
+
+        class Canvas:
+            def show(self):
+                shown.append("show")
+
+            def raise_(self):
+                shown.append("raise")
+
+            def show_field_opening(self, fid, card):
+                shown.append(("open", fid))
+
+            def _clear_field_summary(self, fields):
+                cleared.append(set(fields or set()))
+
+        inst.image_canvas = Canvas()
+        inst._reload_independent_entry = lambda restart_fields=None: resumed.append(
+            set(restart_fields or [])
+        )
+        inst._stop_all_screensaver = lambda: None
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L01-Entry",
+            "directory": "entry",
+            "subdirectory": "S1.T1",
+        }))
+        self.assertEqual(inst.display_phase, "action")
+        self.assertIn({"A"}, resumed)
+        self.assertIn({"A"}, cleared)
+        self.assertIn("show", shown)
+        self.assertIn(("open", "B"), shown)
+        # A continues from test 2 (index 10 of flat playlist → remaining list).
+        self.assertEqual(inst._field_opening_playlists["A"][0]["test_num"], 2)
+        self.assertFalse(inst._independent_done.get("A"))
+        self.assertTrue(inst._realtime_session_active())
+
+    def test_final_coach_clears_opening_summary_before_clip(self):
+        """Opening-card text on screens 3/4 must not block the final coach video."""
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._phase_field_levels = {"A": "L01-Entry"}
+        inst._phase_field_directories = {"A": "entry"}
+        inst._phase_field_modes = {}
+        inst.video_directory = "entry"
+        inst._coach_audio_field = None
+        inst._field_result_state = {}
+        inst._field_result_overlays = {}
+        inst._projected_results = None
+        inst._player_attr = lambda name, default=None: getattr(inst, name, default)
+        cleared = []
+        played = []
+
+        class Canvas:
+            def set_field_level_colors(self, colors):
+                pass
+
+            def _clear_field_summary(self, fields):
+                cleared.append(set(fields or set()))
+
+            def show(self):
+                pass
+
+            def play_layered_clips(self, layers):
+                played.append(layers)
+                return True
+
+        inst.image_canvas = Canvas()
+        inst._stop_field_screensaver = lambda fid: None
+        inst._opening_card_colors = lambda: {"A": ((241, 243, 245), (40, 44, 48))}
+        inst._result_logo_for_field = lambda fid: "C:/tmp/logo_entry.mp4"
+        coach = os.path.join(ROOT, "coach", "Jason", "U-13-Jason-50_-V01.mp4")
+        if not os.path.isfile(coach):
+            # Still verify summary clear + layer build when path is forced present.
+            coach = os.path.join(ROOT, "coach", "fake_coach.mp4")
+            original_isfile = player.os.path.isfile
+            player.os.path.isfile = lambda path, _orig=original_isfile: (
+                True if path == coach or path.endswith("logo_entry.mp4") else _orig(path)
+            )
+            self.addCleanup(lambda: setattr(player.os.path, "isfile", original_isfile))
+        panel = {"coach_video": coach, "slice_aet": "A1", "aac": 80}
+        inst._play_result_side_videos("A", panel)
+        self.assertEqual(cleared, [{"A"}])
+        self.assertTrue(played)
+        layers = played[0]
+        self.assertGreaterEqual(len(layers), 1)
+        # Coach layer is the non-looping overlay on screens 3 and 4.
+        coach_layers = [layer for layer in layers if layer[1] is False]
+        self.assertEqual(len(coach_layers), 1)
+        self.assertIn("A3", coach_layers[0][0])
+        self.assertIn("A4", coach_layers[0][0])
+
+    def test_sim_a_20s_then_join_b_via_operator_path(self):
+        """~20s of Field A (flat), then operator join B; every test on both fields finishes."""
+        # 7 actions × 3000ms ≈ 21s into test 1 of a 5×10 Foundation series.
+        progressed = 7
+        inst = self._single_field_player("A", progressed=progressed)
+        full_a = self._series("A", tests=5, actions=10)
+        full_b = self._series("B", tests=5, actions=6)
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else full_a)
+        inst._idle_screensaver_mode = True
+        inst._screensaver_fields = {"A", "B"}
+        stopped = []
+        inst._stop_all_screensaver = lambda: stopped.append("all")
+        # Canvas so join resumes A action while B opens.
+        inst.image_canvas = types.SimpleNamespace(
+            show=lambda: None,
+            raise_=lambda: None,
+            show_field_opening=lambda fid, card: None,
+            _clear_field_summary=lambda fields: None,
+        )
+        resumed = []
+        inst._reload_independent_entry = lambda restart_fields=None: resumed.append(
+            set(restart_fields or [])
+        )
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L00-Foundation",
+            "directory": "foundation",
+            "subdirectory": "SF-30N",
+        }))
+        self.assertIn("all", stopped)
+        self.assertFalse(inst._idle_screensaver_mode)
+        self.assertIn({"A"}, resumed)
+        self.assertEqual(len(inst._field_opening_playlists["A"]), 50 - progressed)
+        self.assertEqual(len(inst._field_opening_playlists["B"]), 30)
+        self.assertTrue(inst._realtime_session_active())
+        self.assertFalse(inst._field_wants_screensaver("A"))
+        self.assertFalse(inst._field_wants_screensaver("B"))
+
+        closed = {"A": [], "B": []}
+
+        def queue(fid, step):
+            closed[str(fid).upper()[:1]].append(int(step.get("test_num") or 0))
+
+        inst._queue_field_results = queue
+        guard = 0
+        while sorted(inst._finals) != ["A", "B"] and guard < 400:
+            guard += 1
+            moved = False
+            for fid in ("A", "B"):
+                if fid in inst._finals:
+                    continue
+                if inst._independent_done.get(fid):
+                    inst._continue_field_after_results(fid)
+                    moved = True
+                elif not inst._field_series_finished(fid):
+                    inst._advance_independent_field(fid, reload=False)
+                    moved = True
+            if not moved:
+                break
+        self.assertEqual(sorted(inst._finals), ["A", "B"])
+        # A already finished 0 full tests before join; remaining closes tests 1..5.
+        self.assertEqual(closed["A"], [1, 2, 3, 4, 5])
+        self.assertEqual(closed["B"], [1, 2, 3, 4, 5])
+        self.assertTrue(inst._every_independent_series_finished())
+
+    def test_goal_during_opening_reloads_with_restart_fields(self):
+        """Advance after goal must patch A (not silent apply) while B is opening."""
+        # Join during results so A resumes at test 2 action 1 (not last of test 1).
+        inst = self._single_field_player("A", progressed=9)
+        inst._post_results_index = 10
+        inst.display_phase = "wait_per_video"
+        inst.waiting_for_results = True
+        full_a = self._series("A", tests=5, actions=10)
+        full_b = self._series("B", tests=5, actions=6)
+        inst._build_one_field_playlist = lambda fid: list(full_b if fid == "B" else full_a)
+        patched = []
+        inst._patch_independent_fields = lambda entry, fields: patched.append(
+            (set(fields or []), dict((entry or {}).get("field_screens") or {}))
+        )
+        inst.image_canvas = types.SimpleNamespace(
+            show=lambda: None,
+            raise_=lambda: None,
+            show_field_opening=lambda fid, card: None,
+            _clear_field_summary=lambda fields: None,
+            set_screen_images=lambda *a, **k: None,
+        )
+        inst._stop_all_screensaver = lambda: None
+        self.assertTrue(inst._join_independent_field("B", {
+            "level": "L00-Foundation",
+            "directory": "foundation",
+            "subdirectory": "SF-30N",
+        }))
+        self.assertIn("B", inst._fields_opening)
+        self.assertEqual(inst._field_opening_playlists["A"][0]["test_num"], 2)
+        patched.clear()
+        inst._independent_index["A"] = 0
+        inst._independent_done["A"] = False
+        inst._advance_independent_field("A", reload=True)
+        self.assertTrue(patched)
+        fields, screens = patched[-1]
+        self.assertEqual(fields, {"A"})
+        self.assertIn("A", screens)
+        self.assertEqual(inst._independent_index["A"], 1)
+        self.assertEqual(
+            inst._field_opening_playlists["A"][inst._independent_index["A"]]["action_in_set"],
+            2,
+        )
+
 
 class JoinClearsScreensaverTests(unittest.TestCase):
+    def _saver_player(self):
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._screensaver_fields = set()
+        inst._screensaver_hold_until = {}
+        inst._fields_opening = set()
+        inst._field_opening_playlists = {}
+        inst._independent_index = {}
+        inst._independent_done = {}
+        inst._field_final_done = {}
+        inst._field_result_state = {}
+        inst._phase_active = []
+        inst.video_files = []
+        inst.playlist_finished = False
+        inst.display_phase = "idle"
+        inst._idle_screensaver_mode = False
+        inst.image_canvas = None
+        inst.speed_file_dir = "C:/Users/siama/Documents/simust_player"
+        inst._cabinet_controls = {"system_on": True, "screensaver_on": True}
+        return inst
+
+    def test_screensaver_stays_off_while_any_field_realtime(self):
+        """Saver only when both fields free — not on the idle half during A play / B join."""
+        inst = self._saver_player()
+        played = []
+        stopped = []
+        inst._play_field_screensaver = lambda fid: played.append(fid) or True
+        inst._stop_field_screensaver = lambda fid: stopped.append(fid)
+        original = player._read_cabinet_controls
+        player._read_cabinet_controls = lambda *_a, **_k: {
+            "system_on": True, "screensaver_on": True,
+        }
+        self.addCleanup(lambda: setattr(player, "_read_cabinet_controls", original))
+
+        # Idle cabinet → both halves get saver.
+        inst._sync_screensaver()
+        self.assertEqual(sorted(played), ["A", "B"])
+        played.clear()
+
+        # Field A mid-series: no saver on A or B.
+        inst.display_phase = "action"
+        inst._field_opening_playlists = {
+            "A": _scripted_series("A", 5, 10, 3000, 30000),
+        }
+        inst._independent_index = {"A": 0}
+        inst._independent_done = {"A": False}
+        inst._phase_active = ["A"]
+        inst._screensaver_fields = {"A", "B"}
+        self.assertTrue(inst._realtime_session_active())
+        inst._sync_screensaver()
+        self.assertEqual(played, [])
+        self.assertEqual(sorted(stopped), ["A", "B"])
+
+        # A still running, B joined — still no saver.
+        stopped.clear()
+        inst._field_opening_playlists["B"] = _scripted_series("B", 5, 6, 2700, 16200)
+        inst._independent_index["B"] = 0
+        inst._independent_done["B"] = False
+        inst._phase_active = ["A", "B"]
+        inst._screensaver_fields = set()
+        self.assertTrue(inst._realtime_session_active())
+        inst._sync_screensaver()
+        self.assertEqual(played, [])
+
+        # A finished finals but B still playing — still no saver on either half.
+        inst._independent_done["A"] = True
+        inst._independent_index["A"] = 49
+        inst._field_final_done = {"A": True}
+        self.assertTrue(inst._realtime_session_active())
+        inst._sync_screensaver()
+        self.assertEqual(played, [])
+
+        # Both free again → saver returns.
+        inst._field_opening_playlists = {}
+        inst._phase_active = []
+        inst.video_files = []
+        inst.display_phase = "ready"
+        inst._idle_screensaver_mode = False
+        inst._screensaver_fields = set()
+        self.assertFalse(inst._realtime_session_active())
+        inst._sync_screensaver()
+        self.assertEqual(sorted(played), ["A", "B"])
+
+    def test_single_field_wait_per_video_still_blocks_screensaver(self):
+        """Between tests, single-field wait must not look free for saver."""
+        inst = self._saver_player()
+        inst.display_phase = "wait_per_video"
+        inst._phase_active = ["A"]
+        inst.video_files = _scripted_series("A", 5, 10, 3000, 30000)
+        inst.playlist_finished = False
+        inst._field_opening_playlists = {}
+        self.assertTrue(inst._field_is_live("A"))
+        self.assertTrue(inst._realtime_session_active())
+        self.assertFalse(inst._field_wants_screensaver("A"))
+        self.assertFalse(inst._field_wants_screensaver("B"))
+
     def test_stop_screensaver_clears_tiles_even_when_field_not_tracked(self):
         inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
         inst._screensaver_fields = set()  # out of sync on purpose
@@ -1633,6 +2088,8 @@ class JoinClearsScreensaverTests(unittest.TestCase):
         canvas._logo_scale_screens = set()
         canvas._band_screens = set()
         canvas._screensaver_scale_screens = {"A1", "A2", "B1", "B2"}
+        canvas._pass_ssav_screens = set()
+        canvas._pass_ssav_timer = None
         canvas._screen_pixmaps = {"A1": object(), "B1": object()}
         canvas._still_pixmaps = {}
         canvas._pixmap_cache = {}
@@ -1644,11 +2101,139 @@ class JoinClearsScreensaverTests(unittest.TestCase):
         canvas._clear_field_summary = lambda fields: None
         canvas._stop_bounce_motion = lambda: None
         canvas._stop_screen_video = lambda: None
+        canvas._stop_pass_ssav = lambda: None
         canvas._load_pixmap = lambda path: None
         canvas._stamp_screensaver_pixels = lambda pixmaps, screens: None
         canvas.update = lambda: None
         canvas.set_screen_images({}, keep_videos=True, replace_fields={"B"})
         self.assertEqual(canvas._screensaver_scale_screens, {"A1", "A2"})
+
+
+class JoinCueHeartbeatTests(unittest.TestCase):
+    """While B opens, Field A's action cue must stay fresh for realtime."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.cue_path = os.path.join(self._tmp.name, "image_action_cue.json")
+        self._prev_cue = player.IMAGE_ACTION_CUE_FILE
+        player.IMAGE_ACTION_CUE_FILE = self.cue_path
+
+    def tearDown(self):
+        player.IMAGE_ACTION_CUE_FILE = self._prev_cue
+        self._tmp.cleanup()
+
+    def _write_cue(self, payload):
+        with open(self.cue_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+    def _read_cue(self):
+        with open(self.cue_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_keep_other_fields_preserves_live_half(self):
+        self._write_cue({
+            "active": True,
+            "seq": 2,
+            "timestamp": 1.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A3"], "seq": 2, "test_num": 2, "action_in_set": 1},
+            },
+        })
+        player._write_image_action_cue(
+            True,
+            {"B": ["B1"]},
+            seq=3,
+            action="PASS",
+            on_sec=3.0,
+            test_num=1,
+            action_in_set=1,
+            field_meta={"B": {"test_num": 1, "action_in_set": 1, "actions_in_set": 6}},
+            field_seqs={"B": 3},
+            keep_other_fields=True,
+        )
+        cue = self._read_cue()
+        self.assertIn("A", cue["fields"])
+        self.assertEqual(cue["fields"]["A"]["screens"], ["A3"])
+        self.assertEqual(cue["fields"]["B"]["screens"], ["B1"])
+        self.assertGreater(float(cue["timestamp"]), 1.0)
+
+    def test_heartbeat_refreshes_timestamp_while_sibling_opening(self):
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._fields_opening = {"B"}
+        inst._cue_heartbeat_at = 0.0
+        inst._flash_seq = 4
+        inst._field_cue_seq = {"A": 4}
+        inst.video_files = [{
+            "independent_fields": True,
+            "action": "PASS",
+            "on_ms": 3000,
+            "field_screens": {"A": ["A3"]},
+            "field_meta": {"A": {"test_num": 2, "action_in_set": 1, "actions_in_set": 10}},
+            "test_num": 2,
+            "action_in_set": 1,
+            "actions_in_set": 10,
+        }]
+        inst._realtime_session_active = lambda: True
+        inst._player_attr = lambda name, default=None: getattr(inst, name, default)
+        self._write_cue({
+            "active": True,
+            "seq": 4,
+            "timestamp": 10.0,
+            "fields": {"A": {"action": "PASS", "screens": ["A3"], "seq": 4}},
+        })
+        inst._heartbeat_independent_action_cue()
+        cue = self._read_cue()
+        self.assertIn("A", cue["fields"])
+        self.assertEqual(cue["fields"]["A"]["screens"], ["A3"])
+        self.assertGreater(float(cue["timestamp"]), 10.0)
+
+class ImageCueStaleRecoverTests(unittest.TestCase):
+    def test_same_raw_rearms_after_stale_gap(self):
+        import simust_realtime as rt
+
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.channels = {"A": types.SimpleNamespace(
+            label="Field A",
+            field_id="A",
+            session_active=False,
+            pending_start=None,
+            pending_end=False,
+            kp_appear_frames_left=None,
+            kp_clear_frames_left=None,
+            keypoint_hold_frames=0,
+            keypoint_frames_shown=0,
+            _frame_sync_cue_raw="IMAGE|2|PASS|A3|t2|a1",
+            _image_cue_was_off=True,
+            current_qr_block=None,
+            current_screens=[],
+            _pending_cue_info=None,
+        )}
+        cam.active_fields = {"A"}
+        cam._field_is_active = lambda fid: fid in cam.active_fields
+        cam._paused_fields = set()
+        cue = {
+            "active": True,
+            "seq": 2,
+            "timestamp": __import__("time").time(),
+            "on_sec": 3.0,
+            "fields": {
+                "A": {
+                    "action": "PASS",
+                    "screens": ["A3"],
+                    "seq": 2,
+                    "test_num": 2,
+                    "action_in_set": 1,
+                }
+            },
+        }
+        cam._read_image_action_cue = lambda: cue
+        cam._image_cue_for_field = rt.SimustRealtimeCamera._image_cue_for_field.__get__(cam)
+        cam._clear_goal_area_now = lambda *a, **k: None
+        cam._tick_image_cue_frame_sync("10:00:00.000", 1000.0)
+        ch = cam.channels["A"]
+        self.assertIsNotNone(ch.kp_appear_frames_left)
+        self.assertIsNotNone(ch._pending_cue_info)
+        self.assertFalse(ch._image_cue_was_off)
 
 
 if __name__ == "__main__":

@@ -41,7 +41,9 @@ def _patch_playlist_renders(testcase: unittest.TestCase) -> None:
     player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
     player._render_band_digit_image = lambda text, bg, fg: f"img:{text}:{bg}:{fg}"
     player._render_middle_colored_text_image = (
-        lambda text, bg, outer_fg, mid_fg: f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+        lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
+            f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+        )
     )
     player._compose_bouncing_flowers_rgb = (
         lambda width, height, seed, frame_i=0, base_rgb=None, fleet=None, kind="flowers": (

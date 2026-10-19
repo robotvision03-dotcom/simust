@@ -1,7 +1,10 @@
-"""Foundation omid: High Performance numbers, lowest first, advance on a goal."""
+"""Foundation omid: same scenario as SF-30N, coded pass .ssav (not the mp4)."""
+
+from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,39 +14,80 @@ import smart_simust_player as player  # noqa: E402
 
 
 class OmidPlaylistTests(unittest.TestCase):
-    def setUp(self):
-        self._render = player._render_entry_digit_image
-        player._render_entry_digit_image = lambda text, bg=None: f"digit-{text}"
+    def _fake_ssav(self, folder):
+        path = os.path.join(folder, "pass_pixels.ssav")
+        with open(path, "wb") as handle:
+            handle.write(b"SSAV1")
+            handle.write(b"\x00" * 16)
+        return path
 
-    def tearDown(self):
-        player._render_entry_digit_image = self._render
+    def test_omid_matches_sf30n_scenario_with_ssav(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ssav = self._fake_ssav(folder)
+            playlist = player._build_omid_playlist(["A"], directory=folder)
+            self.assertEqual(len(playlist), 50)
+            self.assertTrue(all(item.get("screen_ssav") == ssav for item in playlist))
+            self.assertTrue(all(item.get("screen_video") is None for item in playlist))
+            self.assertTrue(
+                all(
+                    str(path).endswith(".ssav")
+                    for item in playlist
+                    for path in (item.get("screen_images") or {}).values()
+                )
+            )
+            first = playlist[0]
+            self.assertEqual(first["on_ms"], player.SF_SCRIPTED_ON_MS)
+            self.assertEqual(first["gap_ms"], player.SF_SCRIPTED_GAP_MS)
+            self.assertEqual(first["arena_pair"], (1, 1))
+            self.assertEqual(
+                [item["arena_pair"] for item in playlist if item["test_num"] == 1],
+                list(player._SF30_T1),
+            )
+            # Same finish-balls stamp as SF-30N scripted playlists.
+            self.assertTrue(first.get("finish_balls"))
+            self.assertEqual(first.get("budget_ms"), 30000)
 
-    def test_numbers_run_lowest_to_highest_and_wait_for_the_goal(self):
-        playlist = player._build_omid_playlist(["A"])
-        self.assertEqual(len(playlist), 30)
-        for test_num in range(1, 6):
-            steps = [item for item in playlist if item["test_num"] == test_num]
-            self.assertEqual(len(steps), 6)
-            numbers = []
-            for item in steps:
-                self.assertTrue(item["advance_on_goal"])
-                self.assertTrue(item["skip_gap"])
-                self.assertEqual(item["on_ms"], 8000)
-                self.assertEqual(item["efficiency_max_sec"], 8.0)
-                numbers.append(int(str(item["label"]).split("number ")[1].split()[0]))
-            self.assertEqual(numbers, sorted(numbers))
-            self.assertNotIn("budget_ms", steps[0])
+    def test_sf30n_still_uses_pass_image_not_ssav(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jpeg = os.path.join(folder, "pass.jpeg")
+            open(jpeg, "wb").close()
+            self._fake_ssav(folder)
+            playlist = player._build_scripted_sf_playlist(
+                "SF-30N", player.SF30N_SCRIPT, ["A"], folder,
+            )
+            self.assertEqual(len(playlist), 50)
+            self.assertTrue(
+                all(
+                    str(path).endswith((".jpeg", ".jpg", ".png"))
+                    for item in playlist
+                    for path in (item.get("screen_images") or {}).values()
+                )
+            )
+            self.assertTrue(all(not item.get("screen_ssav") for item in playlist))
 
-    def test_omid_2_shares_twelve_seconds_across_six_actions(self):
-        playlist = player._build_omid_playlist(["A"], name="omid_2", budget_ms=17000)
-        self.assertEqual(len(playlist), 30)
-        for test_num in range(1, 6):
-            steps = [item for item in playlist if item["test_num"] == test_num]
-            self.assertEqual(len(steps), 6)
-            self.assertTrue(all(item["budget_ms"] == 17000 for item in steps))
-            self.assertTrue(all(item["advance_on_goal"] for item in steps))
-            numbers = [
-                int(str(item["label"]).split("number ")[1].split()[0])
-                for item in steps
-            ]
-            self.assertEqual(numbers, sorted(numbers))
+
+class PassSsavConvertTests(unittest.TestCase):
+    def test_convert_writes_readable_ssav(self):
+        import screen_saver_anim as anim
+
+        sample = os.path.join(
+            os.path.expanduser("~"),
+            "Documents",
+            "simust_player",
+            "L00-Foundation-Challenge",
+            "omid",
+            "pass.mp4",
+        )
+        if not os.path.isfile(sample):
+            self.skipTest("omid pass.mp4 not on this machine")
+        with tempfile.TemporaryDirectory() as folder:
+            dest = os.path.join(folder, "pass_pixels.ssav")
+            out = anim.convert_video_to_ssav(sample, dest)
+            self.assertEqual(out, dest)
+            frames, interval = anim.load_ssav_pixels_file(dest)
+            self.assertGreater(len(frames), 10)
+            self.assertGreaterEqual(interval, 16)
+
+
+if __name__ == "__main__":
+    unittest.main()

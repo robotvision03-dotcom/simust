@@ -20,7 +20,9 @@ class Series2PlaylistTests(unittest.TestCase):
         player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
         player._render_band_digit_image = lambda text, bg, fg: f"img:{text}:{bg}:{fg}"
         player._render_middle_colored_text_image = (
-            lambda text, bg, outer_fg, mid_fg: f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+            lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
+                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+            )
         )
         self._compose = getattr(player, "_compose_bouncing_flowers_rgb", None)
         self._composite = getattr(player, "_composite_overlay_on_bg", None)
@@ -178,7 +180,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_HEIGHT, 0.30 * 1.4 * 1.3, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_GAP_LINES, 0)
         self.assertAlmostEqual(player.OPENING_LOGO_TEXT_DOWN_FRAC, 0.20, places=3)
-        self.assertEqual(player.OPENING_LOGO_TEXT_LIFT_LINES, 1)
+        self.assertEqual(player.OPENING_LOGO_TEXT_LIFT_LINES, 3)
 
 
 if __name__ == "__main__":

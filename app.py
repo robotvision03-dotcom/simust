@@ -73,6 +73,8 @@ from simust_display_layout import (
     slice_span_for_ids,
     content_width,
     content_x_box,
+    content_band_layout,
+    content_band_center_y,
     screen_content_offset,
     screen_content_offset_y,
 )
@@ -1965,6 +1967,29 @@ async def operator_console():
     )
 
 
+def _foundation_subdirs_for_operator():
+    """SF unlock chain + extra modes that exist as folders under Foundation-Challenge."""
+    root = os.path.join(SIMUST_PLAYER_DIRECTORY, "L00-Foundation-Challenge")
+    on_disk = set()
+    if os.path.isdir(root):
+        try:
+            on_disk = {
+                name for name in os.listdir(root)
+                if os.path.isdir(os.path.join(root, name)) and name != "files"
+            }
+        except OSError:
+            on_disk = set()
+    ordered = list(simust_progress.FOUNDATION_PLAYLISTS)
+    for name in simust_progress.FOUNDATION_EXTRA_PLAYLISTS:
+        if name in on_disk and name not in ordered:
+            ordered.append(name)
+    extras = [
+        name for name in simust_progress.FOUNDATION_EXTRA_PLAYLISTS
+        if name in ordered
+    ]
+    return ordered, extras
+
+
 @app.get("/app-config")
 async def app_config():
     levels = []
@@ -1983,13 +2008,13 @@ async def app_config():
             "video_count": 0,
             "level_num": ALL_LEVELS.index(level_id) + 1,
         })
+    foundation_subdirs, foundation_extras = _foundation_subdirs_for_operator()
     return {
         "public_mode": PUBLIC_MODE,
         "operator_path": "/operator",
         "player_path": "/login",
-        "foundation_subdirs": [
-            "SF-30N", "SF-60N", "SF-110N", "SF-180N",
-        ],
+        "foundation_subdirs": foundation_subdirs,
+        "foundation_extra_playlists": foundation_extras,
         "levels": levels,
         "worldwide": True,
         "lab_online": True if not PUBLIC_MODE else bool((simust_remote.get_status() or {}).get("lab_online")),
@@ -2071,7 +2096,12 @@ async def get_levels():
                 "video_count": video_count,
                 "level_num": ALL_LEVELS.index(level_id) + 1  # just for ordering
             })
-        return {"levels": levels_info}
+        foundation_subdirs, foundation_extras = _foundation_subdirs_for_operator()
+        return {
+            "levels": levels_info,
+            "foundation_subdirs": foundation_subdirs,
+            "foundation_extra_playlists": foundation_extras,
+        }
     except Exception as e:
         logger.error(f"Failed to get levels: {e}")
         raise HTTPException(500, f"Failed to get levels: {str(e)}")
@@ -2305,6 +2335,7 @@ async def start_realtime_playback(req: Request):
         _realtime_dirs_at_start = _realtime_dir_names()
         write_pause_setting(False)
         force_kill_smart_player()
+        phase_active = ["A"]
         try:
             if not players_payload and player_id:
                 players_payload = [{
@@ -2380,7 +2411,12 @@ async def start_realtime_playback(req: Request):
                     "total_videos": 0,
                     "progress": 0,
                     "message": "Starting playback",
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    # Stop buttons light immediately; player refreshes this next.
+                    "fields": {
+                        "A": "playing" if "A" in (phase_active or []) else "idle",
+                        "B": "playing" if "B" in (phase_active or []) else "idle",
+                    },
                 }, f)
         except Exception as e:
             logger.warning(f"Could not reset playback status file: {e}")
@@ -3677,12 +3713,12 @@ def _field_player_profiles():
 
 
 def _results_screen_box(sid, width, height):
-    """Where one screen's picture sits on the results strip."""
+    """Where one screen's picture sits — same content_x_box as beginning info."""
     order = list(RESULTS_SLICE_ORDER)
     if sid not in order:
         return 0, 0, 2, 2
     index = order.index(sid)
-    left, _right, rect_w = content_x_box(index, sid, width, len(order))
+    left, rect_w, _cx, _cy = content_band_layout(index, sid, width, height, len(order))
     top = max(0, int(screen_content_offset_y(sid) or 0))
     box_w = max(2, int(rect_w) - (int(rect_w) % 2))
     box_h = int(height) - top
@@ -3932,7 +3968,9 @@ def _place_logo_on_screens_3_and_4(frame, fields):
         if sid not in order:
             continue
         index = order.index(sid)
-        left, _right, rect_w = content_x_box(index, sid, width, len(order))
+        left, rect_w, _cx, center_y = content_band_layout(
+            index, sid, width, height, len(order),
+        )
         top = screen_content_offset_y(sid)
         box_top = max(0, int(top))
         box_h = height - box_top
@@ -3942,8 +3980,6 @@ def _place_logo_on_screens_3_and_4(frame, fields):
         fh, fw = fitted.shape[:2]
         x = int(left) + (int(rect_w) - fw) // 2
         # Logo bottom lines up with the bottom of the orange results label.
-        offset_y = screen_content_offset_y(sid)
-        center_y = CHART_CENTER_Y + int(offset_y) + int(round(height * RESULTS_BAND_DROP))
         orange_bottom = center_y + RING_RADIUS + 20 + 65
         y = int(round(orange_bottom - fh + height * (0.10 - 0.064)))
         _blit_logo(frame, fitted, x, y)
@@ -5003,11 +5039,12 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 by_slice[panel["slice_acc"]] = ("acc", panel)
                 by_slice[panel["slice_disp"]] = ("disp", panel)
             for i, num in enumerate(slice_numbers):
-                x_offset, tile_width = _slice_box(i)
-                offset_x = screen_content_offset(num)
-                offset_y = screen_content_offset_y(num)
-                center_x = x_offset + tile_width // 2 + offset_x
-                center_y = CHART_CENTER_Y + offset_y + int(round(height * RESULTS_BAND_DROP))
+                if num is None:
+                    continue
+                # Same content_x_box + generated offsets as beginning information.
+                _left, rect_w, center_x, center_y = content_band_layout(
+                    i, num, width, height, num_tiles,
+                )
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:
@@ -5015,25 +5052,25 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
                 kind, panel = hit
                 if kind == "aet":
                     draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["aet_percent"] or 0), 100)
-                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Execution Time")
+                    draw_label_rectangle(img, center_x, rect_w, rect_y, "Execution Time")
                 elif kind == "ae":
                     draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["avg_ae"] or 0), 100)
-                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Efficiency")
+                    draw_label_rectangle(img, center_x, rect_w, rect_y, "Efficiency")
                 elif kind == "acc":
                     draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["aac"] or 0), 100)
-                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Accuracy")
+                    draw_label_rectangle(img, center_x, rect_w, rect_y, "Accuracy")
                 elif kind == "disp":
                     draw_ring_chart(img, center_x, center_y, RING_RADIUS, float(panel["economy_percent"] or 0), 100)
-                    draw_label_rectangle(img, center_x, content_width(tile_width), rect_y, "Displacement")
+                    draw_label_rectangle(img, center_x, rect_w, rect_y, "Displacement")
 
             pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
             for i, num in enumerate(slice_numbers):
-                x_offset, tile_width = _slice_box(i)
-                offset_x = screen_content_offset(num)
-                offset_y = screen_content_offset_y(num)
-                center_x = x_offset + tile_width // 2 + offset_x
-                center_y = CHART_CENTER_Y + offset_y + int(round(height * RESULTS_BAND_DROP))
+                if num is None:
+                    continue
+                _left, _rect_w, center_x, center_y = content_band_layout(
+                    i, num, width, height, num_tiles,
+                )
                 rect_y = center_y + RING_RADIUS + LABEL_VERTICAL_GAP
                 hit = by_slice.get(num)
                 if not hit:

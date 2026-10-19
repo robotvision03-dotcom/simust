@@ -10,8 +10,8 @@ android {
         applicationId = "com.simust.playsmart"
         minSdk = 24
         targetSdk = 36
-        versionCode = 17
-        versionName = "2.15"
+        versionCode = 18
+        versionName = "2.16"
     }
 
     buildTypes {

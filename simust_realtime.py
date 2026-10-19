@@ -153,6 +153,28 @@ def _cue_on_sec(cue=None):
     on_sec, _ = _read_teammate_on_gap()
     return on_sec
 
+
+def _image_cue_stale_sec(cue=None):
+    """How long an active cue may sit without a timestamp refresh.
+
+    Plain cues expire at 5s (player heartbeat must refresh during join openings).
+    finish_balls keeps the cue alive for the shared clock so cylinders do not
+    tear down mid-series when a rewrite is delayed.
+    """
+    if not isinstance(cue, dict):
+        return 5.0
+    if cue.get("finish_balls"):
+        try:
+            budget = float(cue.get("budget_total_sec") or 0)
+        except (TypeError, ValueError):
+            budget = 0.0
+        try:
+            on_sec = float(cue.get("on_sec") or 0)
+        except (TypeError, ValueError):
+            on_sec = 0.0
+        return max(5.0, budget, on_sec) + 2.0
+    return 5.0
+
 DETECTION_CONF = 0.12  # lower to keep blurred / distant balls (GOAL motion blur)
 MAX_PLAYERS = 2
 
@@ -5292,16 +5314,35 @@ class SimustRealtimeCamera:
             field_on = bool(hit and hit.get("raw") and hit.get("screens"))
             cue_raw = hit.get("raw") if field_on else None
 
+            # Stale cue gaps (join opening >5s without heartbeat) clear field_on.
+            # When the cue returns — even with the same raw — re-arm if this
+            # field's session already ended; otherwise cylinders stay frozen.
+            was_cue_off = bool(getattr(ch, "_image_cue_was_off", False))
+            if not field_on:
+                ch._image_cue_was_off = True
+            else:
+                ch._image_cue_was_off = False
+
             # New cue arms its own 17f delay immediately, but the current 60f hold
             # keeps running. Ending it here cut every action to ~2.6s (next pass
             # arrives during the tail of the 3s hold).
             just_armed = False
-            if field_on and cue_raw and cue_raw != getattr(ch, "_frame_sync_cue_raw", None):
+            same_raw = bool(cue_raw and cue_raw == getattr(ch, "_frame_sync_cue_raw", None))
+            recover_after_stale = bool(
+                field_on
+                and cue_raw
+                and was_cue_off
+                and same_raw
+                and not ch.session_active
+                and not ch.pending_start
+                and ch.kp_appear_frames_left is None
+            )
+            if field_on and cue_raw and (not same_raw or recover_after_stale):
                 # The other field rewrites this cue on every goal. A new seq
                 # for the same screen must not restart this cylinder.
                 block = ch.current_qr_block if isinstance(ch.current_qr_block, dict) else {}
                 same_action = False
-                if ch.session_active and block:
+                if ch.session_active and block and not recover_after_stale:
                     try:
                         same_test = int(hit.get("test_num") or 0) == int(block.get("test_num") or 0)
                         same_step = int(hit.get("action_in_set") or 0) == int(block.get("action_in_set") or 0)
@@ -5347,9 +5388,11 @@ class SimustRealtimeCamera:
                     }
                     ch.kp_appear_frames_left = shift
                     just_armed = True
+                    recover_note = " [recover after stale]" if recover_after_stale else ""
                     print(
-                        f"[{ch.label}] cue ON → keypoints in {shift}f, "
+                        f"[{ch.label}] cue ON -> keypoints in {shift}f, "
                         f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
+                        f"{recover_note}"
                     )
 
             # --- Appear countdown runs even while the previous hold is still up ---
@@ -5751,12 +5794,14 @@ class SimustRealtimeCamera:
         }
         if not cue:
             return empty if not CAMERA_QR_ENABLED else None
-        # Stale cue (player crashed): ignore after a few seconds without refresh
+        # Stale cue (player crashed / hung): ignore after the cue age window.
+        # finish_balls keeps a longer window; plain cues expire at 5s unless the
+        # smart player heartbeat refreshes the timestamp during a join opening.
         try:
             ts = float(cue.get("timestamp") or 0)
             if ts and (time.time() - ts) > 3.0 and not cue.get("active"):
                 return empty if not CAMERA_QR_ENABLED else None
-            if ts and (time.time() - ts) > 5.0:
+            if ts and (time.time() - ts) > _image_cue_stale_sec(cue):
                 return empty if not CAMERA_QR_ENABLED else None
         except Exception:
             pass

@@ -938,14 +938,34 @@
             return null;
         };
 
-        // Subdirectories for Foundation — locked until paid 30-minute credits unlock them
+        // Subdirectories for Foundation — SF paid unlock chain + extras (omid, …)
+        // /get-levels refreshes this from folders on the lab disk.
         var LEVEL_SUBDIRS = {
             'L00-Foundation': [
-                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'
+                'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N',
+                'digit', 'rotation', 'omid', 'omid_2'
             ]
         };
-        var FOUNDATION_PLAYLISTS = LEVEL_SUBDIRS['L00-Foundation'].slice();
-        var FOUNDATION_EXTRA_PLAYLISTS = [];
+        var FOUNDATION_PLAYLISTS = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
+        var FOUNDATION_EXTRA_PLAYLISTS = ['digit', 'rotation', 'omid', 'omid_2'];
+        var applyFoundationSubdirs = function(subdirs, extras) {
+            if (Array.isArray(subdirs) && subdirs.length) {
+                LEVEL_SUBDIRS['L00-Foundation'] = subdirs.slice();
+                FOUNDATION_PLAYLISTS = subdirs.filter(function(name) {
+                    return String(name || '').indexOf('SF-') === 0;
+                });
+                if (!FOUNDATION_PLAYLISTS.length) {
+                    FOUNDATION_PLAYLISTS = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
+                }
+            }
+            if (Array.isArray(extras)) {
+                FOUNDATION_EXTRA_PLAYLISTS = extras.slice();
+            } else if (Array.isArray(subdirs) && subdirs.length) {
+                FOUNDATION_EXTRA_PLAYLISTS = subdirs.filter(function(name) {
+                    return FOUNDATION_PLAYLISTS.indexOf(name) === -1;
+                });
+            }
+        };
         var LEVEL_MAIN_BUTTONS = [
             { id: 'L00-Foundation', label: 'Foundation', bg: '#7dffa8', fg: '#0c1c12' },
             { id: 'L01-Entry', label: 'Entry', bg: '#F1F3F5', fg: '#282c30' },
@@ -3853,6 +3873,10 @@
                     if (res.data && res.data.levels) {
                         setAllLevels(res.data.levels);
                     }
+                    applyFoundationSubdirs(
+                        res.data && res.data.foundation_subdirs,
+                        res.data && res.data.foundation_extra_playlists
+                    );
                 }).catch(function(e) { console.error("Failed to fetch levels:", e); });
             };
 
@@ -4589,17 +4613,9 @@
                     joinRealtimeField(liveNow.A ? "B" : "A");
                     return;
                 }
-                // Series finished but the player is still up — start the next level
-                // on that same process instead of killing it mid-save.
-                if (!liveNow.A && !liveNow.B && realtimeRunningRef.current && !sessionSavedRef.current) {
-                    if (playBoth) {
-                        joinRealtimeField("A");
-                        setTimeout(function() { joinRealtimeField("B"); }, 900);
-                        return;
-                    }
-                    joinRealtimeField(origin);
-                    return;
-                }
+                // After a series finishes both fields are idle. Always do a fresh
+                // start-realtime-playback (camera + visualization + Stop active).
+                // Do not join into a leftover ready/idle player process.
 
                 setError("");
                 realtimeRunningRef.current = true;
@@ -4871,12 +4887,19 @@
                                     if (!nextRunning.A && !nextRunning.B) {
                                         realtimePausedRef.current = false;
                                         setRealtimePaused(false);
+                                        // Finish-process / final / series complete: release Stop + session lock.
+                                        if (state === "ready" || state === "idle" || state === "playing_final"
+                                            || state === "completed" || state === "closed"
+                                            || state === "wait_final" || state === "final") {
+                                            realtimeRunningRef.current = false;
+                                            setRealtimeRunning(false);
+                                        }
                                     }
                                 }
                             }
-                            // Training finished — release Play as soon as final summary starts
+                            // Training finished — release Play/Stop as soon as final summary starts
                             // (do not wait up to ~60s for playing_final to become completed).
-                            if (state === "playing_final") {
+                            if (state === "playing_final" || state === "final" || state === "wait_final") {
                                 sawActivePlayback = true;
                                 finishFromStatus();
                                 return;
@@ -4886,16 +4909,11 @@
                                 return;
                             }
                             if (state === "ready") {
-                                // Independent series finished. Stop buttons are idle;
-                                // keep the session open for the next level Play.
+                                // Series complete — release Play/Stop and clear the
+                                // half-open session so the next Play is a clean start
+                                // (camera, visualization, Stop buttons).
                                 sawActivePlayback = true;
-                                if (runningFieldsRef.current.A || runningFieldsRef.current.B) {
-                                    runningFieldsRef.current = { A: false, B: false };
-                                    setRunningFields({ A: false, B: false });
-                                    pausedFieldsRef.current = { A: false, B: false };
-                                    setPausedFields({ A: false, B: false });
-                                }
-                                realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
+                                finishFromStatus();
                                 return;
                             }
                             if (state === "error") {
@@ -5243,7 +5261,8 @@
                         } else if (
                             realtimeRunningRef.current
                             && (state === 'idle' || state === 'completed' || state === 'closed'
-                                || state === 'playing_final' || state === 'aborted')
+                                || state === 'playing_final' || state === 'aborted'
+                                || state === 'ready' || state === 'final' || state === 'wait_final')
                         ) {
                             // Lab finished or stopped — free Play/Stop promptly.
                             if (state === 'aborted') {
@@ -5254,6 +5273,28 @@
                             setRealtimeRunning(false);
                             realtimePausedRef.current = false;
                             setRealtimePaused(false);
+                            runningFieldsRef.current = { A: false, B: false };
+                            setRunningFields({ A: false, B: false });
+                            pausedFieldsRef.current = { A: false, B: false };
+                            setPausedFields({ A: false, B: false });
+                        } else if (pb && pb.fields && typeof pb.fields === 'object') {
+                            var map = pb.fields;
+                            var synced = {
+                                A: map.A === 'playing',
+                                B: map.B === 'playing'
+                            };
+                            var prev = runningFieldsRef.current || { A: false, B: false };
+                            if (!!synced.A !== !!prev.A || !!synced.B !== !!prev.B) {
+                                runningFieldsRef.current = synced;
+                                setRunningFields(synced);
+                                if (!synced.A && !synced.B && realtimeRunningRef.current
+                                    && (state === 'ready' || state === 'idle' || state === 'playing_final'
+                                        || state === 'completed' || state === 'closed'
+                                        || state === 'wait_final' || state === 'final')) {
+                                    realtimeRunningRef.current = false;
+                                    setRealtimeRunning(false);
+                                }
+                            }
                         }
                     }).catch(function(err) {
                         var status = err && err.response && err.response.status;
