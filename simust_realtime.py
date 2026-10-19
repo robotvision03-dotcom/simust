@@ -6502,7 +6502,8 @@ class SimustRealtimeCamera:
                     self._tick_image_cue_frame_sync(current_time_str, current_timestamp)
                     if self.recording_active and self.video_saver.is_recording:
                         if os.path.isfile(STOP_SAVE_FILE):
-                            print("Last pass image finished — stopping video save")
+                            # Player signals this after final results end, or on Stop.
+                            print("Stopping video save (final results done or operator Stop)")
                             self.video_saver.stop()
                             try:
                                 os.remove(STOP_SAVE_FILE)

@@ -12840,9 +12840,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """Fallback when final clip never ends."""
         self._on_field_final_finished()
 
+    def _signal_stop_video_save(self, reason=""):
+        """Ask realtime to finalize realtime_recording.mp4 (camera may keep running)."""
+        try:
+            with open(STOP_SAVE_FILE, "w", encoding="utf-8") as handle:
+                handle.write("1")
+            logger.info(
+                "Asked realtime to stop video save%s",
+                f" ({reason})" if reason else "",
+            )
+        except Exception as exc:
+            logger.warning("Could not signal video stop: %s", exc)
+
     def _stop_camera_only(self):
         if self._realtime_stopped:
             return
+        self._signal_stop_video_save("camera stop")
         self._realtime_stopped = True
         try:
             logger.info("Stopping camera process only...")
@@ -12864,6 +12877,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _stop_realtime(self):
         if self._realtime_stopped:
             return
+        # Operator Stop (or forced cleanup) — end the save immediately.
+        self._signal_stop_video_save("operator stop")
         self._realtime_stopped = True
         try:
             logger.info("Stopping realtime process (camera + player) via backend...")
@@ -12897,16 +12912,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._results_epoch = int(getattr(self, "_results_epoch", 0) or 0) + 1
         self._results_finished_epoch = None
         self.display_phase = "wait_per_video"
+        # Keep realtime_recording.mp4 open through per-video + final results.
+        # Only operator Stop (or session close after finals) ends the save.
         more_tests = getattr(self, "_post_results_index", None) is not None
         if more_tests:
             logger.info("Test finished — saved video stays open for the next test")
         else:
-            try:
-                with open(STOP_SAVE_FILE, "w", encoding="utf-8") as f:
-                    f.write("1")
-                logger.info("Last test finished — asked realtime to stop video save")
-            except Exception as exc:
-                logger.warning("Could not signal video stop: %s", exc)
+            logger.info("Last test finished — saved video stays open until final results end")
         self.check_timer.stop()
         self._stop_action_timer()
         self._wait_started = time.time()
