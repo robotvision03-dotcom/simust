@@ -553,34 +553,119 @@ def _insert_reservation(
     return created
 
 
+def _clear_overlapping_field_bookings(
+    bookings: list,
+    start: datetime,
+    end: datetime,
+    field: str,
+    keep_player_id: str = "",
+) -> list:
+    """Drop overlapping bookings on a field so Elite/World Class can freeze it."""
+    try:
+        import simust_fields
+        field_id = simust_fields.normalize_field(field) or "A"
+    except Exception:
+        field_id = "B" if str(field or "A").strip().upper().startswith("B") else "A"
+    keep = str(keep_player_id or "").strip()
+    remaining = []
+    removed = []
+    for item in bookings or []:
+        try:
+            import simust_fields
+            existing_field = simust_fields.normalize_field(item.get("field")) or "A"
+        except Exception:
+            existing_field = "B" if str(item.get("field") or "A").strip().upper().startswith("B") else "A"
+        if existing_field != field_id:
+            remaining.append(item)
+            continue
+        try:
+            existing_start = _parse_iso_dt(item.get("start", ""), "start")
+            existing_end = _parse_iso_dt(item.get("end", ""), "end")
+        except HTTPException:
+            remaining.append(item)
+            continue
+        if not _intervals_overlap(start, end, existing_start, existing_end):
+            remaining.append(item)
+            continue
+        owner = str(item.get("player_id") or "").strip()
+        if keep and owner == keep:
+            remaining.append(item)
+            continue
+        removed.append(item.get("id"))
+        logger.info(
+            "Elite/World Class booking cleared Field %s reservation %s (%s)",
+            field_id,
+            item.get("id"),
+            owner or "?",
+        )
+    return remaining
+
+
 def _mirror_combined_field_booking(created, **kwargs) -> None:
-    """Elite and World Class need both fields. The field that was booked keeps the score."""
+    """Elite / World Class: auto-reserve both fields; booked field keeps the score.
+
+    The other field is frozen for the same window. Any other player already booked
+    there is removed so nobody else can take that half.
+    """
     try:
         users = load_users()
         progress = simust_progress.ensure_progress(users.get(kwargs["username"]) or {})
-        level = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
+        progress = simust_progress.sync_current_development_level(progress, ALL_LEVELS)
+        level = progress.get("current_level") or ""
     except Exception:
         return
     if not _combined_level(level):
         return
     other = "B" if str(created.get("field") or "A").upper().startswith("A") else "A"
+    start = kwargs["start"]
+    end = kwargs["end"]
+    username = kwargs["username"]
+    with RESERVATION_LOCK:
+        bookings = load_reservations()
+        bookings = _clear_overlapping_field_bookings(
+            bookings, start, end, other, keep_player_id=username
+        )
+        save_reservations(bookings)
     try:
         mirror = _insert_reservation(
-            username=kwargs["username"],
+            username=username,
             display_name=kwargs["display_name"],
-            start=kwargs["start"],
-            end=kwargs["end"],
+            start=start,
+            end=end,
             duration=kwargs["duration"],
             payment_status=kwargs["payment_status"],
-            amount_eur=kwargs["amount_eur"],
+            amount_eur=0,
             source=kwargs["source"],
             payment_ref=kwargs.get("payment_ref") or "",
             field=other,
             mirror=True,
         )
-    except HTTPException:
-        logger.info("Field %s is already booked, so it was not added automatically", other)
-        return
+    except HTTPException as exc:
+        # Race: clear again and retry once.
+        logger.info("Field %s still busy for Elite/World Class (%s) — clearing and retrying", other, exc.detail)
+        with RESERVATION_LOCK:
+            bookings = load_reservations()
+            bookings = _clear_overlapping_field_bookings(
+                bookings, start, end, other, keep_player_id=username
+            )
+            save_reservations(bookings)
+        try:
+            mirror = _insert_reservation(
+                username=username,
+                display_name=kwargs["display_name"],
+                start=start,
+                end=end,
+                duration=kwargs["duration"],
+                payment_status=kwargs["payment_status"],
+                amount_eur=0,
+                source=kwargs["source"],
+                payment_ref=kwargs.get("payment_ref") or "",
+                field=other,
+                mirror=True,
+            )
+        except Exception:
+            logger.exception("Could not book the other field for Elite/World Class after clear")
+            return
     except Exception:
         logger.exception("Could not book the other field for Elite/World Class")
         return
@@ -590,9 +675,16 @@ def _mirror_combined_field_booking(created, **kwargs) -> None:
             if item.get("id") == created.get("id"):
                 item["score_source"] = True
                 item["paired_field"] = other
+                item["combined_level"] = True
             elif item.get("id") == mirror.get("id"):
                 item["score_source"] = False
                 item["paired_from"] = created.get("id")
+                item["combined_level"] = True
+                item["amount_eur"] = 0
+                item["player_name"] = (
+                    str(item.get("player_name") or created.get("player_name") or "")
+                    + " (paired)"
+                ).strip()
         save_reservations(bookings)
 
 
@@ -1059,8 +1151,6 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
                 playlists = list(progress.get("unlocked_playlists") or [])
                 simust_progress._unique_append(playlists, nxt_sf)
                 progress["unlocked_playlists"] = playlists
-                progress["current_level"] = simust_progress.FOUNDATION_LEVEL
-                progress["current_playlist"] = nxt_sf
             else:
                 next_level = get_next_level(level_played)
                 _open_level(progress, next_level)
@@ -1070,6 +1160,9 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
             progress["completed_levels"] = completed_levels
             next_level = get_next_level(level_played)
             _open_level(progress, next_level)
+    # Always stamp CURRENT DEVELOPMENT LEVEL to the furthest unlocked set
+    # (pass unlocks next; fail keeps the same set for the next attempt / booking).
+    simust_progress.sync_current_development_level(progress, ALL_LEVELS)
     users[player_id]["progress"] = progress
     return True
 
@@ -1081,9 +1174,7 @@ def _open_level(progress: dict, next_level: Optional[str]) -> None:
     levels = list(progress.get("unlocked_levels") or [])
     simust_progress._unique_append(levels, next_level)
     progress["unlocked_levels"] = levels
-    progress["current_level"] = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
-    if progress["current_level"] != simust_progress.FOUNDATION_LEVEL:
-        progress["current_playlist"] = ""
+    simust_progress.sync_current_development_level(progress, ALL_LEVELS)
     eligible = [item for item in (progress.get("eligible_levels") or []) if item != next_level]
     progress["eligible_levels"] = eligible
 
@@ -1108,16 +1199,17 @@ def _booking_seconds_left(player_id: str, field: str = "A") -> float:
 
 
 def _continue_target(progress: dict) -> dict:
-    """The highest open set, and whether reservation time is left to play it again."""
-    progress = progress or {}
-    level = simust_progress.highest_unlocked_level(progress, ALL_LEVELS)
+    """Highest unlocked set — where the player continues while booking time remains."""
+    progress = simust_progress.sync_current_development_level(
+        dict(progress or {}), ALL_LEVELS
+    )
+    level = progress.get("current_level") or simust_progress.FOUNDATION_LEVEL
     subdirectory = ""
     if level == simust_progress.FOUNDATION_LEVEL:
         subdirectory = progress.get("current_playlist") or simust_progress.highest_foundation_playlist(progress)
     directory = get_level_path(level)
     if level == simust_progress.FOUNDATION_LEVEL and subdirectory:
         directory = os.path.join(directory, subdirectory)
-    player_id = ""
     return {
         "level": level,
         "subdirectory": subdirectory,
@@ -1125,12 +1217,147 @@ def _continue_target(progress: dict) -> dict:
         "passed": False,
         "continue_play": False,
         "seconds_left": 0,
-        "player_id": player_id,
+        "player_id": "",
     }
 
 
+def _append_performance_trend_session(
+    player_id: str,
+    level: str,
+    subdirectory: str,
+    statistics: dict,
+    field: str = "",
+) -> Optional[str]:
+    """Save a final into player reports so PERFORMANCE TREND updates immediately."""
+    player_id = str(player_id or "").strip()
+    if not player_id:
+        return None
+    try:
+        users = load_users()
+        user = users.get(player_id) or {}
+        player_dir = os.path.join(PLAYER_REPORTS_DIR, player_id)
+        os.makedirs(player_dir, exist_ok=True)
+        session_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] + "_final"
+        stats = {
+            "correct": int((statistics or {}).get("correct") or 0),
+            "late": int((statistics or {}).get("late") or 0),
+            "wrong": int((statistics or {}).get("wrong") or 0),
+            "miss": int((statistics or {}).get("miss") or 0),
+            "avg_ae": float((statistics or {}).get("avg_ae") or 0.0),
+            "avg_finishing_time": float((statistics or {}).get("avg_finishing_time") or 0.0),
+            "total_distance": float((statistics or {}).get("total_distance") or 0.0),
+            "aac": float((statistics or {}).get("aac") or 0.0),
+        }
+        total = stats["correct"] + stats["late"] + stats["wrong"] + stats["miss"]
+        if total > 0 and not stats["aac"]:
+            stats["aac"] = (stats["correct"] + stats["late"]) / total * 100.0
+        report = {
+            "player": {
+                "id": player_id,
+                "name": user.get("name") or "",
+                "surname": user.get("surname") or "",
+                "playerId": player_id,
+                "club": user.get("club") or "",
+                "team": user.get("team") or "",
+                "age": user.get("age") or "",
+                "image": user.get("image") or "",
+            },
+            "session": {
+                "id": session_id,
+                "timestamp": datetime.now().isoformat(),
+                "level": level,
+                "subdirectory": subdirectory or "",
+                "field": str(field or "").upper()[:1],
+                "final_results": True,
+                "total_duration_minutes": 0,
+                "video_count": 0,
+            },
+            "statistics": stats,
+            "actions": [],
+            "total_actions": total,
+        }
+        session_file = os.path.join(player_dir, f"{session_id}.json")
+        with open(session_file, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=False)
+        index_file = os.path.join(player_dir, "index.json")
+        index = []
+        if os.path.isfile(index_file):
+            with open(index_file, "r", encoding="utf-8") as handle:
+                index = json.load(handle) or []
+        index = drop_live_snapshot(player_id, index)
+        index.append({
+            "session_id": session_id,
+            "timestamp": report["session"]["timestamp"],
+            "level": level,
+            "subdirectory": subdirectory or "",
+            "total_actions": total,
+            "correct": stats["correct"],
+            "late": stats["late"],
+            "wrong": stats["wrong"],
+            "miss": stats["miss"],
+            "avg_ae": round(stats["avg_ae"], 2),
+            "file": f"{session_id}.json",
+            "final_results": True,
+        })
+        index.sort(key=lambda row: row.get("timestamp", ""), reverse=True)
+        with open(index_file, "w", encoding="utf-8") as handle:
+            json.dump(index, handle, indent=2, ensure_ascii=False)
+        try:
+            simust_push.push_session_async(
+                player_id, report, user, index[0] if index else None
+            )
+        except Exception:
+            logger.warning("Could not push final trend session for %s", player_id)
+        return session_id
+    except Exception:
+        logger.exception("Could not append PERFORMANCE TREND session for %s", player_id)
+        return None
+
+
+def _final_progress_field_ids(fields: dict, field_metrics: dict, score_field: str) -> list:
+    """Which fields get a profile save from this final.
+
+    Independent A/B (different players): save every field that has metrics.
+    Elite / World Class (combined): only the booked score_field.
+    """
+    real = {}
+    for fid in ("A", "B"):
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        pid = str((slot or {}).get("player_id") or "").strip()
+        if pid and not pid.startswith("__sim_"):
+            real[fid] = pid
+    if not real:
+        return []
+    levels = [
+        str((fields.get(fid) or {}).get("level") or "")
+        for fid in real
+    ]
+    same_player = len(set(real.values())) == 1 and len(real) >= 2
+    combined = same_player or any(_combined_level(level) for level in levels)
+    chosen = str(score_field or "").upper()[:1]
+    if combined:
+        if chosen in real:
+            return [chosen]
+        return [next(iter(real.keys()))]
+    # Independent: prefer fields present in this final's metrics; else all.
+    metric_keys = {
+        str(key).upper()[:1]
+        for key in (field_metrics or {})
+        if str(key).upper()[:1] in ("A", "B")
+    }
+    if metric_keys:
+        return [fid for fid in ("A", "B") if fid in real and fid in metric_keys]
+    return [fid for fid in ("A", "B") if fid in real]
+
+
 def apply_final_results_progress(field_metrics: dict, score_field: str = "") -> dict:
-    """Open the next set from the final results of the field that was booked."""
+    """Save score, unlock when thresholds are met, update trend, continue if time left.
+
+    Independent dual-field: each field's player gets their own final on their profile.
+    Elite / World Class: only the booked score_field player's final counts.
+    While reservation time remains: repeat the same sub-level on fail, or play the
+    newly unlocked set on pass. When time ends, progress is already saved for next booking.
+    """
     info = _continue_target({})
     try:
         with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"), "r", encoding="utf-8") as f:
@@ -1143,40 +1370,54 @@ def apply_final_results_progress(field_metrics: dict, score_field: str = "") -> 
     chosen = str(score_field or payload.get("score_field") or "").upper()[:1]
     if chosen not in ("A", "B"):
         chosen = "A" if isinstance(fields.get("A"), dict) and fields["A"].get("player_id") else "B"
-    slot = fields.get(chosen) if isinstance(fields.get(chosen), dict) else {}
-    if not slot:
-        for fid in ("A", "B"):
-            if isinstance(fields.get(fid), dict) and fields[fid].get("player_id"):
-                chosen = fid
-                slot = fields[fid]
-                break
-    player_id = str((slot or {}).get("player_id") or "").strip()
-    level = str((slot or {}).get("level") or payload.get("level") or "").strip()
-    subdirectory = str((slot or {}).get("subdirectory") or "").strip()
-    metrics = (field_metrics or {}).get(chosen) or {}
-    if not metrics and field_metrics:
-        metrics = next(iter(field_metrics.values()))
+    target_fields = _final_progress_field_ids(fields, field_metrics or {}, chosen)
+    if not target_fields and chosen in ("A", "B"):
+        target_fields = [chosen]
     users = load_users()
-    passed = False
-    if player_id and level and player_id in users:
+    changed = False
+    primary_info = None
+    for fid in target_fields:
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        player_id = str((slot or {}).get("player_id") or "").strip()
+        if player_id.startswith("__sim_"):
+            player_id = ""
+        level = str((slot or {}).get("level") or payload.get("level") or "").strip()
+        subdirectory = str((slot or {}).get("subdirectory") or "").strip()
+        metrics = (field_metrics or {}).get(fid) or {}
+        if not metrics and len(target_fields) == 1 and field_metrics:
+            metrics = next(iter(field_metrics.values()))
+        if not player_id or not level or player_id not in users:
+            continue
         statistics = {
             "aac": float(metrics.get("aac") or 0.0),
             "avg_ae": float(metrics.get("avg_ae") or 0.0),
+            "avg_finishing_time": float(metrics.get("avg_finishing_time") or 0.0),
+            "total_distance": float(metrics.get("total_distance") or 0.0),
             "correct": metrics.get("correct", 0),
             "late": metrics.get("late", 0),
             "wrong": metrics.get("wrong", 0),
             "miss": metrics.get("miss", 0),
         }
         apply_session_progress(users, player_id, level, subdirectory, statistics, from_final=True)
-        save_users(users)
-        progress = (users.get(player_id) or {}).get("progress") or {}
+        progress = simust_progress.sync_current_development_level(
+            (users.get(player_id) or {}).get("progress") or {}, ALL_LEVELS
+        )
+        users[player_id]["progress"] = progress
+        changed = True
+        # Do not write a report here — /save-session-to-player already saves the
+        # full session (actions + stats). Writing both produced duplicate trend points.
         passed = bool((progress.get("challenge_results") or {}).get(level, {}).get("passed"))
-        info = _continue_target(progress)
-        info["passed"] = passed
-        info["player_id"] = player_id
-        info["seconds_left"] = _booking_seconds_left(player_id, chosen)
-        info["continue_play"] = info["seconds_left"] > 30
-    return info
+        field_info = _continue_target(progress)
+        field_info["passed"] = passed
+        field_info["player_id"] = player_id
+        field_info["score_field"] = fid
+        field_info["seconds_left"] = _booking_seconds_left(player_id, fid)
+        field_info["continue_play"] = field_info["seconds_left"] > 30
+        if fid == chosen or primary_info is None:
+            primary_info = field_info
+    if changed:
+        save_users(users)
+    return primary_info or info
 
 
 def drop_live_snapshot(player_id: str, index: list) -> list:
@@ -1190,6 +1431,35 @@ def drop_live_snapshot(player_id: str, index: list) -> list:
         except OSError:
             pass
     return [row for row in (index or []) if row.get("session_id") != live_id]
+
+
+def _drop_recent_final_stubs(player_id: str, index: list, within_seconds: int = 120) -> list:
+    """Remove empty *_final trend stubs so a full save-session is the only point."""
+    player_dir = os.path.join(PLAYER_REPORTS_DIR, str(player_id or "").strip())
+    kept = []
+    now = datetime.now()
+    for row in index or []:
+        sid = str((row or {}).get("session_id") or "")
+        if not sid.endswith("_final"):
+            kept.append(row)
+            continue
+        ts_raw = str((row or {}).get("timestamp") or "")
+        try:
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00").split("+")[0])
+            age = abs((now - ts).total_seconds())
+        except (TypeError, ValueError):
+            age = 0
+        if age > float(within_seconds):
+            kept.append(row)
+            continue
+        stub = os.path.join(player_dir, f"{sid}.json")
+        if os.path.isfile(stub):
+            try:
+                os.remove(stub)
+            except OSError:
+                pass
+        logger.info("Dropped duplicate trend stub %s for %s", sid, player_id)
+    return kept
 
 def _apply_reservation_unlocks(reservations: list) -> None:
     users = load_users()
@@ -1505,6 +1775,29 @@ def should_spawn_screen2_display(display_flag) -> bool:
     return False
 
 
+def clear_image_action_cue(force_end: bool = True) -> None:
+    """Drop leftover finish-balls cues before camera/player boot.
+
+    Realtime starts ~3s before the smart player. A prior World Class (or any
+    finish-balls) cue can still be active for the whole shared-clock window, so
+    the green cylinder and sim shot fire before beginning information appears.
+    """
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "image_action_cue.json")
+    try:
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        payload = {
+            "active": False,
+            "force_end": bool(force_end),
+            "seq": 0,
+            "fields": {},
+            "timestamp": time.time(),
+        }
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+    except Exception as exc:
+        logger.warning("Could not clear image action cue: %s", exc)
+
+
 def force_kill_smart_player():
     global smart_player_process
     kill_process_tree(smart_player_process)
@@ -1703,6 +1996,7 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     force_kill_smart_player()
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
+    clear_image_action_cue(force_end=True)
     discarded = []
     if abort:
         discarded = discard_aborted_realtime_folders()
@@ -2335,6 +2629,8 @@ async def start_realtime_playback(req: Request):
         _realtime_dirs_at_start = _realtime_dir_names()
         write_pause_setting(False)
         force_kill_smart_player()
+        # Camera boots before the player; silence any leftover finish-balls cue now.
+        clear_image_action_cue(force_end=True)
         phase_active = ["A"]
         try:
             if not players_payload and player_id:
@@ -5970,7 +6266,8 @@ async def save_session_to_player(req: Request):
             "total_duration_minutes": session_data.get("total_duration_minutes", 0),
             "video_count": session_data.get("video_count", 0),
             "directory": directory,
-            "original_report_path": session_data.get("report_path", "")
+            "original_report_path": session_data.get("report_path", ""),
+            "final_results": True,
         },
             "statistics": statistics,
             "goals_by_screen": session_data.get("goals_by_screen", {}),
@@ -5987,6 +6284,8 @@ async def save_session_to_player(req: Request):
         if os.path.exists(index_file):
             with open(index_file, 'r', encoding='utf-8') as f:
                 index = json.load(f)
+        # Drop empty trend stubs written seconds earlier by a final-results path.
+        index = _drop_recent_final_stubs(player_id, index, within_seconds=120)
         index.append({
             "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
@@ -5998,7 +6297,8 @@ async def save_session_to_player(req: Request):
             "wrong": statistics.get("wrong", 0),
             "miss": statistics.get("miss", 0),
             "avg_ae": round(float(statistics.get("avg_ae") or 0), 2),
-            "file": f"{session_id}.json"
+            "file": f"{session_id}.json",
+            "final_results": True,
         })
         index.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         with open(index_file, 'w', encoding='utf-8') as f:

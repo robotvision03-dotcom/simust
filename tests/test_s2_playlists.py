@@ -18,10 +18,12 @@ class Series2PlaylistTests(unittest.TestCase):
         self._cam = player._render_camouflage_text_image
         self._motion = player._ensure_wc_motion_bg_video
         player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
-        player._render_band_digit_image = lambda text, bg, fg: f"img:{text}:{bg}:{fg}"
+        player._render_band_digit_image = (
+            lambda text, bg, fg, lift_frac=0.0: f"img:{text}:{bg}:{fg}:{lift_frac}"
+        )
         player._render_middle_colored_text_image = (
             lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
-                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}:{mid_bg}"
             )
         )
         self._compose = getattr(player, "_compose_bouncing_flowers_rgb", None)
@@ -74,6 +76,9 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(odd[0], odd[2])
         self.assertEqual(same[0], odd[0])
         self.assertNotEqual(same[1], odd[1])
+        # No yellow patch — middle letter is painted only (mid_bg=False).
+        sample = next(iter(first["screen_images"].values()))
+        self.assertTrue(sample.endswith(":False"))
 
     def test_hp_s2_later_sets_get_faster_but_not_under_1_8(self):
         first = player._build_high_performance_s2_playlist(1, ["A"])[0]["on_ms"]
@@ -146,7 +151,8 @@ class Series2PlaylistTests(unittest.TestCase):
         positions = first.get("motion_text_positions") or {}
         self.assertEqual(set(positions), set(first["motion_texts"]))
         ys = [float(positions[sid][1]) for sid in positions]
-        self.assertTrue(all(player.WC_TEXT_EDGE_MARGIN <= y <= 1.0 - player.WC_TEXT_EDGE_MARGIN for y in ys))
+        bottom = 1.0 - player.WC_TEXT_EDGE_MARGIN - player.WC_TEXT_BOTTOM_LIFT
+        self.assertTrue(all(player.WC_TEXT_EDGE_MARGIN <= y <= bottom + 1e-6 for y in ys))
         # Numbers are spread: not all stacked on one y.
         self.assertGreater(len(set(round(y, 2) for y in ys)), 1)
         self.assertEqual(player._wc_s2_theme_for_series(1), "flowers")

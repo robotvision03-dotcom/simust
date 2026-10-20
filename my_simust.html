@@ -4808,41 +4808,64 @@
                 };
 
                 var completed = progress.completed_levels || [];
+                // Latest unlocked set is the player's CURRENT DEVELOPMENT LEVEL.
                 var current = progress.current_level || "L00-Foundation";
+                var unlocked = progress.unlocked_levels || [];
+                for (var ui = ALL_LEVELS.length - 1; ui >= 0; ui--) {
+                    if (unlocked.indexOf(ALL_LEVELS[ui]) !== -1 && ALL_LEVELS[ui].indexOf('L00-Foundation') !== 0) {
+                        current = ALL_LEVELS[ui];
+                        break;
+                    }
+                }
 
                 var total = ALL_LEVELS.length || 126;
-                var units = developmentProgressUnits(progress);
+                var units = developmentProgressUnits(Object.assign({}, progress, { current_level: current }));
                 var pct = total > 0 ? Math.min(100, (units / total) * 100) : 0;
                 var currentMain = getMainLevelId(current);
                 var currentIndex = getMainLevelIndex(current);
                 var colorSet = getLevelColor(current);
                 activeLevelFill = colorSet.light;
+                var subLabel = '';
+                if (currentMain === 'L00-Foundation') {
+                    subLabel = progress.current_playlist || '';
+                    if (!subLabel && (progress.unlocked_playlists || []).length) {
+                        var sfOrder = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
+                        for (var sfi = sfOrder.length - 1; sfi >= 0; sfi--) {
+                            if (progress.unlocked_playlists.indexOf(sfOrder[sfi]) !== -1) {
+                                subLabel = sfOrder[sfi];
+                                break;
+                            }
+                        }
+                    }
+                } else if (current.indexOf('/') >= 0) {
+                    subLabel = current.split('/').slice(1).join('/');
+                }
 
                 var mainName = t('levelEntry', 'Entry');
                 var description = t('levelTrackJourney', 'Track your journey through the SIMUST levels.');
                 var levelNumber = "";
                 if (currentMain === "L00-Foundation") {
-                    mainName = t('levelFoundation', 'Foundation');
+                    mainName = t('levelFoundation', 'Foundation') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescFoundation', 'Complete Foundation to begin your journey.');
                     levelNumber = "";
                 } else if (currentMain === "L01-Entry") {
-                    mainName = t('levelEntry', 'Entry');
+                    mainName = t('levelEntry', 'Entry') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescEntry', 'You are building fundamental skills in football behaviour.');
                     levelNumber = "02";
                 } else if (currentMain === "L02-Activated") {
-                    mainName = t('levelActivated', 'Activated');
+                    mainName = t('levelActivated', 'Activated') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescActivated', 'You are developing consistent scan-to-action behaviour under football pressure.');
                     levelNumber = "03";
                 } else if (currentMain === "L03-HighPerformance") {
-                    mainName = t('levelHighPerformance', 'High Performance');
+                    mainName = t('levelHighPerformance', 'High Performance') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescHighPerformance', 'You are building more consistent scan-to-action behaviour under football pressure.');
                     levelNumber = "04";
                 } else if (currentMain === "L04-Elite") {
-                    mainName = t('levelElite', 'Elite');
+                    mainName = t('levelElite', 'Elite') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescElite', 'You are performing at a high level with reliable decision-making.');
                     levelNumber = "05";
                 } else if (currentMain === "L05-WorldClass") {
-                    mainName = t('levelWorldClass', 'World Class');
+                    mainName = t('levelWorldClass', 'World Class') + (subLabel ? (' · ' + subLabel) : '');
                     description = t('levelDescWorldClass', 'You are demonstrating world-class behaviour consistency.');
                     levelNumber = "06";
                 }
@@ -5619,14 +5642,35 @@
             }
 
             function progressLevelLabel(progress) {
+                // CURRENT DEVELOPMENT LEVEL = latest unlocked set (game-save checkpoint).
+                var unlocked = (progress && progress.unlocked_levels) || [];
                 var raw = (progress && progress.current_level) || 'L00-Foundation';
-                if (raw.indexOf('L00-Foundation') === 0) return 'Foundation';
-                if (raw.indexOf('L01-Entry') === 0) return 'Entry';
-                if (raw.indexOf('L02-Activated') === 0) return 'Activated';
-                if (raw.indexOf('L03-HighPerformance') === 0) return 'High Performance';
-                if (raw.indexOf('L04-Elite') === 0) return 'Elite';
-                if (raw.indexOf('L05-WorldClass') === 0) return 'World-Class';
-                return raw;
+                if (unlocked.length) {
+                    for (var i = ALL_LEVELS.length - 1; i >= 0; i--) {
+                        if (unlocked.indexOf(ALL_LEVELS[i]) !== -1 && ALL_LEVELS[i].indexOf('L00-Foundation') !== 0) {
+                            raw = ALL_LEVELS[i];
+                            break;
+                        }
+                    }
+                }
+                var playlist = (progress && progress.current_playlist) || '';
+                if (!playlist && progress && progress.unlocked_playlists && progress.unlocked_playlists.length) {
+                    var sfOrder = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
+                    for (var s = sfOrder.length - 1; s >= 0; s--) {
+                        if (progress.unlocked_playlists.indexOf(sfOrder[s]) !== -1) {
+                            playlist = sfOrder[s];
+                            break;
+                        }
+                    }
+                }
+                var name = raw;
+                if (raw.indexOf('L00-Foundation') === 0) name = 'Foundation' + (playlist ? (' · ' + playlist) : '');
+                else if (raw.indexOf('L01-Entry') === 0) name = 'Entry' + (raw.indexOf('/') >= 0 ? (' · ' + raw.split('/').slice(1).join('/')) : '');
+                else if (raw.indexOf('L02-Activated') === 0) name = 'Activated' + (raw.indexOf('/') >= 0 ? (' · ' + raw.split('/').slice(1).join('/')) : '');
+                else if (raw.indexOf('L03-HighPerformance') === 0) name = 'High Performance' + (raw.indexOf('/') >= 0 ? (' · ' + raw.split('/').slice(1).join('/')) : '');
+                else if (raw.indexOf('L04-Elite') === 0) name = 'Elite' + (raw.indexOf('/') >= 0 ? (' · ' + raw.split('/').slice(1).join('/')) : '');
+                else if (raw.indexOf('L05-WorldClass') === 0) name = 'World-Class' + (raw.indexOf('/') >= 0 ? (' · ' + raw.split('/').slice(1).join('/')) : '');
+                return name;
             }
 
             // ----- Helper: compute session metrics (unchanged) -----
@@ -6036,7 +6080,11 @@
 
                 var labels = pageData.map(function(s) {
                     var d = new Date(s.session && s.session.timestamp || s.timestamp);
-                    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+                    if (isNaN(d.getTime())) return '—';
+                    var day = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+                    var hh = String(d.getHours()).padStart(2, '0');
+                    var mm = String(d.getMinutes()).padStart(2, '0');
+                    return day + ' ' + hh + ':' + mm;
                 });
 
                 var aeData = pageData.map(function(s) { return s.statistics && s.statistics.avg_ae || 0; });

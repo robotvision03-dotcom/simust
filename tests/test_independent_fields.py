@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 
@@ -187,6 +188,27 @@ class FieldContinuesAloneTests(unittest.TestCase):
         inst._independent_index = {"A": 6, "B": 5}
         inst._independent_done = {"A": False, "B": True}
         inst._field_result_state = {"B": {"phase": "playing"}}
+        inst._fields_opening = set()
+        inst._field_epochs = {}
+        inst._phase_field_levels = {"A": "L00-Foundation", "B": "L01-Entry/S1.T1"}
+        inst._phase_field_modes = {}
+        inst._phase_field_directories = {}
+        inst._hide_field_result_rings = lambda fid: None
+        inst._intro_video_for_field = lambda fid: None
+        inst._stop_field_screensaver = lambda fid: None
+        inst._sync_screensaver = lambda: None
+        opened = []
+        inst.image_canvas = types.SimpleNamespace(
+            show_field_opening=lambda fid, card: opened.append((fid, dict(card or {}))),
+            _band_screens=set(),
+        )
+        scheduled = []
+        original_shot = player.QtCore.QTimer.singleShot
+        player.QtCore.QTimer.singleShot = lambda ms, cb: scheduled.append((ms, cb))
+        self.addCleanup(lambda: setattr(player.QtCore.QTimer, "singleShot", original_shot))
+        original_silence = player._silence_image_action_cue_for_fields
+        player._silence_image_action_cue_for_fields = lambda fields: None
+        self.addCleanup(lambda: setattr(player, "_silence_image_action_cue_for_fields", original_silence))
         patched = []
         inst._patch_independent_fields = lambda entry, fields: patched.append(
             (set(fields), dict(entry.get("field_screens") or {}), dict(entry.get("field_meta") or {}))
@@ -197,6 +219,12 @@ class FieldContinuesAloneTests(unittest.TestCase):
         self.assertFalse(inst._independent_done["A"])
         self.assertFalse(inst._independent_done["B"])
         self.assertNotIn("B", inst._field_result_state)
+        self.assertIn("B", inst._fields_opening)
+        self.assertEqual(opened[0][0], "B")
+        self.assertTrue(scheduled)
+        # Opening finished → test starts (same as first test / join).
+        inst._start_joined_field_test("B")
+        self.assertNotIn("B", inst._fields_opening)
         self.assertEqual(patched[0][0], {"B"})
         self.assertIn("A", patched[0][1])
         self.assertIn("B", patched[0][1])
@@ -611,6 +639,8 @@ class FieldContinuesAloneTests(unittest.TestCase):
                     break
                 if inst._independent_done.get(fid):
                     inst._continue_field_after_results(fid)
+                    if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                        inst._start_joined_field_test(fid)
                 else:
                     inst._advance_independent_field(fid, reload=False)
 
@@ -1078,6 +1108,9 @@ class DualSeriesSimulator:
 
     def finish_results(self, fid):
         self.inst._continue_field_after_results(fid)
+        # Tests skip the card/intro timers and start the next test immediately.
+        if fid in set(getattr(self.inst, "_fields_opening", None) or set()):
+            self.inst._start_joined_field_test(fid)
 
     def play_all(self):
         guard = 0
@@ -1385,6 +1418,8 @@ class SeriesRestartTests(unittest.TestCase):
                 break
             if inst._independent_done.get(fid):
                 inst._continue_field_after_results(fid)
+                if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                    inst._start_joined_field_test(fid)
             else:
                 inst._advance_independent_field(fid, reload=False)
                 if not inst._independent_done.get(fid):
@@ -1438,6 +1473,9 @@ class SeriesRestartTests(unittest.TestCase):
 
         inst._continue_field_after_results("A")
         inst._continue_field_after_results("B")
+        for fid in ("A", "B"):
+            if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                inst._start_joined_field_test(fid)
         self.assertEqual(inst._independent_index["A"], 10)
         self.assertEqual(inst._independent_index["B"], 6)
         self.assertFalse(inst._independent_done["A"])
@@ -1637,6 +1675,8 @@ class SingleFieldThenJoinTests(unittest.TestCase):
                 break
             if inst._independent_done.get(fid):
                 inst._continue_field_after_results(fid)
+                if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                    inst._start_joined_field_test(fid)
             else:
                 inst._advance_independent_field(fid, reload=False)
                 if not inst._independent_done.get(fid):
@@ -1667,6 +1707,8 @@ class SingleFieldThenJoinTests(unittest.TestCase):
             guard += 1
             if inst._independent_done.get("B"):
                 inst._continue_field_after_results("B")
+                if "B" in set(getattr(inst, "_fields_opening", None) or set()):
+                    inst._start_joined_field_test("B")
             else:
                 inst._advance_independent_field("B", reload=False)
         self.assertEqual(inst._finals, ["B"])
@@ -1728,6 +1770,8 @@ class SingleFieldThenJoinTests(unittest.TestCase):
                     continue
                 if inst._independent_done.get(fid):
                     inst._continue_field_after_results(fid)
+                    if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                        inst._start_joined_field_test(fid)
                     progressed = True
                 else:
                     inst._advance_independent_field(fid, reload=False)
@@ -1893,6 +1937,8 @@ class SingleFieldThenJoinTests(unittest.TestCase):
                     continue
                 if inst._independent_done.get(fid):
                     inst._continue_field_after_results(fid)
+                    if fid in set(getattr(inst, "_fields_opening", None) or set()):
+                        inst._start_joined_field_test(fid)
                     moved = True
                 elif not inst._field_series_finished(fid):
                     inst._advance_independent_field(fid, reload=False)
@@ -2186,6 +2232,83 @@ class JoinCueHeartbeatTests(unittest.TestCase):
         self.assertIn("A", cue["fields"])
         self.assertEqual(cue["fields"]["A"]["screens"], ["A3"])
         self.assertGreater(float(cue["timestamp"]), 10.0)
+
+    def test_heartbeat_does_not_refresh_opening_field_finish_balls(self):
+        """Stale finish-balls for a field on logos must not be re-armed by heartbeat."""
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        inst._fields_opening = {"A"}
+        inst._cue_heartbeat_at = 0.0
+        inst._flash_seq = 9
+        inst._field_cue_seq = {"A": 9, "B": 8}
+        inst.video_files = [{
+            "independent_fields": True,
+            "action": "PASS",
+            "on_ms": 3000,
+            "finish_balls": True,
+            "field_screens": {"A": ["A3"], "B": ["B2"]},
+            "field_meta": {
+                "A": {"test_num": 1, "action_in_set": 6, "actions_in_set": 6, "finish_balls": True},
+                "B": {"test_num": 1, "action_in_set": 3, "actions_in_set": 6, "finish_balls": True},
+            },
+            "test_num": 1,
+            "action_in_set": 6,
+            "actions_in_set": 6,
+        }]
+        inst._realtime_session_active = lambda: True
+        inst._player_attr = lambda name, default=None: getattr(inst, name, default)
+        self._write_cue({
+            "active": True,
+            "finish_balls": True,
+            "seq": 8,
+            "timestamp": 10.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A3"], "seq": 9},
+                "B": {"action": "PASS", "screens": ["B2"], "seq": 8},
+            },
+        })
+        inst._heartbeat_independent_action_cue()
+        cue = self._read_cue()
+        self.assertNotIn("A", cue.get("fields") or {})
+        self.assertIn("B", cue["fields"])
+        self.assertEqual(cue["fields"]["B"]["screens"], ["B2"])
+        self.assertTrue(cue.get("finish_balls"))
+
+    def test_silence_opening_field_keeps_live_sibling_cue(self):
+        self._write_cue({
+            "active": True,
+            "finish_balls": True,
+            "seq": 5,
+            "timestamp": 1.0,
+            "on_sec": 12.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A4"], "seq": 5, "test_num": 2, "action_in_set": 4},
+                "B": {"action": "PASS", "screens": ["B1"], "seq": 4, "test_num": 1, "action_in_set": 1},
+            },
+        })
+        player._silence_image_action_cue_for_fields(["B"])
+        cue = self._read_cue()
+        self.assertTrue(cue.get("active"))
+        self.assertFalse(cue.get("force_end"))
+        self.assertIn("A", cue["fields"])
+        self.assertNotIn("B", cue["fields"])
+        self.assertEqual(cue["fields"]["A"]["screens"], ["A4"])
+
+    def test_silence_all_fields_force_ends_stale_finish_balls(self):
+        self._write_cue({
+            "active": True,
+            "finish_balls": True,
+            "seq": 7,
+            "timestamp": time.time(),
+            "budget_total_sec": 54.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A3"], "seq": 7},
+            },
+        })
+        player._silence_image_action_cue_for_fields(["A"])
+        cue = self._read_cue()
+        self.assertFalse(cue.get("active"))
+        self.assertTrue(cue.get("force_end"))
+        self.assertEqual(cue.get("fields") or {}, {})
 
 class ImageCueStaleRecoverTests(unittest.TestCase):
     def test_same_raw_rearms_after_stale_gap(self):
