@@ -34,15 +34,17 @@ def _patch_playlist_renders(testcase: unittest.TestCase) -> None:
     testcase._band = player._render_band_digit_image
     testcase._mid = player._render_middle_colored_text_image
     testcase._cam = player._render_camouflage_text_image
-    testcase._motion = player._ensure_wc_motion_bg_video
-    testcase._solid = player._wc_solid_theme_still
+    testcase._motion = getattr(player, "_ensure_wc_motion_bg_video", None)
+    testcase._solid = getattr(player, "_wc_solid_theme_still", None)
     testcase._compose = getattr(player, "_compose_bouncing_flowers_rgb", None)
     testcase._composite = getattr(player, "_composite_overlay_on_bg", None)
     player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
-    player._render_band_digit_image = lambda text, bg, fg: f"img:{text}:{bg}:{fg}"
+    player._render_band_digit_image = (
+        lambda text, bg, fg, lift_frac=0.0: f"img:{text}:{bg}:{fg}:{lift_frac}"
+    )
     player._render_middle_colored_text_image = (
         lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
-            f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+            f"mid:{text}:{bg}:{outer_fg}:{mid_fg}:{mid_bg}"
         )
     )
     player._compose_bouncing_flowers_rgb = (
@@ -56,10 +58,12 @@ def _patch_playlist_renders(testcase: unittest.TestCase) -> None:
             f"cam:{text}:{seed}:{camouflage}:{theme}"
         )
     )
-    player._ensure_wc_motion_bg_video = (
-        lambda theme, seed, base_rgb=None, blocking=False: f"motion:{theme}:{seed}.mp4"
-    )
-    player._wc_solid_theme_still = lambda theme, seed=1: f"solid:{theme}:{seed}"
+    if callable(testcase._motion):
+        player._ensure_wc_motion_bg_video = (
+            lambda theme, seed, base_rgb=None, blocking=False: f"motion:{theme}:{seed}.mp4"
+        )
+    if callable(testcase._solid):
+        player._wc_solid_theme_still = lambda theme, seed=1: f"solid:{theme}:{seed}"
 
 
 def _unpatch_playlist_renders(testcase: unittest.TestCase) -> None:
@@ -67,8 +71,10 @@ def _unpatch_playlist_renders(testcase: unittest.TestCase) -> None:
     player._render_band_digit_image = testcase._band
     player._render_middle_colored_text_image = testcase._mid
     player._render_camouflage_text_image = testcase._cam
-    player._ensure_wc_motion_bg_video = testcase._motion
-    player._wc_solid_theme_still = testcase._solid
+    if testcase._motion is not None:
+        player._ensure_wc_motion_bg_video = testcase._motion
+    if testcase._solid is not None:
+        player._wc_solid_theme_still = testcase._solid
     if testcase._compose is not None:
         player._compose_bouncing_flowers_rgb = testcase._compose
     if testcase._composite is not None:
@@ -329,6 +335,7 @@ class FinishBallsCylinderSeriesSimTests(unittest.TestCase):
     def _clear_cue(self):
         self.cue = {
             "active": False,
+            "force_end": True,
             "finish_balls": True,
             "seq": int(self.cue.get("seq") or 0),
             "timestamp": time.time(),
@@ -410,6 +417,82 @@ class FinishBallsCylinderSeriesSimTests(unittest.TestCase):
                     self._tick(2)
         self.assertFalse(failures, "\n".join(failures[:40]))
         self.assertGreaterEqual(checked, 40, f"only checked {checked} set(s)")
+
+    def test_force_end_cancels_pending_appear_during_opening(self):
+        """Leftover finish-balls must not finish appearing after beginning-info silence."""
+        self.cam.active_fields = {"A"}
+        ch = self.channels["A"]
+        self.cue = {
+            "active": True,
+            "finish_balls": True,
+            "seq": 42,
+            "timestamp": time.time(),
+            "on_sec": 12.0,
+            "budget_total_sec": 54.0,
+            "fields": {"A": {"action": "PASS", "screens": ["A3"], "seq": 42}},
+        }
+        self._tick(3)
+        self.assertIsNotNone(ch.kp_appear_frames_left)
+        self.assertFalse(ch.session_active)
+        self.cue = {
+            "active": False,
+            "force_end": True,
+            "seq": 42,
+            "timestamp": time.time(),
+            "fields": {},
+        }
+        self._tick(1)
+        self.assertIsNone(ch.kp_appear_frames_left)
+        self.assertIsNone(ch._pending_cue_info)
+        self.assertFalse(ch.session_active)
+        self.assertFalse(ch.active_goal_lines)
+
+    def test_field_off_cancels_pending_without_killing_sibling(self):
+        """Opening field dropped from cue: cancel its pending appear only."""
+        self.cam.active_fields = {"A", "B"}
+        shift = int(rt.IMAGE_CUE_EDGE_SHIFT_FRAMES)
+        self.cue = {
+            "active": True,
+            "finish_balls": True,
+            "seq": 11,
+            "timestamp": time.time(),
+            "on_sec": 8.0,
+            "budget_total_sec": 8.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A3"], "seq": 11},
+                "B": {"action": "PASS", "screens": ["B2"], "seq": 10},
+            },
+        }
+        self._tick(shift + 1)
+        self.assertTrue(self.channels["A"].session_active)
+        self.assertTrue(self.channels["B"].session_active)
+        # B begins opening — player silences B only; A stay live.
+        self.cue = {
+            "active": True,
+            "finish_balls": True,
+            "seq": 11,
+            "timestamp": time.time(),
+            "on_sec": 8.0,
+            "budget_total_sec": 8.0,
+            "fields": {
+                "A": {"action": "PASS", "screens": ["A3"], "seq": 11},
+            },
+        }
+        # Re-arm B with a stale pending appear, then drop it again.
+        self.channels["B"].session_active = False
+        self.channels["B"].active_goal_lines = {}
+        self.channels["B"].current_qr_block = None
+        self.channels["B"]._frame_sync_cue_raw = None
+        self.channels["B"].kp_appear_frames_left = None
+        self.channels["B"]._pending_cue_info = None
+        self.cue["fields"]["B"] = {"action": "PASS", "screens": ["B1"], "seq": 99}
+        self._tick(2)
+        self.assertIsNotNone(self.channels["B"].kp_appear_frames_left)
+        del self.cue["fields"]["B"]
+        self._tick(1)
+        self.assertIsNone(self.channels["B"].kp_appear_frames_left)
+        self.assertIsNone(self.channels["B"]._pending_cue_info)
+        self.assertTrue(self.channels["A"].session_active)
 
 
 if __name__ == "__main__":

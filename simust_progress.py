@@ -124,7 +124,13 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
         progress["challenge_results"] = migrated
     if not progress.get("current_level"):
         progress["current_level"] = FOUNDATION_LEVEL
-    if progress.get("current_level") == FOUNDATION_LEVEL and not progress.get("current_playlist"):
+    # Keep current_level inside the unlocked set (full sync needs ALL_LEVELS order).
+    unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
+    unlocked.add(FOUNDATION_LEVEL)
+    cur = normalize_level_id(str(progress.get("current_level") or FOUNDATION_LEVEL))
+    if cur not in unlocked:
+        progress["current_level"] = FOUNDATION_LEVEL
+    if progress.get("current_level") == FOUNDATION_LEVEL:
         progress["current_playlist"] = highest_foundation_playlist(progress)
     return progress
 
@@ -166,6 +172,25 @@ def highest_unlocked_level(progress: Dict[str, Any], all_levels: List[str]) -> s
         if nid in unlocked and nid != FOUNDATION_LEVEL:
             best = nid
     return best or FOUNDATION_LEVEL
+
+
+def sync_current_development_level(progress: Dict[str, Any], all_levels: List[str]) -> Dict[str, Any]:
+    """CURRENT DEVELOPMENT LEVEL = latest unlocked set (and Foundation playlist).
+
+    Call after every unlock / final save so My SIMUST and operator always show
+    where the player continues next time (like a game save checkpoint).
+    """
+    progress = progress or default_progress()
+    level = highest_unlocked_level(progress, all_levels or [])
+    progress["current_level"] = level
+    if level == FOUNDATION_LEVEL:
+        playlist = highest_foundation_playlist(progress)
+        progress["current_playlist"] = playlist
+    else:
+        # Keep a playlist stamp only while still on Foundation.
+        if not str(progress.get("current_playlist") or "").strip():
+            progress["current_playlist"] = ""
+    return progress
 
 
 def next_foundation_playlist(unlocked_playlists: List[str]) -> Optional[str]:
@@ -395,10 +420,13 @@ def sync_unlocks_from_reservations(
 
 
 def public_progress_view(progress: Dict[str, Any], all_levels: List[str]) -> Dict[str, Any]:
-    progress = progress or default_progress()
+    progress = sync_current_development_level(
+        dict(progress or default_progress()), all_levels or []
+    )
     nxt = peek_next_unlock_target(progress, all_levels)
     return {
         "current_level": progress.get("current_level") or FOUNDATION_LEVEL,
+        "current_playlist": progress.get("current_playlist") or "",
         "unlocked_levels": list(progress.get("unlocked_levels") or []),
         "unlocked_playlists": list(progress.get("unlocked_playlists") or []),
         "completed_levels": list(progress.get("completed_levels") or []),

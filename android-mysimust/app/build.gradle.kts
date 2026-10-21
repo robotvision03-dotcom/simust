@@ -13,8 +13,8 @@ android {
         minSdk = 24
         targetSdk = 36
         // Bump both for every Play upload.
-        versionCode = 11
-        versionName = "1.3.7"
+        versionCode = 12
+        versionName = "1.3.8"
         manifestPlaceholders["usesCleartextTraffic"] = "false"
     }
 

@@ -25,9 +25,12 @@ class ActivatedPlaylistTests(unittest.TestCase):
         self.assertEqual(first["test_num"], 1)
         self.assertEqual(first["field_screens"]["A"], ["A1"])
         self.assertEqual(first["field_screens"]["B"], ["B1"])
-        self.assertIn("img:10:", first["screen_images"]["A1"])
+        bg = str(player.ACTIVATED_A1_BG)
+        self.assertIn(f"img:10:{bg}", first["screen_images"]["A1"])
         self.assertEqual(first["screen_images"]["A1"], first["screen_images"]["B1"])
         self.assertEqual(len(first["screen_images"]), 12)
+        # Field B uses the same Activated brand fill as Field A.
+        self.assertTrue(first["screen_images"]["B1"].endswith(bg))
         second = playlist[1]
         shown = {path.split(":")[1] for path in second["screen_images"].values()}
         self.assertNotIn("10", shown)

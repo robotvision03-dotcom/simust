@@ -18,10 +18,12 @@ class Series2PlaylistTests(unittest.TestCase):
         self._cam = player._render_camouflage_text_image
         self._motion = player._ensure_wc_motion_bg_video
         player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
-        player._render_band_digit_image = lambda text, bg, fg: f"img:{text}:{bg}:{fg}"
+        player._render_band_digit_image = (
+            lambda text, bg, fg, lift_frac=0.0: f"img:{text}:{bg}:{fg}:{lift_frac}"
+        )
         player._render_middle_colored_text_image = (
             lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
-                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}"
+                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}:{mid_bg}"
             )
         )
         self._compose = getattr(player, "_compose_bouncing_flowers_rgb", None)
@@ -74,6 +76,9 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(odd[0], odd[2])
         self.assertEqual(same[0], odd[0])
         self.assertNotEqual(same[1], odd[1])
+        # No yellow patch — middle letter is painted only (mid_bg=False).
+        sample = next(iter(first["screen_images"].values()))
+        self.assertTrue(sample.endswith(":False"))
 
     def test_hp_s2_later_sets_get_faster_but_not_under_1_8(self):
         first = player._build_high_performance_s2_playlist(1, ["A"])[0]["on_ms"]
@@ -121,18 +126,21 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertGreaterEqual(on_ms, player.ELITE_S2_ON_MIN_MS - 50)
         self.assertLess(on_ms, player.ELITE_ON_START_MS)
 
-    def test_world_s2_has_one_k2_among_camouflaged_digits(self):
+    def test_world_s2_has_one_letter_token_among_camouflaged_digits(self):
         playlist = player._build_world_class_s2_playlist(1)
         self.assertEqual(len(playlist), 60)
         first = playlist[0]
         texts = [path.split(":")[1] for path in first["screen_images"].values()]
-        self.assertEqual(texts.count("K2"), 1)
-        others = [t for t in texts if t != "K2"]
+        goal_tokens = [t for t in texts if player._is_wc_s2_goal_token(t)]
+        others = [t for t in texts if not player._is_wc_s2_goal_token(t)]
+        self.assertEqual(len(goal_tokens), 1)
         self.assertEqual(len(others), 11)
         self.assertTrue(all(len(t) == 2 and t.isdigit() for t in others))
         goal = first["field_screens"][next(iter(first["field_screens"]))][0]
-        self.assertEqual(first["screen_images"][goal].split(":")[1], "K2")
-        # K2 uses the same camouflage mode/color as the other numbers.
+        goal_token = first["screen_images"][goal].split(":")[1]
+        self.assertTrue(player._is_wc_s2_goal_token(goal_token))
+        self.assertEqual(first.get("goal_token"), goal_token)
+        # Letter token uses the same camouflage mode/color as the numbers.
         flags = {
             path.split(":")[3]
             for path in first["screen_images"].values()
@@ -142,11 +150,12 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(first["motion_theme"], "flowers")
         self.assertTrue(all(s.get("motion_theme") == "flowers" for s in playlist))
         self.assertTrue(first.get("motion_bg"))
-        self.assertEqual(first["motion_texts"][goal], "K2")
+        self.assertEqual(first["motion_texts"][goal], goal_token)
         positions = first.get("motion_text_positions") or {}
         self.assertEqual(set(positions), set(first["motion_texts"]))
         ys = [float(positions[sid][1]) for sid in positions]
-        self.assertTrue(all(player.WC_TEXT_EDGE_MARGIN <= y <= 1.0 - player.WC_TEXT_EDGE_MARGIN for y in ys))
+        bottom = 1.0 - player.WC_TEXT_EDGE_MARGIN - player.WC_TEXT_BOTTOM_LIFT
+        self.assertTrue(all(player.WC_TEXT_EDGE_MARGIN <= y <= bottom + 1e-6 for y in ys))
         # Numbers are spread: not all stacked on one y.
         self.assertGreater(len(set(round(y, 2) for y in ys)), 1)
         self.assertEqual(player._wc_s2_theme_for_series(1), "flowers")
@@ -161,6 +170,15 @@ class Series2PlaylistTests(unittest.TestCase):
         flower_seeds = {step["motion_seed"] for step in playlist}
         self.assertGreater(len(flower_seeds), 1)
         self.assertGreaterEqual(player.WORLD_S2_CAMO_SEVERITY, 1.4)
+        # Goal letter+digit changes across actions (not stuck on K2).
+        tokens = [step.get("goal_token") for step in playlist]
+        self.assertTrue(all(player._is_wc_s2_goal_token(t) for t in tokens))
+        self.assertGreater(len(set(tokens)), 8)
+        # Adjacent actions avoid repeating the same token when possible.
+        same_neighbors = sum(
+            1 for a, b in zip(tokens, tokens[1:]) if a == b
+        )
+        self.assertEqual(same_neighbors, 0)
 
     def test_opening_card_text_is_readable_on_level_color(self):
         samples = {
@@ -176,6 +194,18 @@ class Series2PlaylistTests(unittest.TestCase):
             self.assertEqual(bg, player._LEVEL_PAGE_BG[key][0], key)
             self.assertEqual(fg, player._LEVEL_PAGE_BG[key][1], key)
             self.assertNotEqual(fg, bg, key)
+        # Results fills must match logos even when the L0x- prefix is missing.
+        aliases = {
+            "Entry/S1.T2": "entry",
+            "Activated/S2.T2": "activated",
+            "High Performance/S2.T1": "high-performance",
+            "C:/simust/L02-Activated/S2.T5": "activated",
+            "C:/simust/L01-Entry/S1.T1": "entry",
+        }
+        for level_id, key in aliases.items():
+            self.assertEqual(player._level_brand_key(level_id), key, level_id)
+            bg, _fg = player._level_card_colors(level_id, "", {})
+            self.assertEqual(bg, player._LEVEL_PAGE_BG[key][0], level_id)
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_WIDTH, 0.52 * 1.4 * 1.3, places=3)
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_HEIGHT, 0.30 * 1.4 * 1.3, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_GAP_LINES, 0)

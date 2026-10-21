@@ -1,4 +1,4 @@
-"""Foundation SF-30N…180N: 1s awareness flash on the next pass screen."""
+"""Foundation SF-30N…180N: awareness number appears with pass, stays 1s, clears."""
 
 import os
 import sys
@@ -54,6 +54,11 @@ class SfNextScreenHintTests(unittest.TestCase):
         self.assertTrue(any(g.isalpha() for g in seen))
         for glyph in seen:
             self.assertEqual(len(glyph), 1)
+
+    def test_hint_appears_with_pass_and_holds_one_second(self):
+        self.assertEqual(player.SF_NEXT_HINT_DELAY_MS, 0)
+        self.assertEqual(player.SF_NEXT_HINT_HOLD_MS, 1000)
+        self.assertAlmostEqual(player.ImageActionCanvas.PASS_IMAGE_SCALE, 0.57 * 1.1, places=3)
 
 
 if __name__ == "__main__":

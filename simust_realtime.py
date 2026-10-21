@@ -5294,13 +5294,27 @@ class SimustRealtimeCamera:
     def _tick_image_cue_frame_sync(self, current_time_str, current_timestamp):
         """Start keypoints only from cue active=true.
 
-        Cue false and force_end are ignored. A new true cue arms appear, then
-        keypoints stay for On frames (3s → 90) and clear by that countdown.
+        Mid-action cue false is ignored so On hold can finish. force_end (player
+        silenced the cabinet for beginning-info) clears pending appears and any
+        live cylinder immediately. A new true cue arms appear, then keypoints
+        stay for On frames (3s → 90) and clear by that countdown.
         """
         if CAMERA_QR_ENABLED:
             return
         shift = int(IMAGE_CUE_EDGE_SHIFT_FRAMES)
         cue = self._read_image_action_cue()
+        if isinstance(cue, dict) and cue.get("force_end"):
+            # Beginning-info / idle: drop leftover finish-balls before logos end.
+            for fid, ch in self.channels.items():
+                if not self._field_is_active(fid):
+                    continue
+                ch.kp_appear_frames_left = None
+                ch._pending_cue_info = None
+                ch._frame_sync_cue_raw = None
+                ch.pending_start = None
+                if ch.session_active or ch.active_goal_lines:
+                    self._clear_goal_area_now(ch, current_timestamp)
+            return
         cue_active = bool(isinstance(cue, dict) and cue.get("active"))
 
         paused_fields = set(getattr(self, "_paused_fields", None) or set())
@@ -5320,6 +5334,15 @@ class SimustRealtimeCamera:
             was_cue_off = bool(getattr(ch, "_image_cue_was_off", False))
             if not field_on:
                 ch._image_cue_was_off = True
+                # Opening silenced this half: do not let a pending appear finish
+                # after the cue no longer lists the field (premature cylinder).
+                if not ch.session_active:
+                    if ch.kp_appear_frames_left is not None or ch._pending_cue_info is not None:
+                        ch.kp_appear_frames_left = None
+                        ch._pending_cue_info = None
+                        ch._frame_sync_cue_raw = None
+                    if ch.pending_start:
+                        ch.pending_start = None
             else:
                 ch._image_cue_was_off = False
 
@@ -6530,7 +6553,30 @@ class SimustRealtimeCamera:
             self.destroy_window()
             print(f"\nSaved: {self.recording_dir}")
 
+def _boot_clear_image_action_cue():
+    """Ignore leftover finish-balls from the previous play before the loop starts.
+
+    The camera process often boots a few seconds before beginning information.
+    An active World Class cue would arm the cylinder and sim-shot immediately.
+    """
+    try:
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        payload = {
+            "active": False,
+            "force_end": True,
+            "seq": 0,
+            "fields": {},
+            "timestamp": time.time(),
+        }
+        with open(IMAGE_ACTION_CUE_FILE, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        print("[CUE] Cleared leftover image action cue at realtime boot")
+    except Exception as exc:
+        print(f"[CUE] Boot clear failed: {exc}")
+
+
 def main():
+    _boot_clear_image_action_cue()
     camera = SimustRealtimeCamera()
     try:
         camera.run()

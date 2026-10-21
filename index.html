@@ -5514,7 +5514,11 @@
                             setSelectedSubdirectoryB("");
                             if (isCombinedLevel(next)) {
                                 setScoreField("B");
-                                showToast("Elite / World Class plays both fields from Field B. Field A does not need a player.", 'success');
+                                // Freeze Field A: remove any other player so only B's score counts.
+                                if (typeof clearSelection === 'function') clearSelection();
+                                setSelectedLevel("");
+                                setSelectedSubdirectory("");
+                                showToast("Elite / World Class reserves both fields from Field B. Field A is frozen; score stays on B.", 'success');
                             }
                         },
                         selectedLevel: selectedLevelB,
@@ -5556,7 +5560,11 @@
                             setSelectedSubdirectory("");
                             if (isCombinedLevel(next)) {
                                 setScoreField("A");
-                                showToast("Elite / World Class plays both fields from Field A. Field B does not need a player.", 'success');
+                                // Freeze Field B: remove any other player so only A's score counts.
+                                if (typeof clearSelectionB === 'function') clearSelectionB();
+                                setSelectedLevelB("");
+                                setSelectedSubdirectoryB("");
+                                showToast("Elite / World Class reserves both fields from Field A. Field B is frozen; score stays on A.", 'success');
                             }
                         },
                         selectedLevel: selectedLevel,
