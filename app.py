@@ -1350,13 +1350,20 @@ def _final_progress_field_ids(fields: dict, field_metrics: dict, score_field: st
     return [fid for fid in ("A", "B") if fid in real]
 
 
-def apply_final_results_progress(field_metrics: dict, score_field: str = "") -> dict:
+def apply_final_results_progress(
+    field_metrics: dict,
+    score_field: str = "",
+    save_reports: bool = True,
+) -> dict:
     """Save score, unlock when thresholds are met, update trend, continue if time left.
 
     Independent dual-field: each field's player gets their own final on their profile.
     Elite / World Class: only the booked score_field player's final counts.
     While reservation time remains: repeat the same sub-level on fail, or play the
     newly unlocked set on pass. When time ends, progress is already saved for next booking.
+
+    save_reports=False skips PERFORMANCE TREND writes (used when both fields already
+    saved on their own finals and only unlock/continue sync is needed).
     """
     info = _continue_target({})
     try:
@@ -1404,8 +1411,17 @@ def apply_final_results_progress(field_metrics: dict, score_field: str = "") -> 
         )
         users[player_id]["progress"] = progress
         changed = True
-        # Do not write a report here — /save-session-to-player already saves the
-        # full session (actions + stats). Writing both produced duplicate trend points.
+        if save_reports:
+            # Immediate profile / My SIMUST trend point (push runs inside append).
+            # UI /save-session-to-player may later replace this stub with full actions.
+            try:
+                _append_performance_trend_session(
+                    player_id, level, subdirectory, statistics, field=fid,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not save final trend for %s field %s", player_id, fid,
+                )
         passed = bool((progress.get("challenge_results") or {}).get(level, {}).get("passed"))
         field_info = _continue_target(progress)
         field_info["passed"] = passed
@@ -6080,7 +6096,11 @@ async def create_results_video(req: Request):
                 progress_info = {}
                 if data.get("update_progress") is not False:
                     try:
-                        progress_info = apply_final_results_progress(field_metrics)
+                        progress_info = apply_final_results_progress(
+                            field_metrics,
+                            score_field=str(data.get("score_field") or field_id or ""),
+                            save_reports=data.get("save_reports") is not False,
+                        )
                     except Exception:
                         logger.exception("Final results could not update the player's level")
                 try:
@@ -6158,7 +6178,11 @@ async def create_results_video(req: Request):
         video_path = primary_video
         progress_info = {}
         try:
-            progress_info = apply_final_results_progress(field_metrics)
+            progress_info = apply_final_results_progress(
+                field_metrics,
+                score_field=str(data.get("score_field") or field_id or ""),
+                save_reports=data.get("save_reports") is not False,
+            )
         except Exception:
             logger.exception("Final results could not update the player's level")
         if spawn_display and os.path.exists(player_script):

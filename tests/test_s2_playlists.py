@@ -126,18 +126,21 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertGreaterEqual(on_ms, player.ELITE_S2_ON_MIN_MS - 50)
         self.assertLess(on_ms, player.ELITE_ON_START_MS)
 
-    def test_world_s2_has_one_k2_among_camouflaged_digits(self):
+    def test_world_s2_has_one_letter_token_among_camouflaged_digits(self):
         playlist = player._build_world_class_s2_playlist(1)
         self.assertEqual(len(playlist), 60)
         first = playlist[0]
         texts = [path.split(":")[1] for path in first["screen_images"].values()]
-        self.assertEqual(texts.count("K2"), 1)
-        others = [t for t in texts if t != "K2"]
+        goal_tokens = [t for t in texts if player._is_wc_s2_goal_token(t)]
+        others = [t for t in texts if not player._is_wc_s2_goal_token(t)]
+        self.assertEqual(len(goal_tokens), 1)
         self.assertEqual(len(others), 11)
         self.assertTrue(all(len(t) == 2 and t.isdigit() for t in others))
         goal = first["field_screens"][next(iter(first["field_screens"]))][0]
-        self.assertEqual(first["screen_images"][goal].split(":")[1], "K2")
-        # K2 uses the same camouflage mode/color as the other numbers.
+        goal_token = first["screen_images"][goal].split(":")[1]
+        self.assertTrue(player._is_wc_s2_goal_token(goal_token))
+        self.assertEqual(first.get("goal_token"), goal_token)
+        # Letter token uses the same camouflage mode/color as the numbers.
         flags = {
             path.split(":")[3]
             for path in first["screen_images"].values()
@@ -147,7 +150,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(first["motion_theme"], "flowers")
         self.assertTrue(all(s.get("motion_theme") == "flowers" for s in playlist))
         self.assertTrue(first.get("motion_bg"))
-        self.assertEqual(first["motion_texts"][goal], "K2")
+        self.assertEqual(first["motion_texts"][goal], goal_token)
         positions = first.get("motion_text_positions") or {}
         self.assertEqual(set(positions), set(first["motion_texts"]))
         ys = [float(positions[sid][1]) for sid in positions]
@@ -167,6 +170,15 @@ class Series2PlaylistTests(unittest.TestCase):
         flower_seeds = {step["motion_seed"] for step in playlist}
         self.assertGreater(len(flower_seeds), 1)
         self.assertGreaterEqual(player.WORLD_S2_CAMO_SEVERITY, 1.4)
+        # Goal letter+digit changes across actions (not stuck on K2).
+        tokens = [step.get("goal_token") for step in playlist]
+        self.assertTrue(all(player._is_wc_s2_goal_token(t) for t in tokens))
+        self.assertGreater(len(set(tokens)), 8)
+        # Adjacent actions avoid repeating the same token when possible.
+        same_neighbors = sum(
+            1 for a, b in zip(tokens, tokens[1:]) if a == b
+        )
+        self.assertEqual(same_neighbors, 0)
 
     def test_opening_card_text_is_readable_on_level_color(self):
         samples = {
@@ -182,6 +194,18 @@ class Series2PlaylistTests(unittest.TestCase):
             self.assertEqual(bg, player._LEVEL_PAGE_BG[key][0], key)
             self.assertEqual(fg, player._LEVEL_PAGE_BG[key][1], key)
             self.assertNotEqual(fg, bg, key)
+        # Results fills must match logos even when the L0x- prefix is missing.
+        aliases = {
+            "Entry/S1.T2": "entry",
+            "Activated/S2.T2": "activated",
+            "High Performance/S2.T1": "high-performance",
+            "C:/simust/L02-Activated/S2.T5": "activated",
+            "C:/simust/L01-Entry/S1.T1": "entry",
+        }
+        for level_id, key in aliases.items():
+            self.assertEqual(player._level_brand_key(level_id), key, level_id)
+            bg, _fg = player._level_card_colors(level_id, "", {})
+            self.assertEqual(bg, player._LEVEL_PAGE_BG[key][0], level_id)
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_WIDTH, 0.52 * 1.4 * 1.3, places=3)
         self.assertAlmostEqual(player.OPENING_LOGO_MAX_HEIGHT, 0.30 * 1.4 * 1.3, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_GAP_LINES, 0)

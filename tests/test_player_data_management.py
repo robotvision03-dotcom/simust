@@ -22,6 +22,7 @@ from app import (  # noqa: E402
     _clear_overlapping_field_bookings,
     _continue_target,
     _final_progress_field_ids,
+    apply_final_results_progress,
     apply_session_progress,
 )
 
@@ -172,6 +173,128 @@ class DualFieldFinalSaveTests(unittest.TestCase):
             _final_progress_field_ids(fields, metrics, "A"),
             ["A"],
         )
+
+    def test_single_field_final_only_targets_that_field(self):
+        fields = {
+            "A": {"player_id": "jj", "level": "L00-Foundation"},
+            "B": {"player_id": "christiano", "level": "L01-Entry/S1.T2"},
+        }
+        # Field A finished while B is still playing — only A's metrics arrive.
+        self.assertEqual(
+            _final_progress_field_ids(fields, {"A": {"aac": 70}}, "A"),
+            ["A"],
+        )
+
+    def test_apply_final_writes_trend_when_save_reports(self):
+        users = {
+            "jj": {
+                "name": "JJ",
+                "surname": "Test",
+                "role": "player",
+                "progress": simust_progress.default_progress(),
+            },
+            "christiano": {
+                "name": "Christiano",
+                "surname": "Test",
+                "role": "player",
+                "progress": simust_progress.default_progress(),
+            },
+        }
+        users["jj"]["progress"]["unlocked_levels"] = ["L00-Foundation"]
+        users["jj"]["progress"]["current_level"] = "L00-Foundation"
+        users["christiano"]["progress"]["unlocked_levels"] = [
+            "L00-Foundation",
+            "L01-Entry/S1.T2",
+        ]
+        users["christiano"]["progress"]["current_level"] = "L01-Entry/S1.T2"
+        fields_payload = {
+            "score_field": "A",
+            "fields": {
+                "A": {"player_id": "jj", "level": "L00-Foundation", "subdirectory": ""},
+                "B": {
+                    "player_id": "christiano",
+                    "level": "L01-Entry/S1.T2",
+                    "subdirectory": "",
+                },
+            },
+        }
+        metrics = {
+            "A": {
+                "aac": 80.0,
+                "avg_ae": 75.0,
+                "correct": 8,
+                "late": 0,
+                "wrong": 2,
+                "miss": 0,
+            },
+            "B": {
+                "aac": 90.0,
+                "avg_ae": 85.0,
+                "correct": 9,
+                "late": 0,
+                "wrong": 1,
+                "miss": 0,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pf = os.path.join(tmp, "players_fields.json")
+            with open(pf, "w", encoding="utf-8") as handle:
+                import json
+
+                json.dump(fields_payload, handle)
+            with patch("app.SIMUST_PLAYER_DIRECTORY", tmp), patch(
+                "app.PLAYER_REPORTS_DIR", tmp
+            ), patch("app.load_users", return_value=users), patch(
+                "app.save_users"
+            ), patch("app._booking_seconds_left", return_value=0), patch(
+                "app.simust_push.push_session_async"
+            ):
+                apply_final_results_progress(metrics, score_field="A", save_reports=True)
+            for pid in ("jj", "christiano"):
+                index_path = os.path.join(tmp, pid, "index.json")
+                self.assertTrue(os.path.isfile(index_path), pid)
+                import json
+
+                with open(index_path, "r", encoding="utf-8") as handle:
+                    index = json.load(handle)
+                self.assertEqual(len(index), 1, pid)
+                self.assertTrue(index[0].get("final_results"), pid)
+
+    def test_apply_final_skips_reports_when_disabled(self):
+        users = {
+            "jj": {
+                "name": "JJ",
+                "role": "player",
+                "progress": simust_progress.default_progress(),
+            },
+        }
+        users["jj"]["progress"]["unlocked_levels"] = ["L00-Foundation"]
+        users["jj"]["progress"]["current_level"] = "L00-Foundation"
+        fields_payload = {
+            "fields": {
+                "A": {"player_id": "jj", "level": "L00-Foundation", "subdirectory": ""},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pf = os.path.join(tmp, "players_fields.json")
+            with open(pf, "w", encoding="utf-8") as handle:
+                import json
+
+                json.dump(fields_payload, handle)
+            with patch("app.SIMUST_PLAYER_DIRECTORY", tmp), patch(
+                "app.PLAYER_REPORTS_DIR", tmp
+            ), patch("app.load_users", return_value=users), patch(
+                "app.save_users"
+            ), patch("app._booking_seconds_left", return_value=0), patch(
+                "app.simust_push.push_session_async"
+            ) as push:
+                apply_final_results_progress(
+                    {"A": {"aac": 80, "avg_ae": 70, "correct": 8, "wrong": 2}},
+                    score_field="A",
+                    save_reports=False,
+                )
+            self.assertFalse(os.path.isdir(os.path.join(tmp, "jj")))
+            push.assert_not_called()
 
 
 if __name__ == "__main__":

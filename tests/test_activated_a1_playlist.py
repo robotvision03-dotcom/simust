@@ -13,7 +13,13 @@ import smart_simust_player as player  # noqa: E402
 class ActivatedA1PlaylistTests(unittest.TestCase):
     def setUp(self):
         self._render = player._render_entry_digit_image
+        self._mid = player._render_middle_colored_text_image
         player._render_entry_digit_image = lambda text, bg=None: f"img:{text}:{bg}"
+        player._render_middle_colored_text_image = (
+            lambda text, bg, outer_fg, mid_fg, mid_bg=None: (
+                f"mid:{text}:{bg}:{outer_fg}:{mid_fg}:{mid_bg}"
+            )
+        )
         self._randint = player.random.randint
         self._choice = player.random.choice
         self._sample = player.random.sample
@@ -21,6 +27,7 @@ class ActivatedA1PlaylistTests(unittest.TestCase):
 
     def tearDown(self):
         player._render_entry_digit_image = self._render
+        player._render_middle_colored_text_image = self._mid
         player.random.randint = self._randint
         player.random.choice = self._choice
         player.random.sample = self._sample
@@ -151,8 +158,13 @@ class ActivatedA1PlaylistTests(unittest.TestCase):
         same = next(v for v in vals if v != odd)
         self.assertEqual(vals.count(odd), 1)
         self.assertEqual(vals.count(same), 5)
-        self.assertEqual(same[1], odd[1])
+        self.assertEqual(same[0], odd[0])
+        self.assertEqual(same[2], odd[2])
+        self.assertNotEqual(same[1], odd[1])
         self.assertEqual(first["field_screens"]["A"], ["A4"])
+        # Middle letter is painted only — no yellow background patch.
+        sample = next(iter(first["screen_images"].values()))
+        self.assertTrue(sample.endswith(":False"), sample)
 
     def test_fields_pick_independent_odd_targets(self):
         screens = {"n": 0}

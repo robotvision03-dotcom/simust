@@ -1560,6 +1560,34 @@ class SeriesRestartTests(unittest.TestCase):
                 msg=f"{key}: fg={fg_rgb} on bg={bg_rgb}",
             )
 
+    def test_results_fill_matches_level_brand_for_every_band(self):
+        """Entry / Activated / … results background must equal opening-card brand fill."""
+        inst = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
+        cases = [
+            ("A", "L01-Entry/S1.T2", "S1.T2", "C:/lab/L01-Entry/S1.T2", "entry"),
+            ("B", "L02-Activated/S2.T2", "S2.T2", "C:/lab/L02-Activated/S2.T2", "activated"),
+            ("A", "Activated/S2.T5", "S2.T5", "C:/lab/Activated/S2.T5", "activated"),
+            ("B", "Entry/S1.T1", "S1.T1", "C:/lab/Entry/S1.T1", "entry"),
+            ("A", "L03-HighPerformance/S2.T1", "S2.T1", "C:/lab/HP", "high-performance"),
+            ("B", "L04-Elite/S1.T1", "", "C:/lab/Elite", "elite"),
+            ("A", "L05-WorldClass/S2.T1", "S2.T1", "C:/lab/WC", "world-class"),
+            ("B", "L00-Foundation", "SF-30N", "C:/lab/Foundation/SF-30N", "foundation"),
+        ]
+        for fid, level, mode, directory, key in cases:
+            inst._phase_field_levels = {fid: level}
+            inst._phase_field_modes = {fid: mode}
+            inst._phase_field_directories = {fid: directory}
+            inst._phase_subdirectory = mode
+            inst._phase_mode_id = mode
+            inst.video_directory = directory
+            inst._level_root = directory
+            colors = inst._opening_card_colors()
+            self.assertEqual(
+                colors[fid][0],
+                player._LEVEL_PAGE_BG[key][0],
+                msg=f"{fid} {level} → expected {key}",
+            )
+
     def test_levels_can_run_one_after_another(self):
         cases = [
             (5, 10, 5, 6),

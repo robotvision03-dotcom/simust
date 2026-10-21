@@ -1248,13 +1248,13 @@ def _build_activated_a1_playlist(series_num: int, active_fields) -> List[dict]:
                 for screen in range(1, ENTRY_ACTIONS_PER_TEST + 1):
                     text = odd if screen == odd_screen else same
                     if len(str(text)) == 3 and str(text).isalpha():
-                        # Middle letter only gets a distinct background patch.
+                        # Paint only the middle letter — no yellow background patch.
                         png = _render_middle_colored_text_image(
                             str(text),
                             bg,
                             (255, 255, 255),
-                            (20, 24, 32),
-                            mid_bg=(255, 196, 64),
+                            HP_S2_MID_LETTER,
+                            mid_bg=False,
                         )
                     else:
                         png = _render_entry_digit_image(str(text), bg=bg)
@@ -1940,10 +1940,29 @@ def _render_elite_s2_shape_fallback(text: str, bg) -> Optional[str]:
     return path
 
 
-def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
-    """World Class S2: motion-camouflaged 2-digit numbers; one screen shows K2.
+def _wc_s2_goal_token(avoid: str = "") -> str:
+    """Letter+digit goal (e.g. K2, M7) — same width as distractor numbers 10–99."""
+    letters = SF_NEXT_HINT_LETTERS
+    avoid = str(avoid or "").strip().upper()
+    for _ in range(24):
+        token = f"{random.choice(letters)}{random.randint(0, 9)}"
+        if token != avoid:
+            return token
+    return f"{random.choice(letters)}{random.randint(0, 9)}"
 
-    Theme follows the level set (S2.T#), not the timed test inside the set:
+
+def _is_wc_s2_goal_token(text: str) -> bool:
+    """True for Letter+digit tokens used as the World Class S2 pass target."""
+    raw = str(text or "").strip().upper()
+    return len(raw) == 2 and raw[0].isalpha() and raw[1].isdigit()
+
+
+def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
+    """World Class S2: motion-camouflaged 2-digit numbers; one screen shows a letter+digit.
+
+    The goal token looks like the distractor numbers (two characters) but uses a
+    letter+digit pair that changes every action (K2, M7, R4, …). Theme follows
+    the level set (S2.T#), not the timed test inside the set:
     S2.T1 flowers, S2.T2 fruits, S2.T3 animals, S2.T4 space, S2.T5 orbs.
     Each action uses a different bounce start seed so sprites do not always
     begin from the same edge/location. Timing matches Elite S2.
@@ -1956,6 +1975,7 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
     # One shared clip per theme — schedule once; never encode per action.
     motion_bg = _ensure_wc_motion_bg_video(theme, int(base_seed))
     playlist = []
+    prev_goal_token = ""
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
         order = _combined_s2_goal_order(test_num)
         for action_in_set, goal_sid in enumerate(order, start=1):
@@ -1969,13 +1989,15 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
             )
             # Large step offset so sprites are mid-flight, not stuck on one edge.
             start_frame = int(action_seed) % 180
+            goal_token = _wc_s2_goal_token(avoid=prev_goal_token)
+            prev_goal_token = goal_token
             images = {}
             motion_texts = {}
             motion_positions = {}
             for sid in screens:
-                text = "K2" if sid == goal_sid else f"{random.randint(10, 99)}"
+                text = goal_token if sid == goal_sid else f"{random.randint(10, 99)}"
                 motion_texts[sid] = text
-                # Each number/K2 gets its own random place (not top/bottom 10%).
+                # Each number / letter-token gets its own random place.
                 motion_positions[sid] = _wc_text_anchor_frac(action_seed, f"{sid}:{text}")
                 # Fast solid-theme stills so playlist build stays instant.
                 png = _render_camouflage_text_image(
@@ -2015,10 +2037,11 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
                 "motion_texts": dict(motion_texts),
                 "motion_text_positions": dict(motion_positions),
                 "motion_fill": True,
+                "goal_token": goal_token,
                 "label": (
                     f"WorldClass S2.T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ELITE_ACTIONS_PER_TEST} "
-                    f"goal {goal_sid} K2 theme={theme} on={on_ms}ms"
+                    f"goal {goal_sid} {goal_token} theme={theme} on={on_ms}ms"
                 ),
                 "path": (
                     f"image://WorldClass/S2.T{series_num}/"
@@ -2716,22 +2739,40 @@ _LEVEL_PAGE_BG = {
 
 
 def _level_brand_key(level_id: str, subdirectory: str = "", entry: dict = None) -> str:
+    """Same band identity as opening logos — drives results / waiting fills."""
     text = f"{level_id or ''} {subdirectory or ''}"
     if isinstance(entry, dict):
         text = f"{text} {entry.get('label') or ''} {entry.get('path') or ''}"
-    if re.search(r"L05-WorldClass|World[-_ ]?Class", text, re.I):
-        return "world-class"
-    if re.search(r"L04-Elite", text, re.I):
-        return "elite"
-    if re.search(r"L03-HighPerformance|High[-_ ]?Performance", text, re.I):
-        return "high-performance"
-    if re.search(r"L02-Activated", text, re.I):
-        return "activated"
-    if re.search(r"L01-Entry", text, re.I):
-        return "entry"
-    if re.search(r"Foundation|SF-\d+N", text, re.I):
-        return "foundation"
-    return "foundation"
+    text = str(text or "").strip()
+    # Match logo resolution: L02-Activated/S2.T2, Activated/S2.T2, folder paths.
+    key = _level_intro_key_from_id(text)
+    if not key:
+        for part in re.split(r"[/\\]+", text):
+            part = str(part or "").strip()
+            if not part:
+                continue
+            key = _level_intro_key_from_id(part)
+            if key:
+                break
+    if not key:
+        for pat, mapped in _LEVEL_INTRO_PATH_RULES:
+            if pat.search(text):
+                key = mapped
+                break
+    if not key:
+        if re.search(r"World[-_ ]?Class", text, re.I):
+            key = "world-class"
+        elif re.search(r"\bElite\b", text, re.I):
+            key = "elite"
+        elif re.search(r"High[-_ ]?Performance", text, re.I):
+            key = "high-performance"
+        elif re.search(r"\bActivated\b", text, re.I):
+            key = "activated"
+        elif re.search(r"\bEntry\b", text, re.I):
+            key = "entry"
+        elif re.search(r"Foundation|SF-\d+N", text, re.I):
+            key = "foundation"
+    return key or "foundation"
 
 
 def _level_card_colors(level_id: str, subdirectory: str, entry: dict):
@@ -11327,8 +11368,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "directory": session_dir,
                 "display": False,
                 "make_video": False,
-                "update_progress": stopped,
+                # Always save score + PERFORMANCE TREND as soon as this field finishes
+                # (even while the other field is still playing).
+                "update_progress": True,
+                "save_reports": True,
                 "fields": [fid],
+                "score_field": fid,
             }
             try:
                 if HAS_REQUESTS:
@@ -11520,7 +11565,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "directory": session_dir,
                 "display": False,
                 "make_video": False,
+                # Unlock/continue sync only — each field already wrote its report on final.
                 "update_progress": True,
+                "save_reports": False,
                 "fields": fields or self._active_fields(),
             }
             try:
@@ -12405,21 +12452,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         logger.info("Playlist loaded: %s %s", total, kind)
 
     def _opening_card_colors(self):
-        """Waiting / results band fills: level brand background with readable text."""
-        levels = getattr(self, "_phase_field_levels", None) or {}
-        directories = getattr(self, "_phase_field_directories", None) or {}
-        subdirectory = str(getattr(self, "_phase_subdirectory", "") or "")
+        """Waiting / results band fills: same brand color as the opening logo."""
+        levels = self._player_attr("_phase_field_levels") or {}
+        modes = self._player_attr("_phase_field_modes") or {}
+        directories = self._player_attr("_phase_field_directories") or {}
+        shared_mode = str(self._player_attr("_phase_subdirectory") or "")
+        shared_root = str(self._player_attr("_level_root") or "")
+        shared_dir = str(self._player_attr("video_directory") or "")
         colors = {}
         for fid in ("A", "B"):
-            level_id = str(levels.get(fid) or getattr(self, "_phase_mode_id", "") or "")
+            level_id = str(levels.get(fid) or "")
+            mode = str(modes.get(fid) or shared_mode or "")
+            directory = str(directories.get(fid) or shared_dir or "")
+            # Same context as _result_logo_for_field so fill matches the logo band.
             context = " ".join([
                 level_id,
-                subdirectory,
-                str(getattr(self, "video_directory", "") or ""),
-                str(getattr(self, "_level_root", "") or ""),
-                str(directories.get(fid) or ""),
+                mode,
+                directory,
+                shared_root,
+                str(self._player_attr("_phase_mode_id") or ""),
             ])
-            key = _level_brand_key(context, "", {})
+            key = _level_brand_key(context, mode, {})
             colors[fid] = _LEVEL_PAGE_BG.get(key) or _LEVEL_PAGE_BG["foundation"]
         return colors
 
