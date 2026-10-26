@@ -36,6 +36,12 @@ class ManualCoachHelpersTests(unittest.TestCase):
         self.assertEqual(len(layout["B"]), 6)
         self.assertEqual({row["id"] for row in layout["A"]}, set(manual.FIELD_A_LAYOUT))
         self.assertEqual({row["id"] for row in layout["B"]}, set(manual.FIELD_B_LAYOUT))
+        # A1–A6 use the same panel positions as B1–B6.
+        for n in range(1, 7):
+            a = next(row for row in layout["A"] if row["id"] == f"A{n}")
+            b = next(row for row in layout["B"] if row["id"] == f"B{n}")
+            self.assertEqual(a["left"], b["left"], n)
+            self.assertEqual(a["top"], b["top"], n)
 
     def test_write_command_increments_seq(self):
         first = manual.write_command("cue", screen="A1")

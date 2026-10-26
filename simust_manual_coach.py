@@ -20,23 +20,23 @@ PLAYER_DIR = os.environ.get(
 CMD_FILE = os.path.join(PLAYER_DIR, "manual_coach_cmd.json")
 STATUS_FILE = os.path.join(PLAYER_DIR, "manual_coach_status.json")
 
-# Graphical goal-area layout (percent of each field panel). Matches Foundation
-# working arcs around each half: A4→A5→A6→A1→A2→A3 and B6→B5→B4→B3→B2→B1.
-FIELD_A_LAYOUT = {
-    "A4": {"left": 12, "top": 68},
-    "A5": {"left": 50, "top": 78},
-    "A6": {"left": 88, "top": 68},
-    "A1": {"left": 88, "top": 28},
-    "A2": {"left": 50, "top": 16},
-    "A3": {"left": 12, "top": 28},
-}
+# Graphical goal-area layout (percent of each field panel).
+# A1–A6 use the same positions as B1–B6 (same number → same spot on each half).
 FIELD_B_LAYOUT = {
-    "B6": {"left": 12, "top": 68},
-    "B5": {"left": 50, "top": 78},
-    "B4": {"left": 88, "top": 68},
-    "B3": {"left": 88, "top": 28},
-    "B2": {"left": 50, "top": 16},
     "B1": {"left": 12, "top": 28},
+    "B2": {"left": 50, "top": 16},
+    "B3": {"left": 88, "top": 28},
+    "B4": {"left": 88, "top": 68},
+    "B5": {"left": 50, "top": 78},
+    "B6": {"left": 12, "top": 68},
+}
+FIELD_A_LAYOUT = {
+    "A1": dict(FIELD_B_LAYOUT["B1"]),
+    "A2": dict(FIELD_B_LAYOUT["B2"]),
+    "A3": dict(FIELD_B_LAYOUT["B3"]),
+    "A4": dict(FIELD_B_LAYOUT["B4"]),
+    "A5": dict(FIELD_B_LAYOUT["B5"]),
+    "A6": dict(FIELD_B_LAYOUT["B6"]),
 }
 
 VALID_SCREENS = tuple(

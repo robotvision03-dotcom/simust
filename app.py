@@ -1432,6 +1432,30 @@ def _booking_seconds_left(player_id: str, field: str = "A") -> float:
         return 0.0
 
 
+def _session_is_admin_test(payload: dict = None, fields: dict = None) -> bool:
+    """True for operator admin-password play (no reservation clock).
+
+    Stamped at Realtime Play start. Also inferred when live player slots have
+    no booking_end (admin / staff test starts leave it empty on purpose).
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    if payload.get("admin_test"):
+        return True
+    fields = fields if isinstance(fields, dict) else (
+        payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    )
+    saw_player = False
+    for fid in ("A", "B"):
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        pid = str((slot or {}).get("player_id") or "").strip()
+        if not pid or pid.startswith("__sim_"):
+            continue
+        saw_player = True
+        if str((slot or {}).get("booking_end") or "").strip():
+            return False
+    return bool(saw_player)
+
+
 def _has_open_next_set(progress: dict, level_id: str, subdirectory: str = "") -> bool:
     """True when a pass on this set can open a further training set.
 
@@ -1931,10 +1955,21 @@ def apply_final_results_progress(
         field_info["seconds_left"] = _booking_seconds_left(player_id, fid)
         # Keep playing while booking time remains, except when there is no *open*
         # next set (manual Lock on SF-60N must not loop SF-30N forever).
+        # Admin/manual password play has no reservation clock — still continue
+        # Mode 2 / unlock into the next SF and Entry (incl. Foundation level-up).
         has_next = _has_open_next_set(progress, level_key or level, subdirectory)
-        field_info["continue_play"] = bool(
-            field_info["seconds_left"] > 30 and (not passed or has_next)
-        )
+        admin_test = _session_is_admin_test(payload, fields)
+        field_info["admin_test"] = bool(admin_test)
+        wants_continue = bool(not passed or has_next)
+        if admin_test:
+            field_info["continue_play"] = wants_continue
+            if wants_continue and float(field_info["seconds_left"] or 0) <= 30:
+                # Player continue gate needs >30s; invent a long clock for admin tests.
+                field_info["seconds_left"] = 24 * 3600.0
+        else:
+            field_info["continue_play"] = bool(
+                field_info["seconds_left"] > 30 and wants_continue
+            )
         if fid == chosen or primary_info is None:
             primary_info = field_info
     if changed:
@@ -3508,6 +3543,7 @@ async def start_realtime_playback(req: Request):
                     "levels": slot_levels,
                     "separate_fields": False,
                     "score_field": score_field,
+                    "admin_test": bool(admin_test_override),
                 }, f, indent=2)
         except Exception as e:
             logger.warning("Could not write players_fields.json: %s", e)
@@ -3962,6 +3998,8 @@ async def join_realtime_field(req: Request):
     payload["fields"] = fields
     payload["active"] = active
     payload["levels"] = levels
+    if admin_test_override:
+        payload["admin_test"] = True
     os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
@@ -5584,6 +5622,10 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
             shown = int(metrics.get("distance_m_display") or 0)
         else:
             shown = distance_m_display(raw_dist)
+        # Never persist a blank board over a known positive hip path
+        # (mid-session race used to lock distance_m_display=0 forever).
+        if shown <= 0 and raw_dist > 0:
+            shown = distance_m_display(raw_dist)
         entry = {
             "video_index": int(video_index),
             "total_distance": raw_dist,
@@ -5883,13 +5925,15 @@ def _combine_section_metrics(section_metrics):
     # Final displacement = average of each test's whole-metre board (not a sum).
     display_vals = []
     for m in section_metrics:
+        shown = None
         if m.get("distance_m_display") is not None:
             try:
-                display_vals.append(int(m.get("distance_m_display") or 0))
-                continue
+                shown = int(m.get("distance_m_display") or 0)
             except (TypeError, ValueError):
-                pass
-        display_vals.append(distance_m_display(m.get("total_distance")))
+                shown = None
+        if shown is None or shown <= 0:
+            shown = distance_m_display(m.get("total_distance"))
+        display_vals.append(shown)
     avg_display = (sum(display_vals) / n) if display_vals else 0.0
     total_distance = float(avg_display)
     distance_shown = int(round(avg_display))
@@ -5967,19 +6011,48 @@ def aggregate_final_section_metrics(all_results, session_folder=None):
             vid = 1
         by_video_rows.setdefault(vid, []).append(row)
 
-    if by_video_rows:
+    if by_video_rows or saved_by_video:
         section_metrics = []
-        for vid in sorted(by_video_rows):
-            m = summarize_results_section_metrics(by_video_rows[vid])
-            prior = saved_by_video.get(vid) or {}
-            if prior.get("distance_m_display") is not None:
-                m["distance_m_display"] = int(prior.get("distance_m_display") or 0)
-                try:
-                    m["total_distance"] = float(prior.get("total_distance") or m.get("total_distance") or 0)
-                except (TypeError, ValueError):
-                    pass
+        # Final board = every per-test ring (saved and/or present in results).
+        for vid in sorted(set(by_video_rows) | set(saved_by_video)):
+            rows = by_video_rows.get(vid) or []
+            if rows:
+                m = summarize_results_section_metrics(rows)
             else:
-                m["distance_m_display"] = distance_m_display(m.get("total_distance"))
+                m = dict(saved_by_video.get(vid) or {})
+            prior = saved_by_video.get(vid) or {}
+            prior_shown = None
+            if prior.get("distance_m_display") is not None:
+                try:
+                    prior_shown = int(prior.get("distance_m_display") or 0)
+                except (TypeError, ValueError):
+                    prior_shown = None
+            try:
+                prior_raw = float(prior.get("total_distance") or 0.0)
+            except (TypeError, ValueError):
+                prior_raw = 0.0
+            try:
+                live_dist = float(m.get("total_distance") or 0.0)
+            except (TypeError, ValueError):
+                live_dist = 0.0
+            # Prefer metres that were drawn on a per-test board, but never
+            # lock in a mid-session zero over later hip stamps / recompute.
+            if prior_shown is not None and prior_shown > 0:
+                m["distance_m_display"] = prior_shown
+                if prior_raw > 0:
+                    m["total_distance"] = prior_raw
+            else:
+                if live_dist <= 0 and session_folder:
+                    recomputed = compute_total_distance_from_recognition(
+                        session_folder, video_index=vid
+                    )
+                    if recomputed > 0:
+                        m["total_distance"] = recomputed
+                        live_dist = recomputed
+                if live_dist <= 0 and prior_raw > 0:
+                    m["total_distance"] = prior_raw
+                    live_dist = prior_raw
+                m["distance_m_display"] = distance_m_display(live_dist)
             m["video_index"] = vid
             section_metrics.append(m)
         # Refresh saved boards so a later read matches the corrected AE.
@@ -5994,12 +6067,17 @@ def aggregate_final_section_metrics(all_results, session_folder=None):
         return _combine_section_metrics(section_metrics)
 
     if saved:
-        boards = [
-            int(s.get("distance_m_display"))
-            if s.get("distance_m_display") is not None
-            else distance_m_display(s.get("total_distance"))
-            for s in saved
-        ]
+        boards = []
+        for s in saved:
+            shown = None
+            if s.get("distance_m_display") is not None:
+                try:
+                    shown = int(s.get("distance_m_display") or 0)
+                except (TypeError, ValueError):
+                    shown = None
+            if shown is None or shown <= 0:
+                shown = distance_m_display(s.get("total_distance"))
+            boards.append(shown)
         avg_m = (sum(boards) / float(len(boards))) if boards else 0.0
         logger.info(
             "Final metrics averaging %d saved video board(s): %s → %.1fm",
@@ -6979,22 +7057,37 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         if os.path.exists(recognition_path):
             try:
                 import simust_realtime as _rt
-                with open(recognition_path, "r", encoding="utf-8") as f:
-                    blocks = json.load(f)
-                by_video = _rt.compute_distances_by_video(blocks, all_results)
-                changed = False
-                for row in all_results:
+                blocks = None
+                # Brief retry: recognition may still be flushing atomically.
+                for _attempt in range(4):
                     try:
-                        vid = int(row.get("video_index") or 1)
-                    except (TypeError, ValueError):
-                        vid = 1
-                    metres = float(by_video.get(vid, 0.0))
-                    if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
-                        row["total_distance"] = metres
-                        changed = True
-                if changed:
-                    with open(results_json_path, "w", encoding="utf-8") as f:
-                        json.dump(all_results, f, indent=2, ensure_ascii=False)
+                        with open(recognition_path, "r", encoding="utf-8") as f:
+                            blocks = json.load(f)
+                        break
+                    except (OSError, json.JSONDecodeError, ValueError):
+                        time.sleep(0.05)
+                if blocks is not None:
+                    by_video = _rt.compute_distances_by_video(blocks, all_results)
+                    changed = False
+                    for row in all_results:
+                        try:
+                            vid = int(row.get("video_index") or 1)
+                        except (TypeError, ValueError):
+                            vid = 1
+                        metres = float(by_video.get(vid, 0.0))
+                        if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
+                            row["total_distance"] = metres
+                            changed = True
+                    if changed:
+                        tmp = results_json_path + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(all_results, f, indent=2, ensure_ascii=False)
+                            f.flush()
+                            try:
+                                os.fsync(f.fileno())
+                            except OSError:
+                                pass
+                        os.replace(tmp, results_json_path)
             except Exception as exc:
                 logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
 

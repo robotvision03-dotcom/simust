@@ -2433,14 +2433,15 @@
         // =====================================================================
         // ADMIN SETTINGS – HOMOGRAPHY CALIBRATION
         // =====================================================================
+        // A1–A6 match B1–B6 positions (same number → same spot on each half).
         var DEFAULT_MANUAL_LAYOUT = {
             A: [
-                { id: 'A4', left: 12, top: 68 }, { id: 'A5', left: 50, top: 78 }, { id: 'A6', left: 88, top: 68 },
-                { id: 'A1', left: 88, top: 28 }, { id: 'A2', left: 50, top: 16 }, { id: 'A3', left: 12, top: 28 }
+                { id: 'A1', left: 12, top: 28 }, { id: 'A2', left: 50, top: 16 }, { id: 'A3', left: 88, top: 28 },
+                { id: 'A4', left: 88, top: 68 }, { id: 'A5', left: 50, top: 78 }, { id: 'A6', left: 12, top: 68 }
             ],
             B: [
-                { id: 'B6', left: 12, top: 68 }, { id: 'B5', left: 50, top: 78 }, { id: 'B4', left: 88, top: 68 },
-                { id: 'B3', left: 88, top: 28 }, { id: 'B2', left: 50, top: 16 }, { id: 'B1', left: 12, top: 28 }
+                { id: 'B1', left: 12, top: 28 }, { id: 'B2', left: 50, top: 16 }, { id: 'B3', left: 88, top: 28 },
+                { id: 'B4', left: 88, top: 68 }, { id: 'B5', left: 50, top: 78 }, { id: 'B6', left: 12, top: 68 }
             ]
         };
 

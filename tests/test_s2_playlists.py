@@ -61,8 +61,17 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertAlmostEqual(first["on_ms"] / 1000.0, 3.0, delta=0.05)
         self.assertTrue(first["finish_balls"])
         self.assertEqual(len(first["screen_images"]), 12)
-        self.assertEqual(first.get("motion_theme"), "flowers")
-        self.assertTrue(first.get("motion_bg"))
+        # Same solid S1 backgrounds — no motion flowers.
+        self.assertIsNone(first.get("motion_theme"))
+        self.assertFalse(first.get("motion_bg"))
+        self.assertEqual(first.get("test_bg"), player.HP_TEST_BG[1])
+        # Background changes per timed test, not per action.
+        by_test = {}
+        for step in playlist:
+            by_test.setdefault(step["test_num"], set()).add(step.get("test_bg"))
+        for test_num, bgs in by_test.items():
+            self.assertEqual(bgs, {player.HP_TEST_BG[test_num]}, test_num)
+        self.assertEqual(len({step.get("test_bg") for step in playlist}), 5)
         a_vals = [
             first["screen_images"][f"A{n}"].split(":")[1]
             for n in range(1, 7)
@@ -87,7 +96,9 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertGreaterEqual(fifth, player.ENTRY_ON_MIN_MS - 50)
         for series in (1, 3, 5):
             step = player._build_high_performance_s2_playlist(series, ["A"])[0]
-            self.assertEqual(step.get("motion_theme"), "flowers")
+            self.assertIsNone(step.get("motion_theme"))
+            self.assertFalse(step.get("motion_bg"))
+            self.assertEqual(step.get("test_bg"), player.HP_TEST_BG[1])
 
     def test_elite_s2_has_one_number_among_symbols(self):
         playlist = player._build_elite_s2_playlist(1)
@@ -166,9 +177,16 @@ class Series2PlaylistTests(unittest.TestCase):
         # Level S2.T2 playlist is fruits throughout.
         s2t2 = player._build_world_class_s2_playlist(2)
         self.assertTrue(all(s.get("motion_theme") == "fruits" for s in s2t2))
-        # Each action gets its own bounce start seed (not one shared location).
+        # Motion background seed changes per timed test, not every action.
         flower_seeds = {step["motion_seed"] for step in playlist}
-        self.assertGreater(len(flower_seeds), 1)
+        self.assertEqual(len(flower_seeds), 5)
+        for test_num in range(1, 6):
+            seeds = {
+                step["motion_seed"]
+                for step in playlist
+                if step["test_num"] == test_num
+            }
+            self.assertEqual(len(seeds), 1, test_num)
         self.assertGreaterEqual(player.WORLD_S2_CAMO_SEVERITY, 1.4)
         # Goal letter+digit changes across actions (not stuck on K2).
         tokens = [step.get("goal_token") for step in playlist]
@@ -245,20 +263,32 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertTrue(first.get("hold_full_on"))
         self.assertTrue(first.get("skip_gap"))
         self.assertTrue(first.get("finish_balls"))
-        self.assertEqual(first.get("motion_theme"), "flowers")
+        # S1 solid backgrounds — no motion flowers; bg changes per test.
+        self.assertIsNone(first.get("motion_theme"))
+        self.assertFalse(first.get("motion_bg"))
+        self.assertEqual(first.get("test_bg"), player.HP_TEST_BG[1])
+        by_test_bg = {}
+        for step in playlist:
+            by_test_bg.setdefault(step["test_num"], set()).add(step.get("test_bg"))
+        for test_num, bgs in by_test_bg.items():
+            self.assertEqual(bgs, {player.HP_TEST_BG[test_num]}, test_num)
         # Encode + answers on all 6 screens; cylinders only on the 2 sum screens.
         self.assertEqual(len(first.get("encode_images") or {}), 12)
         self.assertEqual(len(first.get("screen_images") or {}), 12)
         self.assertEqual(len(first["field_screens"]["A"]), 2)
         self.assertEqual(len(first["field_screens"]["B"]), 2)
-        # Encode shows one shared reference on every field screen.
+        # Encode shows one shared red reference on every field screen.
         a_encode = {
             first["encode_images"][f"A{n}"].split(":")[1] for n in range(1, 7)
         }
         self.assertEqual(len(a_encode), 1)
         ref = int(next(iter(a_encode)))
         self.assertEqual(first["reference_numbers"]["A"], ref)
-        self.assertTrue(2 <= ref <= 9)
+        self.assertTrue(1 <= ref <= 9)
+        encode_fg = {
+            first["encode_images"][f"A{n}"].split(":")[3] for n in range(1, 7)
+        }
+        self.assertEqual(encode_fg, {str(player.S3_REFERENCE_FG)})
         a_vals = [
             int(first["screen_images"][f"A{n}"].split(":")[1]) for n in range(1, 7)
         ]
@@ -268,7 +298,7 @@ class Series2PlaylistTests(unittest.TestCase):
         g1 = int(first["screen_images"][goals[1]].split(":")[1])
         self.assertEqual(g0 + g1, ref)
         self.assertEqual(first["sum_pairs"]["A"], (g0, g1))
-        # T3 uses a two-digit reference for 3 seconds.
+        # T3 uses a two-digit reference < 20 for 3 seconds.
         t3 = player._build_high_performance_s3_playlist(3, ["A"])[0]
         self.assertEqual(t3.get("encode_ms"), 3000)
         self.assertEqual(t3.get("actions_in_set"), 6)
@@ -276,9 +306,13 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(t3.get("budget_ms"), 60000)
         self.assertEqual(len(t3.get("screen_images") or {}), 6)
         ref3 = int(next(iter(t3["encode_images"].values())).split(":")[1])
-        self.assertTrue(10 <= ref3 <= 99)
+        self.assertTrue(10 <= ref3 <= 19)
         pair3 = t3["sum_pairs"]["A"]
         self.assertEqual(pair3[0] + pair3[1], ref3)
+        self.assertEqual(
+            next(iter(t3["encode_images"].values())).split(":")[3],
+            str(player.S3_REFERENCE_FG),
+        )
         self.assertEqual(
             player._high_performance_s3_series_num("L03-HighPerformance/S3.T4"), 4
         )
@@ -310,6 +344,16 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(len(refs), 1)
         ref = next(iter(refs))
         self.assertTrue(10 <= ref <= 49)
+        # Red reference + Elite S1 background/digit styling per timed test.
+        self.assertEqual(first.get("test_bg"), player.ELITE_TEST_BG[1])
+        encode_fg = {
+            path.split(":")[3] for path in first["encode_images"].values()
+        }
+        self.assertEqual(encode_fg, {str(player.S3_REFERENCE_FG)})
+        answer_fg = {
+            path.split(":")[3] for path in first["screen_images"].values()
+        }
+        self.assertEqual(answer_fg, {str(player.ELITE_DIGIT_ON_BG[1])})
         goal_sids = [
             sid
             for goals in (first.get("field_screens") or {}).values()
@@ -321,6 +365,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(g0 + g1, ref)
         t3 = player._build_elite_s3_playlist(3)[0]
         self.assertEqual(t3.get("encode_ms"), 3000)
+        self.assertEqual(t3.get("test_bg"), player.ELITE_TEST_BG[1])
         self.assertEqual(
             player._elite_s3_series_num("L04-Elite/S3.T4"), 4
         )
@@ -387,6 +432,16 @@ class Series2PlaylistTests(unittest.TestCase):
         }
         ref = next(iter(refs))
         self.assertTrue(51 <= ref <= 99)
+        # Red reference at S1 digit size; motion seed stable within a timed test.
+        encode_fg = {
+            path.split(":")[3] for path in first["encode_images"].values()
+        }
+        self.assertEqual(encode_fg, {str(player.S3_REFERENCE_FG)})
+        for test_num in range(1, 6):
+            seeds = {
+                step["motion_seed"] for step in t1 if step["test_num"] == test_num
+            }
+            self.assertEqual(len(seeds), 1, test_num)
         t2 = player._build_world_class_s3_playlist(2)[0]
         self.assertEqual(t2.get("motion_theme"), "fruits")
         self.assertEqual(t2.get("encode_ms"), 5000)

@@ -70,12 +70,14 @@ class FinalMetricsAggregationTests(unittest.TestCase):
                 "total_actions": 9,
             })
             final = simust_app.aggregate_final_section_metrics(all_results, session_folder=tmp)
-        # Boards showed 3, 3, 11 → average (not sum 17, not raw-float 18).
+        # Displacement prefers saved boards 3 / 3 / 11 → average (not sum 17).
         self.assertEqual(final["distance_m_display"], round((3 + 3 + 11) / 3.0))
         self.assertAlmostEqual(final["total_distance"], (3 + 3 + 11) / 3.0)
-        self.assertAlmostEqual(final["avg_ae"], (53.0 + 53.0 + 43.0) / 3.0)
-        self.assertAlmostEqual(final["aac"], (50.0 + 50.0 + 44.0) / 3.0)
-        self.assertAlmostEqual(final["aet_percent"], (40.0 + 40.0 + 40.0) / 3.0)
+        # AE/ACC/AET recompute from results when rows exist; video 3 is saved-only.
+        self.assertAlmostEqual(final["avg_ae"], (80.0 + 40.0 + 43.0) / 3.0)
+        self.assertAlmostEqual(final["aac"], (100.0 + 100.0 + 44.0) / 3.0)
+        aet1 = (1.0 - (1.0 / 1.2)) * 100.0
+        self.assertAlmostEqual(final["aet_percent"], (aet1 + aet1 + 40.0) / 3.0)
 
     def test_final_fallback_averages_recomputed_sections(self):
         all_results = [
@@ -99,6 +101,54 @@ class FinalMetricsAggregationTests(unittest.TestCase):
         self.assertAlmostEqual(final["avg_ae"], (70 + 70 + 50) / 3.0)
         self.assertGreaterEqual(final["aet_percent"], 0.0)
         self.assertLessEqual(final["aet_percent"], 100.0)
+
+    def test_final_does_not_lock_zero_displacement_from_mid_session(self):
+        """A mid-session blank Displacement board must not beat later hip stamps."""
+        all_results = [
+            {"id": "S1", "video_index": 1, "result": "Correct", "finishing_time": "1.0",
+             "session_duration": "2.0", "ae": 80, "total_distance": 33.2},
+            {"id": "S2", "video_index": 2, "result": "Correct", "finishing_time": "1.0",
+             "session_duration": "2.0", "ae": 80, "total_distance": 35.6},
+            {"id": "S3", "video_index": 3, "result": "Correct", "finishing_time": "1.0",
+             "session_duration": "2.0", "ae": 80, "total_distance": 36.1},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            # Video 1 board was fine; videos 2–3 were saved as "-" mid-session.
+            simust_app.save_section_metrics_entry(tmp, 1, {
+                "total_distance": 33.2, "distance_m_display": 33,
+                "aac": 100.0, "avg_ae": 80.0, "aet": 1.0, "aet_percent": 50.0,
+                "aet_display": "1.00s", "ae_display": "80%",
+                "correct": 1, "late": 0, "wrong": 0, "miss": 0, "total_actions": 1,
+            })
+            simust_app.save_section_metrics_entry(tmp, 2, {
+                "total_distance": 0.0, "distance_m_display": 0,
+                "aac": 100.0, "avg_ae": 80.0, "aet": 1.0, "aet_percent": 50.0,
+                "aet_display": "1.00s", "ae_display": "80%",
+                "correct": 1, "late": 0, "wrong": 0, "miss": 0, "total_actions": 1,
+            })
+            simust_app.save_section_metrics_entry(tmp, 3, {
+                "total_distance": 0.0, "distance_m_display": 0,
+                "aac": 100.0, "avg_ae": 80.0, "aet": 1.0, "aet_percent": 50.0,
+                "aet_display": "1.00s", "ae_display": "80%",
+                "correct": 1, "late": 0, "wrong": 0, "miss": 0, "total_actions": 1,
+            })
+            final = simust_app.aggregate_final_section_metrics(all_results, session_folder=tmp)
+            panel = simust_app.build_results_ring_panel(final)
+        self.assertEqual(final["distance_m_display"], round((33 + 36 + 36) / 3.0))
+        self.assertGreater(panel["distance_shown"], 0)
+        self.assertNotEqual(panel["distance_shown"], 0)
+
+    def test_save_section_metrics_repairs_zero_display_when_raw_positive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            simust_app.save_section_metrics_entry(tmp, 2, {
+                "total_distance": 35.605, "distance_m_display": 0,
+                "aac": 100.0, "avg_ae": 80.0, "aet": 1.0, "aet_percent": 50.0,
+                "aet_display": "1.00s", "ae_display": "80%",
+                "correct": 1, "late": 0, "wrong": 0, "miss": 0, "total_actions": 1,
+            })
+            saved = simust_app.load_saved_section_metrics(tmp)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["distance_m_display"], 36)
 
 
 if __name__ == "__main__":

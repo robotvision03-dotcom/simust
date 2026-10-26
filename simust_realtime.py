@@ -4308,6 +4308,11 @@ class SimustRealtimeCamera:
                 self.save_between_sessions_block(ch)
                 ch.between_sessions_active = False
 
+        # Flush hips to disk before stamping distances so mid/final rings
+        # never read a truncated recognition.json from an in-progress write.
+        for ch in self.channels.values():
+            self.save_recognition_json(ch)
+
         print("\n[DEBUG] Computing per-video hip distance per field...")
         for ch in self.channels.values():
             try:
@@ -4316,8 +4321,6 @@ class SimustRealtimeCamera:
                 print(f"[DEBUG] Error writing distances for {ch.label}: {e}")
 
         self.video_saver.stop()
-        for ch in self.channels.values():
-            self.save_recognition_json(ch)
         self._write_combined_results_index()
         self.recording_active = False
         self.video_started = False
@@ -4345,8 +4348,15 @@ class SimustRealtimeCamera:
             vid = int(row.get("video_index") or 1)
             row["total_distance"] = float(by_video.get(vid, 0.0))
             row["field"] = ch.field_id
-        with open(results_json_path, "w", encoding="utf-8") as f:
+        tmp = results_json_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(all_results, f, indent=2, ensure_ascii=False)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, results_json_path)
         ch.stats["results"] = all_results
         for vid, metres in sorted(by_video.items()):
             print(f"[DEBUG] [{ch.label}] Video {vid} hip distance: {metres:.2f} m")
@@ -4387,8 +4397,17 @@ class SimustRealtimeCamera:
             output_data.append(block_data)
 
         try:
-            with open(json_path, 'w', encoding='utf-8') as f:
+            # Atomic replace so create-video-results never reads a truncated file
+            # (empty recognition → Displacement shows "-" on the rings).
+            tmp = json_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, json_path)
             # Keep root recognition.json current so smart player can find a report mid-session
             if self.recording_dir and ch.recording_subdir:
                 try:
@@ -4624,7 +4643,8 @@ class SimustRealtimeCamera:
             }
             if on_sec is not None:
                 try:
-                    ch.pending_start["on_sec"] = max(0.1, min(60.0, float(on_sec)))
+                    cap = 3600.0 if finish_balls else 60.0
+                    ch.pending_start["on_sec"] = max(0.1, min(cap, float(on_sec)))
                 except (TypeError, ValueError):
                     pass
             if efficiency_max_sec is not None:
@@ -5404,7 +5424,9 @@ class SimustRealtimeCamera:
             if on_sec is None:
                 on_sec = _cue_on_sec()
             try:
-                on_sec = max(0.1, min(60.0, float(on_sec)))
+                # finish_balls / Manual coach wait for a live ball — allow long holds.
+                cap = 3600.0 if p.get("finish_balls") else 60.0
+                on_sec = max(0.1, min(cap, float(on_sec)))
             except (TypeError, ValueError):
                 on_sec, _ = _read_teammate_on_gap()
             ch._planned_on_sec = float(on_sec)
@@ -5569,7 +5591,11 @@ class SimustRealtimeCamera:
                 # The other field rewrites this cue on every goal. A new seq
                 # for the same screen must not restart this cylinder.
                 block = ch.current_qr_block if isinstance(ch.current_qr_block, dict) else {}
+                finish_balls = bool((cue or {}).get("finish_balls"))
+                new_screens = [str(s) for s in (hit.get("screens") or [])]
+                old_screens = [str(s) for s in (ch.current_screens or [])]
                 same_action = False
+                soft_multi_goal = False
                 if ch.session_active and block and not recover_after_stale:
                     try:
                         same_test = int(hit.get("test_num") or 0) == int(block.get("test_num") or 0)
@@ -5577,14 +5603,65 @@ class SimustRealtimeCamera:
                     except (TypeError, ValueError):
                         same_test = False
                         same_step = False
-                    same_screens = [str(s) for s in (hit.get("screens") or [])] == [
-                        str(s) for s in (ch.current_screens or [])
-                    ]
+                    same_screens = new_screens == old_screens
                     same_action = bool(same_test and same_step and same_screens)
+                    # Manual coach / multi-goal: expanding or shrinking the lit
+                    # set must keep already-drawn cylinders (no clear → reappear).
+                    if finish_balls and old_screens and new_screens and not same_screens:
+                        old_set = set(old_screens)
+                        new_set = set(new_screens)
+                        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
+                        if old_set.issubset(new_set) or new_set.issubset(old_set | scored):
+                            soft_multi_goal = True
                 if same_action:
                     ch._frame_sync_cue_raw = cue_raw
+                elif soft_multi_goal:
+                    ch._frame_sync_cue_raw = cue_raw
+                    added = [s for s in new_screens if s not in set(old_screens)]
+                    removed = set(old_screens) - set(new_screens)
+                    lines = {
+                        name: data
+                        for name, data in (ch.active_goal_lines or {}).items()
+                        if str(name) not in removed
+                    }
+                    if added:
+                        extra = self.get_goal_lines(
+                            added, hit.get("action") or ch.current_action or "PASS", []
+                        )
+                        lines.update(extra or {})
+                    ch.active_goal_lines = lines
+                    ch.current_screens = list(new_screens)
+                    if isinstance(ch.current_qr_block, dict):
+                        ch.current_qr_block["screens"] = list(new_screens)
+                        if hit.get("actions_in_set") is not None:
+                            try:
+                                ch.current_qr_block["actions_in_set"] = int(
+                                    hit.get("actions_in_set")
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                    try:
+                        new_seq = int(hit.get("seq") if hit.get("seq") is not None else 0)
+                        if new_seq:
+                            ch._display_seq = new_seq
+                    except (TypeError, ValueError):
+                        pass
+                    if self._field_is_simulated(fid) and added:
+                        sim = (self.simulators or {}).get(fid)
+                        if sim is not None:
+                            sim.start_action(
+                                ch.current_action,
+                                list(ch.current_screens),
+                                finish_balls=True,
+                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
+                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
+                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
+                            )
+                    print(
+                        f"[{ch.label}] finish_balls soft-update screens "
+                        f"{old_screens} → {new_screens} (cylinders kept)"
+                    )
                 else:
-                    finish_balls = bool((cue or {}).get("finish_balls"))
                     if ch.session_active and finish_balls:
                         self._clear_goal_area_now(ch, current_timestamp)
                     on_sec = hit.get("on_sec")
@@ -5878,7 +5955,7 @@ class SimustRealtimeCamera:
         else:
             origin = getattr(ch, "between_session_start_ts", 0.0) or 0.0
         rel_time = current_timestamp - origin if origin else 0.0
-        mid_x = 640
+        mid_x = int(HALF_WIDTH)
         field_players = [p for p in players if p.get("field") == ch.field_id]
         tagged = [b for b in balls if b.get("field")]
         if tagged:

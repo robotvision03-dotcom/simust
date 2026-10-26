@@ -262,6 +262,16 @@ LEVEL_INTRO_HOLD_MS = 1000
 LEVEL_CARD_MS = 5000
 LEVEL_INTRO_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SCREEN_SAVER_VIDEO = "screen_saver.mp4"
+# After Foundation SF-180N finals pass → play before Entry S1.T1 opens.
+FOUNDATION_LEVEL_UP_VIDEO_NAMES = (
+    "level_UP_Foundation.mp4",
+    "level_up_Foundation.mp4",
+    "level_UP_foundation.mp4",
+    "level_up_foundation.mp4",
+    "Level_UP_Foundation.mp4",
+    "level-UP-Foundation.mp4",
+    "level-up-foundation.mp4",
+)
 CABINET_CONTROLS_FILE = "cabinet_controls.json"
 # Launch token from app.py when System + Screen saver are on and no realtime is running.
 IDLE_SCREENSAVER_ARG = "__screensaver__"
@@ -463,18 +473,21 @@ ELITE_S2_SYMBOLS = (
 ELITE_S2_SHAPES = (
     "●", "○", "◆", "◇", "■", "□", "▲", "△", "◎", "◉", "◈", "✦", "★", "☆",
 )
-# High Performance S2 uses the band page color (same as opening card).
+# High Performance S2/S3 reuse S1 solid fills (HP_TEST_BG) — no motion flowers.
+# Legacy band page color kept for opening-card / Activated letter helpers.
 HP_S2_BG = (49, 95, 145)
 # High Performance S2: paint only the middle letter (no yellow patch behind it).
 HP_S2_MID_LETTER = (255, 196, 64)
 # High Performance S3: encode reference, then two screens whose numbers sum to it.
-# T1–T2: 1-digit reference for 5s. T3–T5: 2-digit reference for 3s. Style matches S2.
+# T1–T2: 1-digit reference for 5s. T3–T5: 2-digit reference < 20 for 3s.
 # Answer phase: 6 actions × 10s = 60s per test (encode time is separate).
+# Reference digit is red; answers match S1 size/placement on the same per-test bg.
 HP_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
 HP_S3_DIGIT_WIDTH = {1: 1, 2: 1, 3: 2, 4: 2, 5: 2}
 HP_S3_ON_MS = 10000
 HP_S3_TEST_BUDGET_MS = 60000
-HP_S3_FLOWER_SEED = 71
+# Red reference number on all S3 bands (HP / Elite / World Class).
+S3_REFERENCE_FG = (255, 0, 0)
 ELITE_S2_BG = (75, 31, 120)
 # Elite / World Class S3: same sum scenario as HP S3 on the combined 12-screen field.
 # Encode times match HP S3 (T1–T2: 5s, T3–T5: 3s). Answer clock is 120s / test.
@@ -497,7 +510,6 @@ WORLD_S2_THEMES = ("flowers", "fruits", "animals", "space", "orbs")
 WORLD_S2_CAMO_SEVERITY = 1.4
 WORLD_S2_MOTION_FRAMES = 24
 WORLD_S2_MOTION_FPS = 20
-HP_S2_FLOWER_SEED = 71
 # Realistic bouncing sprites (Pillow + NumPy).
 FLOWER_BOUNCE_COUNT = 8
 # One looping clip per theme — never block Realtime Play on encode.
@@ -1389,19 +1401,19 @@ def _hp_s2_confusable_middle_pair() -> Tuple[str, str, Tuple[int, int, int]]:
 
 
 def _build_high_performance_s2_playlist(series_num: int, active_fields) -> List[dict]:
-    """HP S2: 3-letter odd-one-out on bouncing realistic flower backgrounds."""
+    """HP S2: 3-letter odd-one-out on the same solid S1 backgrounds (no motion flowers).
+
+    Background color changes once per timed test (HP_TEST_BG), not per action.
+    """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
     on_ms, gap_ms = _entry_series_timing_ms(series_num)
-    seed = int(HP_S2_FLOWER_SEED) + int(series_num) * 17
-    # Never block Realtime Play — warm shared flower clip in the background.
-    motion_bg = _ensure_wc_motion_bg_video("flowers", seed, base_rgb=HP_S2_BG)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        bg = HP_TEST_BG[int(test_num)]
         for action_in_set in range(1, ENTRY_ACTIONS_PER_TEST + 1):
             images = {}
-            overlay_images = {}
             field_screens = {}
             labels = []
             for fid in active:
@@ -1410,35 +1422,21 @@ def _build_high_performance_s2_playlist(series_num: int, active_fields) -> List[
                 for screen in range(1, ENTRY_ACTIONS_PER_TEST + 1):
                     text = odd if screen == odd_screen else same
                     # Paint only the middle letter — no yellow background patch.
-                    overlay = _render_middle_colored_text_image(
-                        text, None, outer_fg, HP_S2_MID_LETTER, mid_bg=False,
-                    )
-                    # Instant solid-bg stills; motion video attaches when ready.
                     png = _render_middle_colored_text_image(
-                        text, HP_S2_BG, outer_fg, HP_S2_MID_LETTER, mid_bg=False,
+                        text, bg, outer_fg, HP_S2_MID_LETTER, mid_bg=False,
                     )
                     if not png:
                         continue
                     sid = _hw_screen_for_field(fid, (screen, screen))
                     if sid is not None:
                         images[sid] = png
-                        if overlay:
-                            overlay_images[sid] = overlay
                 goal_sid = _hw_screen_for_field(fid, (odd_screen, odd_screen))
                 if goal_sid is not None:
                     field_screens[fid] = [goal_sid]
                 labels.append(f"{fid}:{same}/{odd}@{odd_screen}")
             if not field_screens or not images:
                 continue
-            # Unique seed every action → new flower spawn edges/locations.
-            action_seed = (
-                int(seed) * 1009
-                + int(test_num) * 131
-                + int(action_in_set) * 41
-                + random.randint(1, 997)
-            )
-            start_frame = int(action_seed) % 180
-            entry = {
+            playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
                 "test_num": test_num,
@@ -1457,35 +1455,26 @@ def _build_high_performance_s2_playlist(series_num: int, active_fields) -> List[
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
-                "motion_theme": "flowers",
-                "motion_seed": action_seed,
-                "motion_base_rgb": tuple(HP_S2_BG),
-                "motion_start_frame": start_frame,
-                "overlay_images": dict(overlay_images),
-                "motion_fill": True,
+                "test_bg": tuple(bg),
                 "label": (
                     f"HighPerformance S2.T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ENTRY_ACTIONS_PER_TEST} "
-                    f"{' '.join(labels)} flowers on={on_ms}ms gap={gap_ms}ms"
+                    f"{' '.join(labels)} bg=S1 on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
                     f"image://HighPerformance/S2.T{series_num}/"
                     f"test{test_num}/{action_in_set}"
                 ),
-            }
-            if motion_bg:
-                entry["screen_video"] = motion_bg
-                entry["motion_bg"] = motion_bg
-            playlist.append(entry)
+            })
     return _stamp_finish_balls(playlist)
 
 
 def _hp_s3_reference(series_num: int) -> int:
-    """Single-digit (T1–T2) or two-digit (T3–T5) reference the two goals must sum to."""
+    """Single-digit (T1–T2) or two-digit < 20 (T3–T5) reference the two goals must sum to."""
     width = int(HP_S3_DIGIT_WIDTH.get(int(series_num), 1) or 1)
     if width <= 1:
-        return random.randint(2, 9)
-    return random.randint(10, 99)
+        return random.randint(1, 9)
+    return random.randint(10, 19)
 
 
 def _hp_s3_sum_pair(ref: int) -> Tuple[int, int]:
@@ -1632,6 +1621,9 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
     Encode (all screens) is separate from the answer clock. Each test's 6 answer
     actions total 60s (10s each). Cylinders light both answer screens; the sim
     finishes them one by one. Answers stay up for the full On window.
+
+    Background matches HP S1 (HP_TEST_BG), one color per timed test — no flowers.
+    Reference is red; answer digits match S1 size and ring placement.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
@@ -1640,13 +1632,11 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
     on_ms = int(HP_S3_ON_MS)
     gap_ms = 80
     encode_ms = int(HP_S3_ENCODE_MS.get(series, 5000))
-    seed = int(HP_S3_FLOWER_SEED) + series * 19
-    motion_bg = _ensure_wc_motion_bg_video("flowers", seed, base_rgb=HP_S2_BG)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        bg = HP_TEST_BG[int(test_num)]
         for action_in_set in range(1, ENTRY_ACTIONS_PER_TEST + 1):
             images = {}
-            overlay_images = {}
             encode_images = {}
             field_screens = {}
             labels = []
@@ -1656,7 +1646,8 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
                 ref = _hp_s3_reference(series)
                 nums, (g0, g1) = _hp_s3_screen_numbers(ref)
                 ref_text = str(ref)
-                ref_png = _render_entry_digit_image(ref_text, bg=HP_S2_BG)
+                # Red reference at S1 digit size / ring location.
+                ref_png = _render_band_digit_image(ref_text, bg, S3_REFERENCE_FG)
                 if not ref_png:
                     continue
                 goal_sids = []
@@ -1666,15 +1657,12 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
                         continue
                     # Reference on every screen during encode.
                     encode_images[sid] = ref_png
-                    # Answer phase: a different number on every screen.
+                    # Answer phase: S1-style white digits on the same per-test fill.
                     text = str(nums[screen - 1])
-                    png = _render_entry_digit_image(text, bg=HP_S2_BG)
-                    overlay = _render_entry_digit_image(text)
+                    png = _render_entry_digit_image(text, bg=bg)
                     if not png:
                         continue
                     images[sid] = png
-                    if overlay:
-                        overlay_images[sid] = overlay
                 for goal_screen in (g0 + 1, g1 + 1):
                     sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
                     if sid is not None:
@@ -1690,14 +1678,7 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
                 )
             if not field_screens or not images or not encode_images:
                 continue
-            action_seed = (
-                int(seed) * 1009
-                + int(test_num) * 131
-                + int(action_in_set) * 41
-                + random.randint(1, 997)
-            )
-            start_frame = int(action_seed) % 180
-            entry = {
+            playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
                 "test_num": test_num,
@@ -1724,12 +1705,7 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
-                "motion_theme": "flowers",
-                "motion_seed": action_seed,
-                "motion_base_rgb": tuple(HP_S2_BG),
-                "motion_start_frame": start_frame,
-                "overlay_images": dict(overlay_images),
-                "motion_fill": True,
+                "test_bg": tuple(bg),
                 "label": (
                     f"HighPerformance S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ENTRY_ACTIONS_PER_TEST} "
@@ -1741,11 +1717,7 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
                 ),
                 "series_group": 3,
                 "series_num": int(series),
-            }
-            if motion_bg:
-                entry["screen_video"] = motion_bg
-                entry["motion_bg"] = motion_bg
-            playlist.append(entry)
+            })
     stamped = _stamp_finish_balls(playlist)
     # Answer clock is fixed at 60s / test (encode excluded).
     for entry in stamped:
@@ -2185,14 +2157,17 @@ def _build_elite_s2_playlist(series_num: int) -> List[dict]:
 
     Level S2.T1–T2 use characters ($ % …). Level S2.T3–T5 use shapes (● ○ ◆ …)
     for every timed test in that set. Every test uses a random goal order.
+    Background matches Elite S1 (ELITE_TEST_BG) and changes once per timed test.
+    Digits use S1 size and ring placement.
     """
     on_ms, gap_ms = _elite_series_timing_ms(series_num, min_ms=ELITE_S2_ON_MIN_MS)
-    bg = ELITE_S2_BG
     screens = _elite_screen_ids()
     distractors = _elite_s2_distractors_for_series(series_num)
     distractor_kind = "characters" if int(series_num or 1) <= 2 else "shapes"
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        bg = ELITE_TEST_BG[int(test_num)]
+        digit_fg = ELITE_DIGIT_ON_BG[int(test_num)]
         order = _combined_s2_goal_order(test_num)
         for action_in_set, goal_sid in enumerate(order, start=1):
             symbol = random.choice(distractors)
@@ -2203,7 +2178,8 @@ def _build_elite_s2_playlist(series_num: int) -> List[dict]:
                 # Mix a second similar distractor so neighbors stay confusing.
                 if sid != goal_sid and random.random() < 0.35:
                     text = random.choice(distractors)
-                png = _render_band_digit_image(text, bg, (255, 255, 255))
+                fg = digit_fg if str(text).isdigit() else (255, 255, 255)
+                png = _render_band_digit_image(text, bg, fg)
                 if not png:
                     # Unicode shapes can fail on some fonts — draw a fallback mark.
                     png = _render_elite_s2_shape_fallback(text, bg)
@@ -2231,6 +2207,7 @@ def _build_elite_s2_playlist(series_num: int) -> List[dict]:
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
                 "distractor_kind": distractor_kind,
+                "test_bg": tuple(bg),
                 "label": (
                     f"Elite S2.T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ELITE_ACTIONS_PER_TEST} "
@@ -2320,8 +2297,8 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
     letter+digit pair that changes every action (K2, M7, R4, …). Theme follows
     the level set (S2.T#), not the timed test inside the set:
     S2.T1 flowers, S2.T2 fruits, S2.T3 animals, S2.T4 space, S2.T5 orbs.
-    Each action uses a different bounce start seed so sprites do not always
-    begin from the same edge/location. Timing matches Elite S2.
+    Motion background seed changes once per timed test (not every action).
+    Timing matches Elite S2.
     """
     on_ms, gap_ms = _elite_series_timing_ms(series_num, min_ms=ELITE_S2_ON_MIN_MS)
     screens = _elite_screen_ids()
@@ -2333,18 +2310,16 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
     playlist = []
     prev_goal_token = ""
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        # One bounce layout per timed test — background does not reseed each action.
+        test_seed = (
+            int(base_seed) * 1009
+            + int(series_num) * 131
+            + int(test_num) * 57
+            + random.randint(1, 997)
+        )
+        start_frame = int(test_seed) % 180
         order = _combined_s2_goal_order(test_num)
         for action_in_set, goal_sid in enumerate(order, start=1):
-            # Per-action seed → text color + video seek offset (not a new encode).
-            action_seed = (
-                int(base_seed) * 1009
-                + int(series_num) * 131
-                + int(test_num) * 57
-                + int(action_in_set) * 41
-                + random.randint(1, 997)
-            )
-            # Large step offset so sprites are mid-flight, not stuck on one edge.
-            start_frame = int(action_seed) % 180
             goal_token = _wc_s2_goal_token(avoid=prev_goal_token)
             prev_goal_token = goal_token
             images = {}
@@ -2353,12 +2328,12 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
             for sid in screens:
                 text = goal_token if sid == goal_sid else f"{random.randint(10, 99)}"
                 motion_texts[sid] = text
-                # Each number / letter-token gets its own random place.
-                motion_positions[sid] = _wc_text_anchor_frac(action_seed, f"{sid}:{text}")
+                # Numbers stay on the S1 / Elite ring-value center line.
+                motion_positions[sid] = _wc_text_anchor_frac(test_seed, f"{sid}:{text}")
                 # Fast solid-theme stills so playlist build stays instant.
                 png = _render_camouflage_text_image(
                     text,
-                    seed=action_seed,
+                    seed=test_seed,
                     camouflage=True,
                     theme=theme,
                     phase=0.0,
@@ -2388,7 +2363,7 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
                 "motion_theme": theme,
-                "motion_seed": action_seed,
+                "motion_seed": test_seed,
                 "motion_start_frame": start_frame,
                 "motion_texts": dict(motion_texts),
                 "motion_text_positions": dict(motion_positions),
@@ -2436,7 +2411,9 @@ def _s3_combined_field_screens(goal_sids: List[str]) -> dict:
 def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     """Elite S3: encode a two-digit ref (<50), then 12 numbers with exactly two summing to it.
 
-    Combined 12-screen field (A+B together). Visuals match Elite S2 (purple band fill).
+    Combined 12-screen field (A+B together). Background matches Elite S1
+    (ELITE_TEST_BG), changing once per timed test. Reference is red; answers use
+    S1 digit color / size / ring placement.
     5 tests × 12 actions; answer clock 120s (10s each). Encode is separate (5s/3s).
     """
     series = max(1, min(5, int(series_num or 1)))
@@ -2445,23 +2422,24 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     on_ms = max(1, budget_ms // actions)
     gap_ms = 80
     encode_ms = int(ELITE_S3_ENCODE_MS.get(series, 5000))
-    bg = ELITE_S2_BG
     screens = _elite_screen_ids()
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        bg = ELITE_TEST_BG[int(test_num)]
+        answer_fg = ELITE_DIGIT_ON_BG[int(test_num)]
         for action_in_set in range(1, actions + 1):
             ref = _elite_s3_reference()
             goal_idx = _s3_combined_goal_indexes(len(screens))
             nums, (g0, g1) = _s3_sum_screen_numbers(
                 ref, len(screens), goal_indexes=goal_idx
             )
-            ref_png = _render_band_digit_image(str(ref), bg, (255, 255, 255))
+            ref_png = _render_band_digit_image(str(ref), bg, S3_REFERENCE_FG)
             if not ref_png:
                 continue
             encode_images = {sid: ref_png for sid in screens}
             images = {}
             for idx, sid in enumerate(screens):
-                png = _render_band_digit_image(str(nums[idx]), bg, (255, 255, 255))
+                png = _render_band_digit_image(str(nums[idx]), bg, answer_fg)
                 if not png:
                     images = {}
                     break
@@ -2498,6 +2476,7 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
+                "test_bg": tuple(bg),
                 "label": (
                     f"Elite S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{actions} "
@@ -2530,7 +2509,8 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     """World Class S3: encode ref (50<ref<100), then 12 numbers with exactly two summing to it.
 
     Combined 12-screen field. Motion theme matches World Class S2 for the same Tn
-    (T1 flowers, T2 fruits, T3 animals, T4 space, T5 orbs).
+    (T1 flowers, T2 fruits, T3 animals, T4 space, T5 orbs). Motion seed changes
+    once per timed test. Reference is red at S1 digit size; answers keep S1 size.
     All sets: 5 tests × 12 actions / 120s. Encode separate (5s T1–T2, 3s T3–T5).
     """
     series = max(1, min(5, int(series_num or 1)))
@@ -2545,35 +2525,30 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     screens = _elite_screen_ids()
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        test_seed = (
+            int(base_seed) * 1009
+            + int(series) * 131
+            + int(test_num) * 57
+            + random.randint(1, 997)
+        )
+        start_frame = int(test_seed) % 180
         for action_in_set in range(1, actions + 1):
             ref = _wc_s3_reference()
             goal_idx = _s3_combined_goal_indexes(len(screens))
             nums, (g0, g1) = _s3_sum_screen_numbers(
                 ref, len(screens), goal_indexes=goal_idx
             )
-            action_seed = (
-                int(base_seed) * 1009
-                + int(series) * 131
-                + int(test_num) * 57
-                + int(action_in_set) * 41
-                + random.randint(1, 997)
-            )
-            start_frame = int(action_seed) % 180
             ref_text = str(ref)
-            ref_png = _render_camouflage_text_image(
-                ref_text,
-                seed=action_seed,
-                camouflage=True,
-                theme=theme,
-                phase=0.0,
-                fast=True,
+            # Red reference at S1 digit size / ring placement (solid theme fill).
+            ref_png = _render_band_digit_image(
+                ref_text, ELITE_TEST_BG[int(test_num)], S3_REFERENCE_FG
             )
             if not ref_png:
                 continue
             encode_images = {sid: ref_png for sid in screens}
             encode_motion_texts = {sid: ref_text for sid in screens}
             encode_positions = {
-                sid: _wc_text_anchor_frac(action_seed, f"enc:{sid}:{ref_text}")
+                sid: _wc_text_anchor_frac(test_seed, f"enc:{sid}:{ref_text}")
                 for sid in screens
             }
             images = {}
@@ -2583,11 +2558,11 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 text = str(nums[idx])
                 motion_texts[sid] = text
                 motion_positions[sid] = _wc_text_anchor_frac(
-                    action_seed, f"{sid}:{text}"
+                    test_seed, f"{sid}:{text}"
                 )
                 png = _render_camouflage_text_image(
                     text,
-                    seed=action_seed,
+                    seed=test_seed,
                     camouflage=True,
                     theme=theme,
                     phase=0.0,
@@ -2632,7 +2607,7 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
                 "motion_theme": theme,
-                "motion_seed": action_seed,
+                "motion_seed": test_seed,
                 "motion_start_frame": start_frame,
                 "motion_texts": dict(motion_texts),
                 "motion_text_positions": dict(motion_positions),
@@ -3524,6 +3499,30 @@ def _opening_logo_video_for_level(level_id: str = "", subdirectory: str = "") ->
         hit = os.path.join(LEVEL_INTRO_STATIC_DIR, name)
         if os.path.isfile(hit):
             return hit
+    return None
+
+
+def _resolve_foundation_level_up_video() -> Optional[str]:
+    """static/level_UP_Foundation — celebration after SF-180N pass, before Entry."""
+    root = LEVEL_INTRO_STATIC_DIR
+    if not os.path.isdir(root):
+        return None
+    for name in FOUNDATION_LEVEL_UP_VIDEO_NAMES:
+        hit = os.path.join(root, name)
+        if os.path.isfile(hit):
+            return hit
+    # Loose match: any file whose name has level + up + foundation.
+    try:
+        for entry in os.listdir(root):
+            low = str(entry or "").lower()
+            if not low.endswith((".mp4", ".mov", ".webm", ".avi", ".mkv")):
+                continue
+            if "level" in low and "up" in low and "foundation" in low:
+                hit = os.path.join(root, entry)
+                if os.path.isfile(hit):
+                    return hit
+    except Exception:
+        pass
     return None
 
 
@@ -5541,9 +5540,10 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
         }
     if on_sec is not None:
         try:
-            # Shared clocks reach 4.5s × 12 actions (54s). The first screen
-            # has to stay up for whatever is left of that clock.
-            payload["on_sec"] = max(0.1, min(60.0, float(on_sec)))
+            # Shared clocks reach 4.5s × 12 actions (54s). Manual coach /
+            # finish_balls may hold far longer while waiting for a live ball.
+            cap = 3600.0 if finish_balls else 60.0
+            payload["on_sec"] = max(0.1, min(cap, float(on_sec)))
         except (TypeError, ValueError):
             pass
     if efficiency_max_sec is not None:
@@ -8402,10 +8402,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
             return
         self._manual_coach_pass = pass_path
-        already = sid in (self._manual_coach_lit_screens or set())
-        self._manual_coach_lit_screens = set(self._manual_coach_lit_screens or set())
+        prev = set(self._manual_coach_lit_screens or set())
+        already = sid in prev
+        self._manual_coach_lit_screens = set(prev)
         self._manual_coach_lit_screens.add(sid)
-        self._flash_seq = max(1, int(seq or 1))
+        # Keep cue seq stable when adding to an already-lit set so existing
+        # cylinders are soft-updated instead of cleared and reappearing.
+        if not prev:
+            self._flash_seq = max(1, int(seq or 1))
+        elif not int(self._flash_seq or 0):
+            self._flash_seq = max(1, int(seq or 1))
         fid = "B" if sid.startswith("B") else "A"
         walls = dict(getattr(self, "_field_action_wall", None) or {})
         walls[fid] = time.time()
@@ -8416,7 +8422,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._label_phase = "action"
         self._action_phase = "label"
         self._manual_coach_paint_lit()
-        self._manual_coach_rewrite_cue(keep_seq=False)
+        self._manual_coach_rewrite_cue(keep_seq=True)
         lit = self._manual_coach_lit_list()
         self._manual_coach_publish_status(
             message=(
@@ -8428,7 +8434,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         logger.info(
             "Manual coach lit %s (seq=%s, waiting=%s)",
             sid,
-            seq,
+            self._flash_seq,
             ",".join(lit),
         )
 
@@ -8495,9 +8501,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # Repaint remaining pass images only — scored screen drops off the band.
         self._manual_coach_paint_lit()
         if lit:
-            # Bump cue seq so the remaining cylinders stay armed as a fresh multi-goal set.
-            self._flash_seq = int(self._flash_seq or 1) + 1
-            self._manual_coach_rewrite_cue(keep_seq=False)
+            # Soft-update remaining goals — do not bump seq (that cleared cylinders).
+            self._manual_coach_rewrite_cue(keep_seq=True)
             self._manual_coach_publish_status(
                 message=f"Cleared {sid} — {len(lit)} still waiting",
                 last_hit=sid,
@@ -8555,11 +8560,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
             if by_seq:
                 candidates.extend(v for v in by_seq.values() if isinstance(v, dict))
-            else:
-                candidates.append(item)
+            # Always include the latest field entry (clear_now / current Correct).
+            candidates.append(item)
             for chosen in candidates:
+                if not isinstance(chosen, dict):
+                    continue
                 name = str(chosen.get("result") or "").strip().lower()
-                if name != "correct":
+                clear_now = bool(chosen.get("clear_now"))
+                if name != "correct" and not clear_now:
                     continue
                 try:
                     item_seq = int(chosen.get("seq") or 0)
@@ -8567,21 +8575,26 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     item_seq = 0
                 win = str(chosen.get("winning_screen") or "").strip().upper()
                 # Multi-goal hits may use seq, seq+1, … — accept matching screen.
-                if want and item_seq and item_seq < want and win:
-                    if not self._goal_token_matches(sid, win, fid):
+                # A Correct aimed at this lit tile always clears it (sim off or on).
+                matched = False
+                if win:
+                    matched = self._goal_token_matches(sid, win, fid)
+                    if not matched:
                         continue
-                elif want and item_seq and item_seq < want and not win:
-                    continue
-                key = f"{fid}:{item_seq}:{win or name}:{sid}"
-                if key in self._manual_coach_hit_seen:
-                    continue
-                if win and not self._goal_token_matches(sid, win, fid):
-                    continue
-                if not win:
+                else:
                     # Anonymous Correct only counts when this field has one lit goal.
                     field_lit = [s for s in lit if s.startswith(fid)]
                     if len(field_lit) != 1 or field_lit[0] != sid:
                         continue
+                    matched = True
+                    # Stale anonymous Correct from an older seq must not clear a new light.
+                    if want and item_seq and item_seq < want:
+                        continue
+                key = f"{fid}:{item_seq}:{win or name}:{sid}"
+                if key in self._manual_coach_hit_seen:
+                    continue
+                if not matched:
+                    continue
                 self._manual_coach_hit_seen.add(key)
                 self._manual_coach_clear_screen(sid, reason="hit")
                 return
@@ -10394,6 +10407,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not goal or not win or win in ("N/A", "NONE"):
             return False
         if goal == win:
+            return True
+        # New A1–A6 / B1–B6 names occupy old cabinet ids (A1→12, B1→5, …).
+        cabinet_map = {
+            "A1": "12", "A2": "13", "A3": "14", "A4": "2", "A5": "3", "A6": "4",
+            "B1": "5", "B2": "6", "B3": "7", "B4": "9", "B5": "10", "B6": "11",
+        }
+        if cabinet_map.get(goal) == win or cabinet_map.get(win) == goal:
             return True
         goal_digits = re.sub(r"[^0-9]", "", goal)
         win_digits = re.sub(r"[^0-9]", "", win)
@@ -13055,14 +13075,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             seconds_left = float(info.get("seconds_left") or 0)
         except (TypeError, ValueError):
             seconds_left = 0
-        continue_booked = self._should_continue_booked_play(info)
-        if continue_booked:
+        if self._should_continue_booked_play(info):
             # Keep field playlists / phase until restart rebuilds them.
             try:
-                if self._restart_highest_level(info):
-                    self.display_phase = "level_card"
-                    self.playlist_finished = False
-                    self._publish_field_controls()
+                if self._continue_booked_after_finals(info):
                     logger.info(
                         "Independent series complete — continuing with %.0fs booking left (Pause/Stop stay live)",
                         seconds_left,
@@ -13963,6 +13979,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._phase_field_levels = dict(phase.get("field_levels") or {})
         self._phase_dual_independent = bool(phase.get("dual_independent"))
         self.video_directory = phase.get("directory") or self._level_root
+        # Allow the Foundation→Entry celebration once per SF-180N finish.
+        if str(self._phase_subdirectory or self._phase_mode_id or "").upper().startswith("SF-180"):
+            self._foundation_level_up_played = False
         _reset_live_action_results()
         self._held_result_badges = {}
         self._result_released_screens = set()
@@ -14169,19 +14188,51 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         text = str(level or "").replace("\\", "/")
         return bool(re.search(r"L05-WorldClass(?:/|\\)?S2\.T5\b", text, re.I))
 
+    def _is_admin_test_session(self) -> bool:
+        """Operator admin-password play with no reservation clock."""
+        try:
+            payload = _read_players_fields_payload() or {}
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            return False
+        if payload.get("admin_test"):
+            return True
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        saw_player = False
+        for fid in ("A", "B"):
+            slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+            pid = str((slot or {}).get("player_id") or "").strip()
+            if not pid or pid.startswith("__sim_"):
+                continue
+            saw_player = True
+            if str((slot or {}).get("booking_end") or "").strip():
+                return False
+            try:
+                left = self._booking_seconds_left_for_field(fid)
+            except Exception:
+                left = None
+            if left is not None:
+                return False
+        return bool(saw_player)
+
     def _should_continue_booked_play(self, info) -> bool:
-        """True only while booking remains AND progression still has another set to run.
+        """True while booking remains (or admin test) AND another set should run.
 
         Mode 2 keeps farming unlocked sets during a reservation, but after the
         final World Class S2.T5 pass — or a Foundation pass whose next SF is
         admin-locked — continue_play=False so we show finals and stop (no loop).
+
+        Admin/manual password play has no booking_end: still continue so Mode 2
+        level-up and Foundation→Entry (level_UP_Foundation) can run.
         """
         info = self._live_continue_info(info if isinstance(info, dict) else {})
+        admin_test = bool(info.get("admin_test")) or self._is_admin_test_session()
         try:
             seconds_left = float(info.get("seconds_left") or 0)
         except (TypeError, ValueError):
             seconds_left = 0.0
-        if seconds_left <= 30:
+        if not admin_test and seconds_left <= 30:
             return False
         if "continue_play" in info:
             return bool(info.get("continue_play"))
@@ -14260,6 +14311,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pid = str((slot or {}).get("player_id") or "").strip()
             if pid and not pid.startswith("__sim_"):
                 merged["player_id"] = pid
+        admin_test = bool(merged.get("admin_test")) or bool(
+            isinstance(payload, dict) and payload.get("admin_test")
+        )
+        if not admin_test:
+            # Infer admin/manual: live players with empty booking_end stamps.
+            saw_player = False
+            booked = False
+            for fid in ("A", "B"):
+                s = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+                pid = str((s or {}).get("player_id") or "").strip()
+                if not pid or pid.startswith("__sim_"):
+                    continue
+                saw_player = True
+                if str((s or {}).get("booking_end") or "").strip():
+                    booked = True
+                    break
+            admin_test = bool(saw_player and not booked)
+        if admin_test:
+            merged["admin_test"] = True
         # Refresh seconds_left from the live booking. Do not force continue_play
         # True over an explicit False (last set / stop), and never invent a
         # continue on World Class S2.T5 — that loops the final set forever.
@@ -14275,9 +14345,197 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     and not self._is_terminal_training_level(level)
                 ):
                     merged["continue_play"] = True
+            elif admin_test:
+                # No reservation clock — keep Mode 2 / Foundation→Entry continue alive.
+                if float(merged.get("seconds_left") or 0) <= 30:
+                    merged["seconds_left"] = 24 * 3600.0
+                if (
+                    "continue_play" not in raw
+                    and not self._is_terminal_training_level(level)
+                ):
+                    merged["continue_play"] = True
         except Exception:
             pass
         return merged
+
+    def _phase_was_foundation_sf180(self) -> bool:
+        """True when the set that just finished finals was Foundation SF-180N."""
+        phase = {}
+        try:
+            if 0 <= int(self._phase_index) < len(self._run_phases or []):
+                phase = self._run_phases[self._phase_index] or {}
+        except (TypeError, ValueError, IndexError):
+            phase = {}
+        # Prefer the live mode/subdirectory stamps over free-text labels.
+        primary = [
+            phase.get("subdirectory"),
+            phase.get("mode_id"),
+            getattr(self, "_phase_subdirectory", None),
+            getattr(self, "mode_id", None),
+        ]
+        modes = phase.get("field_modes") if isinstance(phase.get("field_modes"), dict) else {}
+        primary.extend(modes.values())
+        primary_text = " ".join(str(b or "") for b in primary)
+        if re.search(r"SF-?180N", primary_text, re.I):
+            return True
+        # Fallback: directory / opening playlist path still names SF-180N.
+        secondary = [
+            phase.get("directory"),
+            getattr(self, "video_directory", None),
+        ]
+        levels = phase.get("field_levels") if isinstance(phase.get("field_levels"), dict) else {}
+        secondary.extend(levels.values())
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        for rows in parts.values() if isinstance(parts, dict) else ():
+            if not rows:
+                continue
+            first = rows[0] if isinstance(rows, (list, tuple)) else None
+            if isinstance(first, dict):
+                secondary.extend(
+                    [first.get("subdirectory"), first.get("path"), first.get("mode_id")]
+                )
+        secondary_text = " ".join(str(b or "") for b in secondary)
+        return bool(re.search(r"SF-?180N", secondary_text, re.I))
+
+    def _should_play_foundation_level_up(self, info) -> bool:
+        """After SF-180N finals with unlock score — show level_UP_Foundation before Entry."""
+        if getattr(self, "_foundation_level_up_played", False):
+            return False
+        if not _resolve_foundation_level_up_video():
+            return False
+        if not self._phase_was_foundation_sf180():
+            return False
+        raw = getattr(self, "_after_final", None) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        info = info if isinstance(info, dict) else {}
+        level = str(info.get("level") or raw.get("level") or "")
+        next_is_entry = bool(re.search(r"L01-Entry|(?:^|[/\\])Entry\b", level, re.I))
+        passed = bool(raw.get("passed"))
+        # Timed-out finals may omit passed but already stamped Entry on disk.
+        return bool(passed or next_is_entry)
+
+    def _play_foundation_level_up_then(self, on_done):
+        """Full-bleed level-up clip on Field A/B (or all screens), then Entry."""
+        path = _resolve_foundation_level_up_video()
+        callback = on_done if callable(on_done) else (lambda: None)
+        if not path:
+            logger.warning("Foundation level-up video missing under static/ — continuing")
+            callback()
+            return
+        self._foundation_level_up_played = True
+        self.display_phase = "level_up"
+        # Celebrate on every live field; if unclear, paint all 12 screens so
+        # admin single-field and dual sessions both see the clip.
+        active = [
+            str(f).upper()[:1]
+            for f in (self._active_fields() or [])
+            if str(f).upper()[:1] in ("A", "B")
+        ]
+        if not active:
+            active = ["A", "B"]
+        screen_to_video = {}
+        for fid in active:
+            for sid in _field_all_screens(fid):
+                screen_to_video[sid] = path
+        # Always fill the opposite wall too when only one field was booked —
+        # operator asked for Field A or B or all screens after finals.
+        for sid in ("A1", "A2", "A3", "A4", "A5", "A6", "B1", "B2", "B3", "B4", "B5", "B6"):
+            screen_to_video.setdefault(sid, path)
+        release_fields = {"A", "B"}
+        intro_ms = _video_duration_ms(path, fallback_ms=8000) + int(LEVEL_INTRO_HOLD_MS)
+        self._publish_field_controls()
+        self._update_status_file(
+            "level_up",
+            self.total_videos,
+            self.total_videos,
+            f"Level up — {os.path.basename(path)}",
+        )
+        logger.info(
+            "Playing Foundation level-up %s for %sms on screens %s before Entry",
+            path, intro_ms, ",".join(sorted(screen_to_video)),
+        )
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        self._hide_projected_results()
+        self.completion_label.hide()
+        played = False
+        if self.image_canvas and screen_to_video:
+            try:
+                self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
+                self.image_canvas.show()
+                self.image_canvas.raise_()
+                self.image_canvas.set_screen_videos(screen_to_video, fill=True, loop=False)
+                played = bool(getattr(self.image_canvas, "active_screens", None))
+            except Exception:
+                logger.exception("Could not paint Foundation level-up on screens")
+                played = False
+        if not played:
+            try:
+                self._play_local_clip(path, rate=1.0)
+                played = True
+            except Exception as exc:
+                logger.error("Foundation level-up playback failed: %s", exc)
+                callback()
+                return
+
+        def _finish():
+            try:
+                if self.play_delay_timer:
+                    self.play_delay_timer.stop()
+            except Exception:
+                pass
+            self.play_delay_timer = None
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+            canvas = getattr(self, "image_canvas", None)
+            if canvas is not None:
+                try:
+                    if hasattr(canvas, "_release_field_videos"):
+                        canvas._release_field_videos(release_fields)
+                    canvas.set_screen_images({}, keep_videos=False)
+                except Exception:
+                    pass
+            callback()
+
+        if self.play_delay_timer:
+            try:
+                self.play_delay_timer.stop()
+            except Exception:
+                pass
+        self.play_delay_timer = QtCore.QTimer(singleShot=True)
+        self.play_delay_timer.timeout.connect(_finish)
+        self.play_delay_timer.start(max(1500, int(intro_ms)))
+
+    def _continue_booked_after_finals(self, info) -> bool:
+        """Shared continue path: optional Foundation level-up, then next set."""
+        info = self._live_continue_info(info if isinstance(info, dict) else {})
+        if not self._should_continue_booked_play(info):
+            return False
+
+        def _do_restart():
+            if self._restart_highest_level(info):
+                self.playlist_finished = False
+                self.display_phase = "level_card"
+                self._publish_field_controls()
+                return
+            logger.warning("Foundation level-up finished but continue restart failed")
+
+        if self._should_play_foundation_level_up(info):
+            self.playlist_finished = False
+            self._publish_field_controls()
+            self._play_foundation_level_up_then(_do_restart)
+            return True
+        if self._restart_highest_level(info):
+            self.playlist_finished = False
+            self.display_phase = "level_card"
+            self._publish_field_controls()
+            return True
+        return False
 
     def _restart_highest_level(self, info):
         """Play the highest open set again while the reservation still has time."""
@@ -14933,11 +15191,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             seconds_left = float(info.get("seconds_left") or 0)
         except (TypeError, ValueError):
             seconds_left = 0
-        should_continue = self._should_continue_booked_play(info)
-        if should_continue and self._restart_highest_level(info):
-            self.playlist_finished = False
-            self.display_phase = "level_card"
-            self._publish_field_controls()
+        if self._continue_booked_after_finals(info):
             logger.info(
                 "Field final done — continuing booked play (%.0fs left); Pause/Stop stay live",
                 seconds_left,
