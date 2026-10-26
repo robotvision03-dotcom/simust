@@ -2726,7 +2726,10 @@ class ArenaSimulator:
     def start_action(self, action, screens, finish_balls=False, action_in_set=0, actions_in_set=0, test_num=0):
         self.parked = False
         self.action = (action or "").upper()
-        self.screens = [str(s) for s in (screens or [])]
+        # Multi-goal cues (HP S3): both cylinders stay lit; aim the first screen
+        # first. After that hit, realtime retargets this sim to the remainder.
+        all_screens = [str(s) for s in (screens or [])]
+        self.screens = all_screens[:1] if (finish_balls and len(all_screens) > 1) else all_screens
         self.finish_balls = bool(finish_balls)
         self.start_ts = time.time()
         self.active = True
@@ -5350,6 +5353,8 @@ class SimustRealtimeCamera:
         ch.active_goal_lines = p["goal_lines"]
         ch.session_active = True
         ch._gap_display_sent = False
+        ch._cylinder_scored_screens = set()
+        ch._cylinder_goal_seq = None
         # t=0 is cue ON (teammate image appear), not keypoint paint delay.
         # Otherwise Session Duration ≈ On − delay (~0.72s when On=1.5).
         try:
@@ -5917,7 +5922,12 @@ class SimustRealtimeCamera:
                 ch.current_keypoints = []
 
     def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
-        """Finish-balls: as soon as the ball is in the cylinder, score Correct."""
+        """Finish-balls: as soon as the ball is in the cylinder, score Correct.
+
+        Multi-goal (HP S3): both cylinders stay lit until each is hit. The first
+        hit drops only that cylinder; the session keeps the remaining goal(s).
+        The last hit ends the session as before.
+        """
         if self.operator_paused or not ch.session_active:
             return
         if str(ch.field_id).upper()[:1] in getattr(self, "_paused_fields", set()):
@@ -5929,16 +5939,19 @@ class SimustRealtimeCamera:
             seq = int(getattr(ch, "_display_seq", 0) or 0)
         except (TypeError, ValueError):
             seq = 0
-        if seq and getattr(ch, "_cylinder_goal_seq", None) == seq:
-            return
+        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
         action = str(ch.current_action or "PASS").upper()
-        for screen_name, line_data in (ch.active_goal_lines or {}).items():
+        lines = dict(ch.active_goal_lines or {})
+        for screen_name, line_data in list(lines.items()):
             if not isinstance(line_data, dict):
+                continue
+            sid = str(screen_name)
+            if sid in scored:
                 continue
             p0, p1 = line_data.get("p0"), line_data.get("p1")
             if p0 is None or p1 is None:
                 continue
-            depth = arrival_depth_for(str(screen_name), action)
+            depth = arrival_depth_for(sid, action)
             # Accept a ball that is already close to the green finish zone so the
             # pass image can clear and the next screen can start without a lag.
             approach = float(depth) + float(APPROACH_FINISH_EXTRA_PX)
@@ -5948,23 +5961,60 @@ class SimustRealtimeCamera:
                     continue
                 if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
                     continue
-                if in_goal_area(center, p0, p1, approach):
-                    ch._cylinder_goal_seq = seq
-                    # Stamp the block so final analysis matches the live Correct
-                    # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
-                    if isinstance(block, dict):
-                        block["cylinder_correct"] = True
-                        block["cylinder_screen"] = str(screen_name)
-                    self._publish_live_result(
-                        ch.field_id,
-                        "Correct",
-                        list(ch.current_screens or []),
-                        screen_name,
-                        ch.current_block_id,
-                        seq=seq,
+                if not in_goal_area(center, p0, p1, approach):
+                    continue
+                scored.add(sid)
+                ch._cylinder_scored_screens = scored
+                # Stamp the block so final analysis matches the live Correct
+                # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
+                block["cylinder_correct"] = True
+                block["cylinder_screen"] = sid
+                # Unique seq per hit so the player can keep both Corrects.
+                try:
+                    hit_seq = int(seq) + len(scored) - 1
+                except (TypeError, ValueError):
+                    hit_seq = seq
+                remaining_lines = {
+                    name: data
+                    for name, data in (ch.active_goal_lines or {}).items()
+                    if str(name) not in scored
+                }
+                self._publish_live_result(
+                    ch.field_id,
+                    "Correct",
+                    list(ch.current_screens or []),
+                    sid,
+                    ch.current_block_id,
+                    seq=hit_seq,
+                )
+                if remaining_lines:
+                    # Keep the other cylinder(s) — do not clear/reappear.
+                    ch.active_goal_lines = remaining_lines
+                    ch.current_screens = [
+                        s for s in (ch.current_screens or [])
+                        if str(s) not in scored
+                    ]
+                    if isinstance(ch.current_qr_block, dict):
+                        ch.current_qr_block["screens"] = list(ch.current_screens)
+                    if self._field_is_simulated(ch.field_id):
+                        sim = (self.simulators or {}).get(ch.field_id)
+                        if sim is not None:
+                            sim.start_action(
+                                ch.current_action,
+                                list(ch.current_screens),
+                                finish_balls=True,
+                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
+                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
+                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
+                            )
+                    print(
+                        f"  [{ch.label}] cylinder hit {sid} — "
+                        f"{len(remaining_lines)} goal(s) still lit"
                     )
-                    self._clear_goal_area_now(ch, current_timestamp)
                     return
+                ch._cylinder_goal_seq = seq
+                self._clear_goal_area_now(ch, current_timestamp)
+                return
 
     def process_dual_fields_frame(self, frame, current_timestamp):
         self.tracker.increment_frame_count()

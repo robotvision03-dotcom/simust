@@ -75,6 +75,7 @@ LAB_ONLY_PREFIXES = (
     "/booking-deadline-release",
     "/homography",
     "/cabinet-controls",
+    "/manual-coach",
 )
 
 

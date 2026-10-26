@@ -212,6 +212,246 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertAlmostEqual(player.OPENING_LOGO_TEXT_DOWN_FRAC, 0.20, places=3)
         self.assertEqual(player.OPENING_LOGO_TEXT_LIFT_LINES, 3)
 
+    def test_elite_and_world_s2_use_random_goal_order(self):
+        elite = player._build_elite_s2_playlist(1)
+        world = player._build_world_class_s2_playlist(1)
+        for playlist in (elite, world):
+            for test_num in range(1, 6):
+                goals = [
+                    step["field_screens"][next(iter(step["field_screens"]))][0]
+                    for step in playlist
+                    if step["test_num"] == test_num
+                ]
+                self.assertEqual(len(goals), 12)
+                self.assertEqual(set(goals), set(player._elite_screen_ids()))
+
+    def test_hp_s3_encodes_reference_then_two_sum_goals(self):
+        playlist = player._build_high_performance_s3_playlist(1, ["A", "B"])
+        # Each S3.Tn series: 5 tests × 6 actions.
+        self.assertEqual(len(playlist), 30)
+        by_test = {}
+        for step in playlist:
+            by_test.setdefault(step["test_num"], []).append(step["action_in_set"])
+        self.assertEqual(sorted(by_test), [1, 2, 3, 4, 5])
+        for test_num, actions in by_test.items():
+            self.assertEqual(actions, [1, 2, 3, 4, 5, 6], test_num)
+        first = playlist[0]
+        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("actions_in_set"), 6)
+        self.assertEqual(first.get("on_ms"), 10000)
+        self.assertEqual(first.get("budget_ms"), 60000)
+        self.assertTrue(first.get("cognitive_encode"))
+        self.assertTrue(first.get("require_all_goals"))
+        self.assertTrue(first.get("hold_full_on"))
+        self.assertTrue(first.get("skip_gap"))
+        self.assertTrue(first.get("finish_balls"))
+        self.assertEqual(first.get("motion_theme"), "flowers")
+        # Encode + answers on all 6 screens; cylinders only on the 2 sum screens.
+        self.assertEqual(len(first.get("encode_images") or {}), 12)
+        self.assertEqual(len(first.get("screen_images") or {}), 12)
+        self.assertEqual(len(first["field_screens"]["A"]), 2)
+        self.assertEqual(len(first["field_screens"]["B"]), 2)
+        # Encode shows one shared reference on every field screen.
+        a_encode = {
+            first["encode_images"][f"A{n}"].split(":")[1] for n in range(1, 7)
+        }
+        self.assertEqual(len(a_encode), 1)
+        ref = int(next(iter(a_encode)))
+        self.assertEqual(first["reference_numbers"]["A"], ref)
+        self.assertTrue(2 <= ref <= 9)
+        a_vals = [
+            int(first["screen_images"][f"A{n}"].split(":")[1]) for n in range(1, 7)
+        ]
+        self.assertEqual(len(set(a_vals)), 6)
+        goals = first["field_screens"]["A"]
+        g0 = int(first["screen_images"][goals[0]].split(":")[1])
+        g1 = int(first["screen_images"][goals[1]].split(":")[1])
+        self.assertEqual(g0 + g1, ref)
+        self.assertEqual(first["sum_pairs"]["A"], (g0, g1))
+        # T3 uses a two-digit reference for 3 seconds.
+        t3 = player._build_high_performance_s3_playlist(3, ["A"])[0]
+        self.assertEqual(t3.get("encode_ms"), 3000)
+        self.assertEqual(t3.get("actions_in_set"), 6)
+        self.assertEqual(t3.get("on_ms"), 10000)
+        self.assertEqual(t3.get("budget_ms"), 60000)
+        self.assertEqual(len(t3.get("screen_images") or {}), 6)
+        ref3 = int(next(iter(t3["encode_images"].values())).split(":")[1])
+        self.assertTrue(10 <= ref3 <= 99)
+        pair3 = t3["sum_pairs"]["A"]
+        self.assertEqual(pair3[0] + pair3[1], ref3)
+        self.assertEqual(
+            player._high_performance_s3_series_num("L03-HighPerformance/S3.T4"), 4
+        )
+        self.assertIsNone(
+            player._high_performance_series_num("L03-HighPerformance/S3.T1")
+        )
+        self.assertEqual(
+            player._series_set_label("L03-HighPerformance/S3.T2"), "S3.T2"
+        )
+
+    def test_elite_s3_encodes_ref_under_50_on_12_screens(self):
+        playlist = player._build_elite_s3_playlist(1)
+        # 5 tests × 12 actions.
+        self.assertEqual(len(playlist), 60)
+        first = playlist[0]
+        self.assertTrue(first.get("combined_field"))
+        self.assertTrue(first.get("cognitive_encode"))
+        self.assertTrue(first.get("require_all_goals"))
+        self.assertTrue(first.get("hold_full_on"))
+        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("actions_in_set"), 12)
+        self.assertEqual(first.get("on_ms"), 10000)
+        self.assertEqual(first.get("budget_ms"), 120000)
+        self.assertEqual(len(first.get("encode_images") or {}), 12)
+        self.assertEqual(len(first.get("screen_images") or {}), 12)
+        refs = {
+            int(path.split(":")[1]) for path in first["encode_images"].values()
+        }
+        self.assertEqual(len(refs), 1)
+        ref = next(iter(refs))
+        self.assertTrue(10 <= ref <= 49)
+        goal_sids = [
+            sid
+            for goals in (first.get("field_screens") or {}).values()
+            for sid in goals
+        ]
+        self.assertEqual(len(goal_sids), 2)
+        g0 = int(first["screen_images"][goal_sids[0]].split(":")[1])
+        g1 = int(first["screen_images"][goal_sids[1]].split(":")[1])
+        self.assertEqual(g0 + g1, ref)
+        t3 = player._build_elite_s3_playlist(3)[0]
+        self.assertEqual(t3.get("encode_ms"), 3000)
+        self.assertEqual(
+            player._elite_s3_series_num("L04-Elite/S3.T4"), 4
+        )
+        self.assertEqual(
+            player._combined_play_decision(
+                ["A"], {"A": "L04-Elite/S3.T2"}
+            ),
+            ("play", "elite", 2, 3),
+        )
+
+    def test_elite_and_wc_s3_goals_can_split_across_fields(self):
+        """Sum answers: both on A, both on B, or one on each — all must appear."""
+        modes = set()
+        for _ in range(60):
+            g0, g1 = player._s3_combined_goal_indexes(12)
+            screens = player._elite_screen_ids()
+            fields = {screens[g0][0], screens[g1][0]}
+            if fields == {"A"}:
+                modes.add("A")
+            elif fields == {"B"}:
+                modes.add("B")
+            else:
+                modes.add("split")
+            if modes == {"A", "B", "split"}:
+                break
+        self.assertEqual(modes, {"A", "B", "split"})
+        # Playlist entries also publish both fields when split.
+        seen = set()
+        for builder in (
+            player._build_elite_s3_playlist,
+            player._build_world_class_s3_playlist,
+        ):
+            for step in builder(1):
+                keys = tuple(sorted((step.get("field_screens") or {}).keys()))
+                if keys == ("A", "B"):
+                    seen.add("split")
+                    goals = []
+                    for sids in step["field_screens"].values():
+                        goals.extend(sids)
+                    self.assertEqual(len(goals), 2)
+                    self.assertEqual({goals[0][0], goals[1][0]}, {"A", "B"})
+                elif keys == ("A",):
+                    seen.add("A")
+                elif keys == ("B",):
+                    seen.add("B")
+        self.assertIn("split", seen)
+        self.assertTrue({"A", "B"} & seen)
+
+    def test_world_class_s3_themes_and_action_counts(self):
+        t1 = player._build_world_class_s3_playlist(1)
+        # All WC S3 sets: 5 tests × 12 actions / 120s.
+        self.assertEqual(len(t1), 60)
+        first = t1[0]
+        self.assertEqual(first.get("motion_theme"), "flowers")
+        self.assertTrue(first.get("motion_bg"))
+        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("actions_in_set"), 12)
+        self.assertEqual(first.get("on_ms"), 10000)
+        self.assertEqual(first.get("budget_ms"), 120000)
+        self.assertTrue(first.get("combined_field"))
+        self.assertTrue(first.get("require_all_goals"))
+        refs = {
+            int(path.split(":")[1]) for path in first["encode_images"].values()
+        }
+        ref = next(iter(refs))
+        self.assertTrue(51 <= ref <= 99)
+        t2 = player._build_world_class_s3_playlist(2)[0]
+        self.assertEqual(t2.get("motion_theme"), "fruits")
+        self.assertEqual(t2.get("encode_ms"), 5000)
+        self.assertEqual(t2.get("actions_in_set"), 12)
+        self.assertEqual(t2.get("on_ms"), 10000)
+        self.assertEqual(t2.get("budget_ms"), 120000)
+        t3 = player._build_world_class_s3_playlist(3)
+        self.assertEqual(len(t3), 60)
+        step = t3[0]
+        self.assertEqual(step.get("motion_theme"), "animals")
+        self.assertEqual(step.get("encode_ms"), 3000)
+        self.assertEqual(step.get("actions_in_set"), 12)
+        self.assertEqual(step.get("on_ms"), 10000)
+        self.assertEqual(step.get("budget_ms"), 120000)
+        self.assertEqual(player._wc_s2_theme_for_series(4), "space")
+        self.assertEqual(player._wc_s2_theme_for_series(5), "orbs")
+        self.assertEqual(
+            player._world_class_s3_series_num("L05-WorldClass/S3.T5"), 5
+        )
+        self.assertEqual(
+            player._combined_play_decision(
+                ["B"], {"B": "L05-WorldClass/S3.T1"}
+            ),
+            ("play", "world-class", 1, 3),
+        )
+
+    def test_hp_s3_skip_gap_still_starts_reference_encode(self):
+        """finish-balls skip_gap must not skip the reference encode phase."""
+        step = player._build_high_performance_s3_playlist(1, ["A"])[0]
+        self.assertTrue(step.get("skip_gap"))
+        self.assertTrue(step.get("cognitive_encode"))
+        self.assertTrue(step.get("encode_images"))
+
+        started = []
+
+        class Window(player.SmartPlayerWindow):
+            def _begin_cognitive_encode(self, entry, fields=None):
+                started.append((entry.get("path"), fields))
+                self._label_phase = "encode"
+
+            def _apply_label_phase(self):
+                started.append("action")
+
+        window = Window.__new__(Window)
+        window.video_files = [step]
+        window.current_video_index = 0
+        window.operator_paused = False
+        window.image_based = True
+        window._label_mode = True
+        window.image_canvas = None
+        window.play_delay_timer = None
+        window.check_timer = type("T", (), {"start": lambda self: None})()
+        window.completion_label = type("L", (), {"hide": lambda self: None})()
+        window.progress_label = type("L", (), {"hide": lambda self: None})()
+        window.playlist_finished = False
+        window.waiting_for_results = False
+        window.total_videos = 1
+        window._update_status_file = lambda *a, **k: None
+        window.video_start_time = 0
+        # Same branch as Realtime Play start: skip_gap + cognitive_encode → encode.
+        window._start_playback()
+        self.assertEqual(window._label_phase, "encode")
+        self.assertEqual(started[0][0], step["path"])
+        self.assertNotIn("action", started)
+
 
 if __name__ == "__main__":
     unittest.main()

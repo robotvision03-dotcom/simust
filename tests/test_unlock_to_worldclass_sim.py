@@ -139,13 +139,14 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 "passed_playlists still lists every Foundation set that was passed."
             )
 
-        # Entry skips S1.T5. Later bands keep S1.T5 then S2.T1..S2.T4 (S2.T5 skipped
-        # except World Class, where S2.T4 opens S2.T5 as the final set).
+        # Entry skips S1.T5. Later bands keep S1.T5 then S2 then S3 (S2.T5 skipped;
+        # S3.T5 kept only as World Class end).
         series_levels = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
+            and not level.endswith("/S2.T5")
             and (
-                not level.endswith("/S2.T5")
+                not level.endswith("/S3.T5")
                 or level.startswith("L05-")
             )
             and (
@@ -154,20 +155,28 @@ class UnlockToWorldClassSim(unittest.TestCase):
             )
         ]
         self.assertEqual(series_levels[0], "L01-Entry/S1.T1")
-        self.assertEqual(series_levels[-1], "L05-WorldClass/S2.T5")
+        self.assertEqual(series_levels[-1], "L05-WorldClass/S3.T5")
         self.assertNotIn("L01-Entry/S1.T5", series_levels)
         self.assertIn("L02-Activated/S1.T5", series_levels)
         self.assertIn("L02-Activated/S2.T1", series_levels)
         self.assertNotIn("L02-Activated/S2.T5", series_levels)
         self.assertIn("L03-HighPerformance/S2.T1", series_levels)
+        self.assertIn("L03-HighPerformance/S3.T1", series_levels)
+        self.assertNotIn("L03-HighPerformance/S3.T5", series_levels)
         self.assertIn("L04-Elite/S2.T1", series_levels)
+        self.assertIn("L04-Elite/S3.T1", series_levels)
+        self.assertNotIn("L04-Elite/S3.T5", series_levels)
+        self.assertIn("L05-WorldClass/S3.T1", series_levels)
         self.assertEqual(get_next_level("L01-Entry/S1.T4"), "L02-Activated/S1.T1")
         self.assertEqual(get_next_level("L02-Activated/S1.T4"), "L02-Activated/S1.T5")
         self.assertEqual(get_next_level("L02-Activated/S1.T5"), "L02-Activated/S2.T1")
         self.assertEqual(get_next_level("L02-Activated/S2.T4"), "L03-HighPerformance/S1.T1")
-        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L04-Elite/S1.T1")
-        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L05-WorldClass/S1.T1")
-        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S2.T5")
+        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L03-HighPerformance/S3.T1")
+        self.assertEqual(get_next_level("L03-HighPerformance/S3.T4"), "L04-Elite/S1.T1")
+        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L04-Elite/S3.T1")
+        self.assertEqual(get_next_level("L04-Elite/S3.T4"), "L05-WorldClass/S1.T1")
+        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S3.T1")
+        self.assertEqual(get_next_level("L05-WorldClass/S3.T4"), "L05-WorldClass/S3.T5")
 
         for level in series_levels:
             progress = users[PLAYER_ID]["progress"]
@@ -199,27 +208,27 @@ class UnlockToWorldClassSim(unittest.TestCase):
             )
 
         progress = users[PLAYER_ID]["progress"]
-        self.assertEqual(progress["current_level"], "L05-WorldClass/S2.T5")
-        self.assertEqual(get_next_level("L05-WorldClass/S2.T5"), None)
-        report.append("The player is on World Class S2.T5. There is no set after it.")
+        self.assertEqual(progress["current_level"], "L05-WorldClass/S3.T5")
+        self.assertEqual(get_next_level("L05-WorldClass/S3.T5"), None)
+        report.append("The player is on World Class S3.T5. There is no set after it.")
         report.append("Unlocked levels: " + ", ".join(progress["unlocked_levels"]))
 
         # A later short final must not lock the set again.
         apply_session_progress(
-            users, PLAYER_ID, "L05-WorldClass/S2.T5", "", FAIL_SERIES_AE, from_final=True
+            users, PLAYER_ID, "L05-WorldClass/S3.T5", "", FAIL_SERIES_AE, from_final=True
         )
         progress = users[PLAYER_ID]["progress"]
-        self.assertIn("L05-WorldClass/S2.T5", progress["unlocked_levels"])
-        self.assertEqual(progress["current_level"], "L05-WorldClass/S2.T5")
-        passed_flag = (progress.get("challenge_results") or {}).get("L05-WorldClass/S2.T5", {}).get("passed")
+        self.assertIn("L05-WorldClass/S3.T5", progress["unlocked_levels"])
+        self.assertEqual(progress["current_level"], "L05-WorldClass/S3.T5")
+        passed_flag = (progress.get("challenge_results") or {}).get("L05-WorldClass/S3.T5", {}).get("passed")
         report.append(
-            "A later short World Class S2.T5 result leaves the set unlocked. "
+            "A later short World Class S3.T5 result leaves the set unlocked. "
             "The stored passed flag is %s." % passed_flag
         )
         if passed_flag is False:
             issues.append(
                 "A later final result below the gate clears the stored passed flag. "
-                "World Class S2.T5 stays unlocked, but challenge_results says passed is false. "
+                "World Class S3.T5 stays unlocked, but challenge_results says passed is false. "
                 "The latest score replaces the success flag instead of keeping the pass."
             )
 

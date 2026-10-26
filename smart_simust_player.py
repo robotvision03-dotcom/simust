@@ -265,6 +265,12 @@ SCREEN_SAVER_VIDEO = "screen_saver.mp4"
 CABINET_CONTROLS_FILE = "cabinet_controls.json"
 # Launch token from app.py when System + Screen saver are on and no realtime is running.
 IDLE_SCREENSAVER_ARG = "__screensaver__"
+# Launch token from app.py Manual tab — coach lights screens one by one.
+MANUAL_COACH_ARG = "__manual_coach__"
+try:
+    import simust_manual_coach as _manual_coach
+except ImportError:
+    _manual_coach = None
 # Idle saver box: 40% smaller than full-cabinet (0.60 of width/height).
 SCREEN_SAVER_SCALE = 0.60
 # Key → candidate filenames (elite file is currently misspelled "eite.mp4").
@@ -461,7 +467,29 @@ ELITE_S2_SHAPES = (
 HP_S2_BG = (49, 95, 145)
 # High Performance S2: paint only the middle letter (no yellow patch behind it).
 HP_S2_MID_LETTER = (255, 196, 64)
+# High Performance S3: encode reference, then two screens whose numbers sum to it.
+# T1–T2: 1-digit reference for 5s. T3–T5: 2-digit reference for 3s. Style matches S2.
+# Answer phase: 6 actions × 10s = 60s per test (encode time is separate).
+HP_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+HP_S3_DIGIT_WIDTH = {1: 1, 2: 1, 3: 2, 4: 2, 5: 2}
+HP_S3_ON_MS = 10000
+HP_S3_TEST_BUDGET_MS = 60000
+HP_S3_FLOWER_SEED = 71
 ELITE_S2_BG = (75, 31, 120)
+# Elite / World Class S3: same sum scenario as HP S3 on the combined 12-screen field.
+# Encode times match HP S3 (T1–T2: 5s, T3–T5: 3s). Answer clock is 120s / test.
+ELITE_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+ELITE_S3_TEST_BUDGET_MS = 120000
+ELITE_S3_ACTIONS = 12  # all Elite S3 sets
+# Elite refs are two-digit and strictly below 50.
+ELITE_S3_REF_MIN = 10
+ELITE_S3_REF_MAX = 49
+# World Class S3: 50 < ref < 100. All sets: 12 actions / 120s answer clock.
+WC_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+WC_S3_TEST_BUDGET_MS = 120000
+WC_S3_ACTIONS = {1: 12, 2: 12, 3: 12, 4: 12, 5: 12}
+WC_S3_REF_MIN = 51
+WC_S3_REF_MAX = 99
 # World Class S2 motion themes: T1 flowers, then fruits / animals / space / orbs.
 WORLD_S2_FLOWER_SEEDS = (11, 29, 47, 63, 81)
 WORLD_S2_THEMES = ("flowers", "fruits", "animals", "space", "orbs")
@@ -811,7 +839,7 @@ def _band_series_num(*paths, band: str) -> Optional[int]:
     blob = " ".join(str(p or "") for p in paths)
     if not re.search(band, blob, re.I):
         return None
-    if re.search(r"S2[.-]T[1-5]|A1[-.]T[1-5]", blob, re.I):
+    if re.search(r"S2[.-]T[1-5]|S3[.-]T[1-5]|A1[-.]T[1-5]|A2[-.]T[1-5]", blob, re.I):
         return None
     match = re.search(r"S1[.-]T([1-5])", blob, re.I)
     if match:
@@ -885,6 +913,26 @@ def _high_performance_s2_series_num(*paths) -> Optional[int]:
     )
 
 
+def _band_s3_series_num(*paths, band: str) -> Optional[int]:
+    """S3.T1..S3.T5 inside a level band → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(band, blob, re.I):
+        return None
+    match = re.search(r"S3[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"A2[-.]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _high_performance_s3_series_num(*paths) -> Optional[int]:
+    return _band_s3_series_num(
+        *paths, band=r"L03-HighPerformance|High[-_ ]?Performance"
+    )
+
+
 def _elite_series_num(*paths) -> Optional[int]:
     return _band_series_num(*paths, band=r"L04-Elite")
 
@@ -893,12 +941,22 @@ def _elite_s2_series_num(*paths) -> Optional[int]:
     return _band_s2_series_num(*paths, band=r"L04-Elite")
 
 
+def _elite_s3_series_num(*paths) -> Optional[int]:
+    return _band_s3_series_num(*paths, band=r"L04-Elite")
+
+
 def _world_class_series_num(*paths) -> Optional[int]:
     return _band_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
 
 
 def _world_class_s2_series_num(*paths) -> Optional[int]:
     return _band_s2_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
+
+
+def _world_class_s3_series_num(*paths) -> Optional[int]:
+    return _band_s3_series_num(
+        *paths, band=r"L05-WorldClass|World[-_ ]?Class"
+    )
 
 
 def _combined_level_band(text) -> Optional[str]:
@@ -918,13 +976,19 @@ COMBINED_PLAY_MESSAGE = (
 
 
 def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Optional[int]]:
-    """Return (series_group, set_num). Group 2 is S2.T*; group 1 is S1.T*."""
+    """Return (series_group, set_num). Group 3=S3.T*, 2=S2.T*, 1=S1.T*."""
     if band == "world-class":
+        s3 = _world_class_s3_series_num(text)
+        if s3:
+            return 3, s3
         s2 = _world_class_s2_series_num(text)
         if s2:
             return 2, s2
         s1 = _world_class_series_num(text)
         return (1, s1) if s1 else (None, None)
+    s3 = _elite_s3_series_num(text)
+    if s3:
+        return 3, s3
     s2 = _elite_s2_series_num(text)
     if s2:
         return 2, s2
@@ -947,7 +1011,7 @@ def _combined_play_decision(active, field_levels=None, field_directories=None, *
     """None when this play is not Elite or World Class.
 
     Otherwise ("play", band, series, group) or ("block", message).
-    Group is 1 for S1.T* and 2 for S2.T*.
+    Group is 1 for S1.T*, 2 for S2.T*, 3 for S3.T*.
     One field is enough: the other half lights automatically for all 12 screens.
     If both fields are set, they must share the same band and set.
     """
@@ -1416,6 +1480,285 @@ def _build_high_performance_s2_playlist(series_num: int, active_fields) -> List[
     return _stamp_finish_balls(playlist)
 
 
+def _hp_s3_reference(series_num: int) -> int:
+    """Single-digit (T1–T2) or two-digit (T3–T5) reference the two goals must sum to."""
+    width = int(HP_S3_DIGIT_WIDTH.get(int(series_num), 1) or 1)
+    if width <= 1:
+        return random.randint(2, 9)
+    return random.randint(10, 99)
+
+
+def _hp_s3_sum_pair(ref: int) -> Tuple[int, int]:
+    """Two non-negative integers that sum to ref (prefer distinct)."""
+    ref = max(1, int(ref))
+    options = []
+    for left in range(0, ref + 1):
+        right = ref - left
+        if right < 0:
+            continue
+        options.append((left, right))
+    if not options:
+        return 0, ref
+    distinct = [pair for pair in options if pair[0] != pair[1]]
+    pool = distinct or options
+    left, right = random.choice(pool)
+    if random.random() < 0.5:
+        left, right = right, left
+    return left, right
+
+
+def _hp_s3_pair_sums_to(nums: List[int], ref: int) -> List[Tuple[int, int]]:
+    hits = []
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if int(nums[i]) + int(nums[j]) == int(ref):
+                hits.append((i, j))
+    return hits
+
+
+def _s3_combined_goal_indexes(screen_count: int = ELITE_ACTIONS_PER_TEST) -> Tuple[int, int]:
+    """Pick two of 12 combined screens: both A, both B, or one on each — equal chance.
+
+    Indexes follow `_elite_screen_ids()` order: 0–5 = A1–A6, 6–11 = B1–B6.
+    """
+    count = max(2, int(screen_count or ELITE_ACTIONS_PER_TEST))
+    half = count // 2
+    a_idx = list(range(0, half))
+    b_idx = list(range(half, count))
+    if len(a_idx) < 1 or len(b_idx) < 1:
+        picks = random.sample(range(count), 2)
+        return int(picks[0]), int(picks[1])
+    mode = random.choice(("A", "B", "split"))
+    if mode == "A" and len(a_idx) >= 2:
+        g0, g1 = random.sample(a_idx, 2)
+    elif mode == "B" and len(b_idx) >= 2:
+        g0, g1 = random.sample(b_idx, 2)
+    else:
+        g0 = random.choice(a_idx)
+        g1 = random.choice(b_idx)
+    if random.random() < 0.5:
+        g0, g1 = g1, g0
+    return int(g0), int(g1)
+
+
+def _s3_sum_screen_numbers(
+    ref: int,
+    screen_count: int = ENTRY_ACTIONS_PER_TEST,
+    goal_indexes: Optional[Tuple[int, int]] = None,
+) -> Tuple[List[int], Tuple[int, int]]:
+    """screen_count values with exactly one pair summing to ref; return values + goal indexes."""
+    ref = int(ref)
+    count = max(2, int(screen_count or ENTRY_ACTIONS_PER_TEST))
+    goal_a, goal_b = _hp_s3_sum_pair(ref)
+    if goal_indexes and len(goal_indexes) == 2:
+        g0, g1 = int(goal_indexes[0]), int(goal_indexes[1])
+        if g0 == g1 or not (0 <= g0 < count and 0 <= g1 < count):
+            indexes = list(range(count))
+            random.shuffle(indexes)
+            g0, g1 = indexes[0], indexes[1]
+    else:
+        indexes = list(range(count))
+        random.shuffle(indexes)
+        g0, g1 = indexes[0], indexes[1]
+    for _ in range(80):
+        values = [None] * count
+        values[g0] = goal_a
+        values[g1] = goal_b
+        used = {goal_a, goal_b}
+        ok = True
+        for idx in range(count):
+            if values[idx] is not None:
+                continue
+            pick = None
+            for _try in range(40):
+                # Keep distractors in a similar magnitude band as the reference.
+                if ref <= 9:
+                    candidate = random.randint(0, 9)
+                else:
+                    candidate = random.randint(0, max(9, min(99, ref + 20)))
+                if candidate in used and random.random() < 0.7:
+                    continue
+                trial = list(values)
+                trial[idx] = candidate
+                # Incomplete rows are fine; only reject when a finished pair already sums.
+                filled = [n for n in trial if n is not None]
+                if len(filled) >= 2:
+                    # Count pairs among filled positions that sum to ref.
+                    filled_idx = [i for i, n in enumerate(trial) if n is not None]
+                    extra = 0
+                    for a in range(len(filled_idx)):
+                        for b in range(a + 1, len(filled_idx)):
+                            ia, ib = filled_idx[a], filled_idx[b]
+                            if {ia, ib} == {g0, g1}:
+                                continue
+                            if int(trial[ia]) + int(trial[ib]) == ref:
+                                extra += 1
+                    if extra:
+                        continue
+                pick = candidate
+                break
+            if pick is None:
+                ok = False
+                break
+            values[idx] = pick
+            used.add(pick)
+        if not ok or any(v is None for v in values):
+            continue
+        nums = [int(v) for v in values]
+        pairs = _hp_s3_pair_sums_to(nums, ref)
+        if len(pairs) == 1 and set(pairs[0]) == {g0, g1}:
+            return nums, (g0, g1)
+    # Deterministic fallback: place the pair and fill with values that cannot complete ref.
+    nums = [0] * count
+    nums[g0] = goal_a
+    nums[g1] = goal_b
+    filler = ref + 1 if ref < 99 else 1
+    for idx in range(count):
+        if idx in (g0, g1):
+            continue
+        nums[idx] = filler
+        filler += 1
+    return nums, (g0, g1)
+
+
+def _hp_s3_screen_numbers(ref: int) -> Tuple[List[int], Tuple[int, int]]:
+    """Six screen values with exactly one pair summing to ref; return values + goal indexes."""
+    return _s3_sum_screen_numbers(ref, ENTRY_ACTIONS_PER_TEST)
+
+
+def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[dict]:
+    """HP S3: encode a reference, then six different numbers (exactly two sum to it).
+
+    Encode (all screens) is separate from the answer clock. Each test's 6 answer
+    actions total 60s (10s each). Cylinders light both answer screens; the sim
+    finishes them one by one. Answers stay up for the full On window.
+    """
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active:
+        return []
+    series = max(1, min(5, int(series_num or 1)))
+    on_ms = int(HP_S3_ON_MS)
+    gap_ms = 80
+    encode_ms = int(HP_S3_ENCODE_MS.get(series, 5000))
+    seed = int(HP_S3_FLOWER_SEED) + series * 19
+    motion_bg = _ensure_wc_motion_bg_video("flowers", seed, base_rgb=HP_S2_BG)
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        for action_in_set in range(1, ENTRY_ACTIONS_PER_TEST + 1):
+            images = {}
+            overlay_images = {}
+            encode_images = {}
+            field_screens = {}
+            labels = []
+            field_refs = {}
+            field_pairs = {}
+            for fid in active:
+                ref = _hp_s3_reference(series)
+                nums, (g0, g1) = _hp_s3_screen_numbers(ref)
+                ref_text = str(ref)
+                ref_png = _render_entry_digit_image(ref_text, bg=HP_S2_BG)
+                if not ref_png:
+                    continue
+                goal_sids = []
+                for screen in range(1, ENTRY_ACTIONS_PER_TEST + 1):
+                    sid = _hw_screen_for_field(fid, (screen, screen))
+                    if sid is None:
+                        continue
+                    # Reference on every screen during encode.
+                    encode_images[sid] = ref_png
+                    # Answer phase: a different number on every screen.
+                    text = str(nums[screen - 1])
+                    png = _render_entry_digit_image(text, bg=HP_S2_BG)
+                    overlay = _render_entry_digit_image(text)
+                    if not png:
+                        continue
+                    images[sid] = png
+                    if overlay:
+                        overlay_images[sid] = overlay
+                for goal_screen in (g0 + 1, g1 + 1):
+                    sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
+                    if sid is not None:
+                        goal_sids.append(sid)
+                if len(goal_sids) < 2:
+                    continue
+                field_screens[fid] = goal_sids
+                field_refs[fid] = ref
+                field_pairs[fid] = (int(nums[g0]), int(nums[g1]))
+                labels.append(
+                    f"{fid}:ref={ref} goals={goal_sids[0]}+{goal_sids[1]} "
+                    f"({nums[g0]}+{nums[g1]}={ref})"
+                )
+            if not field_screens or not images or not encode_images:
+                continue
+            action_seed = (
+                int(seed) * 1009
+                + int(test_num) * 131
+                + int(action_in_set) * 41
+                + random.randint(1, 997)
+            )
+            start_frame = int(action_seed) % 180
+            entry = {
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": ENTRY_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == ENTRY_ACTIONS_PER_TEST,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "encode_ms": encode_ms,
+                "cognitive_encode": True,
+                "encode_images": dict(encode_images),
+                "require_all_goals": True,
+                # Keep answer digits up for the full 10s; do not cut on first ball.
+                "hold_full_on": True,
+                "reference_numbers": dict(field_refs),
+                "sum_pairs": dict(field_pairs),
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "entry_digits": True,
+                "arena_pair": (1, 1),
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "motion_theme": "flowers",
+                "motion_seed": action_seed,
+                "motion_base_rgb": tuple(HP_S2_BG),
+                "motion_start_frame": start_frame,
+                "overlay_images": dict(overlay_images),
+                "motion_fill": True,
+                "label": (
+                    f"HighPerformance S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{ENTRY_ACTIONS_PER_TEST} "
+                    f"{' '.join(labels)} encode={encode_ms}ms on={on_ms}ms"
+                ),
+                "path": (
+                    f"image://HighPerformance/S3.T{series}/"
+                    f"test{test_num}/{action_in_set}"
+                ),
+                "series_group": 3,
+                "series_num": int(series),
+            }
+            if motion_bg:
+                entry["screen_video"] = motion_bg
+                entry["motion_bg"] = motion_bg
+            playlist.append(entry)
+    stamped = _stamp_finish_balls(playlist)
+    # Answer clock is fixed at 60s / test (encode excluded).
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["on_ms"] = int(HP_S3_ON_MS)
+        entry["budget_ms"] = int(HP_S3_TEST_BUDGET_MS)
+        entry["efficiency_max_sec"] = float(HP_S3_TEST_BUDGET_MS) / 1000.0
+        entry["require_all_goals"] = True
+        entry["hold_full_on"] = True
+    return stamped
+
+
 def _composite_overlay_on_bg(overlay_path: str, bg_path: str, text: str, seed: int) -> Optional[str]:
     """Paste transparent letter art onto a flower still (Pillow)."""
     try:
@@ -1652,27 +1995,23 @@ def _world_ordered_goals(test_num: int) -> List[str]:
 
 
 def _ordered_combined_goals(test_num: int, mode: str = "elite") -> List[str]:
-    """Every test follows the test 1 or test 2 line. Nothing is shuffled.
+    """Random goal order across all 12 screens for every Elite / World Class test.
 
-    Odd tests match test 1. Even tests match test 2.
-    World Class test 2 starts on Field B and walks forward (B1, A1, B2, A2, ...).
-    Elite test 2 walks that same alternating line in reverse, so it starts on B6.
+    test_num / mode are kept for call-site compatibility; order is always shuffled.
     """
-    pattern = 2 if int(test_num) % 2 == 0 else 1
-    if str(mode) == "world-class":
-        return _world_ordered_goals(pattern)
-    if pattern == 2:
-        return list(reversed(_elite_alternating_screens()))
-    return _elite_alternating_screens()
+    del test_num, mode
+    order = _elite_screen_ids()
+    random.shuffle(order)
+    return order
 
 
-def _elite_test_layout(test_num: int, mode: str = "elite") -> Tuple[dict, Tuple[int, int, int]]:
-    """Place the first 12 pool numbers along the ordered goal line for this test."""
+def _elite_test_layout(test_num: int, mode: str = "elite") -> Tuple[dict, Tuple[int, int, int], List[str]]:
+    """Place the first 12 pool numbers along a random goal line for this test."""
     order = _ordered_combined_goals(test_num, mode)
     numbers = list(ELITE_NUMBER_POOL)[:ELITE_ACTIONS_PER_TEST]
     placement = {order[i]: numbers[i] for i in range(ELITE_ACTIONS_PER_TEST)}
     bg = ELITE_TEST_BG[int(test_num)]
-    return placement, bg
+    return placement, bg, order
 
 
 def _world_digit_colors(bg) -> List[Tuple[int, int, int]]:
@@ -1737,7 +2076,9 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
     screens = _elite_screen_ids()
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
-        placement, bg = _elite_test_layout(test_num, "world-class" if world else "elite")
+        placement, bg, order = _elite_test_layout(
+            test_num, "world-class" if world else "elite"
+        )
         shared = ELITE_DIGIT_ON_BG[int(test_num)]
         if not world:
             if not _colors_are_visible(shared, bg) or not _colors_are_visible(ELITE_ZERO_COLOR, bg):
@@ -1749,7 +2090,6 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
             if len(probe) < len(screens):
                 logger.error("World Class could not color every screen on test %s", test_num)
                 return []
-        order = _ordered_combined_goals(test_num, "world-class" if world else "elite")
         number_png = {}
         zero_png = {}
         if not world:
@@ -1826,13 +2166,11 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
 
 
 def _combined_s2_goal_order(test_num: int) -> List[str]:
-    """Tests 1–3 alternate A/B; tests 4–5 shuffle that alternating line."""
-    base = _elite_alternating_screens()
-    if int(test_num) >= 4:
-        order = list(base)
-        random.shuffle(order)
-        return order
-    return base
+    """Every Elite / World Class S2 test uses a random goal order across 12 screens."""
+    del test_num
+    order = _elite_screen_ids()
+    random.shuffle(order)
+    return order
 
 
 def _elite_s2_distractors_for_series(series_num: int) -> Tuple[str, ...]:
@@ -1846,7 +2184,7 @@ def _build_elite_s2_playlist(series_num: int) -> List[dict]:
     """Elite S2: 11 similar distractors + one number on 12 screens. Goal is the number.
 
     Level S2.T1–T2 use characters ($ % …). Level S2.T3–T5 use shapes (● ○ ◆ …)
-    for every timed test in that set. Timed tests 4–5 randomize goal order.
+    for every timed test in that set. Every test uses a random goal order.
     """
     on_ms, gap_ms = _elite_series_timing_ms(series_num, min_ms=ELITE_S2_ON_MIN_MS)
     bg = ELITE_S2_BG
@@ -2071,6 +2409,263 @@ def _build_world_class_s2_playlist(series_num: int) -> List[dict]:
                 entry["motion_bg"] = motion_bg
             playlist.append(entry)
     return _stamp_finish_balls(playlist)
+
+
+def _elite_s3_reference() -> int:
+    """Two-digit reference strictly below 50."""
+    return random.randint(int(ELITE_S3_REF_MIN), int(ELITE_S3_REF_MAX))
+
+
+def _wc_s3_reference() -> int:
+    """Two-digit reference with 50 < ref < 100."""
+    return random.randint(int(WC_S3_REF_MIN), int(WC_S3_REF_MAX))
+
+
+def _s3_combined_field_screens(goal_sids: List[str]) -> dict:
+    """Group goal screen ids by field letter (A/B) for combined 12-screen play."""
+    field_screens = {}
+    for sid in goal_sids:
+        name = str(sid or "").strip().upper()
+        if not name:
+            continue
+        fid = "B" if name.startswith("B") else "A"
+        field_screens.setdefault(fid, []).append(name)
+    return field_screens
+
+
+def _build_elite_s3_playlist(series_num: int) -> List[dict]:
+    """Elite S3: encode a two-digit ref (<50), then 12 numbers with exactly two summing to it.
+
+    Combined 12-screen field (A+B together). Visuals match Elite S2 (purple band fill).
+    5 tests × 12 actions; answer clock 120s (10s each). Encode is separate (5s/3s).
+    """
+    series = max(1, min(5, int(series_num or 1)))
+    actions = int(ELITE_S3_ACTIONS)
+    budget_ms = int(ELITE_S3_TEST_BUDGET_MS)
+    on_ms = max(1, budget_ms // actions)
+    gap_ms = 80
+    encode_ms = int(ELITE_S3_ENCODE_MS.get(series, 5000))
+    bg = ELITE_S2_BG
+    screens = _elite_screen_ids()
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        for action_in_set in range(1, actions + 1):
+            ref = _elite_s3_reference()
+            goal_idx = _s3_combined_goal_indexes(len(screens))
+            nums, (g0, g1) = _s3_sum_screen_numbers(
+                ref, len(screens), goal_indexes=goal_idx
+            )
+            ref_png = _render_band_digit_image(str(ref), bg, (255, 255, 255))
+            if not ref_png:
+                continue
+            encode_images = {sid: ref_png for sid in screens}
+            images = {}
+            for idx, sid in enumerate(screens):
+                png = _render_band_digit_image(str(nums[idx]), bg, (255, 255, 255))
+                if not png:
+                    images = {}
+                    break
+                images[sid] = png
+            if not images:
+                continue
+            goal_sids = [screens[g0], screens[g1]]
+            field_screens = _s3_combined_field_screens(goal_sids)
+            if len(goal_sids) < 2 or not field_screens:
+                continue
+            entry = {
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions,
+                "is_last_in_set": action_in_set == actions,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "encode_ms": encode_ms,
+                "cognitive_encode": True,
+                "encode_images": dict(encode_images),
+                "require_all_goals": True,
+                "hold_full_on": True,
+                "reference_numbers": {"AB": ref},
+                "sum_pairs": {"AB": (int(nums[g0]), int(nums[g1]))},
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "entry_digits": True,
+                "combined_field": True,
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "label": (
+                    f"Elite S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{actions} "
+                    f"ref={ref} goals={goal_sids[0]}+{goal_sids[1]} "
+                    f"({nums[g0]}+{nums[g1]}={ref}) "
+                    f"encode={encode_ms}ms on={on_ms}ms"
+                ),
+                "path": (
+                    f"image://Elite/S3.T{series}/"
+                    f"test{test_num}/{action_in_set}"
+                ),
+                "series_group": 3,
+                "series_num": int(series),
+            }
+            playlist.append(entry)
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["on_ms"] = on_ms
+        entry["budget_ms"] = budget_ms
+        entry["efficiency_max_sec"] = float(budget_ms) / 1000.0
+        entry["require_all_goals"] = True
+        entry["hold_full_on"] = True
+        entry["combined_field"] = True
+    return stamped
+
+
+def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
+    """World Class S3: encode ref (50<ref<100), then 12 numbers with exactly two summing to it.
+
+    Combined 12-screen field. Motion theme matches World Class S2 for the same Tn
+    (T1 flowers, T2 fruits, T3 animals, T4 space, T5 orbs).
+    All sets: 5 tests × 12 actions / 120s. Encode separate (5s T1–T2, 3s T3–T5).
+    """
+    series = max(1, min(5, int(series_num or 1)))
+    actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_TEST))
+    budget_ms = int(WC_S3_TEST_BUDGET_MS)
+    on_ms = max(1, budget_ms // max(1, actions))
+    gap_ms = 80
+    encode_ms = int(WC_S3_ENCODE_MS.get(series, 5000))
+    theme = _wc_s2_theme_for_series(series)
+    base_seed = WORLD_S2_FLOWER_SEEDS[(series - 1) % len(WORLD_S2_FLOWER_SEEDS)]
+    motion_bg = _ensure_wc_motion_bg_video(theme, int(base_seed))
+    screens = _elite_screen_ids()
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        for action_in_set in range(1, actions + 1):
+            ref = _wc_s3_reference()
+            goal_idx = _s3_combined_goal_indexes(len(screens))
+            nums, (g0, g1) = _s3_sum_screen_numbers(
+                ref, len(screens), goal_indexes=goal_idx
+            )
+            action_seed = (
+                int(base_seed) * 1009
+                + int(series) * 131
+                + int(test_num) * 57
+                + int(action_in_set) * 41
+                + random.randint(1, 997)
+            )
+            start_frame = int(action_seed) % 180
+            ref_text = str(ref)
+            ref_png = _render_camouflage_text_image(
+                ref_text,
+                seed=action_seed,
+                camouflage=True,
+                theme=theme,
+                phase=0.0,
+                fast=True,
+            )
+            if not ref_png:
+                continue
+            encode_images = {sid: ref_png for sid in screens}
+            encode_motion_texts = {sid: ref_text for sid in screens}
+            encode_positions = {
+                sid: _wc_text_anchor_frac(action_seed, f"enc:{sid}:{ref_text}")
+                for sid in screens
+            }
+            images = {}
+            motion_texts = {}
+            motion_positions = {}
+            for idx, sid in enumerate(screens):
+                text = str(nums[idx])
+                motion_texts[sid] = text
+                motion_positions[sid] = _wc_text_anchor_frac(
+                    action_seed, f"{sid}:{text}"
+                )
+                png = _render_camouflage_text_image(
+                    text,
+                    seed=action_seed,
+                    camouflage=True,
+                    theme=theme,
+                    phase=0.0,
+                    fast=True,
+                )
+                if not png:
+                    images = {}
+                    break
+                images[sid] = png
+            if not images:
+                continue
+            goal_sids = [screens[g0], screens[g1]]
+            field_screens = _s3_combined_field_screens(goal_sids)
+            if len(goal_sids) < 2 or not field_screens:
+                continue
+            entry = {
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions,
+                "is_last_in_set": action_in_set == actions,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "encode_ms": encode_ms,
+                "cognitive_encode": True,
+                "encode_images": dict(encode_images),
+                "encode_motion_texts": dict(encode_motion_texts),
+                "encode_motion_text_positions": dict(encode_positions),
+                "require_all_goals": True,
+                "hold_full_on": True,
+                "reference_numbers": {"AB": ref},
+                "sum_pairs": {"AB": (int(nums[g0]), int(nums[g1]))},
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "entry_digits": True,
+                "combined_field": True,
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "motion_theme": theme,
+                "motion_seed": action_seed,
+                "motion_start_frame": start_frame,
+                "motion_texts": dict(motion_texts),
+                "motion_text_positions": dict(motion_positions),
+                "motion_fill": True,
+                "label": (
+                    f"WorldClass S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{actions} "
+                    f"ref={ref} goals={goal_sids[0]}+{goal_sids[1]} "
+                    f"({nums[g0]}+{nums[g1]}={ref}) theme={theme} "
+                    f"encode={encode_ms}ms on={on_ms}ms"
+                ),
+                "path": (
+                    f"image://WorldClass/S3.T{series}/"
+                    f"test{test_num}/{action_in_set}"
+                ),
+                "series_group": 3,
+                "series_num": int(series),
+            }
+            if motion_bg:
+                entry["screen_video"] = motion_bg
+                entry["motion_bg"] = motion_bg
+            playlist.append(entry)
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["on_ms"] = on_ms
+        entry["budget_ms"] = budget_ms
+        entry["efficiency_max_sec"] = float(budget_ms) / 1000.0
+        entry["require_all_goals"] = True
+        entry["hold_full_on"] = True
+        entry["combined_field"] = True
+    return stamped
 
 
 def _script_for_mode(mode_id: str):
@@ -2588,12 +3183,15 @@ def _active_field_screens(active_fields):
 
 
 def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
-    """S1.T# / S2.T# from the canonical level id — never from disk folder alone.
+    """S1.T# / S2.T# / S3.T# from the canonical level id — never from disk folder alone.
 
     Elite/WC S2.T2 reuses folder A-T2 on disk. Matching bare A-T* first made the
     opening card / operator stamp look like S1.T2 while progress was S2.T2.
     """
     primary = str(level_id or "")
+    s3 = re.search(r"S3[.-]T([1-5])", primary, re.I)
+    if s3:
+        return f"S3.T{s3.group(1)}"
     s2 = re.search(r"S2[.-]T([1-5])", primary, re.I)
     if s2:
         return f"S2.T{s2.group(1)}"
@@ -2601,10 +3199,13 @@ def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
     if s1:
         return f"S1.T{s1.group(1)}"
     blob = f"{primary} {subdirectory or ''}"
+    a2 = re.search(r"A2[-.]T([1-5])", blob, re.I)
+    if a2:
+        return f"S3.T{a2.group(1)}"
     a1 = re.search(r"A1[-.]T([1-5])", blob, re.I)
     if a1:
         return f"S2.T{a1.group(1)}"
-    # Legacy theme folder only when the level id has no S1/S2 token.
+    # Legacy theme folder only when the level id has no S1/S2/S3 token.
     a = re.search(r"(?<![A-Za-z0-9])A[-.]T([1-5])", blob, re.I)
     if a:
         return f"S1.T{a.group(1)}"
@@ -3376,6 +3977,47 @@ def _find_any_foundation_pass_image(directory) -> Optional[str]:
     return None
 
 
+def _resolve_manual_coach_pass_image(player_dir: Optional[str] = None) -> Optional[str]:
+    """Locate a still pass image for Manual coach (Foundation dirs + repo root)."""
+    image_ext = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    candidates = []
+    # Repo next to this script (pass.jpeg ships with the operator).
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("pass.jpeg", "pass.jpg", "pass.png", "teamate.png", "teammate.png"):
+        candidates.append(os.path.join(here, name))
+    base = (
+        str(player_dir or "").strip()
+        or "C:/Users/siama/Documents/simust_player"
+    )
+    foundation = os.path.join(base, "L00-Foundation-Challenge")
+    search_roots = []
+    if os.path.isdir(foundation):
+        search_roots.append(foundation)
+        try:
+            for name in sorted(os.listdir(foundation)):
+                sibling = os.path.join(foundation, name)
+                if os.path.isdir(sibling):
+                    search_roots.append(sibling)
+        except Exception:
+            pass
+    # Prefer still images named *pass* inside Foundation SF folders.
+    for root in search_roots:
+        hit = _find_foundation_pass_image(root)
+        if hit and os.path.splitext(hit)[1].lower() in image_ext:
+            return hit
+    for path in candidates:
+        if path and os.path.isfile(path) and os.path.splitext(path)[1].lower() in image_ext:
+            return path
+    # Last resort: any foundation pass (may still be an image).
+    for root in search_roots:
+        hit = _find_any_foundation_pass_image(root)
+        if hit and os.path.isfile(hit) and os.path.splitext(hit)[1].lower() in image_ext:
+            return hit
+    if TEAMATE_IMAGE and os.path.isfile(TEAMATE_IMAGE):
+        return TEAMATE_IMAGE
+    return None
+
+
 def _find_digit_images(directory) -> List[str]:
     """Digit assets: 0.png…9.png, digit_N.*, or any image in digit/ (fallback)."""
     if not directory or not os.path.isdir(directory):
@@ -3773,6 +4415,30 @@ def _render_band_digit_image(digit: str, bg, fg, lift_frac: float = 0.0) -> Opti
     painter.setPen(QColor(fr, fg_c, fb))
     _draw_text_at_ring_value(painter, text, w, h, lift_frac=lift)
     painter.end()
+    if not img.save(path, "PNG"):
+        return None
+    return path
+
+
+def _render_solid_screen_image(bg=(0, 0, 0)) -> Optional[str]:
+    """Solid fill tile (used to black out a scored S3 answer screen)."""
+    try:
+        r, g, b = (int(bg[0]), int(bg[1]), int(bg[2]))
+    except (TypeError, ValueError, IndexError):
+        r, g, b = 0, 0, 0
+    try:
+        os.makedirs(MATH_EQ_CACHE_DIR, exist_ok=True)
+    except Exception:
+        return None
+    path = os.path.join(MATH_EQ_CACHE_DIR, f"solid_bg_{r}_{g}_{b}.png")
+    if os.path.isfile(path):
+        return path
+    try:
+        from PyQt5.QtGui import QImage, QColor
+    except Exception:
+        return None
+    img = QImage(512, 512, QImage.Format_ARGB32)
+    img.fill(QColor(r, g, b, 255))
     if not img.save(path, "PNG"):
         return None
     return path
@@ -7419,6 +8085,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "screensaver",
             )
         )
+        self._manual_coach_mode = (
+            str(video_directory or "").strip().lower() in (
+                MANUAL_COACH_ARG,
+                "--manual-coach",
+                "manual_coach",
+                "manual-coach",
+            )
+        )
+        self._manual_coach_cmd_seq = 0
+        self._manual_coach_lit_screens = set()
+        self._manual_coach_pass = None
+        self._manual_coach_hit_seen = set()
         self._booking_abort_done = set()
         self.video_files = []
 
@@ -7460,6 +8138,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.display_phase = "idle"
             self._realtime_stopped = True  # no camera session behind idle saver
             logger.info("Idle screensaver mode — coded saver on all screens")
+        elif self._manual_coach_mode:
+            self._run_phases = []
+            self._phase_index = 0
+            self._phase_active = ["A", "B"]
+            self._field_opening_playlists = {}
+            self._fields_opening = set()
+            self.display_phase = "action"
+            self._label_mode = True
+            self._label_phase = "action"
+            self._action_phase = "label"
+            # Keep realtime alive — cylinders come from image_action_cue.json.
+            self._realtime_stopped = False
+            logger.info("Manual coach mode — waiting for operator goal-area cues")
         else:
             self._run_phases = _build_separate_field_phases(self._level_root)
             self._phase_index = 0
@@ -7578,6 +8269,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             for delay in (20, 60, 120, 250, 400, 600):
                 QtCore.QTimer.singleShot(delay, self._force_top_512)
             QtCore.QTimer.singleShot(300, self._sync_screensaver)
+        elif self._manual_coach_mode:
+            self.speed_monitor_timer.start()
+            self._update_status_file("playing", 0, 0, "Manual coach ready")
+            for delay in (20, 60, 120, 250, 400, 600):
+                QtCore.QTimer.singleShot(delay, self._force_top_512)
+            self._manual_coach_timer = QtCore.QTimer(self)
+            self._manual_coach_timer.setTimerType(QtCore.Qt.PreciseTimer)
+            self._manual_coach_timer.timeout.connect(self._poll_manual_coach)
+            self._manual_coach_timer.start(40)
+            QtCore.QTimer.singleShot(200, self._manual_coach_boot)
         else:
             # Level intro clip before each test (replaces "starting" ring animation)
             self._begin_level_intro(0)
@@ -7592,6 +8293,298 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         logger.info("Received termination signal")
         self._force_cleanup()
         sys.exit(0)
+
+    def _manual_coach_boot(self):
+        """Blank the band and advertise ready status for the operator Manual tab."""
+        if not self._manual_coach_mode:
+            return
+        self._manual_coach_lit_screens = set()
+        self._manual_coach_hit_seen = set()
+        try:
+            if self.image_canvas:
+                self.image_canvas.clear()
+                self.image_canvas.show()
+                self.image_canvas.raise_()
+        except Exception:
+            pass
+        self._manual_coach_pass = _resolve_manual_coach_pass_image(
+            getattr(self, "speed_file_dir", None)
+        )
+        self._manual_coach_publish_status(
+            message=(
+                "Manual coach ready — tap goal areas (several can stay lit)"
+                if self._manual_coach_pass
+                else "Pass image missing — check Foundation SF folders or pass.jpeg"
+            ),
+            last_hit=None,
+        )
+        logger.info(
+            "Manual coach boot — pass image %s",
+            self._manual_coach_pass or "(missing)",
+        )
+
+    def _manual_coach_lit_list(self) -> List[str]:
+        return sorted(str(s).upper() for s in (self._manual_coach_lit_screens or set()) if s)
+
+    def _manual_coach_publish_status(self, message: str, last_hit: Optional[str] = None):
+        if not _manual_coach:
+            return
+        lit = self._manual_coach_lit_list()
+        _manual_coach.write_status(
+            active=True,
+            lit_screen=lit[-1] if lit else None,
+            lit_screens=lit,
+            waiting_hit=bool(lit),
+            last_hit=last_hit,
+            seq=int(self._manual_coach_cmd_seq or 0),
+            message=message,
+        )
+
+    def _poll_manual_coach(self):
+        if not self._manual_coach_mode or self._is_closing:
+            return
+        if self.operator_paused:
+            return
+        cmd = _manual_coach.read_command() if _manual_coach else {}
+        try:
+            seq = int(cmd.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        if seq and seq != int(self._manual_coach_cmd_seq or 0):
+            self._manual_coach_cmd_seq = seq
+            action = str(cmd.get("cmd") or "").strip().lower()
+            screen = (
+                _manual_coach.normalize_screen(cmd.get("screen"))
+                if _manual_coach
+                else None
+            )
+            if action == "stop":
+                self._manual_coach_clear_all(reason="stopped")
+                self._update_status_file("completed", 0, 0, "Manual coach stopped")
+                QtCore.QTimer.singleShot(200, self.close)
+                return
+            if action == "clear":
+                self._manual_coach_clear_all(reason="cleared")
+            elif action == "cue" and screen:
+                self._manual_coach_light(screen, seq)
+        # Keep every lit screen until its own ball arrives.
+        if self._manual_coach_lit_screens:
+            self._manual_coach_check_hit()
+            now = time.time()
+            last = float(getattr(self, "_cue_heartbeat_at", 0) or 0)
+            if now - last >= 1.5:
+                self._manual_coach_rewrite_cue(keep_seq=True)
+                self._cue_heartbeat_at = now
+
+    def _manual_coach_light(self, screen: str, seq: int):
+        """Add a pass image + cylinder on this screen; keep any already lit screens."""
+        sid = (
+            _manual_coach.normalize_screen(screen)
+            if _manual_coach
+            else str(screen or "").strip().upper()
+        )
+        if not sid or (
+            _manual_coach and sid not in _manual_coach.VALID_SCREENS
+        ):
+            logger.warning("Manual coach ignored unknown screen %s", screen)
+            return
+        pass_path = self._manual_coach_pass or _resolve_manual_coach_pass_image(
+            getattr(self, "speed_file_dir", None)
+        )
+        if not pass_path or not os.path.isfile(pass_path):
+            pass_path = _resolve_manual_coach_pass_image(
+                getattr(self, "speed_file_dir", None)
+            )
+        if not pass_path or not os.path.isfile(pass_path):
+            logger.error("Manual coach: no pass image available")
+            self._manual_coach_publish_status(
+                message="Pass image missing — cannot light screen",
+            )
+            return
+        self._manual_coach_pass = pass_path
+        already = sid in (self._manual_coach_lit_screens or set())
+        self._manual_coach_lit_screens = set(self._manual_coach_lit_screens or set())
+        self._manual_coach_lit_screens.add(sid)
+        self._flash_seq = max(1, int(seq or 1))
+        fid = "B" if sid.startswith("B") else "A"
+        walls = dict(getattr(self, "_field_action_wall", None) or {})
+        walls[fid] = time.time()
+        self._field_action_wall = walls
+        self._action_cue_wall = time.time()
+        self._goal_arrived = False
+        self.display_phase = "action"
+        self._label_phase = "action"
+        self._action_phase = "label"
+        self._manual_coach_paint_lit()
+        self._manual_coach_rewrite_cue(keep_seq=False)
+        lit = self._manual_coach_lit_list()
+        self._manual_coach_publish_status(
+            message=(
+                f"{'Already lit' if already else 'Lit'} {sid} "
+                f"({len(lit)} waiting) — ball clears each screen"
+            ),
+            last_hit=None,
+        )
+        logger.info(
+            "Manual coach lit %s (seq=%s, waiting=%s)",
+            sid,
+            seq,
+            ",".join(lit),
+        )
+
+    def _manual_coach_paint_lit(self):
+        """Paint pass image on every still-lit screen; leave others blank."""
+        pass_path = self._manual_coach_pass
+        lit = self._manual_coach_lit_list()
+        images = {}
+        if pass_path and os.path.isfile(pass_path):
+            for sid in lit:
+                images[sid] = pass_path
+        try:
+            if self.image_canvas:
+                self.image_canvas.set_screen_images(images, keep_videos=False)
+                self.image_canvas.show()
+                self.image_canvas.raise_()
+        except Exception:
+            logger.exception("Manual coach could not paint lit screens")
+
+    def _manual_coach_rewrite_cue(self, keep_seq: bool = False):
+        lit = self._manual_coach_lit_list()
+        if not lit:
+            try:
+                _clear_image_action_cue(force_end=True)
+            except Exception:
+                pass
+            return
+        field_screens = {}
+        for sid in lit:
+            fid = "B" if sid.startswith("B") else "A"
+            field_screens.setdefault(fid, []).append(sid)
+        seq = int(self._flash_seq or 1)
+        if not keep_seq:
+            seq = max(1, seq)
+            self._flash_seq = seq
+        field_seqs = {fid: seq for fid in field_screens}
+        self._field_cue_seq = dict(field_seqs)
+        _write_image_action_cue(
+            True,
+            field_screens,
+            seq=seq,
+            action="PASS",
+            on_sec=3600.0,
+            efficiency_max_sec=3600.0,
+            finish_balls=True,
+            budget_elapsed_sec=0.0,
+            budget_total_sec=3600.0,
+            action_in_set=1,
+            actions_in_set=max(1, len(lit)),
+            test_num=1,
+            field_seqs=field_seqs,
+            keep_other_fields=False,
+        )
+        self._cue_heartbeat_at = time.time()
+
+    def _manual_coach_clear_screen(self, sid: str, reason: str = "hit"):
+        """Clear one scored screen; leave other lit screens + cylinders alone."""
+        sid = str(sid or "").strip().upper()
+        lit = set(self._manual_coach_lit_screens or set())
+        if sid not in lit:
+            return
+        lit.discard(sid)
+        self._manual_coach_lit_screens = lit
+        # Repaint remaining pass images only — scored screen drops off the band.
+        self._manual_coach_paint_lit()
+        if lit:
+            # Bump cue seq so the remaining cylinders stay armed as a fresh multi-goal set.
+            self._flash_seq = int(self._flash_seq or 1) + 1
+            self._manual_coach_rewrite_cue(keep_seq=False)
+            self._manual_coach_publish_status(
+                message=f"Cleared {sid} — {len(lit)} still waiting",
+                last_hit=sid,
+            )
+        else:
+            try:
+                _clear_image_action_cue(force_end=True)
+            except Exception:
+                pass
+            self._manual_coach_publish_status(
+                message=f"Cleared {sid} — tap next goal area",
+                last_hit=sid,
+            )
+        logger.info("Manual coach cleared %s (%s); remaining=%s", sid, reason, sorted(lit))
+
+    def _manual_coach_clear_all(self, reason: str = "cleared"):
+        was = self._manual_coach_lit_list()
+        self._manual_coach_lit_screens = set()
+        self._manual_coach_hit_seen = set()
+        self._goal_arrived = False
+        try:
+            if self.image_canvas:
+                self.image_canvas.set_screen_images({}, keep_videos=False)
+        except Exception:
+            pass
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        self._manual_coach_publish_status(
+            message="Cleared — tap a goal area",
+            last_hit=None,
+        )
+        logger.info("Manual coach clear-all (%s) was=%s", reason, was)
+
+    def _manual_coach_check_hit(self):
+        lit = self._manual_coach_lit_list()
+        if not lit:
+            return
+        try:
+            with open(LIVE_ACTION_RESULT_FILE, "r", encoding="utf-8") as handle:
+                payload = json.load(handle) or {}
+        except Exception:
+            return
+        fields = payload.get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            return
+        want = int(self._flash_seq or 0)
+        for sid in list(lit):
+            fid = "B" if sid.startswith("B") else "A"
+            item = fields.get(fid) or {}
+            if not isinstance(item, dict):
+                continue
+            candidates = []
+            by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
+            if by_seq:
+                candidates.extend(v for v in by_seq.values() if isinstance(v, dict))
+            else:
+                candidates.append(item)
+            for chosen in candidates:
+                name = str(chosen.get("result") or "").strip().lower()
+                if name != "correct":
+                    continue
+                try:
+                    item_seq = int(chosen.get("seq") or 0)
+                except (TypeError, ValueError):
+                    item_seq = 0
+                win = str(chosen.get("winning_screen") or "").strip().upper()
+                # Multi-goal hits may use seq, seq+1, … — accept matching screen.
+                if want and item_seq and item_seq < want and win:
+                    if not self._goal_token_matches(sid, win, fid):
+                        continue
+                elif want and item_seq and item_seq < want and not win:
+                    continue
+                key = f"{fid}:{item_seq}:{win or name}:{sid}"
+                if key in self._manual_coach_hit_seen:
+                    continue
+                if win and not self._goal_token_matches(sid, win, fid):
+                    continue
+                if not win:
+                    # Anonymous Correct only counts when this field has one lit goal.
+                    field_lit = [s for s in lit if s.startswith(fid)]
+                    if len(field_lit) != 1 or field_lit[0] != sid:
+                        continue
+                self._manual_coach_hit_seen.add(key)
+                self._manual_coach_clear_screen(sid, reason="hit")
+                return
 
     def _force_cleanup(self):
         if self._is_closing:
@@ -7608,6 +8601,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not self._realtime_stopped and not self._status_completed:
             self._stop_realtime()
         try:
+            timer = getattr(self, "_manual_coach_timer", None)
+            if timer is not None:
+                timer.stop()
             self.check_timer.stop()
             self.speed_monitor_timer.stop()
             if self.close_timer:
@@ -7878,7 +8874,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 pass
             _band, series_num = decision[1], decision[2]
             series_group = int(decision[3]) if len(decision) > 3 else 1
-            if series_group == 2:
+            if series_group == 3:
+                playlist = (
+                    _build_world_class_s3_playlist(series_num)
+                    if _band == "world-class"
+                    else _build_elite_s3_playlist(series_num)
+                )
+            elif series_group == 2:
                 playlist = (
                     _build_world_class_s2_playlist(series_num)
                     if _band == "world-class"
@@ -7888,13 +8890,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 playlist = _build_elite_playlist(series_num, _band)
             if playlist:
                 self._label_mode = True
+                actions_n = int(
+                    playlist[0].get("actions_in_set") or ELITE_ACTIONS_PER_TEST
+                )
                 logger.info(
                     "%s S%s.T%s playlist: %s tests x %s actions, on=%sms gap=%sms",
                     "World Class" if _band == "world-class" else "Elite",
                     series_group,
                     series_num,
                     ENTRY_TEST_COUNT,
-                    ELITE_ACTIONS_PER_TEST,
+                    actions_n,
                     playlist[0].get("on_ms"),
                     playlist[0].get("gap_ms"),
                 )
@@ -7935,6 +8940,26 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             getattr(self, "_phase_field_levels", None),
             active,
         )
+        hp_s3_num = _high_performance_s3_series_num(*level_bits)
+        if hp_s3_num:
+            playlist = _build_high_performance_s3_playlist(hp_s3_num, active)
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "High Performance S3.T%s playlist: %s tests x %s actions, "
+                    "encode=%sms on=%sms gap=%sms",
+                    hp_s3_num,
+                    ENTRY_TEST_COUNT,
+                    ENTRY_ACTIONS_PER_TEST,
+                    playlist[0].get("encode_ms"),
+                    playlist[0].get("on_ms"),
+                    playlist[0].get("gap_ms"),
+                )
+                return playlist
+            logger.error("High Performance S3.T%s playlist empty", hp_s3_num)
+            self._label_mode = False
+            return []
+
         hp_s2_num = _high_performance_s2_series_num(*level_bits)
         if hp_s2_num:
             playlist = _build_high_performance_s2_playlist(hp_s2_num, active)
@@ -8986,7 +10011,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.current_video_path = entry.get("path") if isinstance(entry, dict) else entry
         self.video_end_called = False
         self._action_phase = "idle"
-        self._label_phase = "action" if isinstance(entry, dict) and entry.get("skip_gap") else "gap"
+        if (
+            isinstance(entry, dict)
+            and entry.get("cognitive_encode")
+            and entry.get("encode_images")
+        ):
+            self._label_phase = "encode"
+        elif isinstance(entry, dict) and entry.get("skip_gap"):
+            self._label_phase = "action"
+        else:
+            self._label_phase = "gap"
         self._flash_cycle = 0
         self._flash_phase = 0
 
@@ -9080,11 +10114,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if (isinstance(entry, dict) and entry.get("kind") == "labeled_action") or self._label_mode:
                 self._action_phase = "label"
                 # gap_N before action N, unless this test switches as soon as the ball arrives.
-                if isinstance(entry, dict) and entry.get("skip_gap"):
+                # Cognitive encode (HP S3 reference) still runs before the answer screens
+                # even when finish-balls skip the normal gap.
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("cognitive_encode")
+                    and entry.get("encode_images")
+                ):
+                    self._label_phase = "encode"
+                    self._begin_cognitive_encode(entry)
+                elif isinstance(entry, dict) and entry.get("skip_gap"):
                     self._label_phase = "action"
+                    self._apply_label_phase()
                 else:
                     self._label_phase = "gap"
-                self._apply_label_phase()
+                    self._apply_label_phase()
             else:
                 self._action_phase = "flash"
                 self._flash_cycle = 0
@@ -9198,9 +10242,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         Independent fields each keep their own On time. The longer test's clock
         must not be the hold for one shot: that shot would use the whole clock,
         and the next step would end both fields.
+
+        HP S3 (hold_full_on): each answer action uses its own on_ms (10s), not the
+        remaining 60s shared budget — otherwise Mode 2 never advances past a1.
         """
         if isinstance(entry, dict) and entry.get("independent_fields"):
             return self._flash_delay_ms(on=True)
+        if isinstance(entry, dict) and entry.get("hold_full_on"):
+            try:
+                return max(80, int(entry.get("on_ms") or HP_S3_ON_MS))
+            except (TypeError, ValueError):
+                return int(HP_S3_ON_MS)
         if isinstance(entry, dict) and entry.get("budget_ms"):
             delay = self._budget_remaining_ms(entry)
             if delay <= 40:
@@ -9335,6 +10387,82 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # Poll as fast as the UI loop allows; camera lag is the remaining delay.
         self._goal_advance_timer.start(8)
 
+    def _goal_token_matches(self, goal_sid, winning_screen, fid) -> bool:
+        """True when a live winning_screen refers to this goal tile."""
+        goal = str(goal_sid or "").strip().upper()
+        win = str(winning_screen or "").strip().upper()
+        if not goal or not win or win in ("N/A", "NONE"):
+            return False
+        if goal == win:
+            return True
+        goal_digits = re.sub(r"[^0-9]", "", goal)
+        win_digits = re.sub(r"[^0-9]", "", win)
+        if not goal_digits or not win_digits or goal_digits != win_digits:
+            return False
+        # Camera may publish a bare screen number ("3") for this field's goal.
+        if not re.search(r"[A-Z]", win):
+            return True
+        # Same letter+digit field id only — never match the other field's tile.
+        return win[0] == goal[0]
+
+    def _field_goals_complete(self, entry, fid, hits) -> bool:
+        """For require_all_goals: every listed goal screen must have a Correct hit."""
+        goals = list((entry.get("field_screens") or {}).get(fid) or [])
+        if not goals:
+            return True
+        hit_set = set(hits or [])
+        for goal in goals:
+            matched = False
+            for win in hit_set:
+                if self._goal_token_matches(goal, win, fid):
+                    matched = True
+                    break
+            if not matched:
+                return False
+        return True
+
+    def _remaining_goal_screens(self, entry, fid, hits) -> List[str]:
+        """Goal screens for this field that have not scored Correct yet."""
+        fid = str(fid or "").upper()[:1]
+        goals = list((entry.get("field_screens") or {}).get(fid) or [])
+        hit_set = set(hits or [])
+        remaining = []
+        for goal in goals:
+            if any(self._goal_token_matches(goal, win, fid) for win in hit_set):
+                continue
+            remaining.append(str(goal))
+        return remaining
+
+    def _blackout_scored_goal_screens(self, entry, fid, hits):
+        """Paint scored answer screens black; leave other digits up."""
+        fid = str(fid or "").upper()[:1]
+        hit_set = set(hits or [])
+        if not hit_set:
+            return
+        black = _render_solid_screen_image((0, 0, 0))
+        if not black:
+            return
+        keep = {}
+        for sid, path in (entry.get("screen_images") or {}).items():
+            if _field_for_screen(sid) != fid:
+                continue
+            if any(self._goal_token_matches(sid, win, fid) for win in hit_set):
+                keep[str(sid)] = black
+            else:
+                keep[str(sid)] = path
+        if not keep:
+            return
+        try:
+            canvas = object.__getattribute__(self, "image_canvas")
+        except Exception:
+            canvas = None
+        if canvas is None:
+            return
+        try:
+            canvas.set_screen_images(keep, keep_videos=True, replace_fields={fid})
+        except Exception:
+            logger.exception("Could not black out scored S3 screens on %s", fid)
+
     def _poll_goal_advance(self):
         if self.operator_paused:
             return
@@ -9372,6 +10500,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except Exception:
             paused_fields = {}
         arrived = set()
+        require_all = bool(entry.get("require_all_goals"))
+        hits_by_field = dict(self._player_attr("_goal_hits_by_field") or {})
         for fid in self._active_fields():
             if wanted and str(fid).upper()[:1] not in wanted:
                 continue
@@ -9386,38 +10516,99 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             except (TypeError, ValueError):
                 want_seq = shared_seq
             by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
-            chosen = by_seq.get(str(want_seq)) if want_seq else None
-            if not isinstance(chosen, dict):
-                if want_seq:
+            # Multi-goal: each cylinder hit may use seq, seq+1, … — collect all
+            # Corrects since this action started.
+            candidates = []
+            if by_seq:
+                for value in by_seq.values():
+                    if isinstance(value, dict):
+                        candidates.append(value)
+            if not candidates:
+                candidates.append(item)
+            field_hits = set(hits_by_field.get(fid_key) or [])
+            got_correct = False
+            for chosen in candidates:
+                try:
+                    item_seq = int(chosen.get("seq") or 0)
+                except (TypeError, ValueError):
+                    item_seq = 0
+                try:
+                    stamped = float(chosen.get("ts") or 0)
+                except (TypeError, ValueError):
+                    stamped = 0
+                # Single-goal actions still require the current cue seq.
+                if (
+                    not require_all
+                    and want_seq
+                    and item_seq
+                    and item_seq != want_seq
+                ):
                     continue
-                chosen = item
-            try:
-                item_seq = int(chosen.get("seq") or 0)
-            except (TypeError, ValueError):
-                item_seq = 0
-            try:
-                stamped = float(chosen.get("ts") or 0)
-            except (TypeError, ValueError):
-                stamped = 0
-            if want_seq and item_seq and item_seq != want_seq:
-                continue
-            field_wall = float(action_walls.get(fid_key) or 0)
-            if field_wall and stamped + 0.05 < field_wall:
-                continue
-            # A goal on the other field must not throw this field's result away.
-            if not entry.get("independent_fields") and cue_wall and stamped + 0.05 < cue_wall:
-                continue
-            name = str(chosen.get("result") or "").strip().lower()
-            if name != "correct":
+                field_wall = float(action_walls.get(fid_key) or 0)
+                if field_wall and stamped + 0.05 < field_wall:
+                    continue
+                # A goal on the other field must not throw this field's result away.
+                if not entry.get("independent_fields") and cue_wall and stamped + 0.05 < cue_wall:
+                    continue
+                name = str(chosen.get("result") or "").strip().lower()
+                if name != "correct":
+                    continue
+                got_correct = True
+                win = str(chosen.get("winning_screen") or "").strip()
+                if win:
+                    field_hits.add(win)
+                # Without a winning screen, count an anonymous Correct toward progress
+                # only when a single goal remains unmatched.
+                elif require_all:
+                    goals = list((entry.get("field_screens") or {}).get(fid_key) or [])
+                    unmatched = [
+                        g for g in goals
+                        if not any(self._goal_token_matches(g, h, fid_key) for h in field_hits)
+                    ]
+                    if len(unmatched) == 1:
+                        field_hits.add(str(unmatched[0]))
+            if require_all:
+                prev_hits = set(hits_by_field.get(fid_key) or [])
+                hits_by_field[fid_key] = sorted(field_hits)
+                self._goal_hits_by_field = hits_by_field
+                if field_hits and field_hits != prev_hits:
+                    # First hit: black that screen; other cylinder stays lit.
+                    self._blackout_scored_goal_screens(entry, fid_key, field_hits)
+                if not self._field_goals_complete(entry, fid_key, field_hits):
+                    continue
+                # Combined Elite/WC S3: goals may sit on A and B — wait for every
+                # field that lists goals before advancing.
+                if entry.get("combined_field"):
+                    all_done = True
+                    for other_fid, other_goals in (entry.get("field_screens") or {}).items():
+                        if not other_goals:
+                            continue
+                        other_key = str(other_fid).upper()[:1]
+                        other_hits = hits_by_field.get(other_key) or []
+                        if not self._field_goals_complete(entry, other_key, other_hits):
+                            all_done = False
+                            break
+                    if not all_done:
+                        continue
+                # Second hit: go next (do not clear/reappear cylinders).
+            elif not got_correct:
                 continue
             if entry.get("independent_fields"):
-                arrived.add(str(fid).upper()[:1])
+                arrived.add(fid_key)
                 continue
             self._goal_arrived = True
             self._stop_goal_advance_poll()
             # Drop the pass image now so the next screen is not blocked by it.
-            self._clear_field_action_now(str(fid).upper()[:1])
-            logger.info("Ball reached the goal on %s (%s) — next screen", fid, name)
+            self._clear_field_action_now(fid_key)
+            if entry.get("combined_field") and require_all:
+                # Clear the partner half too once every sum goal is scored.
+                partner = "B" if fid_key == "A" else "A"
+                self._clear_field_action_now(partner)
+            logger.info(
+                "Ball reached the goal on %s — next screen%s",
+                fid_key,
+                " (all goals)" if require_all else "",
+            )
             self._finish_label_action()
             return
         if entry.get("independent_fields") and arrived:
@@ -9803,6 +10994,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._pass_on_ms = int(delay)
         self._action_cue_wall = time.time()
         self._goal_arrived = False
+        self._goal_hits_by_field = {}
+        self._recue_goal_key = None
         budget_elapsed = None
         budget_total = None
         if entry.get("independent_fields"):
@@ -9901,26 +11094,58 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._label_phase = "action"
         self._apply_label_phase()
 
-    def _begin_cognitive_encode(self, entry):
-        """Brief preview of stimuli (memory/tracking), then blank, then probe+session."""
+    def _begin_cognitive_encode(self, entry, fields=None):
+        """Show the reference / encode tiles, then blank, then the answer action.
+
+        fields: optional A/B subset (independent restart). None = all active fields.
+        """
         self._hide_waiting_overlay()
+        wanted = {
+            str(fid).upper()[:1]
+            for fid in (fields if fields is not None else self._active_fields())
+        }
+        wanted = {fid for fid in wanted if fid in ("A", "B")}
+        if not wanted:
+            wanted = set(self._active_fields())
+        self._encode_fields = set(wanted)
         if self.image_canvas:
             self.image_canvas.show()
             self.image_canvas.raise_()
+            # Stop flower motion so the reference digit stays readable.
+            try:
+                stop = getattr(self.image_canvas, "stop_bounce_motion", None)
+                if callable(stop):
+                    stop()
+            except Exception:
+                pass
         encode = _named_image_map(
             entry.get("encode_images") or {},
-            set(self._active_fields()),
+            wanted,
         )
         if self.image_canvas:
             if encode:
-                self.image_canvas.set_screen_images(encode)
-            else:
+                self.image_canvas.set_screen_images(
+                    encode,
+                    keep_videos=bool(entry.get("independent_fields")),
+                    replace_fields=wanted if entry.get("independent_fields") else None,
+                )
+            elif not entry.get("independent_fields"):
                 self.image_canvas.clear()
         scale = max(0.05, float(entry.get("timing_scale") or 1.0))
-        delay = max(200, int(COG_ENCODE_MS * scale))
+        try:
+            custom_ms = int(entry.get("encode_ms") or 0)
+        except (TypeError, ValueError):
+            custom_ms = 0
+        if custom_ms > 0:
+            delay = max(200, custom_ms)
+        else:
+            delay = max(200, int(COG_ENCODE_MS * scale))
         logger.info(
-            "Cognitive encode %s for %sms (%s tiles)",
-            entry.get("cognitive"), delay, len(encode),
+            "Cognitive encode %s for %sms (%s tiles) fields=%s",
+            entry.get("cognitive") or entry.get("series_group") or "encode",
+            delay,
+            len(encode),
+            ",".join(sorted(wanted)) or "-",
         )
         self._stop_action_timer()
         self.action_timer = QtCore.QTimer(singleShot=True)
@@ -9933,9 +11158,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             QTimer.singleShot(200, self._cognitive_encode_blank)
             return
-        if self.image_canvas:
-            self.image_canvas.clear()
         entry = self.video_files[self.current_video_index] if self.video_files else {}
+        encode_fields = set(getattr(self, "_encode_fields", None) or ())
+        if self.image_canvas:
+            if entry.get("independent_fields") and encode_fields:
+                # Clear only the field(s) that just finished encoding.
+                try:
+                    self.image_canvas.set_screen_images(
+                        {},
+                        keep_videos=True,
+                        replace_fields=encode_fields,
+                    )
+                except Exception:
+                    self.image_canvas.clear()
+            else:
+                self.image_canvas.clear()
         scale = max(0.05, float((entry or {}).get("timing_scale") or 1.0))
         delay = max(100, int(COG_BLANK_MS * scale))
         self._stop_action_timer()
@@ -9949,7 +11186,23 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             QTimer.singleShot(200, self._cognitive_after_blank)
             return
+        entry = self.video_files[self.current_video_index] if self.video_files else {}
+        encode_fields = set(getattr(self, "_encode_fields", None) or ())
         self._label_phase = "action"
+        # Independent dual-field: finish encode for the restarting half only, then
+        # arm that field's answer screens / cylinders (do not re-enter encode).
+        if (
+            isinstance(entry, dict)
+            and entry.get("independent_fields")
+            and encode_fields
+        ):
+            holds = dict(getattr(self, "_field_hold_until", None) or {})
+            for fid in encode_fields:
+                holds.pop(fid, None)
+            self._field_hold_until = holds
+            self._encode_just_finished = True
+            self._patch_independent_fields(entry, encode_fields)
+            return
         self._apply_label_phase()
 
     def _begin_rotation_spin(self, entry):
@@ -10862,6 +12115,32 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         now = time.perf_counter()
         holds = dict(getattr(self, "_field_hold_until", None) or {})
         meta = entry.get("field_meta") or {}
+        hits = dict(getattr(self, "_goal_hits_by_field", None) or {})
+        for fid in restart_fields:
+            hits.pop(fid, None)
+        self._goal_hits_by_field = hits
+        # HP S3 (and other cognitive encode): show the reference on the restarting
+        # field first; the answer screens + cue arm after encode/blank.
+        encode_done = bool(getattr(self, "_encode_just_finished", False))
+        if encode_done:
+            self._encode_just_finished = False
+        if (
+            restart_fields
+            and isinstance(entry, dict)
+            and entry.get("cognitive_encode")
+            and entry.get("encode_images")
+            and not encode_done
+        ):
+            for fid in restart_fields:
+                # Keep the field "busy" during encode so the sibling timer cannot
+                # treat it as already finished.
+                holds[fid] = now + 3600.0
+            self._field_hold_until = holds
+            self.display_phase = "action"
+            self._action_phase = "label"
+            self._label_phase = "encode"
+            self._begin_cognitive_encode(entry, fields=restart_fields)
+            return
         for fid in restart_fields:
             info = meta.get(fid) or {}
             try:
@@ -14816,7 +16095,18 @@ def main():
         "--screensaver",
         "screensaver",
     )
-    if not idle_saver and not IMAGE_BASED_ACTIONS and not os.path.isdir(video_dir):
+    manual_coach = str(video_dir or "").strip().lower() in (
+        MANUAL_COACH_ARG,
+        "--manual-coach",
+        "manual_coach",
+        "manual-coach",
+    )
+    if (
+        not idle_saver
+        and not manual_coach
+        and not IMAGE_BASED_ACTIONS
+        and not os.path.isdir(video_dir)
+    ):
         app = QtWidgets.QApplication(sys.argv)
         QtWidgets.QMessageBox.critical(None, "Error", f"Directory not found:\n{video_dir}")
         sys.exit(1)

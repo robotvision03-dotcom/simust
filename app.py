@@ -58,6 +58,7 @@ from simust_security import (
 )
 import simust_billing
 import simust_homography
+import simust_manual_coach
 import simust_progress
 import simust_push
 import simust_remote
@@ -1090,6 +1091,11 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     },
     "L04-Elite": {
@@ -1107,6 +1113,11 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     },
     "L05-WorldClass": {
@@ -1124,6 +1135,11 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     }
 }
@@ -1155,6 +1171,7 @@ ALL_LEVELS = get_all_level_ids()
 _LEGACY_THEME_FOLDERS = {
     **{f"S1.T{n}": f"A-T{n}" for n in range(1, 6)},
     **{f"S2.T{n}": f"A1.T{n}" for n in range(1, 6)},
+    **{f"S3.T{n}": f"A2.T{n}" for n in range(1, 6)},
 }
 
 def get_level_path(level_id: str) -> str:
@@ -1171,9 +1188,12 @@ def get_level_path(level_id: str) -> str:
         legacy = list(parts)
         legacy[1] = _LEGACY_THEME_FOLDERS[parts[1]]
         candidates.append(os.path.join(SIMUST_PLAYER_DIRECTORY, *legacy))
-        # S2.T* → A1.T* often missing; reuse A-T* assets on the same band.
+        # S2.T* → A1.T* / S3.T* → A2.T* often missing; reuse A-T* assets on the band.
         theme = str(parts[1] or "")
-        if theme.startswith("S2.T") and theme[-1:].isdigit():
+        if (
+            (theme.startswith("S2.T") or theme.startswith("S3.T"))
+            and theme[-1:].isdigit()
+        ):
             alt = list(parts)
             alt[1] = f"A-T{theme[-1]}"
             candidates.append(os.path.join(SIMUST_PLAYER_DIRECTORY, *alt))
@@ -1193,17 +1213,28 @@ def get_next_level(current_level_id: str) -> Optional[str]:
     """Return the next level to open after a pass.
 
     Entry S1.T4 opens Activated S1.T1.
-    Activated / High Performance / Elite / World Class keep S1.T5 then S2.T*,
-    and S2.T4 opens the next band (or World Class S2.T5 at the end).
+    Activated / Elite / World Class keep S1.T5 then S2.T*, and S2.T4 opens
+    that band's S3.T1 (Activated still opens High Performance).
+    High Performance S3.T4 opens Elite S1.T1; Elite S3.T4 opens World Class
+    S1.T1; World Class S3.T4 opens World Class S3.T5 (end).
     """
     cid = simust_progress.normalize_level_id(current_level_id)
+    if cid.endswith("/S3.T4"):
+        main = cid.split("/")[0]
+        s3_gate = {
+            "L03-HighPerformance": "L04-Elite/S1.T1",
+            "L04-Elite": "L05-WorldClass/S1.T1",
+            "L05-WorldClass": "L05-WorldClass/S3.T5",
+        }
+        if main in s3_gate:
+            return s3_gate[main]
     if cid.endswith("/S2.T4"):
         main = cid.split("/")[0]
         s2_gate = {
             "L02-Activated": "L03-HighPerformance/S1.T1",
-            "L03-HighPerformance": "L04-Elite/S1.T1",
-            "L04-Elite": "L05-WorldClass/S1.T1",
-            "L05-WorldClass": "L05-WorldClass/S2.T5",
+            "L03-HighPerformance": "L03-HighPerformance/S3.T1",
+            "L04-Elite": "L04-Elite/S3.T1",
+            "L05-WorldClass": "L05-WorldClass/S3.T1",
         }
         return s2_gate.get(main)
     if cid.endswith("/S1.T4"):
@@ -2708,6 +2739,10 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
     clear_image_action_cue(force_end=True)
+    try:
+        simust_manual_coach.clear_command_files()
+    except Exception:
+        pass
     discarded = []
     if abort:
         discarded = discard_aborted_realtime_folders()
@@ -3582,6 +3617,205 @@ async def stop_realtime(req: Request):
     except Exception as e:
         logger.error(f"Failed to stop realtime: {e}")
         raise HTTPException(500, f"Failed to stop: {str(e)}")
+
+
+def _require_operator_staff(request: Request):
+    """Coach / manager / admin only (lab or logged-in public tablet)."""
+    if not PUBLIC_MODE:
+        return {"role": "admin", "username": "lab"}
+    users = load_users()
+    viewer = current_user(request, users, required=True)
+    role = str(viewer.get("role") or "").strip().lower()
+    if role not in RESERVATION_STAFF_ROLES:
+        raise HTTPException(403, "Only coach, manager, or admin can use Manual coach")
+    return viewer
+
+
+@app.get("/manual-coach/layout")
+async def manual_coach_layout(request: Request):
+    _require_operator_staff(request)
+    return {"status": "success", "layout": simust_manual_coach.layout_for_operator()}
+
+
+@app.get("/manual-coach/status")
+async def manual_coach_status(request: Request):
+    _require_operator_staff(request)
+    status = simust_manual_coach.read_status()
+    status["session_running"] = bool(_realtime_is_running())
+    return {"status": "success", **status}
+
+
+@app.post("/manual-coach/start")
+async def manual_coach_start(request: Request):
+    """Start realtime camera + smart player in Manual coach mode (no playlist)."""
+    global smart_player_process, realtime_camera_process, _realtime_session_active
+    global realtime_aborted
+    _require_operator_staff(request)
+    if not read_cabinet_controls().get("system_on", True):
+        raise HTTPException(400, "System is off — turn System on first")
+    try:
+        # Stop any active level session first.
+        apply_stop_realtime({"abort": True, "operator_stop": True})
+        await asyncio.sleep(0.4)
+        realtime_aborted = False
+        clear_image_action_cue(force_end=True)
+        simust_manual_coach.clear_command_files()
+        simust_manual_coach.write_status(
+            active=True,
+            lit_screen=None,
+            waiting_hit=False,
+            last_hit=None,
+            seq=0,
+            message="Starting Manual coach…",
+        )
+        # Both fields active so either half can light a cylinder.
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        with open(
+            os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump(
+                {
+                    "fields": {
+                        "A": {
+                            "player_id": "manual-coach",
+                            "player_name": "Manual",
+                            "player_surname": "Coach",
+                            "field": "A",
+                            "level": "Manual",
+                            "directory": "",
+                            "simulated": False,
+                        },
+                        "B": {
+                            "player_id": "manual-coach",
+                            "player_name": "Manual",
+                            "player_surname": "Coach",
+                            "field": "B",
+                            "level": "Manual",
+                            "directory": "",
+                            "simulated": False,
+                        },
+                    },
+                    "players": [],
+                    "active": ["A", "B"],
+                    "level": "Manual",
+                    "levels": {"A": "Manual", "B": "Manual"},
+                    "separate_fields": False,
+                    "score_field": "A",
+                    "manual_coach": True,
+                },
+                handle,
+                indent=2,
+            )
+        write_playback_status("playing", "Manual coach — tap a goal area")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        python_exe = sys.executable
+        foundation_path = get_level_path("L00-Foundation")
+        realtime_script = os.path.join(script_dir, "simust_realtime.py")
+        if not os.path.exists(realtime_script):
+            realtime_script = os.path.join(os.getcwd(), "simust_realtime.py")
+        if os.path.exists(realtime_script):
+            realtime_camera_process = _popen_no_console(
+                [python_exe, realtime_script, foundation_path, "1"],
+            )
+            logger.info("Manual coach: realtime camera started")
+            await asyncio.sleep(2.5)
+        else:
+            logger.warning("Manual coach: simust_realtime.py missing — cylinders unavailable")
+        smart_script = os.path.join(script_dir, "smart_simust_player.py")
+        if not os.path.exists(smart_script):
+            smart_script = os.path.join(os.getcwd(), "smart_simust_player.py")
+        if not os.path.exists(smart_script):
+            raise HTTPException(500, "smart_simust_player.py not found")
+        smart_player_process = _popen_no_console(
+            [python_exe, smart_script, simust_manual_coach.MANUAL_COACH_ARG, "1", "1"],
+            cwd=script_dir,
+        )
+        _realtime_session_active = True
+        await asyncio.sleep(0.5)
+        if smart_player_process.poll() is not None:
+            _realtime_session_active = False
+            raise HTTPException(500, "Manual coach player exited immediately")
+        simust_manual_coach.write_status(
+            active=True,
+            lit_screen=None,
+            waiting_hit=False,
+            last_hit=None,
+            seq=0,
+            message="Manual coach ready — tap a goal area",
+        )
+        logger.info(
+            "Manual coach started (player pid %s)",
+            getattr(smart_player_process, "pid", "?"),
+        )
+        return {
+            "status": "success",
+            "message": "Manual coach ready",
+            "layout": simust_manual_coach.layout_for_operator(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _realtime_session_active = False
+        logger.exception("Manual coach start failed")
+        raise HTTPException(500, f"Failed to start Manual coach: {exc}") from exc
+
+
+@app.post("/manual-coach/cue")
+async def manual_coach_cue(request: Request):
+    """Light one screen + cylinder from a goal-area button press."""
+    _require_operator_staff(request)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    screen = simust_manual_coach.normalize_screen((data or {}).get("screen"))
+    if not screen:
+        raise HTTPException(400, "screen must be A1–A6 or B1–B6")
+    if not _realtime_is_running():
+        raise HTTPException(400, "Start Manual coach first")
+    cmd = simust_manual_coach.write_command("cue", screen=screen)
+    prior = simust_manual_coach.read_status()
+    lit = [
+        str(s).upper()
+        for s in (prior.get("lit_screens") or [])
+        if str(s or "").strip()
+    ]
+    if screen not in lit:
+        lit.append(screen)
+    simust_manual_coach.write_status(
+        active=True,
+        lit_screen=screen,
+        lit_screens=lit,
+        waiting_hit=True,
+        last_hit=None,
+        seq=cmd.get("seq"),
+        message=f"Cueing {screen}… ({len(lit)} lit)",
+    )
+    return {"status": "success", "screen": screen, "seq": cmd.get("seq"), "lit_screens": lit}
+
+
+@app.post("/manual-coach/clear")
+async def manual_coach_clear(request: Request):
+    _require_operator_staff(request)
+    cmd = simust_manual_coach.write_command("clear")
+    return {"status": "success", "seq": cmd.get("seq")}
+
+
+@app.post("/manual-coach/stop")
+async def manual_coach_stop(request: Request):
+    _require_operator_staff(request)
+    try:
+        simust_manual_coach.write_command("stop")
+    except Exception:
+        pass
+    result = apply_stop_realtime({"abort": True, "operator_stop": True})
+    try:
+        simust_manual_coach.clear_command_files()
+    except Exception:
+        pass
+    return {"status": "success", "message": "Manual coach stopped", **result}
 
 
 @app.post("/pause-realtime")
@@ -8245,6 +8479,10 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "homography-test",
     "instagram-live",
     "cabinet-controls",
+    "manual-coach/start",
+    "manual-coach/cue",
+    "manual-coach/clear",
+    "manual-coach/stop",
 }
 
 
@@ -8374,6 +8612,20 @@ def _publish_lab_status() -> None:
         status["cabinet-controls"] = read_cabinet_controls()
     except Exception:
         status["cabinet-controls"] = {"system_on": True, "screensaver_on": False}
+    try:
+        manual = simust_manual_coach.read_status()
+        manual["session_running"] = bool(_realtime_is_running())
+        status["manual-coach/status"] = manual
+        status["manual-coach/layout"] = simust_manual_coach.layout_for_operator()
+    except Exception:
+        status["manual-coach/status"] = {
+            "active": False,
+            "lit_screen": None,
+            "waiting_hit": False,
+            "message": "Manual coach idle",
+            "session_running": False,
+        }
+        status["manual-coach/layout"] = simust_manual_coach.layout_for_operator()
     simust_push.push_lab_status(status)
 
 

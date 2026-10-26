@@ -11,7 +11,7 @@ sys.path.insert(0, ROOT)
 import smart_simust_player as player  # noqa: E402
 
 
-def _fake_digit(text, bg, fg):
+def _fake_digit(text, bg, fg, lift_frac=0.0):
     return f"{text}|{tuple(bg)}|{tuple(fg)}"
 
 
@@ -75,7 +75,9 @@ class ElitePlaylistTests(unittest.TestCase):
         self.assertEqual(len(playlist), 60)
         first = playlist[0]
         self.assertEqual(first["actions_in_set"], 12)
-        self.assertEqual(first["field_screens"], {"A": ["A1"]})
+        first_goal = first["field_screens"][next(iter(first["field_screens"]))][0]
+        self.assertEqual(len(first["field_screens"]), 1)
+        self.assertIn(first_goal, player._elite_screen_ids())
         self.assertEqual(len(first["screen_images"]), 12)
         numbers = []
         colors = set()
@@ -92,26 +94,22 @@ class ElitePlaylistTests(unittest.TestCase):
         self.assertEqual(len(colors), 1)
         self.assertEqual(len(backgrounds), 1)
         second = playlist[1]
-        self.assertTrue(second["screen_images"]["A1"].startswith("00|"))
-        self.assertIn(str(player.ELITE_ZERO_COLOR), second["screen_images"]["A1"])
-        self.assertNotIn(str(player.ELITE_ZERO_COLOR), first["screen_images"]["B1"])
-        self.assertTrue(second["screen_images"]["B1"].startswith("03|"))
-        self.assertEqual(second["field_screens"], {"B": ["B1"]})
-        self.assertNotIn("A", second["field_screens"])
+        self.assertTrue(second["screen_images"][first_goal].startswith("00|"))
+        self.assertIn(str(player.ELITE_ZERO_COLOR), second["screen_images"][first_goal])
+        second_goal = second["field_screens"][next(iter(second["field_screens"]))][0]
+        self.assertNotEqual(first_goal, second_goal)
         self.assertTrue(first["advance_on_goal"])
         self.assertTrue(first["finish_balls"])
         self.assertTrue(first["skip_gap"])
-        test2 = [step for step in playlist if step["test_num"] == 2]
-        self.assertEqual(test2[0]["field_screens"], {"B": ["B6"]})
-        self.assertTrue(test2[0]["screen_images"]["B6"].startswith("01|"))
-        self.assertEqual(test2[1]["field_screens"], {"A": ["A6"]})
-        for test_num, expected in (
-            (3, {"A": ["A1"]}),
-            (4, {"B": ["B6"]}),
-            (5, {"A": ["A1"]}),
-        ):
-            step = next(item for item in playlist if item["test_num"] == test_num)
-            self.assertEqual(step["field_screens"], expected)
+        # Every test uses a random 12-screen order (all screens, no repeats).
+        for test_num in range(1, 6):
+            goals = [
+                step["field_screens"][next(iter(step["field_screens"]))][0]
+                for step in playlist
+                if step["test_num"] == test_num
+            ]
+            self.assertEqual(len(goals), 12)
+            self.assertEqual(set(goals), set(player._elite_screen_ids()))
 
     def test_digit_color_changes_with_background_and_stays_readable(self):
         playlist = player._build_elite_playlist(1, "elite")
@@ -191,8 +189,10 @@ class ElitePlaylistTests(unittest.TestCase):
                 player._colors_are_visible(ast.literal_eval(fg), ast.literal_eval(bg))
             )
         self.assertEqual(len(set(colors)), 12)
-        origin = first["screen_images"]["A1"].split("|")[2]
-        zero = playlist[1]["screen_images"]["A1"]
+        # Goal order is random — the first action's goal becomes 00 on action 2.
+        first_goal = first["field_screens"][next(iter(first["field_screens"]))][0]
+        origin = first["screen_images"][first_goal].split("|")[2]
+        zero = playlist[1]["screen_images"][first_goal]
         self.assertTrue(zero.startswith("00|"))
         self.assertEqual(zero.split("|")[2], origin)
         self.assertNotIn(str(player.ELITE_ZERO_COLOR), zero)
@@ -200,48 +200,26 @@ class ElitePlaylistTests(unittest.TestCase):
         live_first = {
             sid: first["screen_images"][sid].split("|")[2]
             for sid in player._elite_screen_ids()
-            if sid != "A1"
+            if sid != first_goal
         }
         live_second = {
             sid: playlist[1]["screen_images"][sid].split("|")[2]
             for sid in player._elite_screen_ids()
-            if sid != "A1"
+            if sid != first_goal
         }
         self.assertNotEqual(live_first, live_second)
-        bg_first = first["screen_images"]["B1"].split("|")[1]
-        bg_second = playlist[1]["screen_images"]["B1"].split("|")[1]
+        other = "B1" if first_goal != "B1" else "A1"
+        bg_first = first["screen_images"][other].split("|")[1]
+        bg_second = playlist[1]["screen_images"][other].split("|")[1]
         self.assertNotEqual(bg_first, bg_second)
-        goals = []
-        for step in playlist:
-            if step["test_num"] != 1:
-                continue
-            goals.append(step["field_screens"][next(iter(step["field_screens"]))][0])
-        self.assertEqual(
-            goals,
-            ["A1", "B1", "A2", "B2", "A3", "B3", "A4", "B4", "A5", "B5", "A6", "B6"],
-        )
-        test2 = []
-        for step in playlist:
-            if step["test_num"] != 2:
-                continue
-            test2.append(step["field_screens"][next(iter(step["field_screens"]))][0])
-        self.assertEqual(
-            test2,
-            ["B1", "A1", "B2", "A2", "B3", "A3", "B4", "A4", "B5", "A5", "B6", "A6"],
-        )
-        for left, right in zip(goals, goals[1:]):
-            self.assertNotEqual(left[0], right[0])
         by_test = {n: [] for n in range(1, 6)}
         for step in playlist:
             by_test[step["test_num"]].append(
                 step["field_screens"][next(iter(step["field_screens"]))][0]
             )
-        self.assertEqual(by_test[3], goals)
-        self.assertEqual(by_test[5], goals)
-        self.assertEqual(by_test[4], test2)
         for line in by_test.values():
-            for left, right in zip(line, line[1:]):
-                self.assertNotEqual(left[0], right[0])
+            self.assertEqual(len(line), 12)
+            self.assertEqual(set(line), set(player._elite_screen_ids()))
 
 
 if __name__ == "__main__":

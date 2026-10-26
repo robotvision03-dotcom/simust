@@ -133,6 +133,57 @@
         .calib-test { position: absolute; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border-radius: 50%; background: #276ce5; border: 2px solid #fff; pointer-events: none; }
         .homography-table input { width: 88px; background: #07111f; border: 1px solid var(--line); color: #fff; border-radius: 4px; padding: 6px 8px; }
         .refresh-btn:hover { border-color: var(--gold); color: var(--gold-light); }
+        .manual-coach-wrap { display: flex; flex-direction: column; gap: 16px; }
+        .manual-coach-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .manual-coach-toolbar .manual-status {
+            flex: 1 1 220px; min-height: 40px; padding: 10px 14px; border-radius: 8px;
+            border: 1px solid var(--line); background: #07111f; color: #dce7f5; font-weight: 700; font-size: 13px;
+        }
+        .manual-coach-toolbar .manual-status.waiting { border-color: var(--gold); color: var(--gold-light); }
+        .manual-coach-toolbar .manual-status.hit { border-color: var(--green); color: var(--green); }
+        .manual-pitch {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 18px; width: 100%;
+        }
+        .manual-field {
+            position: relative; min-height: 320px; border-radius: 16px; overflow: hidden;
+            border: 1px solid rgba(214,179,75,0.35);
+            background:
+                radial-gradient(ellipse at 50% 110%, rgba(255,255,255,0.08), transparent 55%),
+                linear-gradient(180deg, #1a6b3a 0%, #0f4d2a 45%, #0a3320 100%);
+            box-shadow: inset 0 0 0 2px rgba(255,255,255,0.04);
+        }
+        .manual-field::before {
+            content: ""; position: absolute; inset: 12% 18%; border: 2px solid rgba(255,255,255,0.18);
+            border-radius: 50% / 28%; pointer-events: none;
+        }
+        .manual-field-label {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            z-index: 2; font-size: 12px; font-weight: 800; letter-spacing: 0.08em;
+            text-transform: uppercase; color: rgba(255,255,255,0.85);
+            background: rgba(0,0,0,0.35); padding: 4px 12px; border-radius: 999px;
+        }
+        .manual-goal-btn {
+            position: absolute; width: 64px; height: 64px; margin-left: -32px; margin-top: -32px;
+            border-radius: 50%; border: 2px solid rgba(255,255,255,0.55);
+            background: rgba(7,17,31,0.78); color: #fff; font-weight: 900; font-size: 15px;
+            cursor: pointer; z-index: 3; transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+        }
+        .manual-goal-btn:hover { transform: scale(1.08); border-color: var(--gold); color: var(--gold-light); }
+        .manual-goal-btn.lit {
+            background: rgba(39,108,229,0.92); border-color: #fff;
+            box-shadow: 0 0 0 4px rgba(39,108,229,0.35), 0 8px 22px rgba(0,0,0,0.45);
+        }
+        .manual-goal-btn.hit {
+            background: rgba(46,204,113,0.92); border-color: #fff;
+        }
+        .manual-goal-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .manual-help { font-size: 13px; color: #9ca3af; line-height: 1.45; max-width: 920px; }
+        @media (max-width: 900px) {
+            .manual-pitch { grid-template-columns: 1fr; }
+            .manual-field { min-height: 280px; }
+            .manual-goal-btn { width: 56px; height: 56px; margin-left: -28px; margin-top: -28px; font-size: 13px; }
+        }
         .auto-badge { background: var(--green); color: #07111f; border-radius: 6px; padding: 2px 8px; font-size: 10px; font-weight: 800; margin-inline-start: 8px; animation: pulse 1s infinite; }
         .metric-ring { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 14px 10px 10px 10px; text-align: center; transition: background 0.15s; display: flex; flex-direction: column; align-items: center; }
         .metric-ring:hover { background: #10243f; }
@@ -624,7 +675,11 @@
                 'homography/save': true,
                 'homography/reset': true,
                 'homography/test': true,
-                'cabinet-controls': true
+                'cabinet-controls': true,
+                'manual-coach/start': true,
+                'manual-coach/cue': true,
+                'manual-coach/clear': true,
+                'manual-coach/stop': true
             };
             var labGet = {
                 'playback-status': true,
@@ -632,7 +687,9 @@
                 'results': true,
                 'get-levels': true,
                 'homography/status': true,
-                'cabinet-controls': true
+                'cabinet-controls': true,
+                'manual-coach/status': true,
+                'manual-coach/layout': true
             };
             axios.interceptors.request.use(function(config) {
                 if (window.SIMUST_PUBLIC && window.SIMUST_TOKEN) {
@@ -2376,6 +2433,237 @@
         // =====================================================================
         // ADMIN SETTINGS – HOMOGRAPHY CALIBRATION
         // =====================================================================
+        var DEFAULT_MANUAL_LAYOUT = {
+            A: [
+                { id: 'A4', left: 12, top: 68 }, { id: 'A5', left: 50, top: 78 }, { id: 'A6', left: 88, top: 68 },
+                { id: 'A1', left: 88, top: 28 }, { id: 'A2', left: 50, top: 16 }, { id: 'A3', left: 12, top: 28 }
+            ],
+            B: [
+                { id: 'B6', left: 12, top: 68 }, { id: 'B5', left: 50, top: 78 }, { id: 'B4', left: 88, top: 68 },
+                { id: 'B3', left: 88, top: 28 }, { id: 'B2', left: 50, top: 16 }, { id: 'B1', left: 12, top: 28 }
+            ]
+        };
+
+        var ManualCoachPanel = function(props) {
+            var showToast = props.showToast;
+            var isAdmin = !!props.isAdmin;
+            var simulationFields = props.simulationFields || { A: false, B: false };
+            var toggleSimulationField = props.toggleSimulationField;
+            var simulatorScoreMode = props.simulatorScoreMode || 2;
+            var applySimulatorScoreMode = props.applySimulatorScoreMode;
+            var visualizationEnabled = !!props.visualizationEnabled;
+            var toggleVisualization = props.toggleVisualization;
+            var layoutState = useState(DEFAULT_MANUAL_LAYOUT);
+            var layout = layoutState[0];
+            var setLayout = layoutState[1];
+            var statusState = useState({
+                active: false, lit_screen: null, lit_screens: [], waiting_hit: false, last_hit: null,
+                message: 'Start Manual coach to light goal areas', session_running: false
+            });
+            var status = statusState[0];
+            var setStatus = statusState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var running = !!status.session_running || !!status.active;
+            var litSet = {};
+            (status.lit_screens || []).forEach(function(sid) { litSet[sid] = true; });
+            if (status.lit_screen) litSet[status.lit_screen] = true;
+
+            var refreshStatus = function() {
+                axios.get('/manual-coach/status').then(function(res) {
+                    var data = (res && res.data) || {};
+                    var lit = Array.isArray(data.lit_screens) ? data.lit_screens : [];
+                    if (!lit.length && data.lit_screen) lit = [data.lit_screen];
+                    setStatus({
+                        active: !!data.active,
+                        lit_screen: data.lit_screen || null,
+                        lit_screens: lit,
+                        waiting_hit: !!data.waiting_hit,
+                        last_hit: data.last_hit || null,
+                        message: data.message || '',
+                        session_running: !!data.session_running,
+                        seq: data.seq || 0
+                    });
+                }).catch(function() {});
+            };
+
+            useEffect(function() {
+                axios.get('/manual-coach/layout').then(function(res) {
+                    var next = res && res.data && res.data.layout;
+                    if (next && next.A && next.B) setLayout(next);
+                }).catch(function() {});
+                refreshStatus();
+                var timer = setInterval(refreshStatus, 700);
+                return function() { clearInterval(timer); };
+            }, []);
+
+            var startSession = function() {
+                setBusy(true);
+                axios.post('/manual-coach/start', {}).then(function(res) {
+                    var next = res && res.data && res.data.layout;
+                    if (next && next.A && next.B) setLayout(next);
+                    showToast && showToast('Manual coach ready');
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Could not start Manual coach';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var stopSession = function() {
+                setBusy(true);
+                axios.post('/manual-coach/stop', {}).then(function() {
+                    showToast && showToast('Manual coach stopped');
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Stop failed';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var clearLit = function() {
+                axios.post('/manual-coach/clear', {}).then(refreshStatus).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Clear failed';
+                    showToast && showToast(String(msg));
+                });
+            };
+
+            var cueScreen = function(screenId) {
+                if (!running || busy) return;
+                setBusy(true);
+                axios.post('/manual-coach/cue', { screen: screenId }).then(function() {
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Could not light screen';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var statusClass = 'manual-status';
+            if (status.waiting_hit) statusClass += ' waiting';
+            else if (status.last_hit) statusClass += ' hit';
+
+            var renderField = function(fieldId, spots) {
+                return React.createElement('div', { className: 'manual-field', key: fieldId },
+                    React.createElement('div', { className: 'manual-field-label' }, 'Field ' + fieldId),
+                    (spots || []).map(function(spot) {
+                        var sid = spot.id;
+                        var cls = 'manual-goal-btn';
+                        if (litSet[sid]) cls += ' lit';
+                        else if (status.last_hit === sid) cls += ' hit';
+                        return React.createElement('button', {
+                            key: sid,
+                            type: 'button',
+                            className: cls,
+                            disabled: !running || busy,
+                            title: 'Light ' + sid + ' (stays until ball arrives)',
+                            style: { left: spot.left + '%', top: spot.top + '%' },
+                            onClick: function() { cueScreen(sid); }
+                        }, sid);
+                    })
+                );
+            };
+
+            return React.createElement('div', { className: 'manual-coach-wrap' },
+                React.createElement('h2', { className: 'text-2xl font-black gold-accent' }, 'Manual Coach'),
+                React.createElement('p', { className: 'manual-help' },
+                    'Tap one or more goal areas — each shows the pass image and cylinder and stays lit until the ball arrives. ' +
+                    'Only that screen clears on a hit; other lit screens keep waiting. Tap again to light the next screen.'
+                ),
+                React.createElement('div', { className: 'manual-coach-toolbar' },
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'btn-primary px-6 py-2 font-bold',
+                        disabled: busy || running,
+                        onClick: startSession
+                    }, running ? 'Session running' : 'Start Manual'),
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'clear-selection-btn',
+                        disabled: busy || !running,
+                        onClick: clearLit
+                    }, 'Clear all'),
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'clear-selection-btn',
+                        disabled: busy || !running,
+                        onClick: stopSession
+                    }, 'Stop Manual'),
+                    React.createElement('div', { className: statusClass },
+                        status.message || (running ? 'Ready' : 'Idle')
+                    )
+                ),
+                React.createElement('div', {
+                    className: 'flex items-center gap-4 mb-2 flex-wrap',
+                    style: { marginTop: 4 }
+                },
+                    React.createElement('span', { className: 'text-white font-bold' }, 'Sim A'),
+                    React.createElement('label', {
+                        className: 'toggle-switch',
+                        title: 'Arena simulator for Field A'
+                    },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: !!simulationFields.A,
+                            onChange: function(e) {
+                                toggleSimulationField && toggleSimulationField('A', e.target.checked);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    React.createElement('span', { className: 'text-white font-bold' }, 'Sim B'),
+                    React.createElement('label', {
+                        className: 'toggle-switch',
+                        title: 'Arena simulator for Field B'
+                    },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: !!simulationFields.B,
+                            onChange: function(e) {
+                                toggleSimulationField && toggleSimulationField('B', e.target.checked);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    React.createElement('span', { className: 'text-white font-bold' },
+                        'Sim Mode ' + (simulatorScoreMode === 1 ? '1' : '2')),
+                    React.createElement('label', { className: 'toggle-switch' },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: simulatorScoreMode === 2,
+                            onChange: function(e) {
+                                applySimulatorScoreMode && applySimulatorScoreMode(e.target.checked ? 2 : 1, true);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    isAdmin ?
+                    React.createElement(React.Fragment, null,
+                        React.createElement('span', { className: 'text-white font-bold' }, 'Visualization'),
+                        React.createElement('label', { className: 'toggle-switch' },
+                            React.createElement('input', {
+                                type: 'checkbox',
+                                checked: visualizationEnabled,
+                                onChange: function(e) {
+                                    toggleVisualization && toggleVisualization(e.target.checked);
+                                }
+                            }),
+                            React.createElement('span', { className: 'slider' })
+                        )
+                    ) : null
+                ),
+                React.createElement('div', { className: 'manual-pitch' },
+                    renderField('A', layout.A),
+                    renderField('B', layout.B)
+                )
+            );
+        };
+
         var HomographyCalibration = function() {
             var camerasState = useState([]);
             var cameras = camerasState[0];
@@ -5581,7 +5869,7 @@
             }, [selectedLevelB]);
 
             useEffect(function() {
-                if (role === 'coach' && activeTab !== 'main' && activeTab !== 'reservations') {
+                if (role === 'coach' && activeTab !== 'main' && activeTab !== 'reservations' && activeTab !== 'manual') {
                     setActiveTab('main');
                 }
             }, [role, activeTab]);
@@ -5859,6 +6147,9 @@
                                 isOperatorStaff ? React.createElement('button', { onClick: function() {
                                         setActiveTab('reservations');
                                         closeMenu(); } }, 'Reservation') : null,
+                                isOperatorStaff ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('manual');
+                                        closeMenu(); } }, 'Manual') : null,
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('results');
                                         closeMenu(); } }, t('results')) : null,
@@ -5948,6 +6239,12 @@
                         className: "tab-button" + (activeTab === 'reservations' ? ' active' : '')
                     }, "Reservation") :
                     null,
+                    isOperatorStaff ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('manual'); },
+                        className: "tab-button" + (activeTab === 'manual' ? ' active' : '')
+                    }, "Manual") :
+                    null,
                     isAdmin ?
                     React.createElement('button', {
                         onClick: function() { setActiveTab('results'); },
@@ -5977,6 +6274,17 @@
                         showToast: showToast,
                         role: role,
                         operatorName: username
+                    }) :
+                    activeTab === 'manual' && isOperatorStaff ?
+                    React.createElement(ManualCoachPanel, {
+                        showToast: showToast,
+                        isAdmin: isAdmin,
+                        simulationFields: simulationFields,
+                        toggleSimulationField: toggleSimulationField,
+                        simulatorScoreMode: simulatorScoreMode,
+                        applySimulatorScoreMode: applySimulatorScoreMode,
+                        visualizationEnabled: visualizationEnabled,
+                        toggleVisualization: toggleVisualization
                     }) :
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
