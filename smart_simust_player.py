@@ -14416,7 +14416,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return bool(passed or next_is_entry)
 
     def _play_foundation_level_up_then(self, on_done):
-        """Full-bleed level-up clip on Field A/B (or all screens), then Entry."""
+        """Full-bleed level-up on the live field wall only (A1–A6 or B1–B6), then Entry."""
         path = _resolve_foundation_level_up_video()
         callback = on_done if callable(on_done) else (lambda: None)
         if not path:
@@ -14425,24 +14425,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         self._foundation_level_up_played = True
         self.display_phase = "level_up"
-        # Celebrate on every live field; if unclear, paint all 12 screens so
-        # admin single-field and dual sessions both see the clip.
+        # Only the live field wall(s): A1–A6 and/or B1–B6 — never the idle half.
         active = [
             str(f).upper()[:1]
             for f in (self._active_fields() or [])
             if str(f).upper()[:1] in ("A", "B")
         ]
         if not active:
-            active = ["A", "B"]
+            score = str(
+                (getattr(self, "_after_final", None) or {}).get("score_field") or ""
+            ).upper()[:1]
+            active = [score] if score in ("A", "B") else ["A"]
         screen_to_video = {}
         for fid in active:
             for sid in _field_all_screens(fid):
                 screen_to_video[sid] = path
-        # Always fill the opposite wall too when only one field was booked —
-        # operator asked for Field A or B or all screens after finals.
-        for sid in ("A1", "A2", "A3", "A4", "A5", "A6", "B1", "B2", "B3", "B4", "B5", "B6"):
-            screen_to_video.setdefault(sid, path)
-        release_fields = {"A", "B"}
+        release_fields = {str(f).upper()[:1] for f in active if str(f).upper()[:1] in ("A", "B")}
         intro_ms = _video_duration_ms(path, fallback_ms=8000) + int(LEVEL_INTRO_HOLD_MS)
         self._publish_field_controls()
         self._update_status_file(
@@ -14452,8 +14450,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             f"Level up — {os.path.basename(path)}",
         )
         logger.info(
-            "Playing Foundation level-up %s for %sms on screens %s before Entry",
-            path, intro_ms, ",".join(sorted(screen_to_video)),
+            "Playing Foundation level-up %s for %sms on Field %s screens %s before Entry",
+            path, intro_ms, "+".join(active), ",".join(sorted(screen_to_video)),
         )
         try:
             self.player.stop()
