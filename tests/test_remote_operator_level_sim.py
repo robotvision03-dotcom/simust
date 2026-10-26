@@ -40,8 +40,8 @@ ISSUES_PATH = os.path.join(ROOT, "remote_operator_level_sim_issues.txt")
 # Default gates used by the product.
 PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}  # 75%, 70
 FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}  # 50%
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0}  # 85%, 80
-FAIL_SERIES = {"correct": 16, "late": 0, "wrong": 4, "miss": 0, "avg_ae": 80.0}  # 80%
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}  # AE-only gate
+FAIL_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}  # under AE 75
 
 
 def _accuracy(stats: dict) -> float:
@@ -138,12 +138,14 @@ class RemoteOperatorLevelSim(unittest.TestCase):
         if "L01-Entry/S1.T1" not in progress["unlocked_levels"]:
             issues.append("Passing Foundation set 4 (SF-180N) did not unlock Entry A-T1.")
 
-        # Entry skips S1.T5. Later bands keep S1.T5 then S2; S2.T5 only on World Class.
+        # Entry skips S1.T5. Later bands keep S1.T5 then S2; S2.T5 skipped.
+        # HP / Elite / WC add S3.T1..S3.T4 (S3.T5 only kept as World Class end).
         series = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
+            and not level.endswith("/S2.T5")
             and (
-                not level.endswith("/S2.T5")
+                not level.endswith("/S3.T5")
                 or level.startswith("L05-")
             )
             and (
@@ -161,7 +163,7 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             ok, reason = simust_progress.can_play(progress, level, "")
             self.assertTrue(ok, f"{level}: {reason}")
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (85, 80), level)
+            self.assertEqual((th_acc, th_ae), (0, 75), level)
 
             nxt = get_next_level(level)
             # Fail must not unlock next.
@@ -201,18 +203,33 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             if set_name == "S2.T4":
                 next_band = {
                     "L02-Activated": "L03-HighPerformance/S1.T1",
-                    "L03-HighPerformance": "L04-Elite/S1.T1",
-                    "L04-Elite": "L05-WorldClass/S1.T1",
-                    "L05-WorldClass": "L05-WorldClass/S2.T5",
+                    "L03-HighPerformance": "L03-HighPerformance/S3.T1",
+                    "L04-Elite": "L04-Elite/S3.T1",
+                    "L05-WorldClass": "L05-WorldClass/S3.T1",
                 }.get(band)
                 if next_band and next_band not in progress["unlocked_levels"]:
                     issues.append(
                         f"After passing {level}, {next_band} is not unlocked. "
-                        "S2.T4 must open the next band (or World Class S2.T5)."
+                        "S2.T4 must open the next band / that band's S3.T1."
                     )
                 else:
                     report.append(
                         f"  Set-4 check ({level}): opened {next_band} (S2.T4 unlocks next)."
+                    )
+            if set_name == "S3.T4":
+                next_band = {
+                    "L03-HighPerformance": "L04-Elite/S1.T1",
+                    "L04-Elite": "L05-WorldClass/S1.T1",
+                    "L05-WorldClass": "L05-WorldClass/S3.T5",
+                }.get(band)
+                if next_band and next_band not in progress["unlocked_levels"]:
+                    issues.append(
+                        f"After passing {level}, {next_band} is not unlocked. "
+                        "S3.T4 must open the next band (or World Class S3.T5)."
+                    )
+                else:
+                    report.append(
+                        f"  Set-4 check ({level}): opened {next_band} (S3.T4 unlocks next)."
                     )
 
             if nxt:
@@ -287,19 +304,25 @@ def build(level, subdirectory=""):
                 })
         return player._stamp_finish_balls(rows) if rows else []
     series = 1
-    m = re.search(r"S(?:1|2)[.-]T([1-5])|A-T([1-5])", level)
+    m = re.search(r"S(?:1|2|3)[.-]T([1-5])|A-T([1-5])", level)
     if m:
         series = int(m.group(1) or m.group(2))
     active = {"A", "B"} if _combined_level(level) else {"A"}
     if "L05-WorldClass" in level:
+        if re.search(r"S3[.-]T[1-5]", level, re.I):
+            return player._build_world_class_s3_playlist(series) or []
         if re.search(r"S2[.-]T[1-5]", level, re.I):
             return player._build_world_class_s2_playlist(series) or []
         return player._build_elite_playlist(series, "world-class") or []
     if "L04-Elite" in level:
+        if re.search(r"S3[.-]T[1-5]", level, re.I):
+            return player._build_elite_s3_playlist(series) or []
         if re.search(r"S2[.-]T[1-5]", level, re.I):
             return player._build_elite_s2_playlist(series) or []
         return player._build_elite_playlist(series, "elite") or []
     if "L03-HighPerformance" in level:
+        if re.search(r"S3[.-]T[1-5]", level, re.I):
+            return player._build_high_performance_s3_playlist(series, active) or []
         if re.search(r"S2[.-]T[1-5]", level, re.I):
             return player._build_high_performance_s2_playlist(series, active) or []
         return player._build_high_performance_playlist(series, active) or []
@@ -498,19 +521,25 @@ print(json.dumps(out))
                     })
             return player._stamp_finish_balls(rows) if rows else []
         series = 1
-        match = __import__("re").search(r"S(?:1|2)[.-]T([1-5])|A-T([1-5])", level)
+        match = __import__("re").search(r"S(?:1|2|3)[.-]T([1-5])|A-T([1-5])", level)
         if match:
             series = int(match.group(1) or match.group(2))
         active = {"A", "B"} if _combined_level(level) else {"A"}
         if "L05-WorldClass" in level:
+            if __import__("re").search(r"S3[.-]T[1-5]", level, re.I):
+                return player._build_world_class_s3_playlist(series) or []
             if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
                 return player._build_world_class_s2_playlist(series) or []
             return player._build_elite_playlist(series, "world-class") or []
         if "L04-Elite" in level:
+            if __import__("re").search(r"S3[.-]T[1-5]", level, re.I):
+                return player._build_elite_s3_playlist(series) or []
             if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
                 return player._build_elite_s2_playlist(series) or []
             return player._build_elite_playlist(series, "elite") or []
         if "L03-HighPerformance" in level or "HighPerformance" in level:
+            if __import__("re").search(r"S3[.-]T[1-5]", level, re.I):
+                return player._build_high_performance_s3_playlist(series, active) or []
             if __import__("re").search(r"S2[.-]T[1-5]", level, re.I):
                 return player._build_high_performance_s2_playlist(series, active) or []
             return player._build_high_performance_playlist(series, active) or []

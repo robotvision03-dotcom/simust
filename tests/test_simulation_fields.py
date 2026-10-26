@@ -62,6 +62,88 @@ class WriteSimulationFieldsTests(unittest.TestCase):
         self.assertEqual(app_mod._read_written_simulation_fields(), {"A": False, "B": True})
 
 
+class SimulatorScoreModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="simust-score-mode-")
+        self.patch = patch.object(app_mod, "SIMUST_PLAYER_DIRECTORY", self.tmp)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+
+    def test_default_is_mode2(self):
+        self.assertEqual(app_mod.read_simulator_score_mode(), 2)
+
+    def test_write_mode1_and_mode2(self):
+        self.assertEqual(app_mod.write_simulator_score_mode(1), 1)
+        self.assertEqual(app_mod.read_simulator_score_mode(), 1)
+        path = os.path.join(self.tmp, "simulator_score_mode.txt")
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "1")
+        self.assertEqual(app_mod.write_simulator_score_mode(2), 2)
+        self.assertEqual(app_mod.read_simulator_score_mode(), 2)
+
+    def test_invalid_mode_falls_back_to_2(self):
+        self.assertEqual(app_mod.write_simulator_score_mode(99), 2)
+        self.assertEqual(app_mod.write_simulator_score_mode("nope"), 2)
+
+    def test_parse_helpers(self):
+        self.assertEqual(rt.parse_simulator_score_mode("1"), rt.SIM_SCORE_MODE_FAIL)
+        self.assertEqual(rt.parse_simulator_score_mode("2"), rt.SIM_SCORE_MODE_PASS)
+        self.assertEqual(rt.parse_simulator_score_mode("x"), rt.SIM_SCORE_MODE_PASS)
+
+    def test_mode2_keeps_true_average_and_force_pass(self):
+        """Final AE stays the mean of tests; Mode 2 unlocks via force_pass."""
+        app_mod.write_simulation_fields({"A": True, "B": False})
+        app_mod.write_simulator_score_mode(2)
+        metrics = {"aac": 100.0, "avg_ae": 63.6, "ae_display": "64%"}
+        out = app_mod.apply_simulator_score_mode_to_metrics(
+            metrics, "A", "L05-WorldClass/S2.T5"
+        )
+        self.assertEqual(out["aac"], 100.0)
+        self.assertAlmostEqual(out["avg_ae"], 63.6)
+        self.assertTrue(out.get("force_pass"))
+        # Real field B (not simulated) is unchanged
+        real = app_mod.apply_simulator_score_mode_to_metrics(
+            {"aac": 100.0, "avg_ae": 62.0}, "B", "L05-WorldClass/S2.T5"
+        )
+        self.assertEqual(real["avg_ae"], 62.0)
+
+    def test_mode2_foundation_keeps_true_average(self):
+        app_mod.write_simulation_fields({"A": True, "B": False})
+        app_mod.write_simulator_score_mode(2)
+        out = app_mod.apply_simulator_score_mode_to_metrics(
+            {"aac": 60.0, "avg_ae": 62.0}, "A", "L00-Foundation"
+        )
+        self.assertEqual(out["aac"], 60.0)
+        self.assertEqual(out["avg_ae"], 62.0)
+        self.assertTrue(out.get("force_pass"))
+
+    def test_mode1_caps_below_unlock_gate(self):
+        app_mod.write_simulation_fields({"A": True, "B": True})
+        app_mod.write_simulator_score_mode(1)
+        out = app_mod.apply_simulator_score_mode_to_metrics(
+            {"aac": 100.0, "avg_ae": 90.0}, "A", "L05-WorldClass/S1.T2"
+        )
+        # Series unlock is AE-only at 75%; ACC is not capped.
+        self.assertEqual(out["aac"], 100.0)
+        self.assertLess(out["avg_ae"], 75.0)
+
+    def test_mode2_partner_sim_force_pass_keeps_average(self):
+        """WC partner-sim: Mode 2 force-unlocks without faking the AE average."""
+        app_mod.write_simulation_fields({"A": False, "B": True})
+        app_mod.write_simulator_score_mode(2)
+        out = app_mod.apply_simulator_score_mode_to_metrics(
+            {"aac": 100.0, "avg_ae": 62.0},
+            "A",
+            "L05-WorldClass/S2.T5",
+            score_field="A",
+        )
+        self.assertEqual(out["avg_ae"], 62.0)
+        self.assertTrue(out.get("force_pass"))
+        self.assertTrue(app_mod._simulator_mode2_force_pass("A", score_field="A"))
+
+
 class MixedDetectionTests(unittest.TestCase):
     def test_real_a_simulated_b_uses_camera_then_sim(self):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
@@ -230,12 +312,15 @@ class PartnerPerfectAccuracyTests(unittest.TestCase):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
         cam.active_fields = {"A", "B"}
         cam.simulation_fields = {"A": False, "B": True}
+        cam.simulator_score_mode = rt.SIM_SCORE_MODE_PASS
         sim_a = rt.ArenaSimulator(field_id="A")
         sim_b = rt.ArenaSimulator(field_id="B")
         cam.simulators = {"A": sim_a, "B": sim_b}
         cam._sync_simulator_partner_mode()
         self.assertFalse(sim_a.always_correct)
+        self.assertFalse(sim_a.always_fail)
         self.assertTrue(sim_b.always_correct)
+        self.assertFalse(sim_b.always_fail)
         self.assertEqual(sim_b._finish_plan(4, 12, 12), "finish")
         self.assertEqual(sim_b._next_outcome("PASS"), "correct")
 
@@ -243,15 +328,49 @@ class PartnerPerfectAccuracyTests(unittest.TestCase):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
         cam.active_fields = {"A", "B"}
         cam.simulation_fields = {"A": True, "B": True}
+        cam.simulator_score_mode = rt.SIM_SCORE_MODE_PASS
         sim_a = rt.ArenaSimulator(field_id="A")
         sim_b = rt.ArenaSimulator(field_id="B")
         cam.simulators = {"A": sim_a, "B": sim_b}
         cam._sync_simulator_partner_mode()
         self.assertTrue(sim_a.always_correct)
         self.assertTrue(sim_b.always_correct)
+        self.assertFalse(sim_a.always_fail)
+        self.assertFalse(sim_b.always_fail)
         self.assertEqual(sim_a._finish_plan(4, 3, 10), "finish")
         self.assertEqual(sim_b._finish_plan(2, 9, 10), "finish")
         self.assertEqual(sim_a._next_outcome("GOAL"), "correct")
+
+    def test_mode1_simulated_fields_always_miss(self):
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.active_fields = {"A", "B"}
+        cam.simulation_fields = {"A": True, "B": True}
+        cam.simulator_score_mode = rt.SIM_SCORE_MODE_FAIL
+        sim_a = rt.ArenaSimulator(field_id="A")
+        sim_b = rt.ArenaSimulator(field_id="B")
+        cam.simulators = {"A": sim_a, "B": sim_b}
+        cam._sync_simulator_partner_mode()
+        self.assertTrue(sim_a.always_fail)
+        self.assertTrue(sim_b.always_fail)
+        self.assertFalse(sim_a.always_correct)
+        self.assertFalse(sim_b.always_correct)
+        self.assertEqual(sim_a._finish_plan(1, 1, 10), "miss")
+        self.assertEqual(sim_b._next_outcome("PASS"), "miss")
+        self.assertEqual(sim_a._next_outcome("GOAL"), "miss")
+
+    def test_mode1_only_simulated_field_fails(self):
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.active_fields = {"A", "B"}
+        cam.simulation_fields = {"A": False, "B": True}
+        cam.simulator_score_mode = rt.SIM_SCORE_MODE_FAIL
+        sim_a = rt.ArenaSimulator(field_id="A")
+        sim_b = rt.ArenaSimulator(field_id="B")
+        cam.simulators = {"A": sim_a, "B": sim_b}
+        cam._sync_simulator_partner_mode()
+        self.assertFalse(sim_a.always_fail)
+        self.assertFalse(sim_a.always_correct)
+        self.assertTrue(sim_b.always_fail)
+        self.assertFalse(sim_b.always_correct)
 
     def test_both_fields_far_screens_score_correct(self):
         """B1 and B6 used to miss: the only in-goal sample was filtered as static."""

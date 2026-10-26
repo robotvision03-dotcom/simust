@@ -52,6 +52,7 @@ LAB_ONLY_PREFIXES = (
     "/instagram-live",
     "/set-visualization",
     "/set-simulation",
+    "/simulator-score-mode",
     "/results",
     "/video-results",
     "/realtime-results",
@@ -71,8 +72,10 @@ LAB_ONLY_PREFIXES = (
     "/create-pdf-report",
     "/delete-player-report",
     "/stop-realtime-camera",
+    "/booking-deadline-release",
     "/homography",
     "/cabinet-controls",
+    "/manual-coach",
 )
 
 

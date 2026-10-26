@@ -32,9 +32,10 @@ ISSUES_PATH = os.path.join(ROOT, "unlock_to_worldclass_issues.txt")
 
 PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
 FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0}
-FAIL_SERIES_ACC = {"correct": 16, "late": 0, "wrong": 4, "miss": 0, "avg_ae": 80.0}
-FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 79.0}
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}
+# Low ACC still unlocks when AE meets 75% (ACC is not part of the gate).
+PASS_SERIES_LOW_ACC = {"correct": 10, "late": 0, "wrong": 10, "miss": 0, "avg_ae": 75.0}
+FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}
 
 
 def _accuracy(stats: dict) -> float:
@@ -138,13 +139,14 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 "passed_playlists still lists every Foundation set that was passed."
             )
 
-        # Entry skips S1.T5. Later bands keep S1.T5 then S2.T1..S2.T4 (S2.T5 skipped
-        # except World Class, where S2.T4 opens S2.T5 as the final set).
+        # Entry skips S1.T5. Later bands keep S1.T5 then S2 then S3 (S2.T5 skipped;
+        # S3.T5 kept only as World Class end).
         series_levels = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
+            and not level.endswith("/S2.T5")
             and (
-                not level.endswith("/S2.T5")
+                not level.endswith("/S3.T5")
                 or level.startswith("L05-")
             )
             and (
@@ -153,20 +155,28 @@ class UnlockToWorldClassSim(unittest.TestCase):
             )
         ]
         self.assertEqual(series_levels[0], "L01-Entry/S1.T1")
-        self.assertEqual(series_levels[-1], "L05-WorldClass/S2.T5")
+        self.assertEqual(series_levels[-1], "L05-WorldClass/S3.T5")
         self.assertNotIn("L01-Entry/S1.T5", series_levels)
         self.assertIn("L02-Activated/S1.T5", series_levels)
         self.assertIn("L02-Activated/S2.T1", series_levels)
         self.assertNotIn("L02-Activated/S2.T5", series_levels)
         self.assertIn("L03-HighPerformance/S2.T1", series_levels)
+        self.assertIn("L03-HighPerformance/S3.T1", series_levels)
+        self.assertNotIn("L03-HighPerformance/S3.T5", series_levels)
         self.assertIn("L04-Elite/S2.T1", series_levels)
+        self.assertIn("L04-Elite/S3.T1", series_levels)
+        self.assertNotIn("L04-Elite/S3.T5", series_levels)
+        self.assertIn("L05-WorldClass/S3.T1", series_levels)
         self.assertEqual(get_next_level("L01-Entry/S1.T4"), "L02-Activated/S1.T1")
         self.assertEqual(get_next_level("L02-Activated/S1.T4"), "L02-Activated/S1.T5")
         self.assertEqual(get_next_level("L02-Activated/S1.T5"), "L02-Activated/S2.T1")
         self.assertEqual(get_next_level("L02-Activated/S2.T4"), "L03-HighPerformance/S1.T1")
-        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L04-Elite/S1.T1")
-        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L05-WorldClass/S1.T1")
-        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S2.T5")
+        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L03-HighPerformance/S3.T1")
+        self.assertEqual(get_next_level("L03-HighPerformance/S3.T4"), "L04-Elite/S1.T1")
+        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L04-Elite/S3.T1")
+        self.assertEqual(get_next_level("L04-Elite/S3.T4"), "L05-WorldClass/S1.T1")
+        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S3.T1")
+        self.assertEqual(get_next_level("L05-WorldClass/S3.T4"), "L05-WorldClass/S3.T5")
 
         for level in series_levels:
             progress = users[PLAYER_ID]["progress"]
@@ -174,10 +184,6 @@ class UnlockToWorldClassSim(unittest.TestCase):
             nxt = get_next_level(level)
             if nxt:
                 self.assertNotIn(nxt, progress["unlocked_levels"])
-                apply_session_progress(
-                    users, PLAYER_ID, level, "", FAIL_SERIES_ACC, from_final=True
-                )
-                self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
                 apply_session_progress(
                     users, PLAYER_ID, level, "", FAIL_SERIES_AE, from_final=True
                 )
@@ -187,7 +193,7 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 )
                 self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (85, 80))
+            self.assertEqual((th_acc, th_ae), (0, 75))
             apply_session_progress(
                 users, PLAYER_ID, level, "", PASS_SERIES, from_final=True
             )
@@ -197,32 +203,32 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 self.assertIn(nxt, progress["unlocked_levels"])
                 self.assertEqual(progress["current_level"], nxt)
             report.append(
-                "Passed %s at %.0f%% accuracy and 80 efficiency. Next is %s."
-                % (level, _accuracy(PASS_SERIES), nxt or "none")
+                "Passed %s at AE %.0f (ACC ignored for unlock). Next is %s."
+                % (level, PASS_SERIES["avg_ae"], nxt or "none")
             )
 
         progress = users[PLAYER_ID]["progress"]
-        self.assertEqual(progress["current_level"], "L05-WorldClass/S2.T5")
-        self.assertEqual(get_next_level("L05-WorldClass/S2.T5"), None)
-        report.append("The player is on World Class S2.T5. There is no set after it.")
+        self.assertEqual(progress["current_level"], "L05-WorldClass/S3.T5")
+        self.assertEqual(get_next_level("L05-WorldClass/S3.T5"), None)
+        report.append("The player is on World Class S3.T5. There is no set after it.")
         report.append("Unlocked levels: " + ", ".join(progress["unlocked_levels"]))
 
         # A later short final must not lock the set again.
         apply_session_progress(
-            users, PLAYER_ID, "L05-WorldClass/S2.T5", "", FAIL_SERIES_ACC, from_final=True
+            users, PLAYER_ID, "L05-WorldClass/S3.T5", "", FAIL_SERIES_AE, from_final=True
         )
         progress = users[PLAYER_ID]["progress"]
-        self.assertIn("L05-WorldClass/S2.T5", progress["unlocked_levels"])
-        self.assertEqual(progress["current_level"], "L05-WorldClass/S2.T5")
-        passed_flag = (progress.get("challenge_results") or {}).get("L05-WorldClass/S2.T5", {}).get("passed")
+        self.assertIn("L05-WorldClass/S3.T5", progress["unlocked_levels"])
+        self.assertEqual(progress["current_level"], "L05-WorldClass/S3.T5")
+        passed_flag = (progress.get("challenge_results") or {}).get("L05-WorldClass/S3.T5", {}).get("passed")
         report.append(
-            "A later short World Class S2.T5 result leaves the set unlocked. "
+            "A later short World Class S3.T5 result leaves the set unlocked. "
             "The stored passed flag is %s." % passed_flag
         )
         if passed_flag is False:
             issues.append(
                 "A later final result below the gate clears the stored passed flag. "
-                "World Class S2.T5 stays unlocked, but challenge_results says passed is false. "
+                "World Class S3.T5 stays unlocked, but challenge_results says passed is false. "
                 "The latest score replaces the success flag instead of keeping the pass."
             )
 
@@ -232,13 +238,26 @@ class UnlockToWorldClassSim(unittest.TestCase):
             % (target_after_fail["level"], target_after_fail["subdirectory"])
         )
 
-        late_only = {"correct": 0, "late": 17, "wrong": 3, "miss": 0, "avg_ae": 80.0}
-        if _accuracy(late_only) >= 85:
+        # Low ACC with AE at the gate still unlocks (ACC is not used after Foundation).
+        low_acc_probe = {PLAYER_ID: _new_player()}
+        low_acc_probe[PLAYER_ID]["progress"]["unlocked_levels"] = [
+            "L00-Foundation",
+            "L01-Entry/S1.T1",
+        ]
+        low_acc_probe[PLAYER_ID]["progress"]["unlocked_playlists"] = list(
+            simust_progress.FOUNDATION_PLAYLISTS
+        )
+        apply_session_progress(
+            low_acc_probe,
+            PLAYER_ID,
+            "L01-Entry/S1.T1",
+            "",
+            PASS_SERIES_LOW_ACC,
+            from_final=True,
+        )
+        if "L01-Entry/S1.T2" not in low_acc_probe[PLAYER_ID]["progress"]["unlocked_levels"]:
             issues.append(
-                "Late finishes count toward accuracy. "
-                "17 late and 3 wrong is %.0f%% accuracy, so it meets the 85%% gate "
-                "with no correct finishes."
-                % _accuracy(late_only)
+                "Entry unlock should use AE only. 50%% ACC with AE 75 did not open S1.T2."
             )
 
         aac_overrides = {"correct": 20, "late": 0, "wrong": 0, "miss": 0, "avg_ae": 90.0, "aac": 10}
@@ -345,16 +364,11 @@ class UnlockToWorldClassSim(unittest.TestCase):
             item for item in store["reservations"]
             if item.get("player_id") == PLAYER_ID and item.get("start") == start3.isoformat(timespec="seconds")
         ]
-        self.assertEqual([item.get("field") for item in mine], ["A"])
+        # Elite/WC booking clears a conflicting Field B slot and keeps both fields.
+        self.assertEqual(sorted(item.get("field") for item in mine), ["A", "B"])
         report.append(
-            "If Field B is already taken, an Elite booking on Field A stays on Field A only."
+            "If Field B was taken, an Elite booking on Field A clears that slot and books A+B."
         )
-        if len(mine) == 1:
-            issues.append(
-                "Elite and World Class are supposed to use both fields. "
-                "If the other field is already booked, the original booking is kept on one field "
-                "and play can still be started without the second field."
-            )
         if created.get("field") != "A":
             issues.append("The field that was booked first did not stay the score field.")
 

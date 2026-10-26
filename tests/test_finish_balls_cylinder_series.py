@@ -126,6 +126,16 @@ def _finish_balls_playlists():
             player._build_high_performance_s2_playlist(series, ["A", "B"]),
         ))
         rows.append((
+            f"HP-S3.T{series}",
+            ["A"],
+            player._build_high_performance_s3_playlist(series, ["A"]),
+        ))
+        rows.append((
+            f"HP-S3.T{series}-AB",
+            ["A", "B"],
+            player._build_high_performance_s3_playlist(series, ["A", "B"]),
+        ))
+        rows.append((
             f"Elite-S1.T{series}",
             ["A"],
             player._build_elite_playlist(series, "elite"),
@@ -136,6 +146,11 @@ def _finish_balls_playlists():
             player._build_elite_s2_playlist(series),
         ))
         rows.append((
+            f"Elite-S3.T{series}",
+            ["A"],
+            player._build_elite_s3_playlist(series),
+        ))
+        rows.append((
             f"WC-S1.T{series}",
             ["A"],
             player._build_elite_playlist(series, "world-class"),
@@ -144,6 +159,11 @@ def _finish_balls_playlists():
             f"WC-S2.T{series}",
             ["A"],
             player._build_world_class_s2_playlist(series),
+        ))
+        rows.append((
+            f"WC-S3.T{series}",
+            ["A"],
+            player._build_world_class_s3_playlist(series),
         ))
     return rows
 

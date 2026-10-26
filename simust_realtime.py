@@ -200,6 +200,10 @@ SAVE_VIDEO_EXT = ".mp4"
 
 VIZ_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
 SIM_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
+# Admin: 1 = sim cannot unlock/level-up, 2 = sim always hits unlock scores.
+SIM_SCORE_MODE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "simulator_score_mode.txt")
+SIM_SCORE_MODE_FAIL = 1
+SIM_SCORE_MODE_PASS = 2
 PAUSE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
 STOP_SAVE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_save.txt")
 DISPLAY_WIDTH = 1280
@@ -2077,6 +2081,79 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
             return 'N/A'
 
 # ================================================================
+# Mode 2 finish-balls shared clock
+# ================================================================
+def mode2_pass_finish_ae(aet_percent: float, movement: float = 100.0) -> float:
+    """PASS Correct finish-balls AE used to stamp Mode 2 action rows."""
+    try:
+        aet = max(0.0, min(100.0, float(aet_percent or 0.0)))
+    except (TypeError, ValueError):
+        aet = 0.0
+    try:
+        mov = float(movement or 0.0)
+    except (TypeError, ValueError):
+        mov = 0.0
+    if mov > 0:
+        displacement = max(0.0, min(100.0, 100.0 - mov))
+    else:
+        displacement = 100.0
+    ae = (
+        (0.40 * 70.0)
+        + (0.30 * 100.0)
+        + (0.20 * aet)
+        + (0.10 * (100.0 - displacement))
+    )
+    return max(0.0, min(100.0, ae))
+
+
+def mode2_finish_balls_clock_sec(
+    action_data=None,
+    qr_block=None,
+    elapsed_sec=0.0,
+    arrive_sec=None,
+    travel_sec=0.40,
+) -> float:
+    """Ideal shared-clock stamp for Mode 2 Correct finish-balls actions.
+
+    Real play uses cumulative budget_elapsed, so max(clock) ≈ wall time of the
+    last ball. Short budgets (High Performance S1.T5 ≈ 11.7s, and every later
+    series that decays further) then lock AET near 54% and PASS Correct AE at
+    ~79% — below the unlock gate. Mode 2 stamps action_index × travel instead
+    so every finish-balls band (Entry / Activated / HP / Elite / WC) clears 80%.
+    """
+    try:
+        travel = float(travel_sec if travel_sec is not None else 0.40)
+    except (TypeError, ValueError):
+        travel = 0.40
+    if travel <= 0:
+        travel = 0.40
+
+    action_i = None
+    for src in (action_data, qr_block):
+        if not isinstance(src, dict):
+            continue
+        raw = src.get("action_in_set")
+        if raw is None:
+            continue
+        try:
+            action_i = int(raw)
+            break
+        except (TypeError, ValueError):
+            continue
+
+    if action_i is None or action_i < 1:
+        # Prefer a single fast finish over re-adding cumulative elapsed
+        # (that path is what pinned short-budget series under 80%).
+        try:
+            arrive = float(arrive_sec) if arrive_sec is not None else travel
+        except (TypeError, ValueError):
+            arrive = travel
+        return max(travel, min(arrive, travel + 0.12))
+
+    return float(max(1, action_i)) * travel
+
+
+# ================================================================
 # Compute Action Efficiency (AE)
 # ================================================================
 def compute_action_efficiency(action_type: str, result: str, finishing_time: float,
@@ -2493,6 +2570,29 @@ def read_simulation_fields() -> dict:
         return {"A": False, "B": False}
 
 
+def parse_simulator_score_mode(raw) -> int:
+    """Mode 1 = fail unlock scores. Mode 2 = always unlock / level up."""
+    try:
+        if isinstance(raw, dict):
+            raw = raw.get("mode", raw.get("score_mode", 2))
+        mode = int(str(raw or "2").strip().split()[0])
+    except (TypeError, ValueError):
+        mode = SIM_SCORE_MODE_PASS
+    if mode not in (SIM_SCORE_MODE_FAIL, SIM_SCORE_MODE_PASS):
+        return SIM_SCORE_MODE_PASS
+    return mode
+
+
+def read_simulator_score_mode() -> int:
+    try:
+        if not os.path.exists(SIM_SCORE_MODE_FILE):
+            return SIM_SCORE_MODE_PASS
+        with open(SIM_SCORE_MODE_FILE, "r", encoding="utf-8") as handle:
+            return parse_simulator_score_mode(handle.read())
+    except Exception:
+        return SIM_SCORE_MODE_PASS
+
+
 def read_simulation_setting():
     fields = read_simulation_fields()
     return bool(fields.get("A") or fields.get("B"))
@@ -2612,9 +2712,12 @@ class ArenaSimulator:
         self.border_index = 0
         self.finish_balls = False
         self.always_correct = False
+        self.always_fail = False
 
     def _finish_plan(self, test_num, action_in_set, actions_in_set):
         """Tests 1–5: about 100%, 80%, 50%, 20%, then 100% in the goal."""
+        if getattr(self, "always_fail", False):
+            return "miss"
         if getattr(self, "always_correct", False):
             return "finish"
         from smart_simust_player import finish_balls_sim_plan
@@ -2623,7 +2726,10 @@ class ArenaSimulator:
     def start_action(self, action, screens, finish_balls=False, action_in_set=0, actions_in_set=0, test_num=0):
         self.parked = False
         self.action = (action or "").upper()
-        self.screens = [str(s) for s in (screens or [])]
+        # Multi-goal cues (HP S3): both cylinders stay lit; aim the first screen
+        # first. After that hit, realtime retargets this sim to the remainder.
+        all_screens = [str(s) for s in (screens or [])]
+        self.screens = all_screens[:1] if (finish_balls and len(all_screens) > 1) else all_screens
         self.finish_balls = bool(finish_balls)
         self.start_ts = time.time()
         self.active = True
@@ -2733,12 +2839,16 @@ class ArenaSimulator:
             xy = (xy[0], xy[1] + 29.0)
         self.target_xy = xy
         if getattr(self, "always_correct", False) and self.line_p0 and self.line_p1:
-            # Post-end aims sit on one cell. The static filter drops that cell,
-            # so a far screen never counts. Cross the middle while the ball moves.
-            self.intended = "correct"
+            # Mode 2 must score every action quickly and STAY in the goal.
+            # Intended "correct" returns home after 0.7s and was burning the
+            # clock (Foundation AE ~62%, finish-balls Wrongs → ~64%).
+            # "finish" arrives and holds so advance_on_goal / Correct can fire.
+            self.intended = "finish"
             self.aim_name = "center"
             self.target_xy = self._center_inside_goal(40.0)
             tracked = self.target_xy
+            # Keep AET high enough that PASS Correct AE clears unlock gates.
+            self.finish_travel_s = 0.40
         dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
         now_in = in_goal_area(
             tracked, self.line_p0, self.line_p1, depth, post_radius=post_radius_for(self.action)
@@ -2796,6 +2906,8 @@ class ArenaSimulator:
         return name, xy
 
     def _next_outcome(self, action):
+        if getattr(self, "always_fail", False):
+            return "miss"
         if getattr(self, "always_correct", False):
             return "correct"
         if action == "GOAL":
@@ -3139,8 +3251,15 @@ class ArenaSimulator:
 
         if intended in ("miss", "finish", "slow"):
             # Arrive in the goal area and stay. A slow ball still counts, but
-            # it uses more of the shared clock.
-            travel = 2.40 if intended == "slow" else 0.70
+            # it uses more of the shared clock. Mode 2 uses a shorter finish_travel_s.
+            if intended == "slow":
+                travel = 2.40
+            else:
+                try:
+                    travel = float(getattr(self, "finish_travel_s", 0.70) or 0.70)
+                except (TypeError, ValueError):
+                    travel = 0.70
+                travel = max(0.35, min(2.40, travel))
             u = min(1.0, t / travel)
             if is_press:
                 px, py = self._lerp(self.PLAYER_HOME, target, u)
@@ -3786,6 +3905,7 @@ class SimustRealtimeCamera:
         fields = read_simulation_fields()
         self.simulation_fields = {"A": bool(fields.get("A")), "B": bool(fields.get("B"))}
         self.simulation_enabled = bool(self.simulation_fields["A"] or self.simulation_fields["B"])
+        self.simulator_score_mode = read_simulator_score_mode()
         self.simulator_a = ArenaSimulator(field_id="A")
         self.simulator_b = ArenaSimulator(field_id="B")
         self.simulator = self.simulator_a  # back-compat alias
@@ -3801,6 +3921,11 @@ class SimustRealtimeCamera:
         self.active_fields = set(("A", "B"))
         self._refresh_active_fields()
         self._sync_simulator_partner_mode()
+        print(
+            "Simulator score mode: "
+            f"{self.simulator_score_mode} "
+            f"({'fail unlock' if self.simulator_score_mode == SIM_SCORE_MODE_FAIL else 'always unlock'})"
+        )
 
         # Back-compat aliases → Field A (legacy single-field call sites)
         ch_a = self.channels["A"]
@@ -3987,10 +4112,29 @@ class SimustRealtimeCamera:
         return bool((getattr(self, "simulation_fields", None) or {}).get(key))
 
     def _sync_simulator_partner_mode(self):
-        """A running simulator sends every ball in, so that field scores 100%."""
+        """Apply admin simulator score mode to each simulated field.
+
+        Mode 2: every finish is Correct (always unlock / level up).
+        Mode 1: every finish is Miss (cannot reach unlock thresholds).
+        """
+        mode = int(getattr(self, "simulator_score_mode", SIM_SCORE_MODE_PASS) or SIM_SCORE_MODE_PASS)
+        if mode not in (SIM_SCORE_MODE_FAIL, SIM_SCORE_MODE_PASS):
+            mode = read_simulator_score_mode()
+            self.simulator_score_mode = mode
         for fid, sim in (self.simulators or {}).items():
-            if sim is not None:
-                sim.always_correct = self._field_is_simulated(fid)
+            if sim is None:
+                continue
+            simulated = self._field_is_simulated(fid)
+            if not simulated:
+                sim.always_correct = False
+                sim.always_fail = False
+                continue
+            if mode == SIM_SCORE_MODE_FAIL:
+                sim.always_correct = False
+                sim.always_fail = True
+            else:
+                sim.always_correct = True
+                sim.always_fail = False
 
     def _mask_inactive_half(self, frame):
         """Black out the unused half so saved/live video has no inactive-field content."""
@@ -4164,6 +4308,11 @@ class SimustRealtimeCamera:
                 self.save_between_sessions_block(ch)
                 ch.between_sessions_active = False
 
+        # Flush hips to disk before stamping distances so mid/final rings
+        # never read a truncated recognition.json from an in-progress write.
+        for ch in self.channels.values():
+            self.save_recognition_json(ch)
+
         print("\n[DEBUG] Computing per-video hip distance per field...")
         for ch in self.channels.values():
             try:
@@ -4172,8 +4321,6 @@ class SimustRealtimeCamera:
                 print(f"[DEBUG] Error writing distances for {ch.label}: {e}")
 
         self.video_saver.stop()
-        for ch in self.channels.values():
-            self.save_recognition_json(ch)
         self._write_combined_results_index()
         self.recording_active = False
         self.video_started = False
@@ -4201,8 +4348,15 @@ class SimustRealtimeCamera:
             vid = int(row.get("video_index") or 1)
             row["total_distance"] = float(by_video.get(vid, 0.0))
             row["field"] = ch.field_id
-        with open(results_json_path, "w", encoding="utf-8") as f:
+        tmp = results_json_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(all_results, f, indent=2, ensure_ascii=False)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, results_json_path)
         ch.stats["results"] = all_results
         for vid, metres in sorted(by_video.items()):
             print(f"[DEBUG] [{ch.label}] Video {vid} hip distance: {metres:.2f} m")
@@ -4243,8 +4397,17 @@ class SimustRealtimeCamera:
             output_data.append(block_data)
 
         try:
-            with open(json_path, 'w', encoding='utf-8') as f:
+            # Atomic replace so create-video-results never reads a truncated file
+            # (empty recognition → Displacement shows "-" on the rings).
+            tmp = json_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, json_path)
             # Keep root recognition.json current so smart player can find a report mid-session
             if self.recording_dir and ch.recording_subdir:
                 try:
@@ -4480,7 +4643,8 @@ class SimustRealtimeCamera:
             }
             if on_sec is not None:
                 try:
-                    ch.pending_start["on_sec"] = max(0.1, min(60.0, float(on_sec)))
+                    cap = 3600.0 if finish_balls else 60.0
+                    ch.pending_start["on_sec"] = max(0.1, min(cap, float(on_sec)))
                 except (TypeError, ValueError):
                     pass
             if efficiency_max_sec is not None:
@@ -4690,15 +4854,51 @@ class SimustRealtimeCamera:
             'ae': analysis_result.get('AE', 0.0),
             'video_start_sec': (action_data or {}).get('video_start_sec'),
         }
-        if analysis_result.get("finish_balls") or (action_data or {}).get("finish_balls"):
+        sim = (getattr(self, "simulators", None) or {}).get(ch.field_id)
+        mode2_sim = bool(sim is not None and getattr(sim, "always_correct", False))
+        qr_block = getattr(ch, "current_qr_block", None) or {}
+        finish_balls = bool(
+            analysis_result.get("finish_balls")
+            or (action_data or {}).get("finish_balls")
+            or qr_block.get("finish_balls")
+            or mode2_sim
+        )
+        if finish_balls:
             try:
-                elapsed = float(analysis_result.get("budget_elapsed_sec") or 0)
+                elapsed = float(
+                    analysis_result.get("budget_elapsed_sec")
+                    or (action_data or {}).get("budget_elapsed_sec")
+                    or qr_block.get("budget_elapsed_sec")
+                    or 0
+                )
             except (TypeError, ValueError):
                 elapsed = 0.0
-            try:
-                total = float(analysis_result.get("budget_total_sec") or 0)
-            except (TypeError, ValueError):
-                total = 0.0
+            total = 0.0
+            for raw in (
+                analysis_result.get("budget_total_sec"),
+                (action_data or {}).get("budget_total_sec"),
+                qr_block.get("budget_total_sec"),
+                analysis_result.get("efficiency_max_sec"),
+                (action_data or {}).get("efficiency_max_sec"),
+                qr_block.get("efficiency_max_sec"),
+            ):
+                try:
+                    cand = float(raw or 0)
+                except (TypeError, ValueError):
+                    cand = 0.0
+                if cand > total:
+                    total = cand
+            if total <= 0 and mode2_sim:
+                # Entry/Activated default: 6 actions × 3.0s On.
+                try:
+                    n_act = int(
+                        (action_data or {}).get("actions_in_set")
+                        or qr_block.get("actions_in_set")
+                        or 6
+                    )
+                except (TypeError, ValueError):
+                    n_act = 6
+                total = float(max(1, n_act)) * 3.0
             arrive = None
             try:
                 raw_arrive = result_entry.get("finishing_time")
@@ -4709,7 +4909,30 @@ class SimustRealtimeCamera:
             # Cue ON is 17 frames before the session clock. The shared
             # stopwatch starts at the first screen, so add that delay once.
             shift = 17.0 / 20.0
-            if str(result_entry.get("result") or "") == "Correct" and arrive is not None:
+            if mode2_sim:
+                # Mode 2: every action is Correct, stays in goal, ideal clock.
+                result_entry["result"] = "Correct"
+                if arrive is None:
+                    arrive = float(getattr(sim, "finish_travel_s", 0.40) or 0.40)
+                clock = mode2_finish_balls_clock_sec(
+                    action_data=action_data,
+                    qr_block=qr_block,
+                    elapsed_sec=elapsed,
+                    arrive_sec=arrive,
+                    travel_sec=getattr(sim, "finish_travel_s", 0.40),
+                )
+                result_entry["movement"] = 100.0
+                if total > 0:
+                    aet_pct = max(
+                        0.0, min(100.0, (1.0 - (float(clock) / float(total))) * 100.0)
+                    )
+                else:
+                    aet_pct = 85.0
+                result_entry["ae"] = mode2_pass_finish_ae(aet_pct, 100.0)
+                result_entry["finishing_time"] = float(
+                    getattr(sim, "finish_travel_s", 0.40) or 0.40
+                )
+            elif str(result_entry.get("result") or "") == "Correct" and arrive is not None:
                 clock = elapsed + shift + arrive
             else:
                 clock = total if total > 0 else elapsed
@@ -5150,6 +5373,8 @@ class SimustRealtimeCamera:
         ch.active_goal_lines = p["goal_lines"]
         ch.session_active = True
         ch._gap_display_sent = False
+        ch._cylinder_scored_screens = set()
+        ch._cylinder_goal_seq = None
         # t=0 is cue ON (teammate image appear), not keypoint paint delay.
         # Otherwise Session Duration ≈ On − delay (~0.72s when On=1.5).
         try:
@@ -5199,7 +5424,9 @@ class SimustRealtimeCamera:
             if on_sec is None:
                 on_sec = _cue_on_sec()
             try:
-                on_sec = max(0.1, min(60.0, float(on_sec)))
+                # finish_balls / Manual coach wait for a live ball — allow long holds.
+                cap = 3600.0 if p.get("finish_balls") else 60.0
+                on_sec = max(0.1, min(cap, float(on_sec)))
             except (TypeError, ValueError):
                 on_sec, _ = _read_teammate_on_gap()
             ch._planned_on_sec = float(on_sec)
@@ -5364,7 +5591,11 @@ class SimustRealtimeCamera:
                 # The other field rewrites this cue on every goal. A new seq
                 # for the same screen must not restart this cylinder.
                 block = ch.current_qr_block if isinstance(ch.current_qr_block, dict) else {}
+                finish_balls = bool((cue or {}).get("finish_balls"))
+                new_screens = [str(s) for s in (hit.get("screens") or [])]
+                old_screens = [str(s) for s in (ch.current_screens or [])]
                 same_action = False
+                soft_multi_goal = False
                 if ch.session_active and block and not recover_after_stale:
                     try:
                         same_test = int(hit.get("test_num") or 0) == int(block.get("test_num") or 0)
@@ -5372,14 +5603,65 @@ class SimustRealtimeCamera:
                     except (TypeError, ValueError):
                         same_test = False
                         same_step = False
-                    same_screens = [str(s) for s in (hit.get("screens") or [])] == [
-                        str(s) for s in (ch.current_screens or [])
-                    ]
+                    same_screens = new_screens == old_screens
                     same_action = bool(same_test and same_step and same_screens)
+                    # Manual coach / multi-goal: expanding or shrinking the lit
+                    # set must keep already-drawn cylinders (no clear → reappear).
+                    if finish_balls and old_screens and new_screens and not same_screens:
+                        old_set = set(old_screens)
+                        new_set = set(new_screens)
+                        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
+                        if old_set.issubset(new_set) or new_set.issubset(old_set | scored):
+                            soft_multi_goal = True
                 if same_action:
                     ch._frame_sync_cue_raw = cue_raw
+                elif soft_multi_goal:
+                    ch._frame_sync_cue_raw = cue_raw
+                    added = [s for s in new_screens if s not in set(old_screens)]
+                    removed = set(old_screens) - set(new_screens)
+                    lines = {
+                        name: data
+                        for name, data in (ch.active_goal_lines or {}).items()
+                        if str(name) not in removed
+                    }
+                    if added:
+                        extra = self.get_goal_lines(
+                            added, hit.get("action") or ch.current_action or "PASS", []
+                        )
+                        lines.update(extra or {})
+                    ch.active_goal_lines = lines
+                    ch.current_screens = list(new_screens)
+                    if isinstance(ch.current_qr_block, dict):
+                        ch.current_qr_block["screens"] = list(new_screens)
+                        if hit.get("actions_in_set") is not None:
+                            try:
+                                ch.current_qr_block["actions_in_set"] = int(
+                                    hit.get("actions_in_set")
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                    try:
+                        new_seq = int(hit.get("seq") if hit.get("seq") is not None else 0)
+                        if new_seq:
+                            ch._display_seq = new_seq
+                    except (TypeError, ValueError):
+                        pass
+                    if self._field_is_simulated(fid) and added:
+                        sim = (self.simulators or {}).get(fid)
+                        if sim is not None:
+                            sim.start_action(
+                                ch.current_action,
+                                list(ch.current_screens),
+                                finish_balls=True,
+                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
+                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
+                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
+                            )
+                    print(
+                        f"[{ch.label}] finish_balls soft-update screens "
+                        f"{old_screens} → {new_screens} (cylinders kept)"
+                    )
                 else:
-                    finish_balls = bool((cue or {}).get("finish_balls"))
                     if ch.session_active and finish_balls:
                         self._clear_goal_area_now(ch, current_timestamp)
                     on_sec = hit.get("on_sec")
@@ -5673,7 +5955,7 @@ class SimustRealtimeCamera:
         else:
             origin = getattr(ch, "between_session_start_ts", 0.0) or 0.0
         rel_time = current_timestamp - origin if origin else 0.0
-        mid_x = 640
+        mid_x = int(HALF_WIDTH)
         field_players = [p for p in players if p.get("field") == ch.field_id]
         tagged = [b for b in balls if b.get("field")]
         if tagged:
@@ -5717,7 +5999,12 @@ class SimustRealtimeCamera:
                 ch.current_keypoints = []
 
     def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
-        """Finish-balls: as soon as the ball is in the cylinder, score Correct."""
+        """Finish-balls: as soon as the ball is in the cylinder, score Correct.
+
+        Multi-goal (HP S3): both cylinders stay lit until each is hit. The first
+        hit drops only that cylinder; the session keeps the remaining goal(s).
+        The last hit ends the session as before.
+        """
         if self.operator_paused or not ch.session_active:
             return
         if str(ch.field_id).upper()[:1] in getattr(self, "_paused_fields", set()):
@@ -5729,16 +6016,19 @@ class SimustRealtimeCamera:
             seq = int(getattr(ch, "_display_seq", 0) or 0)
         except (TypeError, ValueError):
             seq = 0
-        if seq and getattr(ch, "_cylinder_goal_seq", None) == seq:
-            return
+        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
         action = str(ch.current_action or "PASS").upper()
-        for screen_name, line_data in (ch.active_goal_lines or {}).items():
+        lines = dict(ch.active_goal_lines or {})
+        for screen_name, line_data in list(lines.items()):
             if not isinstance(line_data, dict):
+                continue
+            sid = str(screen_name)
+            if sid in scored:
                 continue
             p0, p1 = line_data.get("p0"), line_data.get("p1")
             if p0 is None or p1 is None:
                 continue
-            depth = arrival_depth_for(str(screen_name), action)
+            depth = arrival_depth_for(sid, action)
             # Accept a ball that is already close to the green finish zone so the
             # pass image can clear and the next screen can start without a lag.
             approach = float(depth) + float(APPROACH_FINISH_EXTRA_PX)
@@ -5748,23 +6038,60 @@ class SimustRealtimeCamera:
                     continue
                 if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
                     continue
-                if in_goal_area(center, p0, p1, approach):
-                    ch._cylinder_goal_seq = seq
-                    # Stamp the block so final analysis matches the live Correct
-                    # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
-                    if isinstance(block, dict):
-                        block["cylinder_correct"] = True
-                        block["cylinder_screen"] = str(screen_name)
-                    self._publish_live_result(
-                        ch.field_id,
-                        "Correct",
-                        list(ch.current_screens or []),
-                        screen_name,
-                        ch.current_block_id,
-                        seq=seq,
+                if not in_goal_area(center, p0, p1, approach):
+                    continue
+                scored.add(sid)
+                ch._cylinder_scored_screens = scored
+                # Stamp the block so final analysis matches the live Correct
+                # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
+                block["cylinder_correct"] = True
+                block["cylinder_screen"] = sid
+                # Unique seq per hit so the player can keep both Corrects.
+                try:
+                    hit_seq = int(seq) + len(scored) - 1
+                except (TypeError, ValueError):
+                    hit_seq = seq
+                remaining_lines = {
+                    name: data
+                    for name, data in (ch.active_goal_lines or {}).items()
+                    if str(name) not in scored
+                }
+                self._publish_live_result(
+                    ch.field_id,
+                    "Correct",
+                    list(ch.current_screens or []),
+                    sid,
+                    ch.current_block_id,
+                    seq=hit_seq,
+                )
+                if remaining_lines:
+                    # Keep the other cylinder(s) — do not clear/reappear.
+                    ch.active_goal_lines = remaining_lines
+                    ch.current_screens = [
+                        s for s in (ch.current_screens or [])
+                        if str(s) not in scored
+                    ]
+                    if isinstance(ch.current_qr_block, dict):
+                        ch.current_qr_block["screens"] = list(ch.current_screens)
+                    if self._field_is_simulated(ch.field_id):
+                        sim = (self.simulators or {}).get(ch.field_id)
+                        if sim is not None:
+                            sim.start_action(
+                                ch.current_action,
+                                list(ch.current_screens),
+                                finish_balls=True,
+                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
+                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
+                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
+                            )
+                    print(
+                        f"  [{ch.label}] cylinder hit {sid} — "
+                        f"{len(remaining_lines)} goal(s) still lit"
                     )
-                    self._clear_goal_area_now(ch, current_timestamp)
                     return
+                ch._cylinder_goal_seq = seq
+                self._clear_goal_area_now(ch, current_timestamp)
+                return
 
     def process_dual_fields_frame(self, frame, current_timestamp):
         self.tracker.increment_frame_count()
@@ -6361,16 +6688,28 @@ class SimustRealtimeCamera:
     def _apply_simulation_setting(self):
         new_fields = read_simulation_fields()
         old_fields = dict(getattr(self, "simulation_fields", {}) or {})
-        if new_fields == old_fields:
+        new_mode = read_simulator_score_mode()
+        old_mode = int(getattr(self, "simulator_score_mode", SIM_SCORE_MODE_PASS) or SIM_SCORE_MODE_PASS)
+        fields_changed = new_fields != old_fields
+        mode_changed = new_mode != old_mode
+        if not fields_changed and not mode_changed:
             return
         self.simulation_fields = new_fields
         self.simulation_enabled = bool(new_fields.get("A") or new_fields.get("B"))
+        self.simulator_score_mode = new_mode
         self._sync_simulator_partner_mode()
-        print(
-            "Arena simulation: "
-            f"A={'ON' if new_fields.get('A') else 'OFF'} "
-            f"B={'ON' if new_fields.get('B') else 'OFF'}"
-        )
+        if fields_changed:
+            print(
+                "Arena simulation: "
+                f"A={'ON' if new_fields.get('A') else 'OFF'} "
+                f"B={'ON' if new_fields.get('B') else 'OFF'}"
+            )
+        if mode_changed:
+            print(
+                "Simulator score mode: "
+                f"{new_mode} "
+                f"({'fail unlock' if new_mode == SIM_SCORE_MODE_FAIL else 'always unlock'})"
+            )
         for fid in ("A", "B"):
             now_on = bool(new_fields.get(fid))
             was_on = bool(old_fields.get(fid))

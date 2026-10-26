@@ -475,6 +475,8 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
             try:
                 import simust_progress
 
+                # Keep lab operator locks sticky: union remote unlocks, then strip
+                # anything in manually_locked_* so host pulls cannot re-open them.
                 existing["progress"] = simust_progress.merge_progress(
                     existing.get("progress"), account.get("progress")
                 )

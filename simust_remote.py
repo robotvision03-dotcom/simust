@@ -18,6 +18,7 @@ ALLOWED_ACTIONS = {
     "stop-realtime",
     "pause-realtime",
     "set-simulation",
+    "simulator-score-mode",
     "set-visualization",
     "lab-upsert-player",
     "unlock-level",
@@ -29,6 +30,10 @@ ALLOWED_ACTIONS = {
     "homography-test",
     "instagram-live",
     "cabinet-controls",
+    "manual-coach/start",
+    "manual-coach/cue",
+    "manual-coach/clear",
+    "manual-coach/stop",
 }
 
 GET_STATUS_KEYS = {
@@ -37,6 +42,8 @@ GET_STATUS_KEYS = {
     "results": "results",
     "homography": "homography",
     "cabinet-controls": "cabinet-controls",
+    "manual-coach/status": "manual-coach/status",
+    "manual-coach/layout": "manual-coach/layout",
 }
 
 COMMANDS_FILE = os.environ.get("SIMUST_REMOTE_FILE", "remote_commands.json")

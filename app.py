@@ -58,6 +58,7 @@ from simust_security import (
 )
 import simust_billing
 import simust_homography
+import simust_manual_coach
 import simust_progress
 import simust_push
 import simust_remote
@@ -120,19 +121,47 @@ async def guard_lab_only_on_public_host(request: Request, call_next):
 os.makedirs("static", exist_ok=True)   
 
 USERS_FILE = "users.json"
+_USERS_IO_LOCK = threading.Lock()
+
 
 def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    """Load accounts. Falls back to users.json.bak if the main file is corrupt."""
+    with _USERS_IO_LOCK:
+        for path in (USERS_FILE, USERS_FILE + ".bak"):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, OSError) as exc:
+                logging.getLogger(__name__).warning(
+                    "Could not read %s: %s", path, exc
+                )
+        return {}
+
 
 def save_users(users):
-    with open(USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(users, f, indent=2, ensure_ascii=False)
+    """Atomically write accounts so concurrent lock/unlock cannot corrupt the file."""
+    payload = users if isinstance(users, dict) else {}
+    with _USERS_IO_LOCK:
+        tmp = USERS_FILE + ".tmp"
+        bak = USERS_FILE + ".bak"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(USERS_FILE):
+            try:
+                shutil.copy2(USERS_FILE, bak)
+            except OSError:
+                pass
+        os.replace(tmp, USERS_FILE)
     if not PUBLIC_MODE:
         try:
-            simust_push.push_accounts_async(users)
+            simust_push.push_accounts_async(payload)
         except Exception as exc:
             logging.getLogger(__name__).warning("Could not sync accounts to host: %s", exc)
 
@@ -821,6 +850,8 @@ def _validate_reservation_window(start: datetime, end: datetime) -> int:
 
 
 ACTIVE_BOOKING_PLAY_STATUSES = {"paid", "admin_waived", "lab"}
+# Back-to-back (or nearly) bookings for the same player keep one play session open.
+CONTIGUOUS_BOOKING_GAP_SEC = 120
 
 
 def _reservation_field_id(item_or_field) -> str:
@@ -890,6 +921,93 @@ def find_booking_play_window(player_id: str, field: str = "A", now: Optional[dat
     return None, "none"
 
 
+def _player_field_booking_windows(player_id: str, field: str = "A"):
+    """Paid/lab/waived reservations for one player on one field, sorted by start."""
+    pid = str(player_id or "").strip()
+    field_id = _reservation_field_id(field)
+    out = []
+    if not pid:
+        return out
+    for item in load_reservations():
+        if str(item.get("player_id") or "").strip() != pid:
+            continue
+        if _reservation_field_id(item) != field_id:
+            continue
+        status = str(item.get("payment_status") or "").strip().lower()
+        if status not in ACTIVE_BOOKING_PLAY_STATUSES:
+            continue
+        try:
+            start = _parse_iso_dt(item.get("start", ""), "start")
+            end = _parse_iso_dt(item.get("end", ""), "end")
+        except Exception:
+            continue
+        if end <= start:
+            continue
+        out.append((start, end, item))
+    out.sort(key=lambda row: row[0])
+    return out
+
+
+def resolve_contiguous_booking_end(
+    player_id: str,
+    field: str = "A",
+    now: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """Furthest end of the contiguous booking chain covering `now`.
+
+    If the same player booked another slot that starts at (or within a short
+    gap of) the current end, play keeps going until that later round finishes.
+    """
+    now = (now or datetime.now()).replace(microsecond=0)
+    windows = _player_field_booking_windows(player_id, field)
+    covering = None
+    for start, end, item in windows:
+        if start <= now < end:
+            covering = (start, end, item)
+            break
+    if covering is None:
+        return None
+    chain_end = covering[1]
+    gap = timedelta(seconds=max(0, int(CONTIGUOUS_BOOKING_GAP_SEC)))
+    extended = True
+    while extended:
+        extended = False
+        for start, end, _item in windows:
+            if start <= chain_end + gap and end > chain_end:
+                chain_end = end
+                extended = True
+    return chain_end
+
+
+def booking_play_deadline_info(player_id: str, field: str = "A", now: Optional[datetime] = None) -> dict:
+    """Live booking deadline used by the player to abort or keep going."""
+    now = (now or datetime.now()).replace(microsecond=0)
+    booking, state = find_booking_play_window(player_id, field, now=now)
+    chain_end = resolve_contiguous_booking_end(player_id, field, now=now)
+    seconds_left = None
+    if chain_end is not None:
+        seconds_left = max(0.0, (chain_end - now).total_seconds())
+    slot_end = ""
+    contiguous = False
+    if booking:
+        slot_end = str(booking.get("end") or "")
+        if chain_end is not None and slot_end:
+            try:
+                contiguous = chain_end > _parse_iso_dt(slot_end, "end")
+            except Exception:
+                contiguous = False
+    return {
+        "player_id": str(player_id or "").strip(),
+        "field": _reservation_field_id(field),
+        "state": state,
+        "active": state == "active" and booking is not None,
+        "booking_end": chain_end.isoformat(timespec="seconds") if chain_end else "",
+        "slot_end": slot_end,
+        "seconds_left": seconds_left,
+        "contiguous": contiguous,
+    }
+
+
 def require_active_booking_for_play(player_id: str, field: str = "A", now: Optional[datetime] = None) -> dict:
     """Raise 403 unless the player has a live scheduled booking on this field."""
     field_id = _reservation_field_id(field)
@@ -930,8 +1048,9 @@ PROGRESSION = {
     },
     "L01-Entry": {
         "display": "Entry",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        # Unlock / level-up: AE only (ACC threshold unused).
+        "threshold_acc": 0,
+        "threshold_ae": 75,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -942,8 +1061,8 @@ PROGRESSION = {
     },
     "L02-Activated": {
         "display": "Activated",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        "threshold_acc": 0,
+        "threshold_ae": 75,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -959,8 +1078,8 @@ PROGRESSION = {
     },
     "L03-HighPerformance": {
         "display": "High Performance",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        "threshold_acc": 0,
+        "threshold_ae": 75,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -972,12 +1091,17 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     },
     "L04-Elite": {
         "display": "Elite",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        "threshold_acc": 0,
+        "threshold_ae": 75,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -989,12 +1113,17 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     },
     "L05-WorldClass": {
         "display": "World Class",
-        "threshold_acc": 85,
-        "threshold_ae": 80,
+        "threshold_acc": 0,
+        "threshold_ae": 75,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1006,6 +1135,11 @@ PROGRESSION = {
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
         }
     }
 }
@@ -1032,9 +1166,12 @@ def get_all_level_ids():
 ALL_LEVELS = get_all_level_ids()
 
 # Folder names on disk may still use legacy A-T / A1.T theme folders.
+# Activated+ bands only ship A-T1..A-T5; S2.T* maps to A1.T* when present,
+# otherwise falls back to the matching A-T* content folder.
 _LEGACY_THEME_FOLDERS = {
     **{f"S1.T{n}": f"A-T{n}" for n in range(1, 6)},
     **{f"S2.T{n}": f"A1.T{n}" for n in range(1, 6)},
+    **{f"S3.T{n}": f"A2.T{n}" for n in range(1, 6)},
 }
 
 def get_level_path(level_id: str) -> str:
@@ -1046,13 +1183,25 @@ def get_level_path(level_id: str) -> str:
     if cid == "L00-Foundation":
         return os.path.join(SIMUST_PLAYER_DIRECTORY, "L00-Foundation-Challenge")
     parts = cid.split("/")
+    candidates = []
     if len(parts) >= 2 and parts[1] in _LEGACY_THEME_FOLDERS:
         legacy = list(parts)
         legacy[1] = _LEGACY_THEME_FOLDERS[parts[1]]
-        legacy_path = os.path.join(SIMUST_PLAYER_DIRECTORY, *legacy)
-        if os.path.isdir(legacy_path):
-            return legacy_path
-    return os.path.join(SIMUST_PLAYER_DIRECTORY, *parts)
+        candidates.append(os.path.join(SIMUST_PLAYER_DIRECTORY, *legacy))
+        # S2.T* → A1.T* / S3.T* → A2.T* often missing; reuse A-T* assets on the band.
+        theme = str(parts[1] or "")
+        if (
+            (theme.startswith("S2.T") or theme.startswith("S3.T"))
+            and theme[-1:].isdigit()
+        ):
+            alt = list(parts)
+            alt[1] = f"A-T{theme[-1]}"
+            candidates.append(os.path.join(SIMUST_PLAYER_DIRECTORY, *alt))
+    candidates.append(os.path.join(SIMUST_PLAYER_DIRECTORY, *parts))
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0] if candidates else os.path.join(SIMUST_PLAYER_DIRECTORY, *parts)
 
 def get_main_level(level_id: str) -> str:
     """Return the main level ID (e.g., 'L01-Entry') from a challenge ID."""
@@ -1064,17 +1213,28 @@ def get_next_level(current_level_id: str) -> Optional[str]:
     """Return the next level to open after a pass.
 
     Entry S1.T4 opens Activated S1.T1.
-    Activated / High Performance / Elite / World Class keep S1.T5 then S2.T*,
-    and S2.T4 opens the next band (or World Class S2.T5 at the end).
+    Activated / Elite / World Class keep S1.T5 then S2.T*, and S2.T4 opens
+    that band's S3.T1 (Activated still opens High Performance).
+    High Performance S3.T4 opens Elite S1.T1; Elite S3.T4 opens World Class
+    S1.T1; World Class S3.T4 opens World Class S3.T5 (end).
     """
     cid = simust_progress.normalize_level_id(current_level_id)
+    if cid.endswith("/S3.T4"):
+        main = cid.split("/")[0]
+        s3_gate = {
+            "L03-HighPerformance": "L04-Elite/S1.T1",
+            "L04-Elite": "L05-WorldClass/S1.T1",
+            "L05-WorldClass": "L05-WorldClass/S3.T5",
+        }
+        if main in s3_gate:
+            return s3_gate[main]
     if cid.endswith("/S2.T4"):
         main = cid.split("/")[0]
         s2_gate = {
             "L02-Activated": "L03-HighPerformance/S1.T1",
-            "L03-HighPerformance": "L04-Elite/S1.T1",
-            "L04-Elite": "L05-WorldClass/S1.T1",
-            "L05-WorldClass": "L05-WorldClass/S2.T5",
+            "L03-HighPerformance": "L03-HighPerformance/S3.T1",
+            "L04-Elite": "L04-Elite/S3.T1",
+            "L05-WorldClass": "L05-WorldClass/S3.T1",
         }
         return s2_gate.get(main)
     if cid.endswith("/S1.T4"):
@@ -1126,40 +1286,93 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     progress = simust_progress.ensure_progress(users[player_id])
     ok, _reason = simust_progress.can_play(progress, level_played, subdirectory)
     if not ok:
-        return False
+        # Admin test / Mode 2 can finish a set that was not yet marked open.
+        # Still record the final and allow a pass to unlock the next set —
+        # but never reopen an operator manual lock.
+        if not from_final:
+            return False
+        manually_locked = simust_progress.is_manually_locked(
+            progress, level_played, subdirectory or ""
+        )
+        if not manually_locked:
+            if level_played == simust_progress.FOUNDATION_LEVEL:
+                sub = str(subdirectory or "").strip()
+                if sub:
+                    playlists = list(progress.get("unlocked_playlists") or [])
+                    simust_progress._unique_append(playlists, sub)
+                    progress["unlocked_playlists"] = playlists
+                levels = list(progress.get("unlocked_levels") or [])
+                simust_progress._unique_append(levels, simust_progress.FOUNDATION_LEVEL)
+                progress["unlocked_levels"] = levels
+            else:
+                levels = list(progress.get("unlocked_levels") or [])
+                simust_progress._unique_append(levels, level_played)
+                progress["unlocked_levels"] = levels
     completed_levels = progress.setdefault("completed_levels", [])
     challenge_results = progress.setdefault("challenge_results", {})
     th_acc, th_ae = get_level_thresholds(level_played)
-    passed = bool(from_final) and aac >= th_acc and ae >= th_ae
-    if level_played == simust_progress.FOUNDATION_LEVEL and not str(subdirectory or "").strip():
+    # Match rings (1 decimal). Final ACC/AE are series averages.
+    # Foundation: ACC + AE. Entry and later: AE only (75%) — ACC does not gate.
+    aac_gate = round(float(aac), 1)
+    ae_gate = round(float(ae), 1)
+    force_pass = bool(statistics.get("force_pass"))
+    if level_played == simust_progress.FOUNDATION_LEVEL:
+        meets_gate = aac_gate >= float(th_acc) and ae_gate >= float(th_ae)
+    else:
+        meets_gate = ae_gate >= float(th_ae)
+    passed = bool(from_final) and (force_pass or meets_gate)
+    sub = str(subdirectory or "").strip()
+    foundation_extras = {
+        str(p).strip().lower()
+        for p in (simust_progress.FOUNDATION_EXTRA_PLAYLISTS or [])
+    }
+    is_foundation_extra = (
+        level_played == simust_progress.FOUNDATION_LEVEL
+        and bool(sub)
+        and sub.lower() in foundation_extras
+    )
+    if level_played == simust_progress.FOUNDATION_LEVEL and not sub:
+        passed = False
+    # omid / omid_2 / digit / math / cognitive are test-only — never level-up.
+    if is_foundation_extra:
         passed = False
     result = {
-        "aac": round(aac, 1),
-        "ae": round(ae, 1),
+        "aac": aac_gate,
+        "ae": ae_gate,
         "passed": passed,
-        "subdirectory": subdirectory or "",
+        "subdirectory": sub,
     }
-    challenge_results[level_played] = result
+    if is_foundation_extra:
+        # Keep SF progression result intact; extras are scenarios only.
+        extras_map = progress.setdefault("extra_challenge_results", {})
+        extras_map[sub] = result
+    else:
+        challenge_results[level_played] = result
     progress["challenge_results"] = challenge_results
     if passed:
         if level_played == simust_progress.FOUNDATION_LEVEL:
             passed_playlists = list(progress.get("passed_playlists") or [])
-            simust_progress._unique_append(passed_playlists, str(subdirectory or "").strip())
+            simust_progress._unique_append(passed_playlists, sub)
             progress["passed_playlists"] = passed_playlists
-            nxt_sf = simust_progress.next_foundation_playlist_after(subdirectory)
+            nxt_sf = simust_progress.next_foundation_playlist_after(sub)
             if nxt_sf:
+                # Earned SF pass opens the next SF (30N→60N→110N→180N), same as
+                # series level-up. Clears a sticky admin lock on that next SF only.
+                # omid / omid_2 never reach here (foundation extras).
                 playlists = list(progress.get("unlocked_playlists") or [])
+                simust_progress.clear_manual_lock(progress, playlist=nxt_sf)
                 simust_progress._unique_append(playlists, nxt_sf)
                 progress["unlocked_playlists"] = playlists
-            else:
+            elif sub in simust_progress.FOUNDATION_PLAYLISTS:
+                # Only finishing SF-180N opens Entry — never an extra playlist.
                 next_level = get_next_level(level_played)
-                _open_level(progress, next_level)
+                _open_level(progress, next_level, from_score_pass=True)
         else:
             if level_played not in completed_levels:
                 completed_levels.append(level_played)
             progress["completed_levels"] = completed_levels
             next_level = get_next_level(level_played)
-            _open_level(progress, next_level)
+            _open_level(progress, next_level, from_score_pass=True)
     # Always stamp CURRENT DEVELOPMENT LEVEL to the furthest unlocked set
     # (pass unlocks next; fail keeps the same set for the next attempt / booking).
     simust_progress.sync_current_development_level(progress, ALL_LEVELS)
@@ -1167,10 +1380,19 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
     return True
 
 
-def _open_level(progress: dict, next_level: Optional[str]) -> None:
-    """Open the next set and keep every earlier set open. The highest one becomes current."""
+def _open_level(progress: dict, next_level: Optional[str], *, from_score_pass: bool = False) -> None:
+    """Open the next set and keep every earlier set open. The highest one becomes current.
+
+    Manual Lock blocks casual re-open (host pull / UI). An earned score pass on
+    the previous set clears the lock on this next set and opens it — Foundation
+    SF-180N → Entry, and every later band, level up the same way.
+    """
     if not next_level:
         return
+    if simust_progress.is_manually_locked(progress, next_level):
+        if not from_score_pass:
+            return
+        simust_progress.clear_manual_lock(progress, level_id=next_level)
     levels = list(progress.get("unlocked_levels") or [])
     simust_progress._unique_append(levels, next_level)
     progress["unlocked_levels"] = levels
@@ -1184,7 +1406,19 @@ def _combined_level(level_id: str) -> bool:
 
 
 def _booking_seconds_left(player_id: str, field: str = "A") -> float:
-    """Seconds left in the live booking. Zero when no booking is active."""
+    """Seconds left in the live contiguous booking chain. Zero when inactive."""
+    try:
+        info = booking_play_deadline_info(player_id, field)
+    except Exception:
+        info = None
+    if isinstance(info, dict) and info.get("active"):
+        try:
+            left = info.get("seconds_left")
+            if left is not None:
+                return max(0.0, float(left))
+        except (TypeError, ValueError):
+            pass
+    # Fallback: single slot end when contiguous helper is unavailable.
     try:
         booking, state = find_booking_play_window(player_id, field)
     except Exception:
@@ -1196,6 +1430,50 @@ def _booking_seconds_left(player_id: str, field: str = "A") -> float:
         return max(0.0, (end - datetime.now()).total_seconds())
     except Exception:
         return 0.0
+
+
+def _session_is_admin_test(payload: dict = None, fields: dict = None) -> bool:
+    """True for operator admin-password play (no reservation clock).
+
+    Stamped at Realtime Play start. Also inferred when live player slots have
+    no booking_end (admin / staff test starts leave it empty on purpose).
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    if payload.get("admin_test"):
+        return True
+    fields = fields if isinstance(fields, dict) else (
+        payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    )
+    saw_player = False
+    for fid in ("A", "B"):
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        pid = str((slot or {}).get("player_id") or "").strip()
+        if not pid or pid.startswith("__sim_"):
+            continue
+        saw_player = True
+        if str((slot or {}).get("booking_end") or "").strip():
+            return False
+    return bool(saw_player)
+
+
+def _has_open_next_set(progress: dict, level_id: str, subdirectory: str = "") -> bool:
+    """True when a pass on this set can open a further training set.
+
+    Foundation: SF-30N→60N→110N→180N, then Entry. omid / omid_2 are extras and
+    never appear in this chain. Used for Mode 2 booking continue after finals.
+    """
+    progress = progress or {}
+    level_key = simust_progress.normalize_level_id(level_id)
+    sub = str(subdirectory or "").strip()
+    if level_key == simust_progress.FOUNDATION_LEVEL:
+        # Extras are not part of level-up; treat as no next in the SF chain.
+        extra = {str(x).strip().lower() for x in (simust_progress.FOUNDATION_EXTRA_PLAYLISTS or [])}
+        if sub.lower() in extra:
+            return False
+        if simust_progress.next_foundation_playlist_after(sub):
+            return True
+        return bool(get_next_level(simust_progress.FOUNDATION_LEVEL))
+    return bool(get_next_level(level_key))
 
 
 def _continue_target(progress: dict) -> dict:
@@ -1219,6 +1497,183 @@ def _continue_target(progress: dict) -> dict:
         "seconds_left": 0,
         "player_id": "",
     }
+
+
+def propagate_level_status(player_id: str, progress: dict) -> dict:
+    """Stamp CURRENT DEVELOPMENT LEVEL everywhere it is shown or consumed.
+
+    Keeps operator arena slots, continue-play targets, intro level file, and
+    per-player progress.json aligned the moment a set unlocks or locks.
+    """
+    player_id = str(player_id or "").strip()
+    target = _continue_target(progress or {})
+    level = str(target.get("level") or simust_progress.FOUNDATION_LEVEL)
+    subdirectory = str(target.get("subdirectory") or "")
+    directory = str(target.get("directory") or "")
+    if not player_id:
+        return target
+
+    # Per-player stamp used by reports / My SIMUST fallbacks.
+    try:
+        progress_path = os.path.join(PLAYER_REPORTS_DIR, player_id, "progress.json")
+        os.makedirs(os.path.dirname(progress_path), exist_ok=True)
+        with open(progress_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "current_level": level,
+                    "current_playlist": subdirectory,
+                    "unlocked_levels": list((progress or {}).get("unlocked_levels") or []),
+                    "unlocked_playlists": list((progress or {}).get("unlocked_playlists") or []),
+                },
+                handle,
+                indent=2,
+                ensure_ascii=False,
+            )
+    except Exception:
+        logger.exception("Could not write progress.json for %s", player_id)
+
+    # Live arena assignment — both halves if this player is booked on either.
+    pf_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+    try:
+        payload = {}
+        if os.path.exists(pf_path):
+            with open(pf_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle) or {}
+        fields = payload.get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            fields = {}
+        touched = False
+        active_match = False
+        score_fid = ""
+        for fid in ("A", "B"):
+            slot = fields.get(fid) if isinstance(fields.get(fid), dict) else None
+            if not slot:
+                continue
+            slot_pid = str(slot.get("player_id") or "").strip()
+            if slot_pid != player_id:
+                continue
+            if (
+                slot.get("level") != level
+                or str(slot.get("subdirectory") or "") != subdirectory
+                or str(slot.get("directory") or "") != directory
+            ):
+                slot["level"] = level
+                slot["subdirectory"] = subdirectory
+                slot["directory"] = directory
+                fields[fid] = slot
+                touched = True
+            active_match = True
+            if not score_fid:
+                score_fid = fid
+        booked = str(payload.get("score_field") or "").upper()[:1]
+        if booked in ("A", "B"):
+            score_fid = booked
+        # Unlock into Elite / World Class: expand the live arena to both halves
+        # with the empty partner simulated so the next auto-continue / Play uses
+        # all 12 screens and both result lanes.
+        if active_match and _combined_level(level) and score_fid in ("A", "B"):
+            other = "B" if score_fid == "A" else "A"
+            src = fields.get(score_fid) if isinstance(fields.get(score_fid), dict) else {}
+            partner = {
+                "player_id": "__sim_%s__" % other,
+                "player_name": "Simulator",
+                "player_surname": other,
+                "field": other,
+                "subdirectory": subdirectory,
+                "level": level,
+                "directory": directory,
+                "simulated": True,
+                "booking_end": str((src or {}).get("booking_end") or ""),
+            }
+            existing = fields.get(other) if isinstance(fields.get(other), dict) else None
+            existing_pid = str((existing or {}).get("player_id") or "").strip()
+            if existing_pid and existing_pid != player_id and not existing_pid.startswith("__sim_"):
+                pass  # real partner already booked — leave them
+            else:
+                if existing != partner:
+                    fields[other] = partner
+                    touched = True
+                try:
+                    sim_now = _read_written_simulation_fields()
+                except Exception:
+                    sim_now = {"A": False, "B": False}
+                # Partner half always simulates; if the booked field was already
+                # in sim mode, both halves stay simulated.
+                score_was_sim = bool(sim_now.get(score_fid)) or bool(
+                    (src or {}).get("simulated")
+                )
+                desired = dict(sim_now)
+                desired[other] = True
+                if score_was_sim:
+                    desired["A"] = True
+                    desired["B"] = True
+                if desired != sim_now:
+                    write_simulation_fields(desired)
+                    touched = True
+            payload["score_field"] = score_fid
+            active = []
+            for fid in ("A", "B"):
+                slot = fields.get(fid) if isinstance(fields.get(fid), dict) else None
+                if slot and str(slot.get("player_id") or "").strip():
+                    active.append(fid)
+            if active != list(payload.get("active") or []):
+                payload["active"] = active
+                touched = True
+        if active_match:
+            if payload.get("level") != level:
+                payload["level"] = level
+                touched = True
+            levels = payload.get("levels") if isinstance(payload.get("levels"), dict) else {}
+            for fid in ("A", "B"):
+                slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+                slot_pid = str((slot or {}).get("player_id") or "").strip()
+                if slot_pid == player_id or slot_pid.startswith("__sim_"):
+                    if levels.get(fid) != level:
+                        levels[fid] = level
+                        touched = True
+            payload["levels"] = levels
+            payload["fields"] = fields
+            # Operator "players" list used at start — keep current training level in sync.
+            players_list = payload.get("players") if isinstance(payload.get("players"), list) else []
+            if players_list:
+                new_players = []
+                for row in players_list:
+                    if not isinstance(row, dict):
+                        new_players.append(row)
+                        continue
+                    row_pid = str(row.get("player_id") or "").strip()
+                    if row_pid == player_id:
+                        updated = dict(row)
+                        if (
+                            updated.get("level") != level
+                            or str(updated.get("subdirectory") or "") != subdirectory
+                        ):
+                            updated["level"] = level
+                            updated["subdirectory"] = subdirectory
+                            touched = True
+                        new_players.append(updated)
+                    else:
+                        new_players.append(row)
+                payload["players"] = new_players
+            if touched:
+                os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+                tmp = pf_path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, pf_path)
+            # Intro / coach selection while this player is on the arena.
+            try:
+                level_txt = os.path.join(SIMUST_PLAYER_DIRECTORY, "current_level.txt")
+                with open(level_txt, "w", encoding="utf-8") as handle:
+                    handle.write(level)
+            except Exception:
+                logger.exception("Could not write current_level.txt for %s", player_id)
+    except Exception:
+        logger.exception("Could not sync players_fields level for %s", player_id)
+
+    return target
 
 
 def _append_performance_trend_session(
@@ -1314,11 +1769,63 @@ def _append_performance_trend_session(
         return None
 
 
-def _final_progress_field_ids(fields: dict, field_metrics: dict, score_field: str) -> list:
+def _session_is_combined_fields(fields: dict, payload: dict = None) -> bool:
+    """Elite / World Class use both halves; only the booked score field unlocks."""
+    payload = payload if isinstance(payload, dict) else {}
+    levels = [str(payload.get("level") or "")]
+    real_pids = []
+    for fid in ("A", "B"):
+        slot = fields.get(fid) if isinstance((fields or {}).get(fid), dict) else {}
+        levels.append(str((slot or {}).get("level") or ""))
+        pid = str((slot or {}).get("player_id") or "").strip()
+        if pid and not pid.startswith("__sim_"):
+            real_pids.append(pid)
+    if any(_combined_level(level) for level in levels):
+        return True
+    return len(set(real_pids)) == 1 and len(real_pids) >= 2
+
+
+def _resolve_score_field(fields: dict, payload: dict = None, requested: str = "") -> str:
+    """Booked score field for unlock. Elite/WC: never use the partner/sim half."""
+    payload = payload if isinstance(payload, dict) else {}
+    fields = fields if isinstance(fields, dict) else {}
+    booked = str(payload.get("score_field") or "").upper()[:1]
+    req = str(requested or "").upper()[:1]
+
+    def _real_pid(fid: str) -> str:
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+        pid = str((slot or {}).get("player_id") or "").strip()
+        if pid.startswith("__sim_"):
+            return ""
+        return pid
+
+    if _session_is_combined_fields(fields, payload):
+        # Session start stamp wins (player selected on A → score stays on A).
+        if booked in ("A", "B") and _real_pid(booked):
+            return booked
+        if req in ("A", "B") and _real_pid(req):
+            return req
+        for fid in ("A", "B"):
+            if _real_pid(fid):
+                return fid
+        return "A"
+    if req in ("A", "B"):
+        return req
+    if booked in ("A", "B"):
+        return booked
+    if _real_pid("A"):
+        return "A"
+    if _real_pid("B"):
+        return "B"
+    return "A"
+
+
+def _final_progress_field_ids(fields: dict, field_metrics: dict, score_field: str, payload: dict = None) -> list:
     """Which fields get a profile save from this final.
 
     Independent A/B (different players): save every field that has metrics.
-    Elite / World Class (combined): only the booked score_field.
+    Elite / World Class (combined): only the booked score_field — Field B partner
+    scores never unlock when the player was selected on Field A.
     """
     real = {}
     for fid in ("A", "B"):
@@ -1328,14 +1835,8 @@ def _final_progress_field_ids(fields: dict, field_metrics: dict, score_field: st
             real[fid] = pid
     if not real:
         return []
-    levels = [
-        str((fields.get(fid) or {}).get("level") or "")
-        for fid in real
-    ]
-    same_player = len(set(real.values())) == 1 and len(real) >= 2
-    combined = same_player or any(_combined_level(level) for level in levels)
-    chosen = str(score_field or "").upper()[:1]
-    if combined:
+    chosen = _resolve_score_field(fields, payload, score_field)
+    if _session_is_combined_fields(fields, payload):
         if chosen in real:
             return [chosen]
         return [next(iter(real.keys()))]
@@ -1358,7 +1859,8 @@ def apply_final_results_progress(
     """Save score, unlock when thresholds are met, update trend, continue if time left.
 
     Independent dual-field: each field's player gets their own final on their profile.
-    Elite / World Class: only the booked score_field player's final counts.
+    Elite / World Class: only the booked score_field ACC/AE count (Field A when the
+    player was selected on A). Partner / Field B scores never unlock.
     While reservation time remains: repeat the same sub-level on fail, or play the
     newly unlocked set on pass. When time ends, progress is already saved for next booking.
 
@@ -1374,15 +1876,16 @@ def apply_final_results_progress(
     fields = payload.get("fields") if isinstance(payload, dict) else {}
     if not isinstance(fields, dict):
         fields = {}
-    chosen = str(score_field or payload.get("score_field") or "").upper()[:1]
-    if chosen not in ("A", "B"):
-        chosen = "A" if isinstance(fields.get("A"), dict) and fields["A"].get("player_id") else "B"
-    target_fields = _final_progress_field_ids(fields, field_metrics or {}, chosen)
+    chosen = _resolve_score_field(fields, payload, score_field)
+    target_fields = _final_progress_field_ids(
+        fields, field_metrics or {}, chosen, payload=payload
+    )
     if not target_fields and chosen in ("A", "B"):
         target_fields = [chosen]
     users = load_users()
     changed = False
     primary_info = None
+    combined = _session_is_combined_fields(fields, payload)
     for fid in target_fields:
         slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
         player_id = str((slot or {}).get("player_id") or "").strip()
@@ -1391,8 +1894,12 @@ def apply_final_results_progress(
         level = str((slot or {}).get("level") or payload.get("level") or "").strip()
         subdirectory = str((slot or {}).get("subdirectory") or "").strip()
         metrics = (field_metrics or {}).get(fid) or {}
-        if not metrics and len(target_fields) == 1 and field_metrics:
+        # Elite/WC: never substitute partner/Field B rings for the booked field.
+        if (not metrics) and (not combined) and len(target_fields) == 1 and field_metrics:
             metrics = next(iter(field_metrics.values()))
+        metrics = apply_simulator_score_mode_to_metrics(
+            metrics, fid, level, score_field=chosen, fields=fields
+        )
         if not player_id or not level or player_id not in users:
             continue
         statistics = {
@@ -1404,12 +1911,18 @@ def apply_final_results_progress(
             "late": metrics.get("late", 0),
             "wrong": metrics.get("wrong", 0),
             "miss": metrics.get("miss", 0),
+            "force_pass": bool(
+                metrics.get("force_pass")
+                or _simulator_mode2_force_pass(fid, score_field=chosen, fields=fields)
+            ),
         }
         apply_session_progress(users, player_id, level, subdirectory, statistics, from_final=True)
         progress = simust_progress.sync_current_development_level(
             (users.get(player_id) or {}).get("progress") or {}, ALL_LEVELS
         )
         users[player_id]["progress"] = progress
+        # Refresh operator / player level stamps together (users push via save_users).
+        field_info = propagate_level_status(player_id, progress)
         changed = True
         if save_reports:
             # Immediate profile / My SIMUST trend point (push runs inside append).
@@ -1422,13 +1935,41 @@ def apply_final_results_progress(
                 logger.exception(
                     "Could not save final trend for %s field %s", player_id, fid,
                 )
-        passed = bool((progress.get("challenge_results") or {}).get(level, {}).get("passed"))
-        field_info = _continue_target(progress)
+        level_key = simust_progress.normalize_level_id(level)
+        # Foundation challenge_results.passed is for the *last* scored SF set.
+        # Prefer the subdirectory stamp so a prior SF-30N pass cannot look like
+        # "this SF-60N attempt already passed" when retrying.
+        chal = (progress.get("challenge_results") or {}).get(level_key) or {}
+        if not isinstance(chal, dict):
+            chal = (progress.get("challenge_results") or {}).get(level) or {}
+        if isinstance(chal, dict) and level_key == simust_progress.FOUNDATION_LEVEL:
+            chal_sub = str(chal.get("subdirectory") or "").strip()
+            passed = bool(chal.get("passed")) and (
+                not subdirectory or not chal_sub or chal_sub == subdirectory
+            )
+        else:
+            passed = bool(isinstance(chal, dict) and chal.get("passed"))
         field_info["passed"] = passed
         field_info["player_id"] = player_id
         field_info["score_field"] = fid
         field_info["seconds_left"] = _booking_seconds_left(player_id, fid)
-        field_info["continue_play"] = field_info["seconds_left"] > 30
+        # Keep playing while booking time remains, except when there is no *open*
+        # next set (manual Lock on SF-60N must not loop SF-30N forever).
+        # Admin/manual password play has no reservation clock — still continue
+        # Mode 2 / unlock into the next SF and Entry (incl. Foundation level-up).
+        has_next = _has_open_next_set(progress, level_key or level, subdirectory)
+        admin_test = _session_is_admin_test(payload, fields)
+        field_info["admin_test"] = bool(admin_test)
+        wants_continue = bool(not passed or has_next)
+        if admin_test:
+            field_info["continue_play"] = wants_continue
+            if wants_continue and float(field_info["seconds_left"] or 0) <= 30:
+                # Player continue gate needs >30s; invent a long clock for admin tests.
+                field_info["seconds_left"] = 24 * 3600.0
+        else:
+            field_info["continue_play"] = bool(
+                field_info["seconds_left"] > 30 and wants_continue
+            )
         if fid == chosen or primary_info is None:
             primary_info = field_info
     if changed:
@@ -1570,6 +2111,122 @@ def _read_written_simulation_fields():
         }
     except Exception:
         return {"A": False, "B": False}
+
+
+def _simulator_score_mode_path() -> str:
+    return os.path.join(SIMUST_PLAYER_DIRECTORY, "simulator_score_mode.txt")
+
+
+def write_simulator_score_mode(mode: int) -> int:
+    """Mode 1 = sim cannot unlock. Mode 2 = sim always unlocks / levels up."""
+    try:
+        value = int(mode)
+    except (TypeError, ValueError):
+        value = 2
+    if value not in (1, 2):
+        value = 2
+    path = _simulator_score_mode_path()
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(str(value))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    return value
+
+
+def read_simulator_score_mode() -> int:
+    path = _simulator_score_mode_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = int(str(handle.read() or "2").strip().split()[0])
+        return value if value in (1, 2) else 2
+    except Exception:
+        return 2
+
+
+def _field_uses_simulator_score_mode(field_id, score_field: str = "", fields: dict = None) -> bool:
+    """Whether admin Sim Mode 1/2 applies to this field's final.
+
+    - Arena Sim ON for this field → yes (Mode 1 caps / Mode 2 force-unlock).
+    - Mode 2 + partner/any half simulated → also yes for the booked score field
+      (Elite/WC partner-sim must still unlock every band).
+    - players_fields slot stamped simulated=True → yes (join/start sim half).
+    """
+    fid = str(field_id or "").upper()[:1]
+    if fid not in ("A", "B"):
+        return False
+    sim_fields = _read_written_simulation_fields() or {}
+    if bool(sim_fields.get(fid)):
+        return True
+    slot = None
+    if isinstance(fields, dict):
+        slot = fields.get(fid) if isinstance(fields.get(fid), dict) else None
+    if isinstance(slot, dict) and bool(slot.get("simulated")):
+        return True
+    mode = read_simulator_score_mode()
+    if mode != 2:
+        return False
+    any_sim = bool(sim_fields.get("A") or sim_fields.get("B"))
+    if not any_sim:
+        # Partner half may only be stamped on players_fields.
+        other = "B" if fid == "A" else "A"
+        other_slot = fields.get(other) if isinstance(fields, dict) else None
+        if isinstance(other_slot, dict) and bool(other_slot.get("simulated")):
+            any_sim = True
+    if not any_sim:
+        return False
+    chosen = str(score_field or "").upper()[:1]
+    return chosen == fid
+
+
+def apply_simulator_score_mode_to_metrics(metrics, field_id, level_id="", score_field: str = "", fields: dict = None):
+    """Adjust finals for admin Sim Mode.
+
+    Mode 1: cap ACC/AE just under unlock gates (cannot level up).
+    Mode 2: keep the true series average (mean of every test AE). Unlock is
+    force_pass — Mode 2 play itself must stamp each test AE above the gate.
+    Never rewrite the displayed final AE to a fake 75%.
+    """
+    fid = str(field_id or "").upper()[:1]
+    if fid not in ("A", "B"):
+        return metrics
+    if not _field_uses_simulator_score_mode(fid, score_field=score_field, fields=fields):
+        return metrics
+    mode = read_simulator_score_mode()
+    th_acc, th_ae = get_level_thresholds(level_id) if level_id else (0.0, 0.0)
+    if th_ae <= 0:
+        th_ae = float(simust_progress.SERIES_SCORE_AE)
+    out = dict(metrics or {})
+    try:
+        aac = float(out.get("aac") or 0.0)
+    except (TypeError, ValueError):
+        aac = 0.0
+    try:
+        ae = float(out.get("avg_ae") or 0.0)
+    except (TypeError, ValueError):
+        ae = 0.0
+    if mode == 1:
+        # Cap under unlock gates. Series levels are AE-only (th_acc may be 0).
+        if float(th_acc) > 0:
+            out["aac"] = min(aac, max(0.0, float(th_acc) - 1.0))
+        out["avg_ae"] = min(ae, max(0.0, float(th_ae) - 1.0))
+    else:
+        # Mode 2: do not rewrite the average — unlock via force_pass.
+        out["force_pass"] = True
+    avg_ae = float(out.get("avg_ae") or 0.0)
+    out["ae_display"] = f"{avg_ae:.0f}%" if avg_ae > 0 else "-"
+    return out
+
+
+def _simulator_mode2_force_pass(field_id, score_field: str = "", fields: dict = None) -> bool:
+    """Mode 2 sim always unlocks / levels up when this field uses score mode."""
+    if read_simulator_score_mode() != 2:
+        return False
+    return _field_uses_simulator_score_mode(
+        field_id, score_field=score_field, fields=fields
+    )
 
 
 def write_teammate_flash_timing(on_sec, gap_sec):
@@ -1763,27 +2420,138 @@ def kill_process_tree(proc) -> None:
         pass
 
 
+def _popen_no_console(args, **kwargs) -> subprocess.Popen:
+    """Start a helper process without a visible Windows console window."""
+    kwargs.setdefault("shell", False)
+    if sys.platform == "win32":
+        # CREATE_NO_WINDOW — no black python.exe terminal for camera/player.
+        kwargs["creationflags"] = int(kwargs.get("creationflags") or 0) | getattr(
+            subprocess, "CREATE_NO_WINDOW", 0x08000000
+        )
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
+        kwargs.setdefault("stdout", subprocess.DEVNULL)
+        kwargs.setdefault("stderr", subprocess.DEVNULL)
+    return subprocess.Popen(args, **kwargs)
+
+
+def _python_pids_matching(*needles: str) -> list:
+    """PIDs of python.exe whose command line contains any needle (case-insensitive).
+
+    Windows ``taskkill /FI "CMDLine eq *…*"`` is unreliable; scan Win32_Process instead.
+    """
+    needles = [str(n or "").strip().lower() for n in needles if str(n or "").strip()]
+    if not needles:
+        return []
+    pids = []
+    try:
+        if sys.platform == "win32":
+            # Keep the filter string simple — PowerShell matches needles below.
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" "
+                    "| Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=12,
+            )
+            raw = (result.stdout or "").strip()
+            if not raw:
+                return []
+            rows = json.loads(raw)
+            if isinstance(rows, dict):
+                rows = [rows]
+            my_pid = os.getpid()
+            for row in rows or []:
+                try:
+                    pid = int(row.get("ProcessId") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if pid <= 0 or pid == my_pid:
+                    continue
+                cmd = str(row.get("CommandLine") or "").lower()
+                if any(n in cmd for n in needles):
+                    pids.append(pid)
+        else:
+            result = subprocess.run(
+                ["ps", "-eo", "pid,args"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            my_pid = os.getpid()
+            for line in (result.stdout or "").splitlines()[1:]:
+                parts = line.strip().split(None, 1)
+                if len(parts) < 2:
+                    continue
+                try:
+                    pid = int(parts[0])
+                except ValueError:
+                    continue
+                if pid == my_pid:
+                    continue
+                cmd = parts[1].lower()
+                if any(n in cmd for n in needles):
+                    pids.append(pid)
+    except Exception as exc:
+        logger.warning("Could not list python processes: %s", exc)
+    return pids
+
+
+def kill_python_scripts_matching(*needles: str) -> int:
+    """Force-kill matching python scripts (and their console windows). Returns count."""
+    killed = 0
+    for pid in _python_pids_matching(*needles):
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=8,
+                )
+            else:
+                os.kill(pid, 9)
+            killed += 1
+            logger.info("Killed orphan python PID %s matching %s", pid, needles)
+        except Exception as exc:
+            logger.warning("Could not kill PID %s: %s", pid, exc)
+    return killed
+
+
+def kill_orphaned_realtime_processes() -> int:
+    """Close leftover camera/player terminals that block the next Realtime Play."""
+    return kill_python_scripts_matching(
+        "simust_realtime.py",
+        "smart_simust_player.py",
+        "play_results_video.py",
+        "waiting.py",
+    )
+
+
 def smart_player_is_running() -> bool:
     return smart_player_process is not None and smart_player_process.poll() is None
 
 
 def kill_screen2_result_helpers() -> None:
-    """Stop leftover Screen 2 helper windows so the player sequence is not covered."""
-    if sys.platform != "win32":
-        return
+    """Stop leftover Screen 2 helper windows so the player sequence is not covered.
+
+    Always off the asyncio loop — Win32 CIM via PowerShell can take many seconds.
+    """
     try:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *play_results_video*"],
-            capture_output=True,
-            timeout=8,
-        )
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *waiting.py*"],
-            capture_output=True,
-            timeout=8,
-        )
+        threading.Thread(
+            target=kill_python_scripts_matching,
+            args=("play_results_video.py", "waiting.py"),
+            daemon=True,
+            name="kill-screen2-helpers",
+        ).start()
     except Exception:
-        pass
+        try:
+            kill_python_scripts_matching("play_results_video.py", "waiting.py")
+        except Exception:
+            pass
 
 
 def should_spawn_screen2_display(display_flag) -> bool:
@@ -1815,24 +2583,17 @@ def clear_image_action_cue(force_end: bool = True) -> None:
 
 
 def force_kill_smart_player():
-    global smart_player_process
+    global smart_player_process, realtime_camera_process
     kill_process_tree(smart_player_process)
     smart_player_process = None
+    kill_process_tree(realtime_camera_process)
+    realtime_camera_process = None
+    # Windows CMDLine taskkill filters often miss orphans — scan by command line.
+    kill_orphaned_realtime_processes()
     if sys.platform == "win32":
         try:
-            subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq Smart Player*"], capture_output=True, timeout=8)
             subprocess.run(
-                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *smart_simust_player*"],
-                capture_output=True,
-                timeout=8,
-            )
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *simust_realtime*"],
-                capture_output=True,
-                timeout=8,
-            )
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "python.exe", "/FI", "CMDLine eq *play_results_video*"],
+                ["taskkill", "/F", "/FI", "WINDOWTITLE eq Smart Player*"],
                 capture_output=True,
                 timeout=8,
             )
@@ -2013,6 +2774,10 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
     clear_image_action_cue(force_end=True)
+    try:
+        simust_manual_coach.clear_command_files()
+    except Exception:
+        pass
     discarded = []
     if abort:
         discarded = discard_aborted_realtime_folders()
@@ -2051,7 +2816,20 @@ def discard_aborted_realtime_folders() -> list:
             logger.warning("Could not discard %s: %s", path, exc)
     return removed
 
-atexit.register(force_kill_smart_player)
+def _atexit_stop_owned_realtime() -> None:
+    """On lab exit, stop only processes this app.py instance spawned.
+
+    Do not sweep orphans here — importing app from tests used to atexit-kill a
+    live Realtime Play session on the arena.
+    """
+    global smart_player_process, realtime_camera_process
+    kill_process_tree(smart_player_process)
+    smart_player_process = None
+    kill_process_tree(realtime_camera_process)
+    realtime_camera_process = None
+
+
+atexit.register(_atexit_stop_owned_realtime)
 
 def get_video_duration(video_path: str) -> float:
     try:
@@ -2498,18 +3276,19 @@ async def start_realtime_playback(req: Request):
             raise HTTPException(400, "No player selected for Field A or Field B")
 
         score_field = str(data.get("score_field") or data.get("field") or "").strip().upper()[:1]
+        # Elite / World Class with one selected player: partner half is always
+        # the simulator so all 12 screens and both result lanes run together.
+        combined_partner_sim = None
         if len(play_slots) == 1:
             pid, fid, entry = play_slots[0]
             slot_level = str((entry or {}).get("level") or level_id or "")
             if _combined_level(slot_level):
                 other = "B" if fid == "A" else "A"
-                cloned = dict(entry or {})
-                cloned["field"] = other
-                play_slots.append((pid, other, cloned))
                 if score_field not in ("A", "B"):
                     score_field = fid
+                combined_partner_sim = other
                 logger.info(
-                    "Elite/World Class on %s: Field %s is added automatically for all 12 screens. Score stays on Field %s.",
+                    "Elite/World Class on %s: Field %s auto-simulated for all 12 screens. Score stays on Field %s.",
                     fid, other, score_field,
                 )
         if score_field not in ("A", "B"):
@@ -2630,6 +3409,26 @@ async def start_realtime_playback(req: Request):
         if not isinstance(sim_fields, dict):
             both = bool(data.get("simulation_enabled", False))
             sim_fields = {"A": both, "B": both}
+        sim_fields = {
+            "A": bool(sim_fields.get("A")),
+            "B": bool(sim_fields.get("B")),
+        }
+        if combined_partner_sim in ("A", "B"):
+            # Elite/WC partner half is always simulated.
+            sim_fields[combined_partner_sim] = True
+            # If the booked field is already in sim mode, both halves simulate.
+            score_sim = score_field if score_field in ("A", "B") else play_slots[0][1]
+            if bool(sim_fields.get(score_sim)):
+                sim_fields["A"] = True
+                sim_fields["B"] = True
+        else:
+            # Entry / Activated / High Performance: only the selected field(s)
+            # may simulate. Never light the empty half just because the global
+            # Sim toggle left the other checkbox on.
+            selected = {fid for _pid, fid, _entry in play_slots}
+            for fid in ("A", "B"):
+                if fid not in selected:
+                    sim_fields[fid] = False
         write_simulation_fields(sim_fields)
         flash_timing = write_teammate_flash_timing(
             data.get("teammate_on_sec", data.get("on_sec", 1.2)),
@@ -2660,6 +3459,17 @@ async def start_realtime_playback(req: Request):
             # Prefer resolved_slots so Elite/World Class mirroring (one field → both)
             # is written into players_fields.json for the 12-screen combined play.
             for pid, fid, entry, slot_level, entry_sub in resolved_slots:
+                booking_end = ""
+                # Stamp contiguous chain end so back-to-back bookings keep playing,
+                # and abort only when the last reserved round is in its final minute.
+                # Admin / staff test starts leave this empty (no auto-abort).
+                if not admin_test_override:
+                    try:
+                        chain_end = resolve_contiguous_booking_end(pid, fid)
+                        if chain_end is not None:
+                            booking_end = chain_end.isoformat(timespec="seconds")
+                    except Exception:
+                        booking_end = ""
                 field_map[fid] = {
                     "player_id": pid or (entry or {}).get("player_id") or "",
                     "player_name": (entry or {}).get("player_name") or "",
@@ -2668,37 +3478,60 @@ async def start_realtime_playback(req: Request):
                     "subdirectory": entry_sub,
                     "level": slot_level,
                     "directory": field_dirs.get(fid) or "",
+                    "booking_end": booking_end,
                 }
             active_list = [
                 fid for fid in ("A", "B")
                 if isinstance(field_map.get(fid), dict)
                 and str(field_map[fid].get("player_id") or "").strip()
             ]
-            requested_fields = {
-                _reservation_field_id(entry)
-                for entry in (players_payload or [])
-                if isinstance(entry, dict)
-            }
-            for fid, other in (("A", "B"), ("B", "A")):
-                if fid not in requested_fields:
-                    continue
-                if not bool(sim_fields.get(fid)) or fid in active_list:
-                    continue
-                src = field_map.get(other) if isinstance(field_map.get(other), dict) else {}
-                if not str((src or {}).get("player_id") or "").strip():
-                    continue
-                field_map[fid] = {
-                    "player_id": "__sim_%s__" % fid,
-                    "player_name": "Simulator",
-                    "player_surname": fid,
-                    "field": fid,
-                    "subdirectory": src.get("subdirectory") or "",
-                    "level": src.get("level") or level_id,
-                    "directory": field_dirs.get(fid) or src.get("directory") or "",
-                    "simulated": True,
-                }
-                active_list.append(fid)
-            # Both selected fields stay active together (neither half dark).
+            # Elite / World Class only: attach simulator on the empty partner half.
+            # High Performance / Entry / Activated must stay on the selected field(s)
+            # — do not start Field B when only Field A was chosen.
+            if combined_partner_sim in ("A", "B") and combined_partner_sim not in active_list:
+                other = combined_partner_sim
+                lead = "B" if other == "A" else "A"
+                src = field_map.get(lead) if isinstance(field_map.get(lead), dict) else {}
+                src_pid = str((src or {}).get("player_id") or "").strip()
+                if src_pid and not src_pid.startswith("__sim_"):
+                    field_map[other] = {
+                        "player_id": "__sim_%s__" % other,
+                        "player_name": "Simulator",
+                        "player_surname": other,
+                        "field": other,
+                        "subdirectory": src.get("subdirectory") or "",
+                        "level": src.get("level") or level_id,
+                        "directory": field_dirs.get(other) or src.get("directory") or "",
+                        "simulated": True,
+                        "booking_end": str(src.get("booking_end") or ""),
+                    }
+                    active_list.append(other)
+            if combined_partner_sim in ("A", "B"):
+                active_list = [fid for fid in ("A", "B") if fid in set(active_list)]
+            else:
+                # Single-band play: clear the idle half so a prior Elite dual
+                # session cannot leave Field B lit.
+                selected = set(active_list)
+                for fid in ("A", "B"):
+                    if fid in selected:
+                        continue
+                    field_map[fid] = {
+                        "player_id": "",
+                        "player_name": "",
+                        "player_surname": "",
+                        "field": fid,
+                        "subdirectory": "",
+                        "level": "",
+                        "directory": "",
+                        "simulated": False,
+                        "booking_end": "",
+                    }
+            for fid in ("A", "B"):
+                slot = field_map.get(fid) if isinstance(field_map.get(fid), dict) else None
+                if slot and str(slot.get("player_id") or "").strip() and slot.get("level"):
+                    slot_levels[fid] = slot.get("level")
+                elif fid in slot_levels and fid not in active_list:
+                    slot_levels.pop(fid, None)
             phase_active = active_list or ["A"]
             os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
             with open(os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"), "w", encoding="utf-8") as f:
@@ -2710,6 +3543,7 @@ async def start_realtime_playback(req: Request):
                     "levels": slot_levels,
                     "separate_fields": False,
                     "score_field": score_field,
+                    "admin_test": bool(admin_test_override),
                 }, f, indent=2)
         except Exception as e:
             logger.warning("Could not write players_fields.json: %s", e)
@@ -2743,6 +3577,10 @@ async def start_realtime_playback(req: Request):
                 logger.warning(f"Error cleaning up old process: {e}")
             finally:
                 realtime_camera_process = None
+        # Previous booking often left simust_realtime.exe console open; that
+        # blocks the next Realtime Play until the orphan is gone.
+        force_kill_smart_player()
+        clear_image_action_cue(force_end=True)
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         python_exe = sys.executable
@@ -2754,18 +3592,9 @@ async def start_realtime_playback(req: Request):
         if not os.path.exists(realtime_script):
             logger.warning(f"simust_realtime.py not found - only video player will run")
         else:
-            if sys.platform == "win32":
-                CREATE_NO_WINDOW = 0x08000000
-                realtime_camera_process = subprocess.Popen(
-                    [python_exe, realtime_script, level_path, str(player_speed)],
-                    shell=False,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE | CREATE_NO_WINDOW
-                )
-            else:
-                realtime_camera_process = subprocess.Popen(
-                    [python_exe, realtime_script, level_path, str(player_speed)],
-                    shell=False
-                )
+            realtime_camera_process = _popen_no_console(
+                [python_exe, realtime_script, level_path, str(player_speed)],
+            )
             logger.info("Realtime camera/QR detection started.")
             await asyncio.sleep(3)
 
@@ -2776,18 +3605,9 @@ async def start_realtime_playback(req: Request):
         if not os.path.exists(smart_script):
             raise HTTPException(500, f"smart_simust_player.py not found")
 
-        if sys.platform == "win32":
-            CREATE_NO_WINDOW = 0x08000000
-            smart_player_process = subprocess.Popen(
-                [python_exe, smart_script, level_path, str(player_speed), "1"],
-                shell=False,
-                creationflags=subprocess.CREATE_NEW_CONSOLE | CREATE_NO_WINDOW
-            )
-        else:
-            smart_player_process = subprocess.Popen(
-                [python_exe, smart_script, level_path, str(player_speed), "1"],
-                shell=False
-            )
+        smart_player_process = _popen_no_console(
+            [python_exe, smart_script, level_path, str(player_speed), "1"],
+        )
         logger.info(f"Smart player launched with level: {level_id}, subdir: {subdirectory or 'None'}, speed: {player_speed}x on Screen 2")
 
         # Also store the current level for the player (level intro video selection)
@@ -2833,6 +3653,205 @@ async def stop_realtime(req: Request):
     except Exception as e:
         logger.error(f"Failed to stop realtime: {e}")
         raise HTTPException(500, f"Failed to stop: {str(e)}")
+
+
+def _require_operator_staff(request: Request):
+    """Coach / manager / admin only (lab or logged-in public tablet)."""
+    if not PUBLIC_MODE:
+        return {"role": "admin", "username": "lab"}
+    users = load_users()
+    viewer = current_user(request, users, required=True)
+    role = str(viewer.get("role") or "").strip().lower()
+    if role not in RESERVATION_STAFF_ROLES:
+        raise HTTPException(403, "Only coach, manager, or admin can use Manual coach")
+    return viewer
+
+
+@app.get("/manual-coach/layout")
+async def manual_coach_layout(request: Request):
+    _require_operator_staff(request)
+    return {"status": "success", "layout": simust_manual_coach.layout_for_operator()}
+
+
+@app.get("/manual-coach/status")
+async def manual_coach_status(request: Request):
+    _require_operator_staff(request)
+    status = simust_manual_coach.read_status()
+    status["session_running"] = bool(_realtime_is_running())
+    return {"status": "success", **status}
+
+
+@app.post("/manual-coach/start")
+async def manual_coach_start(request: Request):
+    """Start realtime camera + smart player in Manual coach mode (no playlist)."""
+    global smart_player_process, realtime_camera_process, _realtime_session_active
+    global realtime_aborted
+    _require_operator_staff(request)
+    if not read_cabinet_controls().get("system_on", True):
+        raise HTTPException(400, "System is off — turn System on first")
+    try:
+        # Stop any active level session first.
+        apply_stop_realtime({"abort": True, "operator_stop": True})
+        await asyncio.sleep(0.4)
+        realtime_aborted = False
+        clear_image_action_cue(force_end=True)
+        simust_manual_coach.clear_command_files()
+        simust_manual_coach.write_status(
+            active=True,
+            lit_screen=None,
+            waiting_hit=False,
+            last_hit=None,
+            seq=0,
+            message="Starting Manual coach…",
+        )
+        # Both fields active so either half can light a cylinder.
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        with open(
+            os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump(
+                {
+                    "fields": {
+                        "A": {
+                            "player_id": "manual-coach",
+                            "player_name": "Manual",
+                            "player_surname": "Coach",
+                            "field": "A",
+                            "level": "Manual",
+                            "directory": "",
+                            "simulated": False,
+                        },
+                        "B": {
+                            "player_id": "manual-coach",
+                            "player_name": "Manual",
+                            "player_surname": "Coach",
+                            "field": "B",
+                            "level": "Manual",
+                            "directory": "",
+                            "simulated": False,
+                        },
+                    },
+                    "players": [],
+                    "active": ["A", "B"],
+                    "level": "Manual",
+                    "levels": {"A": "Manual", "B": "Manual"},
+                    "separate_fields": False,
+                    "score_field": "A",
+                    "manual_coach": True,
+                },
+                handle,
+                indent=2,
+            )
+        write_playback_status("playing", "Manual coach — tap a goal area")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        python_exe = sys.executable
+        foundation_path = get_level_path("L00-Foundation")
+        realtime_script = os.path.join(script_dir, "simust_realtime.py")
+        if not os.path.exists(realtime_script):
+            realtime_script = os.path.join(os.getcwd(), "simust_realtime.py")
+        if os.path.exists(realtime_script):
+            realtime_camera_process = _popen_no_console(
+                [python_exe, realtime_script, foundation_path, "1"],
+            )
+            logger.info("Manual coach: realtime camera started")
+            await asyncio.sleep(2.5)
+        else:
+            logger.warning("Manual coach: simust_realtime.py missing — cylinders unavailable")
+        smart_script = os.path.join(script_dir, "smart_simust_player.py")
+        if not os.path.exists(smart_script):
+            smart_script = os.path.join(os.getcwd(), "smart_simust_player.py")
+        if not os.path.exists(smart_script):
+            raise HTTPException(500, "smart_simust_player.py not found")
+        smart_player_process = _popen_no_console(
+            [python_exe, smart_script, simust_manual_coach.MANUAL_COACH_ARG, "1", "1"],
+            cwd=script_dir,
+        )
+        _realtime_session_active = True
+        await asyncio.sleep(0.5)
+        if smart_player_process.poll() is not None:
+            _realtime_session_active = False
+            raise HTTPException(500, "Manual coach player exited immediately")
+        simust_manual_coach.write_status(
+            active=True,
+            lit_screen=None,
+            waiting_hit=False,
+            last_hit=None,
+            seq=0,
+            message="Manual coach ready — tap a goal area",
+        )
+        logger.info(
+            "Manual coach started (player pid %s)",
+            getattr(smart_player_process, "pid", "?"),
+        )
+        return {
+            "status": "success",
+            "message": "Manual coach ready",
+            "layout": simust_manual_coach.layout_for_operator(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _realtime_session_active = False
+        logger.exception("Manual coach start failed")
+        raise HTTPException(500, f"Failed to start Manual coach: {exc}") from exc
+
+
+@app.post("/manual-coach/cue")
+async def manual_coach_cue(request: Request):
+    """Light one screen + cylinder from a goal-area button press."""
+    _require_operator_staff(request)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    screen = simust_manual_coach.normalize_screen((data or {}).get("screen"))
+    if not screen:
+        raise HTTPException(400, "screen must be A1–A6 or B1–B6")
+    if not _realtime_is_running():
+        raise HTTPException(400, "Start Manual coach first")
+    cmd = simust_manual_coach.write_command("cue", screen=screen)
+    prior = simust_manual_coach.read_status()
+    lit = [
+        str(s).upper()
+        for s in (prior.get("lit_screens") or [])
+        if str(s or "").strip()
+    ]
+    if screen not in lit:
+        lit.append(screen)
+    simust_manual_coach.write_status(
+        active=True,
+        lit_screen=screen,
+        lit_screens=lit,
+        waiting_hit=True,
+        last_hit=None,
+        seq=cmd.get("seq"),
+        message=f"Cueing {screen}… ({len(lit)} lit)",
+    )
+    return {"status": "success", "screen": screen, "seq": cmd.get("seq"), "lit_screens": lit}
+
+
+@app.post("/manual-coach/clear")
+async def manual_coach_clear(request: Request):
+    _require_operator_staff(request)
+    cmd = simust_manual_coach.write_command("clear")
+    return {"status": "success", "seq": cmd.get("seq")}
+
+
+@app.post("/manual-coach/stop")
+async def manual_coach_stop(request: Request):
+    _require_operator_staff(request)
+    try:
+        simust_manual_coach.write_command("stop")
+    except Exception:
+        pass
+    result = apply_stop_realtime({"abort": True, "operator_stop": True})
+    try:
+        simust_manual_coach.clear_command_files()
+    except Exception:
+        pass
+    return {"status": "success", "message": "Manual coach stopped", **result}
 
 
 @app.post("/pause-realtime")
@@ -2948,6 +3967,14 @@ async def join_realtime_field(req: Request):
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+    booking_end = ""
+    if not admin_test_override:
+        try:
+            chain_end = resolve_contiguous_booking_end(player_id, fid)
+            if chain_end is not None:
+                booking_end = chain_end.isoformat(timespec="seconds")
+        except Exception:
+            booking_end = ""
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     fields[fid] = {
         "player_id": player_id,
@@ -2957,6 +3984,7 @@ async def join_realtime_field(req: Request):
         "subdirectory": sub,
         "level": level_id,
         "directory": directory,
+        "booking_end": booking_end,
     }
     active = []
     for item in payload.get("active") or []:
@@ -2970,6 +3998,8 @@ async def join_realtime_field(req: Request):
     payload["fields"] = fields
     payload["active"] = active
     payload["levels"] = levels
+    if admin_test_override:
+        payload["admin_test"] = True
     os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
@@ -3100,17 +4130,8 @@ def ensure_idle_screensaver_player() -> bool:
     python_exe = sys.executable
     args = [python_exe, smart_script, "__screensaver__", "1", "1"]
     try:
-        # Same launch style as a realtime session so Screen 2 Qt display works.
-        if sys.platform == "win32":
-            CREATE_NO_WINDOW = 0x08000000
-            smart_player_process = subprocess.Popen(
-                args,
-                shell=False,
-                cwd=script_dir,
-                creationflags=subprocess.CREATE_NEW_CONSOLE | CREATE_NO_WINDOW,
-            )
-        else:
-            smart_player_process = subprocess.Popen(args, shell=False, cwd=script_dir)
+        # Same launch style as realtime — Qt screens still show; no console window.
+        smart_player_process = _popen_no_console(args, cwd=script_dir)
         time.sleep(0.4)
         if smart_player_process.poll() is not None:
             logger.error(
@@ -3275,21 +4296,95 @@ async def stop_realtime_camera():
     try:
         if realtime_camera_process and realtime_camera_process.poll() is None:
             realtime_camera_process.terminate()
-            for _ in range(50):
+            for _ in range(20):
                 if realtime_camera_process.poll() is not None:
                     break
                 await asyncio.sleep(0.1)
             if realtime_camera_process.poll() is None:
                 realtime_camera_process.kill()
-                realtime_camera_process.wait(timeout=2)
+                try:
+                    realtime_camera_process.wait(timeout=1)
+                except Exception:
+                    pass
             realtime_camera_process = None
-            logger.info("Realtime camera process stopped.")
-            return {"status": "success", "message": "Camera stopped"}
-        else:
-            return {"status": "info", "message": "No camera process running"}
+        # Always sweep orphans — handle can be lost while the console stays open.
+        killed = kill_python_scripts_matching("simust_realtime.py")
+        logger.info("Realtime camera process stopped (orphans killed=%s).", killed)
+        return {"status": "success", "message": "Camera stopped", "orphans_killed": killed}
     except Exception as e:
         logger.error(f"Failed to stop camera: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/booking-play-deadline")
+async def get_booking_play_deadline(player_id: str = "", field: str = "A"):
+    """Seconds left on the contiguous booking chain for a reserved player/field."""
+    info = booking_play_deadline_info(player_id, field)
+    return {"status": "success", **info}
+
+
+@app.post("/booking-deadline-release")
+async def booking_deadline_release(req: Request):
+    """Reservation ended: fully stop camera, player, and leftover terminals.
+
+    Used when the player's reserved time (including back-to-back rounds) is over.
+    Clears cues and frees the cabinet for the next Realtime Play start.
+    """
+    global realtime_camera_process, _realtime_session_active, realtime_active_player_id
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    reason = str((data or {}).get("reason") or "booking_end")
+    # Default full stop: nothing keeps running until the next player starts.
+    full_stop = bool((data or {}).get("full_stop", True))
+    clear_image_action_cue(force_end=True)
+    write_visualization_setting(False)
+    write_pause_setting(False)
+    try:
+        if realtime_camera_process and realtime_camera_process.poll() is None:
+            realtime_camera_process.terminate()
+            for _ in range(15):
+                if realtime_camera_process.poll() is not None:
+                    break
+                await asyncio.sleep(0.1)
+            if realtime_camera_process.poll() is None:
+                try:
+                    realtime_camera_process.kill()
+                except Exception:
+                    pass
+            realtime_camera_process = None
+    except Exception as exc:
+        logger.warning("Booking deadline camera stop: %s", exc)
+        realtime_camera_process = None
+    # Close the visible simust_realtime console even if the Popen handle was lost.
+    kill_python_scripts_matching("simust_realtime.py")
+    if full_stop:
+        try:
+            kill_screen2_result_helpers()
+        except Exception:
+            pass
+        try:
+            # Delay slightly so the player's release HTTP call can finish first.
+            def _kill_player_soon():
+                time.sleep(0.6)
+                force_kill_smart_player()
+            threading.Thread(target=_kill_player_soon, daemon=True).start()
+        except Exception as exc:
+            logger.warning("Booking deadline player stop: %s", exc)
+            try:
+                force_kill_smart_player()
+            except Exception:
+                pass
+    _realtime_session_active = False
+    realtime_active_player_id = None
+    write_playback_status("ready", "Booking time ended — ready for the next reservation")
+    logger.info(
+        "Booking deadline release (%s) full_stop=%s — session fully stopped",
+        reason,
+        full_stop,
+    )
+    return {"status": "success", "released": True, "reason": reason, "full_stop": full_stop}
 
 @app.post("/set-visualization")
 async def set_visualization(req: Request):
@@ -3323,10 +4418,37 @@ async def set_simulation(req: Request):
             "status": "success",
             "simulation_fields": saved,
             "simulation_enabled": bool(saved.get("A") or saved.get("B")),
+            "simulator_score_mode": read_simulator_score_mode(),
         }
     except Exception as e:
         logger.error(f"Failed to set simulation: {e}")
         raise HTTPException(500, f"Failed to set simulation: {str(e)}")
+
+
+@app.get("/simulator-score-mode")
+async def get_simulator_score_mode():
+    mode = read_simulator_score_mode()
+    return {
+        "status": "success",
+        "mode": mode,
+        "label": "fail unlock" if mode == 1 else "always unlock",
+    }
+
+
+@app.post("/simulator-score-mode")
+async def set_simulator_score_mode(req: Request):
+    try:
+        data = await req.json()
+        mode = write_simulator_score_mode(data.get("mode", data.get("score_mode", 2)))
+        logger.info("Simulator score mode set to %s", mode)
+        return {
+            "status": "success",
+            "mode": mode,
+            "label": "fail unlock" if mode == 1 else "always unlock",
+        }
+    except Exception as e:
+        logger.error(f"Failed to set simulator score mode: {e}")
+        raise HTTPException(500, f"Failed to set simulator score mode: {str(e)}")
 
 # ============================================================
 # RESULTS ENDPOINTS
@@ -4500,6 +5622,10 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
             shown = int(metrics.get("distance_m_display") or 0)
         else:
             shown = distance_m_display(raw_dist)
+        # Never persist a blank board over a known positive hip path
+        # (mid-session race used to lock distance_m_display=0 forever).
+        if shown <= 0 and raw_dist > 0:
+            shown = distance_m_display(raw_dist)
         entry = {
             "video_index": int(video_index),
             "total_distance": raw_dist,
@@ -4539,13 +5665,41 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
         logger.warning("Could not save section metrics for video %s: %s", video_index, exc)
 
 
+def _is_finish_balls_timeout_filler(row) -> bool:
+    """Unplayed leftover stamped Wrong when the shared clock expired (T1a3, …)."""
+    result = str((row or {}).get("result") or (row or {}).get("Result") or "").strip().lower()
+    if result != "wrong":
+        return False
+    rid = str((row or {}).get("id") or "").strip()
+    if re.match(r"^T\d+a\d+$", rid, flags=re.I):
+        return True
+    clock = _parse_positive_float((row or {}).get("balls_clock_sec"))
+    budget = _parse_positive_float((row or {}).get("balls_budget_sec"))
+    if clock and budget and clock >= (budget * 0.99):
+        try:
+            mov = float((row or {}).get("movement") or 0)
+        except (TypeError, ValueError):
+            mov = 0.0
+        if mov <= 0:
+            return True
+    return False
+
+
 def finish_balls_clock(results_list):
-    """Shared-clock speed. All balls in the goal → time used. Any miss uses the whole clock."""
+    """Shared-clock speed. All played balls in the goal → time used.
+
+    Timeout filler Wrongs (unplayed leftovers when the clock ends) must not
+    force used=budget / AET=0% — that was pinning Mode 2 Foundation AE ~60%.
+    Real Wrong/Miss still burns the whole clock.
+    """
     results_list = list(results_list or [])
+    playable = [row for row in results_list if not _is_finish_balls_timeout_filler(row)]
+    if not playable:
+        playable = results_list
     budgets = []
     clocks = []
     saw = False
-    for row in results_list:
+    for row in playable:
         if row.get("finish_balls") or row.get("balls_budget_sec") is not None:
             saw = True
         budget = _parse_positive_float(row.get("balls_budget_sec"))
@@ -4562,11 +5716,20 @@ def finish_balls_clock(results_list):
     def _fb_result(row):
         return str((row or {}).get("result") or (row or {}).get("Result") or "").strip().lower()
 
-    correct = sum(1 for row in results_list if _fb_result(row) == "correct")
-    late = sum(1 for row in results_list if _fb_result(row) == "late")
-    total = len(results_list)
+    correct = sum(1 for row in playable if _fb_result(row) == "correct")
+    late = sum(1 for row in playable if _fb_result(row) == "late")
+    real_wrong = sum(
+        1 for row in playable
+        if _fb_result(row) in ("wrong", "miss")
+    )
+    total = len(playable)
     all_in = total > 0 and correct == total
     if all_in and clocks and budget > 0:
+        used = max(clocks)
+        if used > budget:
+            used = budget
+    elif clocks and budget > 0 and real_wrong == 0:
+        # Only timeout fillers were dropped — keep Correct pace.
         used = max(clocks)
         if used > budget:
             used = budget
@@ -4575,7 +5738,7 @@ def finish_balls_clock(results_list):
     percent = 0.0
     if budget > 0:
         percent = max(0.0, min(100.0, (1.0 - (used / budget)) * 100.0))
-    # Same AAC rule as normal tests: Correct + Late over all actions.
+    # AAC over played actions (timeout fillers excluded).
     accuracy = ((correct + late) / total) * 100.0 if total else 0.0
     return {
         "finish_balls": True,
@@ -4598,8 +5761,8 @@ def finish_balls_action_ae(row, aet_percent):
     screen = str((row or {}).get("winning_screen") or "")
     if action == "TARGET" and screen in ("9L", "6L", "9R", "6R"):
         priority = 85
-    result = str((row or {}).get("result") or "")
-    if result == "Correct":
+    result = str((row or {}).get("result") or "").strip().lower()
+    if result == "correct":
         accuracy_term = 100.0
         wrong = 0.0
     else:
@@ -4630,7 +5793,13 @@ def finish_balls_action_ae(row, aet_percent):
 
 def finish_balls_efficiency(results_list, aet_percent):
     """Test efficiency is the average of the action scores."""
-    scores = [finish_balls_action_ae(row, aet_percent) for row in (results_list or [])]
+    rows = [
+        row for row in (results_list or [])
+        if not _is_finish_balls_timeout_filler(row)
+    ]
+    if not rows:
+        rows = list(results_list or [])
+    scores = [finish_balls_action_ae(row, aet_percent) for row in rows]
     if not scores:
         return 0.0
     return sum(scores) / len(scores)
@@ -4747,26 +5916,31 @@ def summarize_results_section_metrics(results_list):
 
 
 def _combine_section_metrics(section_metrics):
+    """Final series score = mean of every per-test board (ACC, AE, AET, displacement)."""
     section_metrics = [m for m in (section_metrics or []) if isinstance(m, dict)]
     if not section_metrics:
         return summarize_results_section_metrics([])
 
-    # Final displacement = sum of the whole metres each video board already showed
-    # (3+3+11=17), never sum-then-round of raw floats (17.61→18) and never
-    # recompute from recognition.json.
-    display_sum = 0
+    n = float(len(section_metrics))
+    # Final displacement = average of each test's whole-metre board (not a sum).
+    display_vals = []
     for m in section_metrics:
+        shown = None
         if m.get("distance_m_display") is not None:
             try:
-                display_sum += int(m.get("distance_m_display") or 0)
-                continue
+                shown = int(m.get("distance_m_display") or 0)
             except (TypeError, ValueError):
-                pass
-        display_sum += distance_m_display(m.get("total_distance"))
-    total_distance = float(display_sum)
+                shown = None
+        if shown is None or shown <= 0:
+            shown = distance_m_display(m.get("total_distance"))
+        display_vals.append(shown)
+    avg_display = (sum(display_vals) / n) if display_vals else 0.0
+    total_distance = float(avg_display)
+    distance_shown = int(round(avg_display))
 
-    aac = sum(float(m.get("aac") or 0.0) for m in section_metrics) / len(section_metrics)
-    avg_ae = sum(float(m.get("avg_ae") or 0.0) for m in section_metrics) / len(section_metrics)
+    aac = sum(float(m.get("aac") or 0.0) for m in section_metrics) / n
+    avg_ae = sum(float(m.get("avg_ae") or 0.0) for m in section_metrics) / n
+    aet_percent = sum(float(m.get("aet_percent") or 0.0) for m in section_metrics) / n
     aets = [m.get("aet") for m in section_metrics if m.get("aet") is not None]
     if aets:
         aet = sum(float(a) for a in aets) / len(aets)
@@ -4776,7 +5950,6 @@ def _combine_section_metrics(section_metrics):
             for m in section_metrics
             if m.get("aet_session_display") and m.get("aet_session_display") != "-"
         ]
-        # Average numeric session displays when present
         sess_vals = []
         for s in sess:
             try:
@@ -4786,19 +5959,16 @@ def _combine_section_metrics(section_metrics):
         if sess_vals:
             avg_session = sum(sess_vals) / len(sess_vals)
             aet_session_display = f"{avg_session:.2f}s"
-            aet_percent = max(0.0, min(100.0, (1.0 - (aet / avg_session)) * 100.0))
         else:
             aet_session_display = None
-            aet_percent = 0.0
     else:
         aet = None
-        aet_percent = 0.0
         aet_display = "-"
         aet_session_display = None
 
     return {
         "total_distance": float(total_distance),
-        "distance_m_display": int(display_sum),
+        "distance_m_display": int(distance_shown),
         "correct": sum(int(m.get("correct") or 0) for m in section_metrics),
         "late": sum(int(m.get("late") or 0) for m in section_metrics),
         "wrong": sum(int(m.get("wrong") or 0) for m in section_metrics),
@@ -4816,30 +5986,22 @@ def _combine_section_metrics(section_metrics):
 
 
 def aggregate_final_section_metrics(all_results, session_folder=None):
-    """Final rings from saved per-video boards only (sum/avg). No recognition recompute."""
-    saved = load_saved_section_metrics(session_folder) if session_folder else []
-    if saved:
-        logger.info(
-            "Final metrics summing %d saved video board(s): %s → %sm",
-            len(saved),
-            " + ".join(
-                str(
-                    s.get("distance_m_display")
-                    if s.get("distance_m_display") is not None
-                    else distance_m_display(s.get("total_distance"))
-                )
-                for s in saved
-            ),
-            sum(
-                int(s.get("distance_m_display"))
-                if s.get("distance_m_display") is not None
-                else distance_m_display(s.get("total_distance"))
-                for s in saved
-            ),
-        )
-        return _combine_section_metrics(saved)
+    """Final rings = mean of per-test boards.
 
-    # Fallback only when no per-video boards were saved (legacy sessions).
+    AE/ACC/AET are recomputed from results.json when present so Mode 2
+    timeout-filler Wrongs cannot leave a stale ~60% board on disk.
+    Displacement still prefers the saved per-video metre stamp when available.
+    """
+    saved = load_saved_section_metrics(session_folder) if session_folder else []
+    saved_by_video = {}
+    for s in saved:
+        try:
+            vid = int(s.get("video_index") or 0)
+        except (TypeError, ValueError):
+            vid = 0
+        if vid:
+            saved_by_video[vid] = s
+
     all_results = list(all_results or [])
     by_video_rows = {}
     for row in all_results:
@@ -4849,15 +6011,83 @@ def aggregate_final_section_metrics(all_results, session_folder=None):
             vid = 1
         by_video_rows.setdefault(vid, []).append(row)
 
-    section_metrics = []
-    for vid in sorted(by_video_rows):
-        m = summarize_results_section_metrics(by_video_rows[vid])
-        m["distance_m_display"] = distance_m_display(m.get("total_distance"))
-        section_metrics.append(m)
+    if by_video_rows or saved_by_video:
+        section_metrics = []
+        # Final board = every per-test ring (saved and/or present in results).
+        for vid in sorted(set(by_video_rows) | set(saved_by_video)):
+            rows = by_video_rows.get(vid) or []
+            if rows:
+                m = summarize_results_section_metrics(rows)
+            else:
+                m = dict(saved_by_video.get(vid) or {})
+            prior = saved_by_video.get(vid) or {}
+            prior_shown = None
+            if prior.get("distance_m_display") is not None:
+                try:
+                    prior_shown = int(prior.get("distance_m_display") or 0)
+                except (TypeError, ValueError):
+                    prior_shown = None
+            try:
+                prior_raw = float(prior.get("total_distance") or 0.0)
+            except (TypeError, ValueError):
+                prior_raw = 0.0
+            try:
+                live_dist = float(m.get("total_distance") or 0.0)
+            except (TypeError, ValueError):
+                live_dist = 0.0
+            # Prefer metres that were drawn on a per-test board, but never
+            # lock in a mid-session zero over later hip stamps / recompute.
+            if prior_shown is not None and prior_shown > 0:
+                m["distance_m_display"] = prior_shown
+                if prior_raw > 0:
+                    m["total_distance"] = prior_raw
+            else:
+                if live_dist <= 0 and session_folder:
+                    recomputed = compute_total_distance_from_recognition(
+                        session_folder, video_index=vid
+                    )
+                    if recomputed > 0:
+                        m["total_distance"] = recomputed
+                        live_dist = recomputed
+                if live_dist <= 0 and prior_raw > 0:
+                    m["total_distance"] = prior_raw
+                    live_dist = prior_raw
+                m["distance_m_display"] = distance_m_display(live_dist)
+            m["video_index"] = vid
+            section_metrics.append(m)
+        # Refresh saved boards so a later read matches the corrected AE.
+        if session_folder:
+            try:
+                for m in section_metrics:
+                    save_section_metrics_entry(
+                        session_folder, int(m.get("video_index") or 1), m
+                    )
+            except Exception:
+                logger.exception("Could not refresh section metrics after final recompute")
+        return _combine_section_metrics(section_metrics)
 
-    if not section_metrics:
-        return summarize_results_section_metrics(all_results)
-    return _combine_section_metrics(section_metrics)
+    if saved:
+        boards = []
+        for s in saved:
+            shown = None
+            if s.get("distance_m_display") is not None:
+                try:
+                    shown = int(s.get("distance_m_display") or 0)
+                except (TypeError, ValueError):
+                    shown = None
+            if shown is None or shown <= 0:
+                shown = distance_m_display(s.get("total_distance"))
+            boards.append(shown)
+        avg_m = (sum(boards) / float(len(boards))) if boards else 0.0
+        logger.info(
+            "Final metrics averaging %d saved video board(s): %s → %.1fm",
+            len(saved),
+            " / ".join(str(v) for v in boards),
+            avg_m,
+        )
+        return _combine_section_metrics(saved)
+
+    return summarize_results_section_metrics(all_results)
 
 
 
@@ -5768,14 +6998,198 @@ async def _wait_until_actions_are_scored(timeout=12.0, fields=None):
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
         await asyncio.sleep(0.15)
-    if not saw_status:
+    # Only pad when we were given a real wait budget (not Mode 2's short poll).
+    if not saw_status and float(timeout) >= 2.0:
         await asyncio.sleep(2.5)
+
+
+def _playback_aborted_for_results() -> bool:
+    """True when booking abort / stop already freed the cabinet — skip late results work."""
+    if not _realtime_session_active:
+        try:
+            status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
+            if os.path.isfile(status_file):
+                with open(status_file, "r", encoding="utf-8") as handle:
+                    status = json.load(handle) or {}
+                state = str(status.get("state") or "").strip().lower()
+                if state in ("ready", "idle", "aborted", "booking_abort", "closed"):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def _build_create_video_results_sync(data, directory, video_index, spawn_display):
+    """Heavy file/CPU work for per-video rings — must not run on the asyncio loop."""
+    session_root = directory
+    base = os.path.basename(session_root.rstrip("\\/"))
+    if base in ("field_A", "field_B"):
+        session_root = os.path.dirname(session_root)
+
+    active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
+    field_jobs = []
+    for fid in ("A", "B"):
+        if fid not in active:
+            continue
+        fdir = os.path.join(session_root, f"field_{fid}")
+        fresults = os.path.join(fdir, "results.json")
+        if os.path.exists(fresults):
+            with open(fresults, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+            if rows:
+                field_jobs.append((fid, fdir, rows, fresults))
+
+    if not field_jobs:
+        results_json_path = os.path.join(session_root, "results.json")
+        if not os.path.exists(results_json_path):
+            return {"status": "error", "message": "results.json not found"}
+        with open(results_json_path, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+        legacy_fid = "A" if "A" in active else ("B" if "B" in active else "A")
+        field_jobs.append((legacy_fid, session_root, rows, results_json_path))
+
+    panels = {}
+    primary_rows = None
+    primary_fid = "A" if "A" in active else "B"
+    primary_dir = session_root
+    for fid, fdir, all_results, results_json_path in field_jobs:
+        recognition_path = os.path.join(fdir, "recognition.json")
+        if os.path.exists(recognition_path):
+            try:
+                import simust_realtime as _rt
+                blocks = None
+                # Brief retry: recognition may still be flushing atomically.
+                for _attempt in range(4):
+                    try:
+                        with open(recognition_path, "r", encoding="utf-8") as f:
+                            blocks = json.load(f)
+                        break
+                    except (OSError, json.JSONDecodeError, ValueError):
+                        time.sleep(0.05)
+                if blocks is not None:
+                    by_video = _rt.compute_distances_by_video(blocks, all_results)
+                    changed = False
+                    for row in all_results:
+                        try:
+                            vid = int(row.get("video_index") or 1)
+                        except (TypeError, ValueError):
+                            vid = 1
+                        metres = float(by_video.get(vid, 0.0))
+                        if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
+                            row["total_distance"] = metres
+                            changed = True
+                    if changed:
+                        tmp = results_json_path + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(all_results, f, indent=2, ensure_ascii=False)
+                            f.flush()
+                            try:
+                                os.fsync(f.fileno())
+                            except OSError:
+                                pass
+                        os.replace(tmp, results_json_path)
+            except Exception as exc:
+                logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
+
+        video_results = [
+            r for r in all_results
+            if int(r.get("video_index") or 0) == int(video_index)
+        ]
+        if not video_results:
+            logger.warning("No results for video_index %s on Field %s", video_index, fid)
+            continue
+
+        section = prepare_field_section_metrics(
+            video_results, fdir, video_index=video_index, is_final=False
+        )
+        save_section_metrics_entry(fdir, video_index, section)
+        panels[fid] = build_results_ring_panel(section, field=fid)
+        if primary_rows is None or fid == primary_fid:
+            primary_rows = video_results
+            primary_fid = fid
+            primary_dir = fdir
+
+    if not panels or primary_rows is None:
+        return {"status": "error", "message": "No results available"}
+
+    if data.get("make_video") is False:
+        logger.info(
+            "Projecting results for fields %s, test %s (no video)",
+            ",".join(sorted(panels.keys())),
+            video_index,
+        )
+        return {
+            "status": "success",
+            "panels": panels,
+            "video_path": "",
+        }
+
+    if len(panels) == 1:
+        only_fid = next(iter(panels.keys()))
+        video_path = os.path.join(session_root, f"results_video_{video_index}_field_{only_fid}.mp4")
+    else:
+        video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
+    extra = [panels[fid] for fid in ("A", "B") if fid in panels and fid != primary_fid]
+    if "A" in panels and "B" in panels:
+        primary_fid = "A"
+        primary_dir = os.path.join(session_root, "field_A")
+        primary_rows = [
+            r for r in next(j[2] for j in field_jobs if j[0] == "A")
+            if int(r.get("video_index") or 0) == int(video_index)
+        ]
+        extra = [panels["B"]]
+    elif "B" in panels and "A" not in panels:
+        primary_fid = "B"
+        primary_dir = os.path.join(session_root, "field_B")
+        primary_rows = [
+            r for r in next(j[2] for j in field_jobs if j[0] == "B")
+            if int(r.get("video_index") or 0) == int(video_index)
+        ]
+        extra = []
+
+    logger.info(
+        "Generating per-video results for fields %s: %s",
+        ",".join(sorted(panels.keys())),
+        video_path,
+    )
+    success = generate_results_video_from_results(
+        primary_rows,
+        video_path,
+        duration_seconds=20,
+        is_final=False,
+        slice_video_path=None,
+        session_folder=primary_dir,
+        video_index=video_index,
+        field=primary_fid,
+        extra_ring_panels=extra,
+        native_background=False,
+    )
+    if not success or not os.path.exists(video_path):
+        return {"status": "error", "message": "Per-video generation failed"}
+
+    if spawn_display:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        player_script = os.path.join(script_dir, "play_results_video.py")
+        if not os.path.exists(player_script):
+            player_script = os.path.join(os.getcwd(), "play_results_video.py")
+        if os.path.exists(player_script):
+            subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
+        else:
+            logger.error("Player script not found")
+    return {
+        "status": "success",
+        "video_path": video_path,
+        "videos": [video_path],
+    }
 
 
 @app.post("/create-video-results")
 async def create_video_results(req: Request):
     try:
         data = await req.json()
+        if _playback_aborted_for_results():
+            logger.info("Skipping create-video-results — session already released")
+            return {"status": "ignored", "message": "Session already released"}
         directory = data.get("directory")
         report_path = data.get("report_path")
         video_index = data.get("video_index", 1)
@@ -5783,9 +7197,10 @@ async def create_video_results(req: Request):
             video_index = int(video_index)
         except (TypeError, ValueError):
             video_index = 1
+        # Screen-2 helpers are retired. Never call kill_screen2_result_helpers()
+        # here — it runs a blocking PowerShell CIM scan on the event loop and
+        # wedges :8000 so Mode 2 rings time out and never paint.
         spawn_display = should_spawn_screen2_display(data.get("display", True))
-        if not spawn_display:
-            kill_screen2_result_helpers()
 
         # Player sends report_path (recognition.json); convert to session folder.
         if (not directory or not os.path.exists(directory)) and report_path:
@@ -5802,164 +7217,269 @@ async def create_video_results(req: Request):
             else:
                 return {"status": "error", "message": "No session folder found"}
 
+        # Mode 2 / fast rings: do not burn 12s+ waiting — player only waits ~4s.
+        score_wait = 12.0
+        try:
+            if read_simulator_score_mode() == 2:
+                score_wait = 0.8
+        except Exception:
+            score_wait = 12.0
         await _wait_until_actions_are_scored(
+            timeout=score_wait,
             fields=data.get("fields") or data.get("active_fields"),
         )
+        if _playback_aborted_for_results():
+            logger.info("Skipping create-video-results after score wait — session released")
+            return {"status": "ignored", "message": "Session already released"}
 
-        # Normalize to session root when pointed at field_A / field_B
-        session_root = directory
-        base = os.path.basename(session_root.rstrip("\\/"))
-        if base in ("field_A", "field_B"):
-            session_root = os.path.dirname(session_root)
+        # Offload sync CPU/IO so concurrent polls (/playback-status) stay alive.
+        return await asyncio.to_thread(
+            _build_create_video_results_sync,
+            data,
+            directory,
+            video_index,
+            spawn_display,
+        )
 
-        active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
-        field_jobs = []
-        for fid in ("A", "B"):
-            if fid not in active:
-                continue
-            fdir = os.path.join(session_root, f"field_{fid}")
-            fresults = os.path.join(fdir, "results.json")
-            if os.path.exists(fresults):
-                with open(fresults, "r", encoding="utf-8") as f:
-                    rows = json.load(f)
-                if rows:
-                    field_jobs.append((fid, fdir, rows, fresults))
+    except Exception as e:
+        logger.error(f"create-video-results error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
-        # Legacy single-folder session (pre dual-field)
-        if not field_jobs:
-            results_json_path = os.path.join(session_root, "results.json")
-            if not os.path.exists(results_json_path):
-                return {"status": "error", "message": "results.json not found"}
-            with open(results_json_path, "r", encoding="utf-8") as f:
+
+def _build_create_results_video_sync(data, session_root, directory, field_id, spawn_display):
+    """Heavy final metrics / unlock / coach work — must not run on the asyncio loop.
+
+    Mode 2 finals previously blocked :8000 long enough for the player HTTP
+    timeout (25s) to fire with empty panels → skip display → same SF forever.
+    """
+    results_json_path = os.path.join(directory, "results.json")
+    if not os.path.exists(results_json_path):
+        for fid in (("A", "B") if not field_id else (field_id,)):
+            cand = os.path.join(directory, f"field_{fid}", "results.json")
+            if os.path.exists(cand):
+                results_json_path = cand
+                directory = os.path.join(directory, f"field_{fid}")
+                field_id = fid
+                break
+    if not os.path.exists(results_json_path):
+        return {"status": "error", "message": "results.json not found"}
+
+    with open(results_json_path, "r", encoding="utf-8") as f:
+        all_results = json.load(f)
+
+    if not all_results:
+        other = "B" if field_id == "A" else "A"
+        alt = os.path.join(session_root, f"field_{other}", "results.json")
+        if os.path.exists(alt):
+            with open(alt, "r", encoding="utf-8") as f:
+                all_results = json.load(f)
+            directory = os.path.join(session_root, f"field_{other}")
+            field_id = other
+            results_json_path = alt
+        if not all_results:
+            return {"status": "error", "message": "No results found"}
+
+    if not field_id and all_results:
+        try:
+            import simust_fields
+            field_id = simust_fields.normalize_field(all_results[0].get("field")) or "A"
+        except Exception:
+            field_id = "A"
+
+    field_dirs = []
+    active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
+    for fid in ("A", "B"):
+        if fid not in active:
+            continue
+        fdir = os.path.join(session_root, f"field_{fid}")
+        fresults = os.path.join(fdir, "results.json")
+        if os.path.exists(fresults):
+            with open(fresults, "r", encoding="utf-8") as f:
                 rows = json.load(f)
-            legacy_fid = "A" if "A" in active else ("B" if "B" in active else "A")
-            field_jobs.append((legacy_fid, session_root, rows, results_json_path))
+            if rows:
+                field_dirs.append((fid, fdir, rows))
+    if not field_dirs:
+        legacy_fid = field_id or ("A" if "A" in active else "B")
+        if legacy_fid in active:
+            field_dirs = [(legacy_fid, directory, all_results)]
 
-        # Stamp distances per field, collect per-video rows + ring panels
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    player_script = os.path.join(script_dir, "play_results_video.py")
+    if not os.path.exists(player_script):
+        player_script = os.path.join(os.getcwd(), "play_results_video.py")
+    waiting_script = os.path.join(script_dir, "waiting.py")
+    if not os.path.exists(waiting_script):
+        waiting_script = os.path.join(os.getcwd(), "waiting.py")
+    wait_proc = None
+    wait_started = time.time()
+    try:
+        if spawn_display and os.path.exists(waiting_script):
+            wait_cmd = [sys.executable, waiting_script]
+            if sys.platform == "win32":
+                wait_proc = subprocess.Popen(
+                    wait_cmd, shell=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                wait_proc = subprocess.Popen(wait_cmd, shell=False)
+            logger.info("Showing the same per-video waiting animation before the final results")
+
+        generated = []
+        primary_video = None
         panels = {}
+        field_metrics = {}
         primary_rows = None
         primary_fid = "A" if "A" in active else "B"
         primary_dir = session_root
-        for fid, fdir, all_results, results_json_path in field_jobs:
-            recognition_path = os.path.join(fdir, "recognition.json")
-            if os.path.exists(recognition_path):
-                try:
-                    import simust_realtime as _rt
-                    with open(recognition_path, "r", encoding="utf-8") as f:
-                        blocks = json.load(f)
-                    by_video = _rt.compute_distances_by_video(blocks, all_results)
-                    changed = False
-                    for row in all_results:
-                        try:
-                            vid = int(row.get("video_index") or 1)
-                        except (TypeError, ValueError):
-                            vid = 1
-                        metres = float(by_video.get(vid, 0.0))
-                        if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
-                            row["total_distance"] = metres
-                            changed = True
-                    if changed:
-                        with open(results_json_path, "w", encoding="utf-8") as f:
-                            json.dump(all_results, f, indent=2, ensure_ascii=False)
-                except Exception as exc:
-                    logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
-
-            video_results = [
-                r for r in all_results
-                if int(r.get("video_index") or 0) == int(video_index)
-            ]
-            if not video_results:
-                logger.warning("No results for video_index %s on Field %s", video_index, fid)
-                continue
-
-            section = prepare_field_section_metrics(
-                video_results, fdir, video_index=video_index, is_final=False
+        try:
+            with open(
+                os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"),
+                "r",
+                encoding="utf-8",
+            ) as pf:
+                _pf = json.load(pf) or {}
+            _pf_fields = _pf.get("fields") if isinstance(_pf, dict) else {}
+            if not isinstance(_pf_fields, dict):
+                _pf_fields = {}
+            _session_level = str((_pf.get("level") if isinstance(_pf, dict) else "") or "")
+        except Exception:
+            _pf_fields = {}
+            _session_level = ""
+            _pf = {}
+        score_for_mode = str(
+            data.get("score_field")
+            or (_pf.get("score_field") if isinstance(_pf, dict) else "")
+            or field_id
+            or ""
+        ).upper()[:1]
+        for fid, fdir, rows in field_dirs:
+            metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
+            slot = _pf_fields.get(fid) if isinstance(_pf_fields.get(fid), dict) else {}
+            level_for_mode = str((slot or {}).get("level") or _session_level or "").strip()
+            metrics = apply_simulator_score_mode_to_metrics(
+                metrics or {},
+                fid,
+                level_for_mode,
+                score_field=score_for_mode,
+                fields=_pf_fields,
             )
-            save_section_metrics_entry(fdir, video_index, section)
-            panels[fid] = build_results_ring_panel(section, field=fid)
+            field_metrics[fid] = metrics or {}
+            panels[fid] = build_results_ring_panel(metrics, field=fid)
             if primary_rows is None or fid == primary_fid:
-                primary_rows = video_results
+                primary_rows = rows
                 primary_fid = fid
                 primary_dir = fdir
 
         if not panels or primary_rows is None:
-            return {"status": "error", "message": "No results available"}
+            return {"status": "error", "message": "No results found"}
 
         if data.get("make_video") is False:
+            progress_info = {}
+            if data.get("update_progress") is not False:
+                try:
+                    progress_info = apply_final_results_progress(
+                        field_metrics,
+                        score_field=str(data.get("score_field") or field_id or ""),
+                        save_reports=data.get("save_reports") is not False,
+                    )
+                except Exception:
+                    logger.exception("Final results could not update the player's level")
+            try:
+                profiles = _field_player_profiles()
+                for fid, panel in panels.items():
+                    profile = profiles.get(fid) or {}
+                    coach_path = select_coach_video(
+                        profile.get("gender") or "Male",
+                        profile.get("age") or 16,
+                        panel.get("aac"),
+                    )
+                    if coach_path:
+                        panel["coach_video"] = coach_path
+            except Exception:
+                logger.exception("Final coach clip could not be chosen")
             logger.info(
-                "Projecting results for fields %s, test %s (no video)",
+                "Projecting final results for fields %s (no video)",
                 ",".join(sorted(panels.keys())),
-                video_index,
             )
             return {
                 "status": "success",
                 "panels": panels,
                 "video_path": "",
+                "progress": progress_info,
             }
 
-        # One results video: only active fields' rings (A and/or B)
-        # Separate field phases → distinct files so A then B do not overwrite.
-        if len(panels) == 1:
-            only_fid = next(iter(panels.keys()))
-            video_path = os.path.join(session_root, f"results_video_{video_index}_field_{only_fid}.mp4")
-        else:
-            video_path = os.path.join(session_root, f"results_video_{video_index}.mp4")
-        extra = [panels[fid] for fid in ("A", "B") if fid in panels and fid != primary_fid]
+        extra = []
         if "A" in panels and "B" in panels:
             primary_fid = "A"
             primary_dir = os.path.join(session_root, "field_A")
-            primary_rows = [
-                r for r in next(j[2] for j in field_jobs if j[0] == "A")
-                if int(r.get("video_index") or 0) == int(video_index)
-            ]
+            primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "A")
             extra = [panels["B"]]
         elif "B" in panels and "A" not in panels:
             primary_fid = "B"
             primary_dir = os.path.join(session_root, "field_B")
-            primary_rows = [
-                r for r in next(j[2] for j in field_jobs if j[0] == "B")
-                if int(r.get("video_index") or 0) == int(video_index)
-            ]
-            extra = []
+            primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "B")
 
+        video_path = os.path.join(session_root, "final_results_video.mp4")
+        if len(panels) == 1:
+            only_fid = next(iter(panels.keys()))
+            video_path = os.path.join(session_root, f"final_results_video_field_{only_fid}.mp4")
         logger.info(
-            "Generating per-video results for fields %s: %s",
+            "Generating final results video for fields %s (coach clips on screens 3 and 4, primary %s): %s",
             ",".join(sorted(panels.keys())),
+            primary_fid,
             video_path,
         )
-        success = generate_results_video_from_results(
+        ok = generate_results_video_from_results(
             primary_rows,
             video_path,
-            duration_seconds=20,
-            is_final=False,
+            duration_seconds=0,
+            is_final=True,
             slice_video_path=None,
             session_folder=primary_dir,
-            video_index=video_index,
             field=primary_fid,
             extra_ring_panels=extra,
-            native_background=False,
         )
-        if not success or not os.path.exists(video_path):
-            return {"status": "error", "message": "Per-video generation failed"}
+        if ok and os.path.exists(video_path):
+            generated.append(video_path)
+            primary_video = video_path
 
         if spawn_display:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            player_script = os.path.join(script_dir, "play_results_video.py")
-            if not os.path.exists(player_script):
-                player_script = os.path.join(os.getcwd(), "play_results_video.py")
-            if os.path.exists(player_script):
-                subprocess.Popen([sys.executable, player_script, video_path, "1"], shell=False)
-            else:
-                logger.error("Player script not found")
-        return {
-            "status": "success",
-            "video_path": video_path,
-            "videos": [video_path],
-        }
+            leftover = 5.0 - (time.time() - wait_started)
+            if leftover > 0:
+                time.sleep(leftover)
+    finally:
+        if wait_proc:
+            kill_process_tree(wait_proc)
 
-    except Exception as e:
-        logger.error(f"create-video-results error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+    if not primary_video:
+        return {"status": "error", "message": "Video generation failed"}
+
+    video_path = primary_video
+    progress_info = {}
+    try:
+        progress_info = apply_final_results_progress(
+            field_metrics,
+            score_field=str(data.get("score_field") or field_id or ""),
+            save_reports=data.get("save_reports") is not False,
+        )
+    except Exception:
+        logger.exception("Final results could not update the player's level")
+    if spawn_display and os.path.exists(player_script):
+        play_cmd = [sys.executable, player_script, video_path, "1"]
+        if sys.platform == "win32":
+            subprocess.Popen(
+                play_cmd, shell=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            subprocess.Popen(play_cmd, shell=False)
+    return {
+        "status": "success",
+        "video_path": video_path,
+        "videos": generated or [video_path],
+        "progress": progress_info,
+    }
+
 
 @app.post("/create-results-video")
 async def create_results_video(req: Request):
@@ -5969,9 +7489,8 @@ async def create_results_video(req: Request):
         data = await req.json()
         directory = data.get("directory")
         report_path = data.get("report_path")
+        # Do not kill_screen2 here — blocking CIM scan wedges the event loop.
         spawn_display = should_spawn_screen2_display(data.get("display", True))
-        if not spawn_display:
-            kill_screen2_result_helpers()
 
         # Player may send report_path (recognition.json under field_A / field_B)
         if (not directory or not os.path.exists(directory)) and report_path:
@@ -5998,208 +7517,19 @@ async def create_results_video(req: Request):
         if base in ("field_A", "field_B"):
             session_root = os.path.dirname(session_root)
             directory = session_root
-        results_json_path = os.path.join(directory, "results.json")
         field_id = str(data.get("field") or "").strip().upper()[:1]
         if field_id not in ("A", "B"):
             field_id = ""
-        if not os.path.exists(results_json_path):
-            for fid in (("A", "B") if not field_id else (field_id,)):
-                cand = os.path.join(directory, f"field_{fid}", "results.json")
-                if os.path.exists(cand):
-                    results_json_path = cand
-                    directory = os.path.join(directory, f"field_{fid}")
-                    field_id = fid
-                    break
-        if not os.path.exists(results_json_path):
-            return {"status": "error", "message": "results.json not found"}
 
-        with open(results_json_path, "r", encoding="utf-8") as f:
-            all_results = json.load(f)
-
-        if not all_results:
-            other = "B" if field_id == "A" else "A"
-            alt = os.path.join(session_root, f"field_{other}", "results.json")
-            if os.path.exists(alt):
-                with open(alt, "r", encoding="utf-8") as f:
-                    all_results = json.load(f)
-                directory = os.path.join(session_root, f"field_{other}")
-                field_id = other
-                results_json_path = alt
-            if not all_results:
-                return {"status": "error", "message": "No results found"}
-
-        if not field_id and all_results:
-            try:
-                import simust_fields
-                field_id = simust_fields.normalize_field(all_results[0].get("field")) or "A"
-            except Exception:
-                field_id = "A"
-
-        field_dirs = []
-        active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
-        for fid in ("A", "B"):
-            if fid not in active:
-                continue
-            fdir = os.path.join(session_root, f"field_{fid}")
-            fresults = os.path.join(fdir, "results.json")
-            if os.path.exists(fresults):
-                with open(fresults, "r", encoding="utf-8") as f:
-                    rows = json.load(f)
-                if rows:
-                    field_dirs.append((fid, fdir, rows))
-        if not field_dirs:
-            legacy_fid = field_id or ("A" if "A" in active else "B")
-            if legacy_fid in active:
-                field_dirs = [(legacy_fid, directory, all_results)]
-
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        player_script = os.path.join(script_dir, "play_results_video.py")
-        if not os.path.exists(player_script):
-            player_script = os.path.join(os.getcwd(), "play_results_video.py")
-        waiting_script = os.path.join(script_dir, "waiting.py")
-        if not os.path.exists(waiting_script):
-            waiting_script = os.path.join(os.getcwd(), "waiting.py")
-        wait_proc = None
-        wait_started = time.time()
-        try:
-            if spawn_display and os.path.exists(waiting_script):
-                wait_cmd = [sys.executable, waiting_script]
-                if sys.platform == "win32":
-                    wait_proc = subprocess.Popen(
-                        wait_cmd, shell=False,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    )
-                else:
-                    wait_proc = subprocess.Popen(wait_cmd, shell=False)
-                logger.info("Showing the same per-video waiting animation before the final results")
-
-            generated = []
-            primary_video = None
-            panels = {}
-            field_metrics = {}
-            primary_rows = None
-            primary_fid = "A" if "A" in active else "B"
-            primary_dir = session_root
-            for fid, fdir, rows in field_dirs:
-                metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
-                field_metrics[fid] = metrics or {}
-                panels[fid] = build_results_ring_panel(metrics, field=fid)
-                if primary_rows is None or fid == primary_fid:
-                    primary_rows = rows
-                    primary_fid = fid
-                    primary_dir = fdir
-
-            if not panels or primary_rows is None:
-                return {"status": "error", "message": "No results found"}
-
-            if data.get("make_video") is False:
-                progress_info = {}
-                if data.get("update_progress") is not False:
-                    try:
-                        progress_info = apply_final_results_progress(
-                            field_metrics,
-                            score_field=str(data.get("score_field") or field_id or ""),
-                            save_reports=data.get("save_reports") is not False,
-                        )
-                    except Exception:
-                        logger.exception("Final results could not update the player's level")
-                try:
-                    profiles = _field_player_profiles()
-                    for fid, panel in panels.items():
-                        profile = profiles.get(fid) or {}
-                        coach_path = select_coach_video(
-                            profile.get("gender") or "Male",
-                            profile.get("age") or 16,
-                            panel.get("aac"),
-                        )
-                        if coach_path:
-                            panel["coach_video"] = coach_path
-                except Exception:
-                    logger.exception("Final coach clip could not be chosen")
-                logger.info(
-                    "Projecting final results for fields %s (no video)",
-                    ",".join(sorted(panels.keys())),
-                )
-                return {
-                    "status": "success",
-                    "panels": panels,
-                    "video_path": "",
-                    "progress": progress_info,
-                }
-
-            extra = []
-            if "A" in panels and "B" in panels:
-                primary_fid = "A"
-                primary_dir = os.path.join(session_root, "field_A")
-                primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "A")
-                extra = [panels["B"]]
-            elif "B" in panels and "A" not in panels:
-                primary_fid = "B"
-                primary_dir = os.path.join(session_root, "field_B")
-                primary_rows = next(rows for fid, fdir, rows in field_dirs if fid == "B")
-
-            video_path = os.path.join(session_root, "final_results_video.mp4")
-            if len(panels) == 1:
-                only_fid = next(iter(panels.keys()))
-                video_path = os.path.join(session_root, f"final_results_video_field_{only_fid}.mp4")
-            logger.info(
-                "Generating final results video for fields %s (coach clips on screens 3 and 4, primary %s): %s",
-                ",".join(sorted(panels.keys())),
-                primary_fid,
-                video_path,
-            )
-            ok = generate_results_video_from_results(
-                primary_rows,
-                video_path,
-                duration_seconds=0,
-                is_final=True,
-                slice_video_path=None,
-                session_folder=primary_dir,
-                field=primary_fid,
-                extra_ring_panels=extra,
-            )
-            if ok and os.path.exists(video_path):
-                generated.append(video_path)
-                primary_video = video_path
-
-            if spawn_display:
-                leftover = 5.0 - (time.time() - wait_started)
-                if leftover > 0:
-                    await asyncio.sleep(leftover)
-        finally:
-            if wait_proc:
-                kill_process_tree(wait_proc)
-
-        if not primary_video:
-            return {"status": "error", "message": "Video generation failed"}
-
-        # Combined final lives at session root (one video for both fields)
-
-        video_path = primary_video
-        progress_info = {}
-        try:
-            progress_info = apply_final_results_progress(
-                field_metrics,
-                score_field=str(data.get("score_field") or field_id or ""),
-                save_reports=data.get("save_reports") is not False,
-            )
-        except Exception:
-            logger.exception("Final results could not update the player's level")
-        if spawn_display and os.path.exists(player_script):
-            play_cmd = [sys.executable, player_script, video_path, "1"]
-            if sys.platform == "win32":
-                subprocess.Popen(
-                    play_cmd, shell=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-            else:
-                subprocess.Popen(play_cmd, shell=False)
-        return {
-            "status": "success",
-            "video_path": video_path,
-            "videos": generated or [video_path],
-            "progress": progress_info,
-        }
+        # Offload sync CPU/IO so Mode 2 finals return panels before the player times out.
+        return await asyncio.to_thread(
+            _build_create_results_video_sync,
+            data,
+            session_root,
+            directory,
+            field_id,
+            spawn_display,
+        )
 
     except Exception as e:
         logger.error(f"create-results-video error: {e}", exc_info=True)
@@ -6504,6 +7834,23 @@ async def delete_player_report(player_id: str, session_id: str):
 # NEW: Unlock Level Endpoint (Admin Only)
 # ============================================================
 
+def _progress_payload(progress: dict) -> dict:
+    """CURRENT DEVELOPMENT LEVEL + open sets for operator / My SIMUST clients."""
+    synced = simust_progress.sync_current_development_level(
+        dict(progress or {}), ALL_LEVELS
+    )
+    return {
+        "current_level": synced.get("current_level"),
+        "current_playlist": synced.get("current_playlist"),
+        "unlocked_levels": list(synced.get("unlocked_levels") or []),
+        "unlocked_playlists": list(synced.get("unlocked_playlists") or []),
+        "completed_levels": list(synced.get("completed_levels") or []),
+        "eligible_levels": list(synced.get("eligible_levels") or []),
+        "manually_locked_levels": list(synced.get("manually_locked_levels") or []),
+        "manually_locked_playlists": list(synced.get("manually_locked_playlists") or []),
+    }
+
+
 @app.post("/unlock-level")
 async def unlock_level(req: Request):
     try:
@@ -6519,6 +7866,8 @@ async def unlock_level(req: Request):
         if isinstance(level_id, str) and level_id.startswith(f"{simust_progress.FOUNDATION_LEVEL}/"):
             subdirectory = level_id.split("/", 1)[1].strip()
             level_id = simust_progress.FOUNDATION_LEVEL
+        else:
+            level_id = simust_progress.normalize_level_id(str(level_id))
 
         users = load_users()
         if player_id not in users:
@@ -6526,61 +7875,73 @@ async def unlock_level(req: Request):
 
         progress = simust_progress.ensure_progress(users[player_id])
         unlocked = list(progress.get("unlocked_levels") or [])
+        unlocked_norm = {simust_progress.normalize_level_id(x) for x in unlocked}
         playlists = list(progress.get("unlocked_playlists") or [])
 
         if level_id == simust_progress.FOUNDATION_LEVEL and subdirectory:
             if subdirectory not in simust_progress.FOUNDATION_ALL_PLAYLISTS:
                 raise HTTPException(400, f"Invalid Foundation playlist: {subdirectory}")
+            simust_progress.clear_manual_lock(progress, playlist=subdirectory)
             changed = False
             if subdirectory not in playlists:
                 playlists.append(subdirectory)
                 progress["unlocked_playlists"] = playlists
                 changed = True
-            if simust_progress.FOUNDATION_LEVEL not in unlocked:
+            if simust_progress.FOUNDATION_LEVEL not in unlocked_norm:
                 unlocked.append(simust_progress.FOUNDATION_LEVEL)
                 progress["unlocked_levels"] = unlocked
                 changed = True
-            progress["current_level"] = simust_progress.FOUNDATION_LEVEL
-            if changed:
-                users[player_id]["progress"] = progress
-                save_users(users)
-                return {
-                    "status": "success",
-                    "message": f"Foundation playlist {subdirectory} unlocked for player {player_id}",
-                    "unlocked_playlists": playlists,
-                }
-            return {"status": "info", "message": f"Playlist {subdirectory} already unlocked"}
+            simust_progress.sync_current_development_level(progress, ALL_LEVELS)
+            users[player_id]["progress"] = progress
+            propagate_level_status(player_id, progress)
+            save_users(users)
+            return {
+                "status": "success" if changed else "info",
+                "message": (
+                    f"Foundation playlist {subdirectory} unlocked for player {player_id}"
+                    if changed
+                    else f"Playlist {subdirectory} already unlocked"
+                ),
+                "unlocked_playlists": list(progress.get("unlocked_playlists") or []),
+                "progress": _progress_payload(progress),
+            }
 
-        if level_id not in ALL_LEVELS:
+        all_norm = {simust_progress.normalize_level_id(x) for x in ALL_LEVELS}
+        if level_id not in all_norm and level_id != simust_progress.FOUNDATION_LEVEL:
             raise HTTPException(400, "Invalid level ID")
 
+        # Admin unlock clears a sticky operator lock so the set can stay open.
+        simust_progress.clear_manual_lock(progress, level_id=level_id)
         if level_id == simust_progress.FOUNDATION_LEVEL:
-            # Admin force-unlock of Foundation opens all SF playlists.
             for name in simust_progress.FOUNDATION_PLAYLISTS:
+                simust_progress.clear_manual_lock(progress, playlist=name)
                 if name not in playlists:
                     playlists.append(name)
             progress["unlocked_playlists"] = playlists
-        if level_id not in unlocked:
+        status = "info"
+        message = "Level already unlocked"
+        if level_id not in unlocked_norm:
             unlocked.append(level_id)
             progress["unlocked_levels"] = unlocked
-            completed = progress.get("completed_levels", [])
-            for lvl in ALL_LEVELS:
-                if lvl in unlocked and lvl not in completed:
-                    progress["current_level"] = lvl
-                    break
-            # Remove from eligible once manually unlocked
-            eligible = [e for e in (progress.get("eligible_levels") or []) if e != level_id]
+            eligible = [
+                e for e in (progress.get("eligible_levels") or [])
+                if simust_progress.normalize_level_id(e) != level_id
+            ]
             progress["eligible_levels"] = eligible
-            users[player_id]["progress"] = progress
-            save_users(users)
-            return {"status": "success", "message": f"Level {level_id} unlocked for player {player_id}"}
-        else:
-            if level_id == simust_progress.FOUNDATION_LEVEL:
-                progress["unlocked_playlists"] = playlists
-                users[player_id]["progress"] = progress
-                save_users(users)
-                return {"status": "success", "message": f"Foundation playlists unlocked for player {player_id}"}
-            return {"status": "info", "message": "Level already unlocked"}
+            status = "success"
+            message = f"Level {level_id} unlocked for player {player_id}"
+        elif level_id == simust_progress.FOUNDATION_LEVEL:
+            status = "success"
+            message = f"Foundation playlists unlocked for player {player_id}"
+        simust_progress.sync_current_development_level(progress, ALL_LEVELS)
+        users[player_id]["progress"] = progress
+        propagate_level_status(player_id, progress)
+        save_users(users)
+        return {
+            "status": status,
+            "message": message,
+            "progress": _progress_payload(progress),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -6602,6 +7963,8 @@ async def lock_level(req: Request):
         if isinstance(level_id, str) and level_id.startswith(f"{simust_progress.FOUNDATION_LEVEL}/"):
             subdirectory = level_id.split("/", 1)[1].strip()
             level_id = simust_progress.FOUNDATION_LEVEL
+        else:
+            level_id = simust_progress.normalize_level_id(str(level_id))
 
         users = load_users()
         if player_id not in users:
@@ -6614,53 +7977,56 @@ async def lock_level(req: Request):
                 raise HTTPException(400, f"Invalid Foundation playlist: {subdirectory}")
             if subdirectory in ("digit", "random"):
                 raise HTTPException(400, f"{subdirectory} follows SF unlocks; lock SF playlists instead")
-            playlists = [p for p in (progress.get("unlocked_playlists") or []) if p != subdirectory]
-            progress["unlocked_playlists"] = playlists
+            simust_progress.mark_manual_lock(progress, playlist=subdirectory)
             unlocked = list(progress.get("unlocked_levels") or [])
-            if not playlists and simust_progress.FOUNDATION_LEVEL in unlocked:
+            if not (progress.get("unlocked_playlists") or []) and simust_progress.FOUNDATION_LEVEL in unlocked:
                 unlocked = [lvl for lvl in unlocked if lvl != simust_progress.FOUNDATION_LEVEL]
                 progress["unlocked_levels"] = unlocked
-                if progress.get("current_level") == simust_progress.FOUNDATION_LEVEL:
-                    progress["current_level"] = unlocked[0] if unlocked else ""
+            simust_progress.sync_current_development_level(progress, ALL_LEVELS)
             users[player_id]["progress"] = progress
+            propagate_level_status(player_id, progress)
             save_users(users)
             return {
                 "status": "success",
                 "message": f"Foundation playlist {subdirectory} locked for player {player_id}",
-                "unlocked_playlists": playlists,
+                "unlocked_playlists": list(progress.get("unlocked_playlists") or []),
+                "progress": _progress_payload(progress),
             }
 
-        if level_id not in ALL_LEVELS:
+        all_norm = {simust_progress.normalize_level_id(x) for x in ALL_LEVELS}
+        if level_id not in all_norm:
             raise HTTPException(400, "Invalid level ID")
 
         if level_id == "L00-Foundation":
             raise HTTPException(400, "Lock Foundation playlists individually; Foundation umbrella cannot be locked here")
 
         unlocked = list(progress.get("unlocked_levels", []))
-        completed = list(progress.get("completed_levels", []))
-
-        if level_id not in unlocked:
-            return {"status": "info", "message": "Level already locked"}
-
-        unlocked = [lvl for lvl in unlocked if lvl != level_id]
-        completed = [lvl for lvl in completed if lvl != level_id]
-        if simust_progress.FOUNDATION_LEVEL not in unlocked and (progress.get("unlocked_playlists") or []):
-            unlocked.insert(0, simust_progress.FOUNDATION_LEVEL)
-
-        current = progress.get("current_level")
-        if current == level_id or current not in unlocked:
-            current = simust_progress.FOUNDATION_LEVEL if simust_progress.FOUNDATION_LEVEL in unlocked else (unlocked[0] if unlocked else "")
-            for lvl in ALL_LEVELS:
-                if lvl in unlocked and lvl not in completed:
-                    current = lvl
-                    break
-            progress["current_level"] = current
-
-        progress["unlocked_levels"] = unlocked
-        progress["completed_levels"] = completed
+        unlocked_norm = {simust_progress.normalize_level_id(x) for x in unlocked}
+        already = level_id not in unlocked_norm and simust_progress.is_manually_locked(
+            progress, level_id
+        )
+        # Sticky lock even if already missing from unlocked (host pull race).
+        simust_progress.mark_manual_lock(progress, level_id=level_id)
+        if simust_progress.FOUNDATION_LEVEL not in {
+            simust_progress.normalize_level_id(x)
+            for x in (progress.get("unlocked_levels") or [])
+        } and (progress.get("unlocked_playlists") or []):
+            levels = list(progress.get("unlocked_levels") or [])
+            levels.insert(0, simust_progress.FOUNDATION_LEVEL)
+            progress["unlocked_levels"] = levels
+        simust_progress.sync_current_development_level(progress, ALL_LEVELS)
         users[player_id]["progress"] = progress
+        propagate_level_status(player_id, progress)
         save_users(users)
-        return {"status": "success", "message": f"Level {level_id} locked for player {player_id}"}
+        return {
+            "status": "info" if already else "success",
+            "message": (
+                "Level already locked"
+                if already
+                else f"Level {level_id} locked for player {player_id}"
+            ),
+            "progress": _progress_payload(progress),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -6803,6 +8169,12 @@ async def get_players(request: Request):
                 users_dirty = True
 
             progress = simust_progress.ensure_progress(user_data)
+            before_level = progress.get("current_level")
+            progress = simust_progress.sync_current_development_level(progress, ALL_LEVELS)
+            if progress.get("current_level") != before_level:
+                user_data["progress"] = progress
+                users[username] = user_data
+                users_dirty = True
             avg_ae, avg_acc, latest_ae = compute_player_ae_acc(player_id)
             session_count = 0
             try:
@@ -7018,8 +8390,9 @@ async def ingest_player_data(request: Request):
             elif field not in merged:
                 merged[field] = ""
         if account.get("progress"):
-            merged["progress"] = simust_progress.merge_progress(
-                existing.get("progress"), account.get("progress")
+            # Lab lock/unlock must replace open sets on the host (union cannot lock).
+            merged["progress"] = simust_progress.apply_lab_progress(
+                existing.get("progress"), account.get("progress"), ALL_LEVELS
             )
         if account.get("password_hash"):
             merged["password"] = account["password_hash"]
@@ -7199,6 +8572,10 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "homography-test",
     "instagram-live",
     "cabinet-controls",
+    "manual-coach/start",
+    "manual-coach/cue",
+    "manual-coach/clear",
+    "manual-coach/stop",
 }
 
 
@@ -7328,6 +8705,20 @@ def _publish_lab_status() -> None:
         status["cabinet-controls"] = read_cabinet_controls()
     except Exception:
         status["cabinet-controls"] = {"system_on": True, "screensaver_on": False}
+    try:
+        manual = simust_manual_coach.read_status()
+        manual["session_running"] = bool(_realtime_is_running())
+        status["manual-coach/status"] = manual
+        status["manual-coach/layout"] = simust_manual_coach.layout_for_operator()
+    except Exception:
+        status["manual-coach/status"] = {
+            "active": False,
+            "lit_screen": None,
+            "waiting_hit": False,
+            "message": "Manual coach idle",
+            "session_running": False,
+        }
+        status["manual-coach/layout"] = simust_manual_coach.layout_for_operator()
     simust_push.push_lab_status(status)
 
 

@@ -133,6 +133,57 @@
         .calib-test { position: absolute; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border-radius: 50%; background: #276ce5; border: 2px solid #fff; pointer-events: none; }
         .homography-table input { width: 88px; background: #07111f; border: 1px solid var(--line); color: #fff; border-radius: 4px; padding: 6px 8px; }
         .refresh-btn:hover { border-color: var(--gold); color: var(--gold-light); }
+        .manual-coach-wrap { display: flex; flex-direction: column; gap: 16px; }
+        .manual-coach-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .manual-coach-toolbar .manual-status {
+            flex: 1 1 220px; min-height: 40px; padding: 10px 14px; border-radius: 8px;
+            border: 1px solid var(--line); background: #07111f; color: #dce7f5; font-weight: 700; font-size: 13px;
+        }
+        .manual-coach-toolbar .manual-status.waiting { border-color: var(--gold); color: var(--gold-light); }
+        .manual-coach-toolbar .manual-status.hit { border-color: var(--green); color: var(--green); }
+        .manual-pitch {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 18px; width: 100%;
+        }
+        .manual-field {
+            position: relative; min-height: 320px; border-radius: 16px; overflow: hidden;
+            border: 1px solid rgba(214,179,75,0.35);
+            background:
+                radial-gradient(ellipse at 50% 110%, rgba(255,255,255,0.08), transparent 55%),
+                linear-gradient(180deg, #1a6b3a 0%, #0f4d2a 45%, #0a3320 100%);
+            box-shadow: inset 0 0 0 2px rgba(255,255,255,0.04);
+        }
+        .manual-field::before {
+            content: ""; position: absolute; inset: 12% 18%; border: 2px solid rgba(255,255,255,0.18);
+            border-radius: 50% / 28%; pointer-events: none;
+        }
+        .manual-field-label {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            z-index: 2; font-size: 12px; font-weight: 800; letter-spacing: 0.08em;
+            text-transform: uppercase; color: rgba(255,255,255,0.85);
+            background: rgba(0,0,0,0.35); padding: 4px 12px; border-radius: 999px;
+        }
+        .manual-goal-btn {
+            position: absolute; width: 64px; height: 64px; margin-left: -32px; margin-top: -32px;
+            border-radius: 50%; border: 2px solid rgba(255,255,255,0.55);
+            background: rgba(7,17,31,0.78); color: #fff; font-weight: 900; font-size: 15px;
+            cursor: pointer; z-index: 3; transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+        }
+        .manual-goal-btn:hover { transform: scale(1.08); border-color: var(--gold); color: var(--gold-light); }
+        .manual-goal-btn.lit {
+            background: rgba(39,108,229,0.92); border-color: #fff;
+            box-shadow: 0 0 0 4px rgba(39,108,229,0.35), 0 8px 22px rgba(0,0,0,0.45);
+        }
+        .manual-goal-btn.hit {
+            background: rgba(46,204,113,0.92); border-color: #fff;
+        }
+        .manual-goal-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .manual-help { font-size: 13px; color: #9ca3af; line-height: 1.45; max-width: 920px; }
+        @media (max-width: 900px) {
+            .manual-pitch { grid-template-columns: 1fr; }
+            .manual-field { min-height: 280px; }
+            .manual-goal-btn { width: 56px; height: 56px; margin-left: -28px; margin-top: -28px; font-size: 13px; }
+        }
         .auto-badge { background: var(--green); color: #07111f; border-radius: 6px; padding: 2px 8px; font-size: 10px; font-weight: 800; margin-inline-start: 8px; animation: pulse 1s infinite; }
         .metric-ring { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 14px 10px 10px 10px; text-align: center; transition: background 0.15s; display: flex; flex-direction: column; align-items: center; }
         .metric-ring:hover { background: #10243f; }
@@ -612,6 +663,7 @@
                 'pause-realtime': true,
                 'instagram-live': true,
                 'set-simulation': true,
+                'simulator-score-mode': true,
                 'set-visualization': true,
                 'lab-upsert-player': true,
                 'unlock-level': true,
@@ -623,7 +675,11 @@
                 'homography/save': true,
                 'homography/reset': true,
                 'homography/test': true,
-                'cabinet-controls': true
+                'cabinet-controls': true,
+                'manual-coach/start': true,
+                'manual-coach/cue': true,
+                'manual-coach/clear': true,
+                'manual-coach/stop': true
             };
             var labGet = {
                 'playback-status': true,
@@ -631,7 +687,9 @@
                 'results': true,
                 'get-levels': true,
                 'homography/status': true,
-                'cabinet-controls': true
+                'cabinet-controls': true,
+                'manual-coach/status': true,
+                'manual-coach/layout': true
             };
             axios.interceptors.request.use(function(config) {
                 if (window.SIMUST_PUBLIC && window.SIMUST_TOKEN) {
@@ -870,8 +928,18 @@
 
         var getTNumber = function(id) {
             if (!id) return 0;
-            var match = id.match(/T(\d+)/i);
+            var match = String(id || '').match(/\.T(\d+)/i) || String(id || '').match(/T(\d+)/i);
             if (match) return parseInt(match[1], 10);
+            return 0;
+        };
+
+        // Series within a band: S1.T* before S2.T* (legacy A-T = S1, A1.T = S2).
+        var getSeriesNumber = function(id) {
+            var text = String(id || '');
+            var match = text.match(/\/S(\d+)\.T/i) || text.match(/(?:^|[^A-Z0-9])S(\d+)\.T/i);
+            if (match) return parseInt(match[1], 10);
+            if (/A1\.T\d+/i.test(text)) return 2;
+            if (/A-T\d+/i.test(text) || /A\.T\d+/i.test(text)) return 1;
             return 0;
         };
 
@@ -898,11 +966,18 @@
         var sortLevels = function(levels) {
             if (!levels || levels.length === 0) return [];
             return levels.slice().sort(function(a, b) {
+                // Prefer server progression order when present (S1.T1..S1.T5 then S2.T1..S2.T5).
+                var numA = a.level_num != null ? Number(a.level_num) : NaN;
+                var numB = b.level_num != null ? Number(b.level_num) : NaN;
+                if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
                 var catA = getCategoryFromId(a.id);
                 var catB = getCategoryFromId(b.id);
                 var orderA = CATEGORY_ORDER[catA] !== undefined ? CATEGORY_ORDER[catA] : 999;
                 var orderB = CATEGORY_ORDER[catB] !== undefined ? CATEGORY_ORDER[catB] : 999;
                 if (orderA !== orderB) return orderA - orderB;
+                var sA = getSeriesNumber(a.id);
+                var sB = getSeriesNumber(b.id);
+                if (sA !== sB) return sA - sB;
                 var tA = getTNumber(a.id);
                 var tB = getTNumber(b.id);
                 if (tA !== tB) return tA - tB;
@@ -913,10 +988,14 @@
         };
 
         var getHighestUnlockedLevel = function(levels, unlocked) {
-            if (!levels || levels.length === 0) return null;
-            var sorted = sortLevels(levels);
+            var unlockedList = unlocked || [];
+            if (!unlockedList.length) return null;
+            var pool = (levels && levels.length)
+                ? levels
+                : unlockedList.map(function(id) { return { id: id }; });
+            var sorted = sortLevels(pool);
             for (var i = sorted.length - 1; i >= 0; i--) {
-                if (unlocked.indexOf(sorted[i].id) !== -1) {
+                if (unlockedList.indexOf(sorted[i].id) !== -1) {
                     return sorted[i].id;
                 }
             }
@@ -2354,6 +2433,238 @@
         // =====================================================================
         // ADMIN SETTINGS – HOMOGRAPHY CALIBRATION
         // =====================================================================
+        // A1–A6 match B1–B6 positions (same number → same spot on each half).
+        var DEFAULT_MANUAL_LAYOUT = {
+            A: [
+                { id: 'A1', left: 12, top: 28 }, { id: 'A2', left: 50, top: 16 }, { id: 'A3', left: 88, top: 28 },
+                { id: 'A4', left: 88, top: 68 }, { id: 'A5', left: 50, top: 78 }, { id: 'A6', left: 12, top: 68 }
+            ],
+            B: [
+                { id: 'B1', left: 12, top: 28 }, { id: 'B2', left: 50, top: 16 }, { id: 'B3', left: 88, top: 28 },
+                { id: 'B4', left: 88, top: 68 }, { id: 'B5', left: 50, top: 78 }, { id: 'B6', left: 12, top: 68 }
+            ]
+        };
+
+        var ManualCoachPanel = function(props) {
+            var showToast = props.showToast;
+            var isAdmin = !!props.isAdmin;
+            var simulationFields = props.simulationFields || { A: false, B: false };
+            var toggleSimulationField = props.toggleSimulationField;
+            var simulatorScoreMode = props.simulatorScoreMode || 2;
+            var applySimulatorScoreMode = props.applySimulatorScoreMode;
+            var visualizationEnabled = !!props.visualizationEnabled;
+            var toggleVisualization = props.toggleVisualization;
+            var layoutState = useState(DEFAULT_MANUAL_LAYOUT);
+            var layout = layoutState[0];
+            var setLayout = layoutState[1];
+            var statusState = useState({
+                active: false, lit_screen: null, lit_screens: [], waiting_hit: false, last_hit: null,
+                message: 'Start Manual coach to light goal areas', session_running: false
+            });
+            var status = statusState[0];
+            var setStatus = statusState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var running = !!status.session_running || !!status.active;
+            var litSet = {};
+            (status.lit_screens || []).forEach(function(sid) { litSet[sid] = true; });
+            if (status.lit_screen) litSet[status.lit_screen] = true;
+
+            var refreshStatus = function() {
+                axios.get('/manual-coach/status').then(function(res) {
+                    var data = (res && res.data) || {};
+                    var lit = Array.isArray(data.lit_screens) ? data.lit_screens : [];
+                    if (!lit.length && data.lit_screen) lit = [data.lit_screen];
+                    setStatus({
+                        active: !!data.active,
+                        lit_screen: data.lit_screen || null,
+                        lit_screens: lit,
+                        waiting_hit: !!data.waiting_hit,
+                        last_hit: data.last_hit || null,
+                        message: data.message || '',
+                        session_running: !!data.session_running,
+                        seq: data.seq || 0
+                    });
+                }).catch(function() {});
+            };
+
+            useEffect(function() {
+                axios.get('/manual-coach/layout').then(function(res) {
+                    var next = res && res.data && res.data.layout;
+                    if (next && next.A && next.B) setLayout(next);
+                }).catch(function() {});
+                refreshStatus();
+                var timer = setInterval(refreshStatus, 700);
+                return function() { clearInterval(timer); };
+            }, []);
+
+            var startSession = function() {
+                setBusy(true);
+                axios.post('/manual-coach/start', {}).then(function(res) {
+                    var next = res && res.data && res.data.layout;
+                    if (next && next.A && next.B) setLayout(next);
+                    showToast && showToast('Manual coach ready');
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Could not start Manual coach';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var stopSession = function() {
+                setBusy(true);
+                axios.post('/manual-coach/stop', {}).then(function() {
+                    showToast && showToast('Manual coach stopped');
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Stop failed';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var clearLit = function() {
+                axios.post('/manual-coach/clear', {}).then(refreshStatus).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Clear failed';
+                    showToast && showToast(String(msg));
+                });
+            };
+
+            var cueScreen = function(screenId) {
+                if (!running || busy) return;
+                setBusy(true);
+                axios.post('/manual-coach/cue', { screen: screenId }).then(function() {
+                    refreshStatus();
+                }).catch(function(err) {
+                    var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Could not light screen';
+                    showToast && showToast(String(msg));
+                }).finally(function() { setBusy(false); });
+            };
+
+            var statusClass = 'manual-status';
+            if (status.waiting_hit) statusClass += ' waiting';
+            else if (status.last_hit) statusClass += ' hit';
+
+            var renderField = function(fieldId, spots) {
+                return React.createElement('div', { className: 'manual-field', key: fieldId },
+                    React.createElement('div', { className: 'manual-field-label' }, 'Field ' + fieldId),
+                    (spots || []).map(function(spot) {
+                        var sid = spot.id;
+                        var cls = 'manual-goal-btn';
+                        if (litSet[sid]) cls += ' lit';
+                        else if (status.last_hit === sid) cls += ' hit';
+                        return React.createElement('button', {
+                            key: sid,
+                            type: 'button',
+                            className: cls,
+                            disabled: !running || busy,
+                            title: 'Light ' + sid + ' (stays until ball arrives)',
+                            style: { left: spot.left + '%', top: spot.top + '%' },
+                            onClick: function() { cueScreen(sid); }
+                        }, sid);
+                    })
+                );
+            };
+
+            return React.createElement('div', { className: 'manual-coach-wrap' },
+                React.createElement('h2', { className: 'text-2xl font-black gold-accent' }, 'Manual Coach'),
+                React.createElement('p', { className: 'manual-help' },
+                    'Tap one or more goal areas — each shows the pass image and cylinder and stays lit until the ball arrives. ' +
+                    'Only that screen clears on a hit; other lit screens keep waiting. Tap again to light the next screen.'
+                ),
+                React.createElement('div', { className: 'manual-coach-toolbar' },
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'btn-primary px-6 py-2 font-bold',
+                        disabled: busy || running,
+                        onClick: startSession
+                    }, running ? 'Session running' : 'Start Manual'),
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'clear-selection-btn',
+                        disabled: busy || !running,
+                        onClick: clearLit
+                    }, 'Clear all'),
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'clear-selection-btn',
+                        disabled: busy || !running,
+                        onClick: stopSession
+                    }, 'Stop Manual'),
+                    React.createElement('div', { className: statusClass },
+                        status.message || (running ? 'Ready' : 'Idle')
+                    )
+                ),
+                React.createElement('div', {
+                    className: 'flex items-center gap-4 mb-2 flex-wrap',
+                    style: { marginTop: 4 }
+                },
+                    React.createElement('span', { className: 'text-white font-bold' }, 'Sim A'),
+                    React.createElement('label', {
+                        className: 'toggle-switch',
+                        title: 'Arena simulator for Field A'
+                    },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: !!simulationFields.A,
+                            onChange: function(e) {
+                                toggleSimulationField && toggleSimulationField('A', e.target.checked);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    React.createElement('span', { className: 'text-white font-bold' }, 'Sim B'),
+                    React.createElement('label', {
+                        className: 'toggle-switch',
+                        title: 'Arena simulator for Field B'
+                    },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: !!simulationFields.B,
+                            onChange: function(e) {
+                                toggleSimulationField && toggleSimulationField('B', e.target.checked);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    React.createElement('span', { className: 'text-white font-bold' },
+                        'Sim Mode ' + (simulatorScoreMode === 1 ? '1' : '2')),
+                    React.createElement('label', { className: 'toggle-switch' },
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: simulatorScoreMode === 2,
+                            onChange: function(e) {
+                                applySimulatorScoreMode && applySimulatorScoreMode(e.target.checked ? 2 : 1, true);
+                            }
+                        }),
+                        React.createElement('span', { className: 'slider' })
+                    ),
+                    isAdmin ?
+                    React.createElement(React.Fragment, null,
+                        React.createElement('span', { className: 'text-white font-bold' }, 'Visualization'),
+                        React.createElement('label', { className: 'toggle-switch' },
+                            React.createElement('input', {
+                                type: 'checkbox',
+                                checked: visualizationEnabled,
+                                onChange: function(e) {
+                                    toggleVisualization && toggleVisualization(e.target.checked);
+                                }
+                            }),
+                            React.createElement('span', { className: 'slider' })
+                        )
+                    ) : null
+                ),
+                React.createElement('div', { className: 'manual-pitch' },
+                    renderField('A', layout.A),
+                    renderField('B', layout.B)
+                )
+            );
+        };
+
         var HomographyCalibration = function() {
             var camerasState = useState([]);
             var cameras = camerasState[0];
@@ -3008,6 +3319,10 @@
             var realtimePausedState = useState(false);
             var realtimePaused = realtimePausedState[0];
             var setRealtimePaused = realtimePausedState[1];
+            // Keep operator level picker locked to CURRENT DEVELOPMENT LEVEL while live.
+            useEffect(function() {
+                window.__simustLivePlayActive = !!realtimeRunning;
+            }, [realtimeRunning]);
             var pausedFieldsState = useState({ A: false, B: false });
             var pausedFields = pausedFieldsState[0];
             var setPausedFields = pausedFieldsState[1];
@@ -3052,6 +3367,9 @@
             var simulationFieldsState = useState({ A: false, B: false });
             var simulationFields = simulationFieldsState[0];
             var setSimulationFields = simulationFieldsState[1];
+            var simulatorScoreModeState = useState(2);
+            var simulatorScoreMode = simulatorScoreModeState[0];
+            var setSimulatorScoreMode = simulatorScoreModeState[1];
             var teammateOnSecState = useState(1.2);
             var teammateOnSec = teammateOnSecState[0];
             var setTeammateOnSec = teammateOnSecState[1];
@@ -3182,12 +3500,16 @@
             var runningFieldsRef = useRef({ A: false, B: false });
             var sessionTogetherRef = useRef(false);
             var selectedPlayerIdRef = useRef(null);
+            var selectedPlayerBIdRef = useRef(null);
+            var progressSigRef = useRef({});
+            var levelSnapRef = useRef({ A: '', B: '' });
             var activeTabRef = useRef(activeTab);
             var resultsEpochRef = useRef(0);
             var visualizationEnabledRef = useRef(false);
             var vizRequestSeqRef = useRef(0);
             var simulationEnabledRef = useRef(false);
             var simulationFieldsRef = useRef({ A: false, B: false });
+            var simulatorScoreModeRef = useRef(2);
             var simRequestSeqRef = useRef(0);
             var teammateOnSecRef = useRef(1.2);
             var teammateGapSecRef = useRef(0.5);
@@ -3368,11 +3690,24 @@
                         localStorage.setItem("simust_players", JSON.stringify(merged));
                         // Keep empty until the operator searches/selects. Never auto-pick
                         // merged[0] (that was jumping back to a default like "Omid Omid").
-                        var currentId = selectedPlayerIdRef.current;
-                        if (currentId) {
-                            var player = merged.find(function(p) { return p.id === currentId; });
-                            if (player) updateProgressForPlayer(player);
-                        }
+                        // When unlock/level-up changes progress, snap Field A+B level
+                        // UI to CURRENT DEVELOPMENT LEVEL at the same time (one stamp
+                        // for operator + My SIMUST — no S1.T5 vs S2.T2 split).
+                        var applyLoadedProgress = function(pid, updater) {
+                            if (!pid) return;
+                            var player = merged.find(function(p) { return p.id === pid; });
+                            if (!player) return;
+                            var sig = progressSignature(player.progress);
+                            var prev = progressSigRef.current[pid];
+                            progressSigRef.current[pid] = sig;
+                            var cur = String((player.progress || {}).current_level || '');
+                            var livePlaying = !!(window.__simustLivePlayActive);
+                            updater(player, {
+                                followCurrent: (!!prev && prev !== sig) || (livePlaying && !!cur)
+                            });
+                        };
+                        applyLoadedProgress(selectedPlayerIdRef.current, updateProgressForPlayer);
+                        applyLoadedProgress(selectedPlayerBIdRef.current, updateProgressForPlayerB);
                         return merged;
                     }
                     return [];
@@ -3399,11 +3734,17 @@
                             });
                             setPlayers(updated);
                             localStorage.setItem("simust_players", JSON.stringify(updated));
-                            var currentId2 = selectedPlayerIdRef.current;
-                            if (currentId2) {
-                                var p2 = updated.find(function(p) { return p.id === currentId2; });
-                                if (p2) updateProgressForPlayer(p2);
-                            }
+                            var applyLocalProgress = function(pid, updater) {
+                                if (!pid) return;
+                                var p2 = updated.find(function(p) { return p.id === pid; });
+                                if (!p2) return;
+                                var sig = progressSignature(p2.progress);
+                                var prev = progressSigRef.current[pid];
+                                progressSigRef.current[pid] = sig;
+                                updater(p2, { followCurrent: !!prev && prev !== sig });
+                            };
+                            applyLocalProgress(selectedPlayerIdRef.current, updateProgressForPlayer);
+                            applyLocalProgress(selectedPlayerBIdRef.current, updateProgressForPlayerB);
                             return updated;
                         }
                     } catch (e2) { console.error(e2); }
@@ -3416,16 +3757,32 @@
                 setPlayers(updated);
             };
 
-            var applySharedLevelDefaults = function(unlocked, playlists, current) {
+            var resolveTrainingLevel = function(unlocked, playlists, current) {
+                // Saved CURRENT DEVELOPMENT LEVEL when still unlocked, else furthest unlock.
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                if (highest && highest !== "L00-Foundation") {
-                    setSelectedLevel(highest);
-                    setSelectedSubdirectory("");
-                    return;
+                var saved = current || "";
+                var target = highest || saved || "L00-Foundation";
+                if (saved && (unlocked || []).indexOf(saved) !== -1) {
+                    if (!highest || highest === "L00-Foundation") {
+                        target = saved;
+                    } else {
+                        var ordered = sortLevels([{ id: saved }, { id: highest }]);
+                        target = ordered[ordered.length - 1].id;
+                    }
                 }
-                var sf = getHighestFoundationPlaylist(playlists);
-                setSelectedLevel("L00-Foundation");
-                setSelectedSubdirectory(sf);
+                if (target && target !== "L00-Foundation") {
+                    return { level: target, subdirectory: "" };
+                }
+                return {
+                    level: "L00-Foundation",
+                    subdirectory: getHighestFoundationPlaylist(playlists)
+                };
+            };
+
+            var applySharedLevelDefaults = function(unlocked, playlists, current) {
+                var pick = resolveTrainingLevel(unlocked, playlists, current);
+                setSelectedLevel(pick.level);
+                setSelectedSubdirectory(pick.subdirectory);
             };
 
             var softPreserveSharedLevel = function(unlocked, playlists) {
@@ -3482,12 +3839,27 @@
                 return true;
             };
 
+            var progressSignature = function(progress) {
+                progress = progress || {};
+                return [
+                    progress.current_level || "",
+                    progress.current_playlist || "",
+                    (progress.unlocked_levels || []).join(","),
+                    (progress.unlocked_playlists || []).join(","),
+                    (progress.completed_levels || []).join(","),
+                    (progress.manually_locked_levels || []).join(","),
+                    (progress.manually_locked_playlists || []).join(",")
+                ].join("|");
+            };
+
             var updateProgressForPlayer = function(player, options) {
                 if (!player) return;
                 options = options || {};
-                // preferDefaults: only when picking a player. Progress refreshes must
-                // NOT overwrite a manual SF-30N / level choice with the highest unlock.
+                // preferDefaults / followCurrent: snap selected level to CURRENT
+                // DEVELOPMENT LEVEL (unlock, lock, level-up). Soft preserve only
+                // when progress did not change (periodic refresh).
                 var preferDefaults = !!options.preferDefaults;
+                var followCurrent = !!options.followCurrent || preferDefaults;
                 var progress = player.progress || {};
                 var unlocked = progress.unlocked_levels || [];
                 var playlists = progress.unlocked_playlists || [];
@@ -3502,7 +3874,7 @@
                 setSessionCredits(credits);
                 setEligibleLevels(eligible);
 
-                if (preferDefaults) {
+                if (followCurrent) {
                     applySharedLevelDefaults(unlocked, playlists, current);
                     return;
                 }
@@ -3511,15 +3883,9 @@
             };
 
             var applyLevelDefaultsB = function(unlocked, playlists, current) {
-                var highest = getHighestUnlockedLevel(allLevels, unlocked);
-                if (highest && highest !== "L00-Foundation") {
-                    setSelectedLevelB(highest);
-                    setSelectedSubdirectoryB("");
-                    return;
-                }
-                var sf = getHighestFoundationPlaylist(playlists);
-                setSelectedLevelB("L00-Foundation");
-                setSelectedSubdirectoryB(sf);
+                var pick = resolveTrainingLevel(unlocked, playlists, current);
+                setSelectedLevelB(pick.level);
+                setSelectedSubdirectoryB(pick.subdirectory);
             };
 
             var softPreserveLevelB = function(unlocked, playlists) {
@@ -3542,6 +3908,7 @@
                 if (!player) return;
                 options = options || {};
                 var preferDefaults = !!options.preferDefaults;
+                var followCurrent = !!options.followCurrent || preferDefaults;
                 var progress = player.progress || {};
                 var unlocked = progress.unlocked_levels || [];
                 var playlists = progress.unlocked_playlists || [];
@@ -3556,7 +3923,7 @@
                 setSessionCreditsB(credits);
                 setEligibleLevelsB(eligible);
 
-                if (preferDefaults) {
+                if (followCurrent) {
                     applyLevelDefaultsB(unlocked, playlists, current);
                 } else {
                     softPreserveLevelB(unlocked, playlists);
@@ -3604,6 +3971,7 @@
                     clearResultsDisplay();
                 }
                 selectedPlayerIdRef.current = player.id;
+                progressSigRef.current[player.id] = progressSignature(player.progress);
                 setSelectedPlayerId(player.id);
                 setSearchQuery((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                 setShowSearchResults(false);
@@ -3640,6 +4008,8 @@
                     showToast("Same player already selected for Field A — pick another for Field B", 'error');
                     return;
                 }
+                selectedPlayerBIdRef.current = player.id;
+                progressSigRef.current[player.id] = progressSignature(player.progress);
                 setSelectedPlayerBId(player.id);
                 setSearchQueryB((player.name || '') + ' ' + (player.surname || '').trim() + ' · ' + player.playerId);
                 setShowSearchResultsB(false);
@@ -3650,6 +4020,8 @@
             };
 
             var clearSelectionB = function() {
+                selectedPlayerBIdRef.current = null;
+                levelSnapRef.current.B = '';
                 setSelectedPlayerBId(null);
                 setSearchQueryB("");
                 setFilteredPlayersB([]);
@@ -3672,6 +4044,7 @@
 
             var clearSelection = function() {
                 selectedPlayerIdRef.current = null;
+                levelSnapRef.current.A = '';
                 setSelectedPlayerId(null);
                 setSearchQuery("");
                 setFilteredPlayers([]);
@@ -3912,7 +4285,9 @@
                             unlocked_playlists: (source.unlocked_playlists || []).slice(),
                             completed_levels: (source.completed_levels || []).slice(),
                             session_credits: source.session_credits || 0,
-                            eligible_levels: (source.eligible_levels || []).slice()
+                            eligible_levels: (source.eligible_levels || []).slice(),
+                            manually_locked_levels: (source.manually_locked_levels || []).slice(),
+                            manually_locked_playlists: (source.manually_locked_playlists || []).slice()
                         };
                         if (playlist) {
                             if (progress.unlocked_playlists.indexOf(playlist) === -1) {
@@ -3921,7 +4296,9 @@
                             if (progress.unlocked_levels.indexOf('L00-Foundation') === -1) {
                                 progress.unlocked_levels.push('L00-Foundation');
                             }
-                            progress.current_level = 'L00-Foundation';
+                            progress.manually_locked_playlists = progress.manually_locked_playlists.filter(function(id) {
+                                return id !== playlist;
+                            });
                         } else if (progress.unlocked_levels.indexOf(levelId) === -1) {
                             progress.unlocked_levels.push(levelId);
                             if (levelId === 'L00-Foundation') {
@@ -3931,25 +4308,34 @@
                                     }
                                 });
                             }
-                            var sorted = sortLevels(allLevels);
-                            var highest = null;
-                            for (var i = sorted.length - 1; i >= 0; i--) {
-                                if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
-                                    progress.completed_levels.indexOf(sorted[i].id) === -1) {
-                                    highest = sorted[i].id;
-                                    break;
-                                }
-                            }
-                            if (highest) progress.current_level = highest;
                         }
+                        if (!playlist) {
+                            progress.manually_locked_levels = progress.manually_locked_levels.filter(function(id) {
+                                return id !== levelId;
+                            });
+                        }
+                        // CURRENT DEVELOPMENT LEVEL = highest unlocked set.
+                        var sortedUnlock = sortLevels(allLevels);
+                        var highestUnlock = 'L00-Foundation';
+                        for (var ui = sortedUnlock.length - 1; ui >= 0; ui--) {
+                            if (progress.unlocked_levels.indexOf(sortedUnlock[ui].id) !== -1 &&
+                                sortedUnlock[ui].id.indexOf('L00-Foundation') !== 0) {
+                                highestUnlock = sortedUnlock[ui].id;
+                                break;
+                            }
+                        }
+                        progress.current_level = highestUnlock;
                         return Object.assign({}, p, { progress: progress });
                     }
                     return p;
                 });
                 setPlayers(updatedPlayers);
                 var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
-                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
-                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
+                if (updatedPlayer) {
+                    progressSigRef.current[playerId] = progressSignature(updatedPlayer.progress);
+                }
+                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer, { followCurrent: true });
+                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer, { followCurrent: true });
             };
 
             var handleUnlockLevel = function(levelId) {
@@ -3957,8 +4343,11 @@
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
                 applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success" || res.data.status === "info") {
-                        showToast("Unlocked " + levelId, 'success');
+                    var st = (res.data && res.data.status) || '';
+                    if (st === "success" || st === "info" || st === "queued") {
+                        showToast(st === "queued" ? ("Unlock queued for " + levelId) : ("Unlocked " + levelId), 'success');
+                        // Keep optimistic UI on queued; only reload when lab returned progress.
+                        if (res.data.progress) loadPlayers();
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
                         loadPlayers();
@@ -3975,8 +4364,10 @@
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
                 applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success" || res.data.status === "info") {
-                        showToast("Unlocked " + levelId + " for Field B", 'success');
+                    var st = (res.data && res.data.status) || '';
+                    if (st === "success" || st === "info" || st === "queued") {
+                        showToast(st === "queued" ? ("Unlock queued for Field B " + levelId) : ("Unlocked " + levelId + " for Field B"), 'success');
+                        if (res.data.progress) loadPlayers();
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
                         loadPlayers();
@@ -4003,12 +4394,17 @@
                             unlocked_playlists: (source.unlocked_playlists || []).slice(),
                             completed_levels: (source.completed_levels || []).slice(),
                             session_credits: source.session_credits || 0,
-                            eligible_levels: (source.eligible_levels || []).slice()
+                            eligible_levels: (source.eligible_levels || []).slice(),
+                            manually_locked_levels: (source.manually_locked_levels || []).slice(),
+                            manually_locked_playlists: (source.manually_locked_playlists || []).slice()
                         };
                         if (playlist) {
                             progress.unlocked_playlists = progress.unlocked_playlists.filter(function(id) {
                                 return id !== playlist;
                             });
+                            if (progress.manually_locked_playlists.indexOf(playlist) === -1) {
+                                progress.manually_locked_playlists.push(playlist);
+                            }
                             if (!progress.unlocked_playlists.length) {
                                 progress.unlocked_levels = progress.unlocked_levels.filter(function(id) {
                                     return id !== 'L00-Foundation';
@@ -4017,32 +4413,36 @@
                         } else {
                             progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
                             progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
+                            if (progress.manually_locked_levels.indexOf(levelId) === -1) {
+                                progress.manually_locked_levels.push(levelId);
+                            }
                             if (progress.unlocked_levels.indexOf("L00-Foundation") === -1 &&
                                 progress.unlocked_playlists.length) {
                                 progress.unlocked_levels.unshift("L00-Foundation");
                             }
-                            if (progress.current_level === levelId) {
-                                progress.current_level = "L00-Foundation";
-                                var sorted = sortLevels(allLevels);
-                                var highest = null;
-                                for (var i = sorted.length - 1; i >= 0; i--) {
-                                    if (progress.unlocked_levels.indexOf(sorted[i].id) !== -1 &&
-                                        progress.completed_levels.indexOf(sorted[i].id) === -1) {
-                                        highest = sorted[i].id;
-                                        break;
-                                    }
-                                }
-                                if (highest) progress.current_level = highest;
+                        }
+                        // After lock, CURRENT DEVELOPMENT LEVEL drops to the new highest open set.
+                        var sortedLock = sortLevels(allLevels);
+                        var highestLock = 'L00-Foundation';
+                        for (var li = sortedLock.length - 1; li >= 0; li--) {
+                            if (progress.unlocked_levels.indexOf(sortedLock[li].id) !== -1 &&
+                                sortedLock[li].id.indexOf('L00-Foundation') !== 0) {
+                                highestLock = sortedLock[li].id;
+                                break;
                             }
                         }
+                        progress.current_level = highestLock;
                         return Object.assign({}, p, { progress: progress });
                     }
                     return p;
                 });
                 setPlayers(updatedPlayers);
                 var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
-                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer);
-                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer);
+                if (updatedPlayer) {
+                    progressSigRef.current[playerId] = progressSignature(updatedPlayer.progress);
+                }
+                if (updatedPlayer && refreshA) updateProgressForPlayer(updatedPlayer, { followCurrent: true });
+                if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer, { followCurrent: true });
             };
 
             var handleLockLevel = function(levelId) {
@@ -4054,8 +4454,11 @@
                 }
                 applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success" || res.data.status === "info") {
-                        showToast("Locked " + levelId, 'info');
+                    var st = (res.data && res.data.status) || '';
+                    if (st === "success" || st === "info" || st === "queued") {
+                        showToast(st === "queued" ? ("Lock queued for " + levelId) : ("Locked " + levelId), 'info');
+                        // Do not loadPlayers on queued — that snapped locks back open.
+                        if (res.data.progress) loadPlayers();
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
                         loadPlayers();
@@ -4076,8 +4479,10 @@
                 }
                 applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
-                    if (res.data.status === "success" || res.data.status === "info") {
-                        showToast("Locked " + levelId + " for Field B", 'info');
+                    var st = (res.data && res.data.status) || '';
+                    if (st === "success" || st === "info" || st === "queued") {
+                        showToast(st === "queued" ? ("Lock queued for Field B " + levelId) : ("Locked " + levelId + " for Field B"), 'info');
+                        if (res.data.progress) loadPlayers();
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
                         loadPlayers();
@@ -4279,6 +4684,26 @@
                 applySimulationFields(next, true);
             };
 
+            var applySimulatorScoreMode = function(mode, toastOn) {
+                var next = (parseInt(mode, 10) === 1) ? 1 : 2;
+                simulatorScoreModeRef.current = next;
+                setSimulatorScoreMode(next);
+                localStorage.setItem('simust_simulator_score_mode', String(next));
+                axios.post("/simulator-score-mode", { mode: next }).then(function() {
+                    if (toastOn) {
+                        showToast(
+                            next === 1
+                                ? "Sim Mode 1: scores stay below unlock"
+                                : "Sim Mode 2: scores meet unlock (ACC/AE)",
+                            "info"
+                        );
+                    }
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Simulator score mode failed", "error");
+                });
+            };
+
             var toggleSimulation = function(enabled) {
                 applySimulationFields({ A: !!enabled, B: !!enabled }, true);
             };
@@ -4334,10 +4759,10 @@
                     return;
                 }
 
-                if (ae >= 70 && acc >= 80) {
-                    showToast("Score passed. Next series is eligible — book 30 minutes to open it.", 'success');
+                if (ae >= 75) {
+                    showToast("Score passed (AE ≥75%). Next series unlocks from this final result.", 'success');
                 } else {
-                    showToast("Performance: efficiency=" + ae.toFixed(1) + "%, accuracy=" + acc.toFixed(1) + "%. Need ≥70% efficiency and ≥80% accuracy, then book 30 minutes.", 'info');
+                    showToast("Performance: efficiency=" + ae.toFixed(1) + "%. Need ≥75% AE to level up (ACC is not used).", 'info');
                 }
             };
 
@@ -4417,9 +4842,15 @@
                     fetchRealtimeResults(false, true);
                     return loadPlayers().then(function() {
                         var updatedA = getSelectedPlayer();
-                        if (updatedA) updateProgressForPlayer(updatedA);
+                        if (updatedA) {
+                            progressSigRef.current[updatedA.id] = progressSignature(updatedA.progress);
+                            updateProgressForPlayer(updatedA, { followCurrent: true });
+                        }
                         var updatedB = getSelectedPlayerB();
-                        if (updatedB) updateProgressForPlayerB(updatedB);
+                        if (updatedB) {
+                            progressSigRef.current[updatedB.id] = progressSignature(updatedB.progress);
+                            updateProgressForPlayerB(updatedB, { followCurrent: true });
+                        }
                         if (playerA) {
                             checkAndUnlockNextLevel(
                                 (reportData && reportData.statistics) || {},
@@ -4652,9 +5083,11 @@
                     player_player_id: primary.playerId,
                     visualization_enabled: (role === 'admin') && !!visualizationEnabledRef.current,
                     simulation_enabled: !!(simulationFieldsRef.current.A || simulationFieldsRef.current.B),
+                    // Only selected field(s) may start in sim. Elite/WC partner sim
+                    // is applied by the server — do not light the empty half for HP.
                     simulation_fields: {
-                        A: !!simulationFieldsRef.current.A,
-                        B: !!simulationFieldsRef.current.B
+                        A: !!(playerA || together) && !!simulationFieldsRef.current.A,
+                        B: !!(playerB || together) && !!simulationFieldsRef.current.B
                     },
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
@@ -4750,35 +5183,75 @@
 
                     var sawActivePlayback = false;
                     var waitStartedAt = Date.now();
-                    var finishFromStatus = function() {
+                    var continueWatchUntil = 0;
+                    var finishFromStatus = function(opts) {
+                        opts = opts || {};
                         if (sessionAbortedRef.current || realtimePausedRef.current) return;
-                        if (!realtimeRunningRef.current && sessionSavedRef.current) return;
+                        if (!realtimeRunningRef.current && sessionSavedRef.current && !opts.soft) return;
+                        // Soft finish (final rings / ready): free Play, but keep status polling
+                        // so an auto-continued booked set can re-light Pause/Stop.
+                        var soft = !!opts.soft;
                         realtimeRunningRef.current = false;
                         setRealtimeRunning(false);
                         runningFieldsRef.current = { A: false, B: false };
                         setRunningFields({ A: false, B: false });
                         pausedFieldsRef.current = { A: false, B: false };
                         setPausedFields({ A: false, B: false });
-                        if (liveIntervalRef.current) {
-                            clearInterval(liveIntervalRef.current);
-                            liveIntervalRef.current = null;
+                        if (!soft) {
+                            if (liveIntervalRef.current) {
+                                clearInterval(liveIntervalRef.current);
+                                liveIntervalRef.current = null;
+                            }
+                            if (autoStopTimeoutRef.current) {
+                                clearTimeout(autoStopTimeoutRef.current);
+                                autoStopTimeoutRef.current = null;
+                            }
+                            if (realtimeMonitorInterval.current) {
+                                clearTimeout(realtimeMonitorInterval.current);
+                                realtimeMonitorInterval.current = null;
+                            }
+                            setInstagramLive(false);
+                            axios.post("/instagram-live", { on: false }).catch(function() {});
+                        } else {
+                            continueWatchUntil = Date.now() + 15000;
                         }
-                        if (autoStopTimeoutRef.current) {
-                            clearTimeout(autoStopTimeoutRef.current);
-                            autoStopTimeoutRef.current = null;
-                        }
-                        if (realtimeMonitorInterval.current) {
-                            clearTimeout(realtimeMonitorInterval.current);
-                            realtimeMonitorInterval.current = null;
-                        }
-                        setInstagramLive(false);
-                        axios.post("/instagram-live", { on: false }).catch(function() {});
                         if (!sessionSavedRef.current) {
                             sessionSavedRef.current = true;
                             showToast("Playback finished, saving session…", 'info');
                             handlePlaybackComplete().then(function() {
                                 showToast("Session saved successfully!", 'success');
                             }).catch(function() {});
+                        }
+                    };
+                    var rearmFromContinuedPlay = function(fieldMap, state) {
+                        var nextRunning = { A: false, B: false };
+                        if (fieldMap && typeof fieldMap === "object") {
+                            nextRunning.A = fieldMap.A === "playing";
+                            nextRunning.B = fieldMap.B === "playing";
+                        }
+                        // Intro/starting may publish before fields=playing — keep buttons live.
+                        if (!nextRunning.A && !nextRunning.B &&
+                            (state === "starting" || state === "playing" || state === "loading")) {
+                            nextRunning.A = true;
+                            if (selectedPlayerBId || (runningFieldsRef.current && runningFieldsRef.current.B)) {
+                                nextRunning.B = !!selectedPlayerBId || !!(sessionTogetherRef.current);
+                            }
+                            if (sessionTogetherRef.current || isCombinedLevel(selectedLevel)) {
+                                nextRunning.A = true;
+                                nextRunning.B = true;
+                            }
+                        }
+                        if (!nextRunning.A && !nextRunning.B) return;
+                        runningFieldsRef.current = nextRunning;
+                        setRunningFields(nextRunning);
+                        realtimeRunningRef.current = true;
+                        setRealtimeRunning(true);
+                        // Continued booked set is a new attempt — allow another session save.
+                        sessionSavedRef.current = false;
+                        continueWatchUntil = 0;
+                        if (!autoStopTimeoutRef.current) {
+                            autoStopRemainingRef.current = 45 * 60 * 1000;
+                            armAutoStopTimeout(autoStopRemainingRef.current);
                         }
                     };
 
@@ -4803,13 +5276,17 @@
                     };
 
                     var checkStatus = function() {
-                        if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
+                        var watchingContinue = Date.now() < continueWatchUntil;
+                        if (sessionAbortedRef.current) return;
+                        if (!realtimeRunningRef.current && !watchingContinue) return;
                         axios.get("/playback-status").then(function(statusRes) {
-                            if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
+                            watchingContinue = Date.now() < continueWatchUntil;
+                            if (sessionAbortedRef.current) return;
+                            if (!realtimeRunningRef.current && !watchingContinue) return;
                             var state = statusRes.data && statusRes.data.state ? statusRes.data.state : '';
                             if (window.SIMUST_PUBLIC && !sawActivePlayback) {
                                 axios.get('/remote/status').then(function(st) {
-                                    if (sessionAbortedRef.current || !realtimeRunningRef.current || sessionSavedRef.current) return;
+                                    if (sessionAbortedRef.current || (!realtimeRunningRef.current && Date.now() >= continueWatchUntil)) return;
                                     var data = st.data || {};
                                     var err = data.last_remote_error;
                                     var act = data.last_remote_action;
@@ -4870,6 +5347,11 @@
                                 setInstagramLive(!!statusRes.data.instagram_live.on);
                             }
                             var fieldMap = statusRes.data && statusRes.data.fields;
+                            // Auto-continue after a booked final: re-light Pause/Stop.
+                            if (state === "starting" || state === "playing" || state === "loading") {
+                                sawActivePlayback = true;
+                                rearmFromContinuedPlay(fieldMap, state);
+                            }
                             if (fieldMap && typeof fieldMap === "object") {
                                 var nextRunning = {
                                     A: fieldMap.A === "playing",
@@ -4877,8 +5359,15 @@
                                 };
                                 var prevRunning = runningFieldsRef.current || { A: false, B: false };
                                 if (!!nextRunning.A !== !!prevRunning.A || !!nextRunning.B !== !!prevRunning.B) {
-                                    runningFieldsRef.current = nextRunning;
-                                    setRunningFields(nextRunning);
+                                    if (nextRunning.A || nextRunning.B) {
+                                        runningFieldsRef.current = nextRunning;
+                                        setRunningFields(nextRunning);
+                                        realtimeRunningRef.current = true;
+                                        setRealtimeRunning(true);
+                                    } else {
+                                        runningFieldsRef.current = nextRunning;
+                                        setRunningFields(nextRunning);
+                                    }
                                     var nextPaused = Object.assign({}, pausedFieldsRef.current || { A: false, B: false });
                                     if (!nextRunning.A) nextPaused.A = false;
                                     if (!nextRunning.B) nextPaused.B = false;
@@ -4887,21 +5376,18 @@
                                     if (!nextRunning.A && !nextRunning.B) {
                                         realtimePausedRef.current = false;
                                         setRealtimePaused(false);
-                                        // Finish-process / final / series complete: release Stop + session lock.
-                                        if (state === "ready" || state === "idle" || state === "playing_final"
-                                            || state === "completed" || state === "closed"
-                                            || state === "wait_final" || state === "final") {
+                                        if (state === "completed" || state === "closed") {
                                             realtimeRunningRef.current = false;
                                             setRealtimeRunning(false);
                                         }
                                     }
                                 }
                             }
-                            // Training finished — release Play/Stop as soon as final summary starts
-                            // (do not wait up to ~60s for playing_final to become completed).
+                            // Soft finish during final rings — keep polling for booked auto-continue.
                             if (state === "playing_final" || state === "final" || state === "wait_final") {
                                 sawActivePlayback = true;
-                                finishFromStatus();
+                                finishFromStatus({ soft: true });
+                                realtimeMonitorInterval.current = setTimeout(checkStatus, 600);
                                 return;
                             }
                             if (state === "completed" || state === "closed") {
@@ -4909,10 +5395,12 @@
                                 return;
                             }
                             if (state === "ready") {
-                                // Series complete — release Play/Stop and clear the
-                                // half-open session so the next Play is a clean start
-                                // (camera, visualization, Stop buttons).
                                 sawActivePlayback = true;
+                                finishFromStatus({ soft: true });
+                                if (Date.now() < continueWatchUntil) {
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
                                 finishFromStatus();
                                 return;
                             }
@@ -4921,7 +5409,16 @@
                                 return;
                             }
                             if (state === "idle" && sawActivePlayback) {
+                                if (Date.now() < continueWatchUntil) {
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
                                 finishFromStatus();
+                                return;
+                            }
+                            // Keep watching briefly after soft finish even if realtimeRunning was cleared.
+                            if (!realtimeRunningRef.current && Date.now() < continueWatchUntil) {
+                                realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
                                 return;
                             }
                             realtimeMonitorInterval.current = setTimeout(checkStatus, sawActivePlayback ? 600 : 1000);
@@ -5155,6 +5652,10 @@
             }, [selectedPlayerId]);
 
             useEffect(function() {
+                selectedPlayerBIdRef.current = selectedPlayerBId;
+            }, [selectedPlayerBId]);
+
+            useEffect(function() {
                 fetchLevels();
                 loadPlayers();
                 var hostPlayerRefresh = setInterval(function() {
@@ -5180,6 +5681,14 @@
                     } catch (e) {}
                 }
                 applySimulationFields(startFields, false);
+                var storedSimMode = localStorage.getItem('simust_simulator_score_mode');
+                var bootSimMode = (storedSimMode === '1') ? 1 : 2;
+                axios.get('/simulator-score-mode').then(function(res) {
+                    var mode = (res.data && parseInt(res.data.mode, 10) === 1) ? 1 : bootSimMode;
+                    applySimulatorScoreMode(mode, false);
+                }).catch(function() {
+                    applySimulatorScoreMode(bootSimMode, false);
+                });
                 var storedSystem = localStorage.getItem('simust-system-on');
                 var storedSaver = localStorage.getItem('simust-screensaver-on');
                 var bootSystem = storedSystem === null ? true : storedSystem === '1';
@@ -5319,16 +5828,22 @@
 
             useEffect(function() {
                 var player = getSelectedPlayer();
-                if (player) {
-                    updateProgressForPlayer(player);
-                }
+                if (!player || !selectedPlayerId) return;
+                // Snap once per player after the level catalog is ready so training
+                // level = saved highest unlock. Later players refreshes soft-preserve.
+                var key = selectedPlayerId + ':' + (allLevels && allLevels.length ? 'ready' : 'wait');
+                var snap = allLevels && allLevels.length > 0 && levelSnapRef.current.A !== key;
+                if (snap) levelSnapRef.current.A = key;
+                updateProgressForPlayer(player, { preferDefaults: snap });
             }, [selectedPlayerId, players, allLevels]);
 
             useEffect(function() {
                 var playerB = getSelectedPlayerB();
-                if (playerB) {
-                    updateProgressForPlayerB(playerB);
-                }
+                if (!playerB || !selectedPlayerBId) return;
+                var keyB = selectedPlayerBId + ':' + (allLevels && allLevels.length ? 'ready' : 'wait');
+                var snapB = allLevels && allLevels.length > 0 && levelSnapRef.current.B !== keyB;
+                if (snapB) levelSnapRef.current.B = keyB;
+                updateProgressForPlayerB(playerB, { preferDefaults: snapB });
             }, [selectedPlayerBId, players, allLevels]);
 
             // Reset each field's playlist when that field's level changes.
@@ -5355,7 +5870,7 @@
             }, [selectedLevelB]);
 
             useEffect(function() {
-                if (role === 'coach' && activeTab !== 'main' && activeTab !== 'reservations') {
+                if (role === 'coach' && activeTab !== 'main' && activeTab !== 'reservations' && activeTab !== 'manual') {
                     setActiveTab('main');
                 }
             }, [role, activeTab]);
@@ -5633,6 +6148,9 @@
                                 isOperatorStaff ? React.createElement('button', { onClick: function() {
                                         setActiveTab('reservations');
                                         closeMenu(); } }, 'Reservation') : null,
+                                isOperatorStaff ? React.createElement('button', { onClick: function() {
+                                        setActiveTab('manual');
+                                        closeMenu(); } }, 'Manual') : null,
                                 isAdmin ? React.createElement('button', { onClick: function() {
                                         setActiveTab('results');
                                         closeMenu(); } }, t('results')) : null,
@@ -5689,7 +6207,24 @@
                                 }),
                                 React.createElement('span', { className: "slider" })
                             )
-                        )
+                        ),
+                        isAdmin ?
+                        React.createElement('label', {
+                            className: "cabinet-switch",
+                            title: "Sim Mode 1: cannot unlock. Mode 2: always unlock / level up."
+                        },
+                            React.createElement('span', null, "Sim Mode " + (simulatorScoreMode === 1 ? "1" : "2")),
+                            React.createElement('span', { className: "toggle-switch" },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: simulatorScoreMode === 2,
+                                    onChange: function(e) {
+                                        applySimulatorScoreMode(e.target.checked ? 2 : 1, true);
+                                    }
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            )
+                        ) : null
                     )
                 ),
 
@@ -5704,6 +6239,12 @@
                         onClick: function() { setActiveTab('reservations'); },
                         className: "tab-button" + (activeTab === 'reservations' ? ' active' : '')
                     }, "Reservation") :
+                    null,
+                    isOperatorStaff ?
+                    React.createElement('button', {
+                        onClick: function() { setActiveTab('manual'); },
+                        className: "tab-button" + (activeTab === 'manual' ? ' active' : '')
+                    }, "Manual") :
                     null,
                     isAdmin ?
                     React.createElement('button', {
@@ -5734,6 +6275,17 @@
                         showToast: showToast,
                         role: role,
                         operatorName: username
+                    }) :
+                    activeTab === 'manual' && isOperatorStaff ?
+                    React.createElement(ManualCoachPanel, {
+                        showToast: showToast,
+                        isAdmin: isAdmin,
+                        simulationFields: simulationFields,
+                        toggleSimulationField: toggleSimulationField,
+                        simulatorScoreMode: simulatorScoreMode,
+                        applySimulatorScoreMode: applySimulatorScoreMode,
+                        visualizationEnabled: visualizationEnabled,
+                        toggleVisualization: toggleVisualization
                     }) :
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
