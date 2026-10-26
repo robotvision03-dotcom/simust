@@ -19,6 +19,7 @@ import threading
 import random
 import math
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -247,8 +248,13 @@ def _reset_live_action_results():
     except Exception as exc:
         logger.warning("Could not reset live action results: %s", exc)
 
-WAIT_ANIMATION_MS = 5000
-PER_VIDEO_RESULTS_MS = 20000
+# Processing rings only — keep short. Rings show for PER/FINAL below.
+WAIT_ANIMATION_MS = 1200
+PER_VIDEO_RESULTS_MS = 30000
+FINAL_RESULTS_MS = 40000
+# Max time on processing if create-video-results is slow/empty (then retry / skip).
+# Elite/WC dual-field rings need more headroom than single-field Entry/Activated.
+RESULTS_FETCH_BUDGET_MS = 14000
 # Fallback if the starting video length cannot be read.
 LEVEL_INTRO_MS = 4000
 # Keep the last frame of the starting video on screen this long after it ends.
@@ -280,10 +286,9 @@ OPENING_LOGO_TEXT_GAP_LINES = 0
 OPENING_LOGO_TEXT_DOWN_FRAC = 0.20
 # Pull that text back up by this many lines (was 1; +2 more for visibility under logo).
 OPENING_LOGO_TEXT_LIFT_LINES = 3
-# World Class digits: keep clear of the top/bottom screen edges.
+# World Class digits use the same ring-value center as Elite/Entry (no special lift).
 WC_TEXT_EDGE_MARGIN = 0.10
-# Pull World Class numbers 20% up from the bottom of the screen.
-WC_TEXT_BOTTOM_LIFT = 0.20
+WC_TEXT_BOTTOM_LIFT = 0.0
 LEVEL_OPENING_LOGO_FILES = {
     "foundation": ("logo_video_foundation.mp4",),
     "entry": ("logo_video_Entry.mp4",),
@@ -563,6 +568,8 @@ LIVE_ACTION_RESULT_FILE = "C:/Users/siama/Documents/simust_player/live_action_re
 STOP_SAVE_FILE = "C:/Users/siama/Documents/simust_player/stop_save.txt"
 FLASH_TIMING_FILE = "C:/Users/siama/Documents/simust_player/teammate_flash_timing.json"
 PLAYERS_FIELDS_FILE = "C:/Users/siama/Documents/simust_player/players_fields.json"
+# Abort mid-play / pre-final when less than this many seconds remain on the booking.
+BOOKING_ABORT_LEAD_SEC = 60
 # Rotation mode: fast pass-image spin around the field arc, then hold on one screen.
 ROTATION_ARC_A = list(FOUNDATION_ARC_A)  # A4→A5→A6→A1→A2→A3
 ROTATION_ARC_B = list(FOUNDATION_ARC_B)  # B6→B5→B4→B3→B2→B1
@@ -855,14 +862,21 @@ def _high_performance_series_num(*paths) -> Optional[int]:
 
 
 def _band_s2_series_num(*paths, band: str) -> Optional[int]:
-    """S2.T1..S2.T5 inside a level band → series 1..5."""
+    """S2.T1..S2.T5 inside a level band → series 1..5.
+
+    Disk folders often map S2.T* → A-T* (no A1.T* on disk). Prefer an explicit
+    S2.T / A1.T token; never treat bare A-T as series 2 unless S2 is named.
+    """
     blob = " ".join(str(p or "") for p in paths)
     if not re.search(band, blob, re.I):
         return None
     match = re.search(r"S2[.-]T([1-5])", blob, re.I)
-    if not match:
-        return None
-    return int(match.group(1))
+    if match:
+        return int(match.group(1))
+    match = re.search(r"A1[-.]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def _high_performance_s2_series_num(*paths) -> Optional[int]:
@@ -1745,7 +1759,6 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
             if any(not number_png[sid] or not zero_png[sid] for sid in screens):
                 return []
         last_fg = {}
-        wc_lift = float(WC_TEXT_BOTTOM_LIFT) if world else 0.0
         for action_in_set, goal_sid in enumerate(order, start=1):
             finished = set(order[:action_in_set - 1])
             remaining = [sid for sid in screens if sid not in finished]
@@ -1758,7 +1771,8 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
                     return []
                 for sid in finished:
                     fg = _world_fg_on_bg(last_fg.get(sid), action_bg, palette)
-                    pix = _render_band_digit_image("00", action_bg, fg, lift_frac=wc_lift)
+                    # Same vertical placement as Elite / Entry (ring-value center).
+                    pix = _render_band_digit_image("00", action_bg, fg, lift_frac=0.0)
                     if not pix:
                         return []
                     images[sid] = pix
@@ -1770,7 +1784,7 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
                     fg = colors[index]
                     last_fg[sid] = fg
                     pix = _render_band_digit_image(
-                        placement[sid], action_bg, fg, lift_frac=wc_lift,
+                        placement[sid], action_bg, fg, lift_frac=0.0,
                     )
                     if not pix:
                         return []
@@ -1799,12 +1813,14 @@ def _build_elite_playlist(series_num: int, mode: str = "elite") -> List[dict]:
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
                 "label": (
-                    f"{label_prefix} A-T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"{label_prefix} S1.T{series_num} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ELITE_ACTIONS_PER_TEST} "
                     f"goal screen {goal_sid} number {placement.get(goal_sid)} "
                     f"on={on_ms}ms gap={gap_ms}ms"
                 ),
-                "path": f"image://{label_prefix}/A-T{series_num}/test{test_num}/{action_in_set}",
+                "path": f"image://{label_prefix}/S1.T{series_num}/test{test_num}/{action_in_set}",
+                "series_group": 1,
+                "series_num": int(series_num),
             })
     return _stamp_finish_balls(playlist)
 
@@ -1884,6 +1900,8 @@ def _build_elite_s2_playlist(series_num: int) -> List[dict]:
                     f"distractors={distractor_kind} on={on_ms}ms"
                 ),
                 "path": f"image://Elite/S2.T{series_num}/test{test_num}/{action_in_set}",
+                "series_group": 2,
+                "series_num": int(series_num),
             })
     return _stamp_finish_balls(playlist)
 
@@ -2570,14 +2588,26 @@ def _active_field_screens(active_fields):
 
 
 def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
-    """S1.T# = series group 1 set #; S2.T# = series group 2 (Activated second block)."""
-    text = f"{level_id or ''} {subdirectory or ''}"
-    s2 = re.search(r"S2[.-]T([1-5])|A1[-.]T([1-5])", text, re.I)
+    """S1.T# / S2.T# from the canonical level id — never from disk folder alone.
+
+    Elite/WC S2.T2 reuses folder A-T2 on disk. Matching bare A-T* first made the
+    opening card / operator stamp look like S1.T2 while progress was S2.T2.
+    """
+    primary = str(level_id or "")
+    s2 = re.search(r"S2[.-]T([1-5])", primary, re.I)
     if s2:
-        return f"S2.T{s2.group(1) or s2.group(2)}"
-    s1 = re.search(r"S1[.-]T([1-5])|(?<!\d)A[-.]T([1-5])", text, re.I)
+        return f"S2.T{s2.group(1)}"
+    s1 = re.search(r"S1[.-]T([1-5])", primary, re.I)
     if s1:
-        return f"S1.T{s1.group(1) or s1.group(2)}"
+        return f"S1.T{s1.group(1)}"
+    blob = f"{primary} {subdirectory or ''}"
+    a1 = re.search(r"A1[-.]T([1-5])", blob, re.I)
+    if a1:
+        return f"S2.T{a1.group(1)}"
+    # Legacy theme folder only when the level id has no S1/S2 token.
+    a = re.search(r"(?<![A-Za-z0-9])A[-.]T([1-5])", blob, re.I)
+    if a:
+        return f"S1.T{a.group(1)}"
     return None
 
 
@@ -3687,20 +3717,14 @@ def _draw_text_at_ring_value(painter, text, width, height, lift_frac: float = 0.
     )
 
 
-def _wc_text_anchor_frac(seed: int, key: str = "") -> Tuple[float, float]:
-    """Random normalized (x, y) text center.
+def _ring_value_center_frac(height: int = 1080) -> float:
+    """Normalized Y of the results-ring value line (same as Elite/Entry digits)."""
+    return float(_ring_value_center_y(int(height))) / float(max(1, int(height)))
 
-    Top stays clear of the edge margin; the bottom is pulled up by
-    WC_TEXT_BOTTOM_LIFT so numbers sit higher on the screen.
-    """
-    token = str(key or "")
-    rng = random.Random(int(seed) * 10007 + sum((i + 1) * ord(c) for i, c in enumerate(token)))
-    margin = float(WC_TEXT_EDGE_MARGIN)
-    bottom = max(margin + 0.05, 1.0 - margin - float(WC_TEXT_BOTTOM_LIFT))
-    # Slight side inset so wide glyphs (K2 / 2-digit) stay inside the tile.
-    fx = rng.uniform(0.14, 0.86)
-    fy = rng.uniform(margin, bottom)
-    return float(fx), float(fy)
+
+def _wc_text_anchor_frac(seed: int, key: str = "") -> Tuple[float, float]:
+    """World Class overlay numbers sit on the same center line as other levels."""
+    return 0.5, float(_ring_value_center_frac(1080))
 
 
 def _draw_text_at_frac(painter, text, width, height, fx: float, fy: float):
@@ -4765,8 +4789,10 @@ def _build_foundation_timed_playlist(
                 ),
                 "path": f"image://{mode_id}/test{test_num}/{action_in_set}",
                 "foundation_sf": mode_id,
+                # Shared-clock budget base (frontend On may still scale live).
+                "on_ms": int(round(SF_SCRIPTED_ON_MS * float(scale))),
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _pick_filler_placements(action_num, action_screens, active_fields, fillers):
@@ -6398,6 +6424,19 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     if group.get("full_band") or group.get("loop") is False:
                         # One-shot coach/clip finished — drop it so the logo
                         # layer underneath keeps painting on screens 3/4.
+                        # Clear fill flags so Field A returns to logo box size
+                        # (same as Field B, which never had a full-bleed coach).
+                        gone = {_sid(sid) for sid in (group.get("screens") or set()) if _sid(sid)}
+                        if gone and group.get("fill", True):
+                            fill = set(getattr(self, "_video_fill_screens", None) or set())
+                            logo = set(getattr(self, "_logo_scale_screens", None) or set())
+                            for name in gone:
+                                fill.discard(name)
+                                logo.add(name)
+                            self._video_fill_screens = fill
+                            self._logo_scale_screens = logo
+                            if logo:
+                                self._content_scale = float(OPENING_LOGO_MAX_WIDTH)
                         try:
                             cap.release()
                         except Exception:
@@ -6812,12 +6851,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     metrics = painter.fontMetrics()
                 pos = positions.get(name)
                 if pos and len(pos) >= 2:
+                    # Same vertical line as Elite/Entry digits (ring-value center).
                     fx = min(0.92, max(0.08, float(pos[0])))
-                    bottom = max(
-                        WC_TEXT_EDGE_MARGIN + 0.05,
-                        1.0 - WC_TEXT_EDGE_MARGIN - float(WC_TEXT_BOTTOM_LIFT),
-                    )
-                    fy = min(bottom, max(WC_TEXT_EDGE_MARGIN, float(pos[1])))
+                    fy = float(_ring_value_center_frac(max(1, self.height())))
                     cx = left + int(round(fx * rect_w))
                     cy = int(round(fy * self.height())) + int(screen_content_offset_y(name) or 0)
                     line = QtCore.QRect(
@@ -7383,6 +7419,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "screensaver",
             )
         )
+        self._booking_abort_done = set()
         self.video_files = []
 
         # Waiting overlay (initially None)
@@ -7682,6 +7719,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return []
         phase = str(self._player_attr("display_phase") or "")
         # Cabinet final / post-series: Stop must release even if phase_active is stale.
+        # Keep Pause/Stop live during opening card / intro of an auto-continued set.
         if phase in ("wait_final", "final", "idle", "ready", "completed", "closed"):
             return []
         parts = getattr(self, "_field_opening_playlists", None) or {}
@@ -7691,7 +7729,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 key = str(fid).upper()[:1]
                 if rows and not self._field_series_finished(key):
                     playing.append(key)
-            return playing
+            if playing:
+                return playing
         return [
             str(fid).upper()[:1]
             for fid in (getattr(self, "_phase_active", None) or [])
@@ -7833,6 +7872,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 return []
             # Combined band always drives both halves (all 12 screens).
             self._phase_active = ["A", "B"]
+            try:
+                _write_players_fields_active(["A", "B"])
+            except Exception:
+                pass
             _band, series_num = decision[1], decision[2]
             series_group = int(decision[3]) if len(decision) > 3 else 1
             if series_group == 2:
@@ -9198,6 +9241,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _store_budget_wrongs(self, missed):
         """Write a Wrong row for each action the player had no time to play."""
         import urllib.request
+        # Mode 2 (admin always-pass): never inject timeout Wrongs. Those rows
+        # stamp balls_clock_sec = full budget and force shared-clock AET to 0%,
+        # which pinned every Foundation/Entry test AE around 58–65%.
+        try:
+            mode_path = os.path.join(
+                os.path.dirname(PLAYERS_FIELDS_FILE) or ".",
+                "simulator_score_mode.txt",
+            )
+            with open(mode_path, "r", encoding="utf-8") as handle:
+                mode = int(str(handle.read() or "2").strip().split()[0])
+            if mode == 2:
+                logger.info(
+                    "Mode 2: skip %s budget-timeout Wrong stamp(s)",
+                    len(missed or []),
+                )
+                return
+        except Exception:
+            pass
         root = "C:/Users/siama/Documents/simust_realtime_recordings"
         if not os.path.isdir(root):
             logger.warning("No recording folder for unfinished omid_2 actions")
@@ -10290,6 +10351,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             stopped = {}
         stopped.pop(fid, None)
         self._field_operator_stopped = stopped
+        abort_done = set(getattr(self, "_booking_abort_done", None) or set())
+        abort_done.discard(fid)
+        self._booking_abort_done = abort_done
         for name in ("_field_final_queued", "_field_final_done", "_field_result_state"):
             try:
                 bucket = dict(object.__getattribute__(self, name) or {})
@@ -11011,30 +11075,44 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "make_video": False,
                 "fields": [fid],
             }
-            try:
-                if HAS_REQUESTS:
-                    response = requests.post(
-                        "http://127.0.0.1:8000/create-video-results", json=payload, timeout=90,
+            # Mode 2: short attempts so processing stays ~1–2s when API is healthy.
+            _m = self._read_simulator_score_mode()
+            http_timeout = 4.0 if _m == 2 else 35
+            attempts = 2 if _m == 2 else 1
+            for attempt in range(1, attempts + 1):
+                try:
+                    if HAS_REQUESTS:
+                        response = requests.post(
+                            "http://127.0.0.1:8000/create-video-results",
+                            json=payload,
+                            timeout=http_timeout,
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            panel = (data.get("panels") or {}).get(fid) or {}
+                            if isinstance(panel, dict) and panel:
+                                video_path = json.dumps(panel)
+                                break
+                    else:
+                        import urllib.request
+                        req = urllib.request.Request(
+                            "http://127.0.0.1:8000/create-video-results",
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        with urllib.request.urlopen(req, timeout=http_timeout) as resp:
+                            data = json.loads(resp.read().decode("utf-8") or "{}")
+                            panel = (data.get("panels") or {}).get(fid) or {}
+                            if isinstance(panel, dict) and panel:
+                                video_path = json.dumps(panel)
+                                break
+                except Exception as exc:
+                    logger.warning(
+                        "Field %s results request attempt %s failed: %s",
+                        fid, attempt, exc,
                     )
-                    if response.status_code == 200:
-                        data = response.json()
-                        panel = (data.get("panels") or {}).get(fid) or {}
-                        if isinstance(panel, dict) and panel:
-                            video_path = json.dumps(panel)
-                else:
-                    import urllib.request
-                    req = urllib.request.Request(
-                        "http://127.0.0.1:8000/create-video-results",
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with urllib.request.urlopen(req, timeout=90) as resp:
-                        data = json.loads(resp.read().decode("utf-8") or "{}")
-                        panel = (data.get("panels") or {}).get(fid) or {}
-                        if isinstance(panel, dict) and panel:
-                            video_path = json.dumps(panel)
-            except Exception as exc:
-                logger.warning("Field %s results request failed: %s", fid, exc)
+                if attempt < attempts:
+                    time.sleep(0.35)
         self.field_results_ready.emit(fid, video_path)
 
     def _on_field_results_ready(self, fid, video_path):
@@ -11270,7 +11348,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         panel = state.get("panel") if isinstance(state.get("panel"), dict) else None
         if not panel or not panel.get("slice_aet"):
-            if time.time() - float(state.get("started") or 0) < 30.0:
+            elapsed = time.time() - float(state.get("started") or 0)
+            budget_s = float(RESULTS_FETCH_BUDGET_MS) / 1000.0
+            # Keep processing short: one HTTP retry, then give up (~6s total).
+            if elapsed < budget_s:
+                if elapsed >= max(1.5, WAIT_ANIMATION_MS / 1000.0) and not state.get("retried"):
+                    state["retried"] = True
+                    try:
+                        test_num = int(state.get("test_num") or 1)
+                    except (TypeError, ValueError):
+                        test_num = 1
+                    logger.warning(
+                        "Field %s rings missing after %.1fs — retrying create-video-results",
+                        fid, elapsed,
+                    )
+                    threading.Thread(
+                        target=self._request_field_results,
+                        args=(fid, test_num),
+                        daemon=True,
+                    ).start()
                 token = self._field_epoch(fid)
                 QtCore.QTimer.singleShot(
                     200, lambda field=fid, stamp=token: self._reveal_field_results(field, stamp),
@@ -11279,6 +11375,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
             if overlay is not None:
                 overlay.hide()
+            logger.warning("Field %s rings still missing after %.1fs — continuing", fid, elapsed)
             state["phase"] = "done"
             self._continue_field_after_results(fid, epoch)
             return
@@ -11287,6 +11384,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             overlay.hide()
         state["phase"] = "playing"
         self._show_field_result_rings(fid, panel)
+        self._update_status_file(
+            "playing_results",
+            int(state.get("test_num") or self._current_test_num()),
+            self.total_videos,
+            "Showing per-video results...",
+        )
         logger.info("Field %s results drawn on its screens while the other field continues", fid)
         token = self._field_epoch(fid)
         QtCore.QTimer.singleShot(
@@ -11363,6 +11466,28 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             base = os.path.basename(session_dir.rstrip("\\/"))
             if base in ("field_A", "field_B"):
                 session_dir = os.path.dirname(session_dir)
+            booked_score = ""
+            combined = False
+            try:
+                pf = _read_players_fields_payload() or {}
+                booked_score = str(pf.get("score_field") or "").upper()[:1]
+                level_blob = str(pf.get("level") or "")
+                for slot in ((pf.get("fields") or {}) or {}).values():
+                    if isinstance(slot, dict):
+                        level_blob += " " + str(slot.get("level") or "")
+                combined = bool(_combined_level_band(level_blob))
+            except Exception:
+                booked_score = ""
+                combined = False
+            if booked_score not in ("A", "B"):
+                booked_score = fid
+            # Elite/WC: only the booked half (player on A → Field A) unlocks.
+            # Partner / Field B rings are display-only.
+            update_progress = True
+            score_for_unlock = fid
+            if combined:
+                score_for_unlock = booked_score
+                update_progress = fid == booked_score
             payload = {
                 "report_path": report_path,
                 "directory": session_dir,
@@ -11370,15 +11495,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "make_video": False,
                 # Always save score + PERFORMANCE TREND as soon as this field finishes
                 # (even while the other field is still playing).
-                "update_progress": True,
+                "update_progress": update_progress,
                 "save_reports": True,
                 "fields": [fid],
-                "score_field": fid,
+                "score_field": score_for_unlock,
             }
+            # Mode 2 finals include unlock + panels; keep above FINAL_RESULTS budget.
+            final_timeout = 60 if self._read_simulator_score_mode() == 2 else 90
             try:
                 if HAS_REQUESTS:
                     response = requests.post(
-                        "http://127.0.0.1:8000/create-results-video", json=payload, timeout=90,
+                        "http://127.0.0.1:8000/create-results-video",
+                        json=payload,
+                        timeout=final_timeout,
                     )
                     if response.status_code == 200:
                         data = response.json()
@@ -11392,7 +11521,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         data=json.dumps(payload).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                     )
-                    with urllib.request.urlopen(req, timeout=90) as resp:
+                    with urllib.request.urlopen(req, timeout=final_timeout) as resp:
                         data = json.loads(resp.read().decode("utf-8") or "{}")
                         panel = (data.get("panels") or {}).get(fid) or {}
                         if isinstance(panel, dict) and panel:
@@ -11413,7 +11542,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         panel = state.get("panel") if isinstance(state.get("panel"), dict) else None
         if not panel or not panel.get("slice_aet"):
-            if time.time() - float(state.get("started") or 0) < 30.0:
+            elapsed = time.time() - float(state.get("started") or 0)
+            # Finals need unlock work — allow a bit longer than per-video, still capped.
+            final_budget_s = max(8.0, float(RESULTS_FETCH_BUDGET_MS) / 1000.0)
+            if elapsed < final_budget_s:
+                if elapsed >= max(1.5, WAIT_ANIMATION_MS / 1000.0) and not state.get("retried"):
+                    state["retried"] = True
+                    logger.warning(
+                        "Field %s final rings missing after %.1fs — retrying",
+                        fid, elapsed,
+                    )
+                    threading.Thread(
+                        target=self._request_field_final, args=(fid,), daemon=True,
+                    ).start()
                 token = self._field_epoch(fid)
                 QtCore.QTimer.singleShot(
                     200, lambda field=fid, stamp=token: self._reveal_field_final(field, stamp),
@@ -11422,6 +11563,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
             if overlay is not None:
                 overlay.hide()
+            logger.warning("Field %s final rings still missing after %.1fs — continuing", fid, elapsed)
             self._finish_field_final(fid)
             return
         overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
@@ -11432,7 +11574,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         logger.info("Field %s final results drawn while the other field continues", fid)
         token = self._field_epoch(fid)
         QtCore.QTimer.singleShot(
-            PER_VIDEO_RESULTS_MS,
+            FINAL_RESULTS_MS,
             lambda field=fid, stamp=token: self._finish_field_final(field, stamp),
         )
 
@@ -11560,6 +11702,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 session_dir = os.path.dirname(session_dir)
             parts = getattr(self, "_field_opening_playlists", None) or {}
             fields = [str(fid).upper()[:1] for fid, rows in parts.items() if rows]
+            score_field = "A"
+            try:
+                pf = _read_players_fields_payload() or {}
+                score_field = str(pf.get("score_field") or "A").upper()[:1]
+            except Exception:
+                score_field = "A"
+            if score_field not in ("A", "B"):
+                score_field = "A"
             payload = {
                 "report_path": report_path,
                 "directory": session_dir,
@@ -11569,11 +11719,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "update_progress": True,
                 "save_reports": False,
                 "fields": fields or self._active_fields(),
+                "score_field": score_field,
             }
+            close_timeout = 25 if self._read_simulator_score_mode() == 2 else 90
             try:
                 if HAS_REQUESTS:
                     response = requests.post(
-                        "http://127.0.0.1:8000/create-results-video", json=payload, timeout=120,
+                        "http://127.0.0.1:8000/create-results-video",
+                        json=payload,
+                        timeout=close_timeout,
                     )
                     if response.status_code == 200:
                         progress = response.json().get("progress") or {}
@@ -11607,15 +11761,36 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._finish_independent_session()
 
     def _finish_independent_session(self):
-        """Both fields finished. Release Stop, flash the cabinet, clear camera.
+        """Both fields finished. Continue booked play, or release Stop / camera.
 
-        Frontend treats status ready as session complete and the next Play does a
-        fresh start (camera + visualization + Stop). Keep the player window only
-        when the coded screensaver must stay up.
+        While reservation time remains, auto-start the next (or same) set without
+        publishing idle/ready first — that would disable Pause/Stop on the operator.
         """
         self._independent_close_started = False
         self.playlist_finished = False
         self._status_completed = False
+        info = self._live_continue_info(self._player_attr("_after_final") or {})
+        if not isinstance(info, dict):
+            info = {}
+        try:
+            seconds_left = float(info.get("seconds_left") or 0)
+        except (TypeError, ValueError):
+            seconds_left = 0
+        continue_booked = self._should_continue_booked_play(info)
+        if continue_booked:
+            # Keep field playlists / phase until restart rebuilds them.
+            try:
+                if self._restart_highest_level(info):
+                    self.display_phase = "level_card"
+                    self.playlist_finished = False
+                    self._publish_field_controls()
+                    logger.info(
+                        "Independent series complete — continuing with %.0fs booking left (Pause/Stop stay live)",
+                        seconds_left,
+                    )
+                    return
+            except Exception:
+                logger.exception("Could not auto-continue the next booked level")
         self._field_opening_playlists = {}
         self._independent_index = {}
         self._independent_done = {}
@@ -11638,20 +11813,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "ready", 0, 0, "Series complete — ready for the next level",
         )
         logger.info("Independent series complete — Stop released, ready for next Play")
-        info = self._player_attr("_after_final") or {}
-        if not isinstance(info, dict):
-            info = {}
-        try:
-            seconds_left = float(info.get("seconds_left") or 0)
-        except (TypeError, ValueError):
-            seconds_left = 0
-        if info.get("continue_play") and seconds_left > 30:
-            try:
-                if self._restart_highest_level(info):
-                    return
-            except Exception:
-                logger.exception("Could not auto-continue the next booked level")
-            return
         # No next Play yet — close camera/visualization and drop the leftover
         # player process so nothing keeps running behind the next test.
         self._close_camera_feed_display()
@@ -12601,39 +12762,336 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass
         return True
 
+    def _ensure_combined_dual_phase(self, phase, info):
+        """HP → Elite/WC continue: both fields active, partner half simulated."""
+        level = str((info or {}).get("level") or "").strip()
+        if not _combined_level_band(level):
+            return phase
+        subdirectory = str((info or {}).get("subdirectory") or "").strip()
+        directory = str(
+            (info or {}).get("directory")
+            or phase.get("directory")
+            or ""
+        ).strip()
+        score = str(
+            (info or {}).get("score_field")
+            or (info or {}).get("field")
+            or ""
+        ).upper()[:1]
+        if score not in ("A", "B"):
+            active = [str(x).upper()[:1] for x in (phase.get("active") or [])]
+            score = active[0] if active and active[0] in ("A", "B") else "A"
+        other = "B" if score == "A" else "A"
+        player_id = str((info or {}).get("player_id") or "").strip()
+        phase["active"] = ["A", "B"]
+        phase["dual_independent"] = False
+        phase["subdirectory"] = subdirectory
+        phase["mode_id"] = level
+        phase["field_levels"] = {"A": level, "B": level}
+        if directory:
+            phase["directory"] = directory
+            phase["field_directories"] = {"A": directory, "B": directory}
+        phase["field_modes"] = {"A": subdirectory or level, "B": subdirectory or level}
+        phase["label"] = f"{score}+{other}[{level}]"
+        # Stamp players_fields + enable partner simulation for the camera.
+        try:
+            payload = _read_players_fields_payload() or {}
+            fields = dict(payload.get("fields") or {}) if isinstance(payload, dict) else {}
+            src = fields.get(score) if isinstance(fields.get(score), dict) else {}
+            if player_id and (
+                not str((src or {}).get("player_id") or "").strip()
+                or str((src or {}).get("player_id") or "").startswith("__sim_")
+            ):
+                src = {
+                    "player_id": player_id,
+                    "player_name": str((info or {}).get("player_name") or src.get("player_name") or ""),
+                    "player_surname": str((info or {}).get("player_surname") or src.get("player_surname") or ""),
+                    "field": score,
+                    "booking_end": str((src or {}).get("booking_end") or ""),
+                }
+            src = dict(src or {})
+            src["level"] = level
+            src["subdirectory"] = subdirectory
+            src["directory"] = directory
+            src["field"] = score
+            fields[score] = src
+            fields[other] = {
+                "player_id": "__sim_%s__" % other,
+                "player_name": "Simulator",
+                "player_surname": other,
+                "field": other,
+                "subdirectory": subdirectory,
+                "level": level,
+                "directory": directory,
+                "simulated": True,
+                "booking_end": str(src.get("booking_end") or ""),
+            }
+            new_payload = dict(payload or {})
+            new_payload["fields"] = fields
+            new_payload["active"] = ["A", "B"]
+            new_payload["level"] = level
+            new_payload["levels"] = {"A": level, "B": level}
+            new_payload["score_field"] = score
+            new_payload["separate_fields"] = False
+            path = PLAYERS_FIELDS_FILE
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(new_payload, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            logger.exception("Could not stamp Elite/WC dual players_fields on continue")
+        try:
+            if HAS_REQUESTS:
+                # Keep score-field sim if it was already on (both halves sim);
+                # otherwise only the partner half is simulated.
+                score_was_sim = bool(
+                    (src or {}).get("simulated")
+                ) or str((src or {}).get("player_id") or "").startswith("__sim_")
+                if not score_was_sim:
+                    try:
+                        sim_path = os.path.join(
+                            os.path.dirname(PLAYERS_FIELDS_FILE) or ".",
+                            "arena_simulation.txt",
+                        )
+                        if os.path.exists(sim_path):
+                            with open(sim_path, "r", encoding="utf-8") as handle:
+                                sim_data = json.load(handle) or {}
+                            score_was_sim = bool(
+                                sim_data.get(score) or sim_data.get(score.lower())
+                            )
+                    except Exception:
+                        pass
+                fields_payload = {
+                    score: bool(score_was_sim),
+                    other: True,
+                }
+                requests.post(
+                    "http://127.0.0.1:8000/set-simulation",
+                    json={"fields": fields_payload},
+                    timeout=2.0,
+                )
+        except Exception:
+            logger.warning("Could not enable partner simulation for Elite/WC continue")
+        try:
+            _write_players_fields_active(["A", "B"])
+        except Exception:
+            pass
+        logger.info(
+            "Continuing into Elite/World Class dual play: score=%s sim=%s level=%s",
+            score, other, level,
+        )
+        return phase
+
+    @staticmethod
+    def _is_terminal_training_level(level: str) -> bool:
+        """World Class S2.T5 is the last set — do not loop it for the rest of the booking."""
+        text = str(level or "").replace("\\", "/")
+        return bool(re.search(r"L05-WorldClass(?:/|\\)?S2\.T5\b", text, re.I))
+
+    def _should_continue_booked_play(self, info) -> bool:
+        """True only while booking remains AND progression still has another set to run.
+
+        Mode 2 keeps farming unlocked sets during a reservation, but after the
+        final World Class S2.T5 pass — or a Foundation pass whose next SF is
+        admin-locked — continue_play=False so we show finals and stop (no loop).
+        """
+        info = self._live_continue_info(info if isinstance(info, dict) else {})
+        try:
+            seconds_left = float(info.get("seconds_left") or 0)
+        except (TypeError, ValueError):
+            seconds_left = 0.0
+        if seconds_left <= 30:
+            return False
+        if "continue_play" in info:
+            return bool(info.get("continue_play"))
+        # Timed-out final omitted the flag: keep going unless this is the last set.
+        if self._is_terminal_training_level(str(info.get("level") or "")):
+            return False
+        return True
+
+    def _live_continue_info(self, info):
+        """Merge final-response continue stamps with live players_fields / level file.
+
+        Mode 2 finals often time out after unlock already wrote the next set to
+        disk. Without this merge the player kept replaying the old S1.T3 playlist
+        while operator/performance showed S1.T5 / S2.T*.
+        """
+        raw = dict(info or {}) if isinstance(info, dict) else {}
+        merged = dict(raw)
+        payload = {}
+        try:
+            payload = _read_players_fields_payload() or {}
+        except Exception:
+            payload = {}
+        score = str(
+            merged.get("score_field")
+            or (payload or {}).get("score_field")
+            or "A"
+        ).upper()[:1]
+        if score not in ("A", "B"):
+            score = "A"
+        fields = (payload or {}).get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            fields = {}
+        slot = fields.get(score) if isinstance(fields.get(score), dict) else {}
+        level = str(
+            merged.get("level")
+            or (slot or {}).get("level")
+            or (payload or {}).get("level")
+            or ""
+        ).strip()
+        if not level:
+            try:
+                with open(CURRENT_LEVEL_FILE, "r", encoding="utf-8") as handle:
+                    level = str(handle.read() or "").strip()
+            except Exception:
+                level = ""
+        directory = str(
+            merged.get("directory")
+            or (slot or {}).get("directory")
+            or ""
+        ).strip()
+        # Prefer a real subdirectory stamp. Empty string from a timed-out final
+        # must not wipe the live unlock (SF-30N → SF-60N) already on disk.
+        merged_sub = str(merged.get("subdirectory") or "").strip()
+        slot_sub = str((slot or {}).get("subdirectory") or "").strip()
+        subdirectory = merged_sub or slot_sub
+        if (
+            merged_sub
+            and slot_sub
+            and merged_sub.upper() != slot_sub.upper()
+            and "foundation" in level.lower()
+        ):
+            order = ("SF-30N", "SF-60N", "SF-110N", "SF-180N")
+            try:
+                if order.index(slot_sub.upper()) > order.index(merged_sub.upper()):
+                    subdirectory = slot_sub
+                    directory = str((slot or {}).get("directory") or directory).strip()
+            except ValueError:
+                pass
+        if level:
+            merged["level"] = level
+        if directory:
+            merged["directory"] = directory
+        merged["subdirectory"] = subdirectory
+        merged["score_field"] = score
+        if not merged.get("player_id"):
+            pid = str((slot or {}).get("player_id") or "").strip()
+            if pid and not pid.startswith("__sim_"):
+                merged["player_id"] = pid
+        # Refresh seconds_left from the live booking. Do not force continue_play
+        # True over an explicit False (last set / stop), and never invent a
+        # continue on World Class S2.T5 — that loops the final set forever.
+        try:
+            live_left = self._booking_seconds_left_for_field(score)
+            if live_left is not None:
+                merged["seconds_left"] = max(
+                    float(merged.get("seconds_left") or 0), float(live_left)
+                )
+                if (
+                    live_left > 30
+                    and "continue_play" not in raw
+                    and not self._is_terminal_training_level(level)
+                ):
+                    merged["continue_play"] = True
+        except Exception:
+            pass
+        return merged
+
     def _restart_highest_level(self, info):
         """Play the highest open set again while the reservation still has time."""
         if not self._run_phases:
             return False
         phase = self._run_phases[self._phase_index]
+        # Only the create-results progress payload counts as a final stamp.
+        # Live merge invents continue_play when booking remains — that must not
+        # look like a successful final and restart the same SF forever.
+        raw_final = dict(getattr(self, "_after_final", None) or {})
+        info = self._live_continue_info(info)
         level = str((info or {}).get("level") or "").strip()
         subdirectory = str((info or {}).get("subdirectory") or "").strip()
         directory = str((info or {}).get("directory") or phase.get("directory") or "").strip()
-        if level:
+        # Foundation: never restart the same SF set after a pass when the next
+        # SF is locked — that loops SF-30N forever with no final advance.
+        prev_sub = str(
+            phase.get("subdirectory")
+            or phase.get("mode_id")
+            or getattr(self, "_phase_subdirectory", "")
+            or getattr(self, "mode_id", "")
+            or ""
+        ).strip()
+        prev_dir = str(phase.get("directory") or getattr(self, "video_directory", "") or "").strip()
+        same_foundation = (
+            "foundation" in f"{level} {prev_dir} {directory}".lower()
+            and subdirectory
+            and prev_sub
+            and subdirectory.upper() == prev_sub.upper()
+        )
+        if same_foundation:
+            has_final_stamp = (
+                "passed" in raw_final
+                or "continue_play" in raw_final
+            )
+            if bool((info or {}).get("passed")) or not has_final_stamp:
+                logger.info(
+                    "Continue skipped — same Foundation SF %s "
+                    "(passed=%s final_stamp=%s); refusing empty-final loop",
+                    subdirectory,
+                    bool((info or {}).get("passed")),
+                    has_final_stamp,
+                )
+                return False
+        if _combined_level_band(level):
+            phase = self._ensure_combined_dual_phase(phase, info)
+            self._run_phases[self._phase_index] = phase
+        elif level:
             levels = dict(phase.get("field_levels") or {})
             for fid in phase.get("active") or []:
                 levels[fid] = level
             phase["field_levels"] = levels
             phase["subdirectory"] = subdirectory
-            phase["mode_id"] = level
-        if directory:
-            phase["directory"] = directory
-            phase["field_directories"] = {
-                fid: directory for fid in (phase.get("active") or [])
-            }
+            # Foundation SF / extras: playlist builder keys off mode_id — must be
+            # SF-30N (not L00-Foundation) or continue reloads the wrong set.
+            sub_low = subdirectory.lower()
+            if subdirectory.upper().startswith("SF-") or sub_low in FOUNDATION_EXTRA_MODES:
+                phase["mode_id"] = subdirectory
+            else:
+                phase["mode_id"] = level
+            if directory:
+                phase["directory"] = directory
+                phase["field_directories"] = {
+                    fid: directory for fid in (phase.get("active") or [])
+                }
+            phase["label"] = (
+                f"{level}/{subdirectory}" if subdirectory and "foundation" in level.lower()
+                else level
+            )
+            self._run_phases[self._phase_index] = phase
+        else:
+            logger.warning(
+                "Continue skipped — no next level in final response or players_fields"
+            )
+            return False
         self._level_card_shown_for = None
         self._after_final = {}
         logger.info(
-            "Reservation time left — repeating %s %s",
+            "Reservation time left — continuing %s %s (dir=%s mode=%s)",
             level or phase.get("label"),
             subdirectory,
+            directory or phase.get("directory") or "",
+            phase.get("mode_id"),
         )
         if not self._apply_run_phase(self._phase_index, fatal=False):
             return False
         self._prestart_done = False
         self.is_first_video = True
         self.playlist_finished = False
+        self._status_completed = False
         self._begin_level_intro(0)
+        # Operator Pause/Stop must light for the continued set immediately.
+        self._publish_field_controls()
         return True
 
     def _advance_to_next_field_phase(self):
@@ -12732,6 +13190,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.player.play()
         self.check_timer.start()
 
+    def _read_simulator_score_mode(self) -> int:
+        """1 = fail unlock, 2 = always unlock. Default 2 if file missing."""
+        try:
+            mode_path = os.path.join(
+                os.path.dirname(PLAYERS_FIELDS_FILE) or ".",
+                "simulator_score_mode.txt",
+            )
+            with open(mode_path, "r", encoding="utf-8") as handle:
+                return int(str(handle.read() or "2").strip().split()[0])
+        except Exception:
+            return 2
+
     def _do_per_video_request(self, video_num, start_time, end_time):
         report_path = self._find_latest_report()
         video_path = ""
@@ -12739,9 +13209,28 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.warning("No report found – skipping per-video results.")
             self.per_video_results_ready.emit("")
             return
+        # Mode 2: short attempts + one retry so processing stays brief and rings
+        # still arrive (empty emit used to skip results and jump to next test).
+        # Elite/WC dual halves need a longer single attempt than Entry/Activated.
+        mode = self._read_simulator_score_mode()
+        combined = bool(
+            _combined_level_band(
+                " ".join(
+                    str(x or "")
+                    for x in (
+                        getattr(self, "_phase_mode_id", ""),
+                        getattr(self, "video_directory", ""),
+                        str((getattr(self, "_phase_field_levels", None) or {})),
+                    )
+                )
+            )
+        )
+        if mode == 2:
+            http_timeout = 8.0 if combined else 5.0
+        else:
+            http_timeout = 35
         backend_url = "http://127.0.0.1:8000/create-video-results"
         session_dir = os.path.dirname(report_path) if report_path else ""
-        # Normalize to session root when pointed at field_A / field_B
         base = os.path.basename(session_dir.rstrip("\\/"))
         if base in ("field_A", "field_B"):
             session_dir = os.path.dirname(session_dir)
@@ -12756,38 +13245,52 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "make_video": False,
             "fields": self._active_fields(),
         }
-        try:
-            if HAS_REQUESTS:
-                response = requests.post(backend_url, json=payload, timeout=90)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == "error":
-                        logger.error(
-                            "Per-video results error for test %s: %s",
-                            video_num, data.get("message") or data,
+        attempts = 2 if mode == 2 else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                if HAS_REQUESTS:
+                    response = requests.post(
+                        backend_url, json=payload, timeout=http_timeout,
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("status") == "error":
+                            logger.error(
+                                "Per-video results error for test %s: %s",
+                                video_num, data.get("message") or data,
+                            )
+                        panels = data.get("panels") or {}
+                        if isinstance(panels, dict) and panels:
+                            video_path = json.dumps({"panels": panels})
+                            logger.info(
+                                "Results for test %s ready to project.", video_num,
+                            )
+                            break
+                        logger.warning(
+                            "Per-video results missing rings (attempt %s): %s",
+                            attempt, data,
                         )
-                    panels = data.get("panels") or {}
-                    if isinstance(panels, dict) and panels:
-                        video_path = json.dumps({"panels": panels})
-                        logger.info("Results for test %s ready to project.", video_num)
                     else:
-                        logger.error("Per-video results missing rings: %s", data)
+                        logger.error("Backend error: %s", response.text)
                 else:
-                    logger.error("Backend error: %s", response.text)
-            else:
-                import urllib.request
-                req = urllib.request.Request(
-                    backend_url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    import urllib.request
+                    req = urllib.request.Request(
+                        backend_url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=http_timeout) as resp:
+                        data = json.loads(resp.read().decode("utf-8") or "{}")
+                        panels = data.get("panels") or {}
+                        if isinstance(panels, dict) and panels:
+                            video_path = json.dumps({"panels": panels})
+                            break
+            except Exception as e:
+                logger.error(
+                    "Per-video results request attempt %s failed: %s", attempt, e,
                 )
-                with urllib.request.urlopen(req, timeout=90) as resp:
-                    data = json.loads(resp.read().decode("utf-8") or "{}")
-                    panels = data.get("panels") or {}
-                    if isinstance(panels, dict) and panels:
-                        video_path = json.dumps({"panels": panels})
-        except Exception as e:
-            logger.error("Per-video results request failed: %s", e)
+            if attempt < attempts:
+                time.sleep(0.35)
         self.per_video_results_ready.emit(video_path)
 
     def _on_per_video_results_ready(self, video_path):
@@ -12821,7 +13324,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 lambda path=video_path, token=token: self._play_per_video_results(path, token),
             )
             return
-        self._hide_waiting_overlay()
         panels = None
         if isinstance(video_path, str) and video_path.startswith("{"):
             try:
@@ -12829,6 +13331,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             except (TypeError, ValueError, json.JSONDecodeError):
                 panels = None
         if isinstance(panels, dict) and panels:
+            self._hide_waiting_overlay()
             self.display_phase = "per_video_results"
             self.waiting_for_results = True
             self.completion_label.hide()
@@ -12845,27 +13348,80 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
             self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
             return
-        if not video_path or not os.path.exists(video_path):
-            logger.warning("Per-video results missing; continuing sequence")
-            self._finish_per_video_results()
+        if video_path and os.path.exists(video_path):
+            self._hide_waiting_overlay()
+            self.display_phase = "per_video_results"
+            self.waiting_for_results = True
+            self.completion_label.hide()
+            if self.image_canvas:
+                self.image_canvas.hide()
+            self._update_status_file(
+                "playing_results",
+                self._current_test_num(),
+                self.total_videos,
+                "Playing per-video results...",
+            )
+            logger.info(
+                "Playing per-video results for test %s/%s: %s",
+                self._current_test_num(), self.total_videos, video_path,
+            )
+            self._play_local_clip(video_path, rate=1.0)
+            self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
             return
-        self.display_phase = "per_video_results"
-        self.waiting_for_results = True
-        self.completion_label.hide()
-        if self.image_canvas:
-            self.image_canvas.hide()
-        self._update_status_file(
-            "playing_results",
-            self._current_test_num(),
-            self.total_videos,
-            "Playing per-video results...",
+        # Empty panels: keep "Processing" up, retry once, only then advance.
+        # Do not arm the skip timer on the first empty — that raced Elite dual
+        # create-video-results and jumped to the next test with no rings.
+        elapsed_ms = (
+            time.time() - float(getattr(self, "_wait_started", time.time()) or time.time())
+        ) * 1000.0
+        budget = float(RESULTS_FETCH_BUDGET_MS)
+        retried = int(getattr(self, "_per_video_retried_epoch", -1) or -1) == current
+        if not retried:
+            self._per_video_retried_epoch = current
+            logger.warning(
+                "Per-video rings missing after %.1fs — retrying (keep processing)",
+                elapsed_ms / 1000.0,
+            )
+            video_num = self._current_test_num()
+            start_time = self._set_start_time or self.video_start_time
+            threading.Thread(
+                target=self._do_per_video_request,
+                args=(video_num, start_time, time.time()),
+                daemon=True,
+            ).start()
+            # Safety watchdog only — normal path waits for the retry emit.
+            left = max(500, int(budget - elapsed_ms))
+            token = current
+            self._arm_timer(
+                left,
+                lambda stamp=token: self._skip_per_video_if_still_waiting(stamp),
+            )
+            return
+        if elapsed_ms < budget:
+            left = max(300, int(budget - elapsed_ms))
+            token = current
+            self._arm_timer(
+                left,
+                lambda stamp=token: self._skip_per_video_if_still_waiting(stamp),
+            )
+            return
+        logger.warning(
+            "Per-video results still missing after %.1fs — continuing sequence",
+            elapsed_ms / 1000.0,
         )
-        logger.info(
-            "Playing per-video results for test %s/%s: %s",
-            self._current_test_num(), self.total_videos, video_path,
-        )
-        self._play_local_clip(video_path, rate=1.0)
-        self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
+        self._hide_waiting_overlay()
+        self._finish_per_video_results()
+
+    def _skip_per_video_if_still_waiting(self, epoch):
+        """Fallback after RESULTS_FETCH_BUDGET_MS if rings never arrived."""
+        if getattr(self, "display_phase", "") != "wait_per_video":
+            return
+        current = int(getattr(self, "_results_epoch", 0) or 0)
+        if int(epoch or 0) != current:
+            return
+        logger.warning("Per-video results budget exhausted — continuing without rings")
+        self._hide_waiting_overlay()
+        self._finish_per_video_results()
 
     def _finish_per_video_results(self):
         epoch = int(getattr(self, "_results_epoch", 0) or 0)
@@ -12951,30 +13507,57 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         base = os.path.basename(session_dir.rstrip("\\/"))
         if base in ("field_A", "field_B"):
             session_dir = os.path.dirname(session_dir)
+        score_field = ""
         try:
-            response = requests.post(
-                backend_url,
-                json={
-                    "report_path": report_path,
-                    "directory": session_dir,
-                    "display": False,
-                    "make_video": False,
-                    "fields": self._active_fields(),
-                },
-                timeout=120,
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == "success":
-                    self._after_final = data.get("progress") or {}
-                    panels = data.get("panels") or {}
-                    if isinstance(panels, dict) and panels:
-                        self.final_summary_done.emit(json.dumps({"panels": panels}))
-                        return
-            self.final_summary_done.emit("")
-        except Exception as e:
-            logger.error("Final summary request failed: %s", e)
-            self.final_summary_done.emit("")
+            payload_pf = _read_players_fields_payload() or {}
+            score_field = str(payload_pf.get("score_field") or "").upper()[:1]
+        except Exception:
+            score_field = ""
+        if score_field not in ("A", "B"):
+            score_field = "A"
+        # Mode 2 finals must return panels + unlock before continue. 25s was too
+        # short when the API event loop was busy → empty emit → SF loop.
+        final_timeout = 60 if self._read_simulator_score_mode() == 2 else 90
+        payload = {
+            "report_path": report_path,
+            "directory": session_dir,
+            "display": False,
+            "make_video": False,
+            "fields": self._active_fields(),
+            # Elite/WC: unlock from the booked half only (player on A → Field A).
+            "score_field": score_field,
+            "update_progress": True,
+        }
+        last_err = None
+        for attempt in (1, 2):
+            try:
+                response = requests.post(
+                    backend_url, json=payload, timeout=final_timeout,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "success":
+                        self._after_final = data.get("progress") or {}
+                        panels = data.get("panels") or {}
+                        if isinstance(panels, dict) and panels:
+                            self.final_summary_done.emit(
+                                json.dumps({"panels": panels})
+                            )
+                            return
+                logger.warning(
+                    "Final summary attempt %s returned no panels (status=%s)",
+                    attempt,
+                    getattr(response, "status_code", "?"),
+                )
+            except Exception as e:
+                last_err = e
+                logger.error("Final summary request attempt %s failed: %s", attempt, e)
+        if last_err:
+            logger.error("Final summary request failed after retries: %s", last_err)
+        # Do NOT invent continue_play into _after_final here — that made empty
+        # finals look stamped and restarted the same Foundation SF forever.
+        # _on_field_final_finished merges live disk state when deciding continue.
+        self.final_summary_done.emit("")
 
     def _on_final_summary_done(self, video_path):
         if self.operator_paused:
@@ -13007,7 +13590,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self._force_close_timer.stop()
             self._force_close_timer = QtCore.QTimer(singleShot=True)
             self._force_close_timer.timeout.connect(self._on_field_final_finished)
-            self._force_close_timer.start(PER_VIDEO_RESULTS_MS)
+            self._force_close_timer.start(FINAL_RESULTS_MS)
             return
         if video_path and os.path.exists(video_path):
             self.display_phase = "final"
@@ -13045,7 +13628,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self._force_close_timer.stop()
             self._force_close_timer = QtCore.QTimer(singleShot=True)
             self._force_close_timer.timeout.connect(self._on_field_final_finished)
-            self._force_close_timer.start(60000)
+            self._force_close_timer.start(FINAL_RESULTS_MS)
         else:
             logger.warning("Final summary missing for phase — advancing")
             self._on_field_final_finished()
@@ -13066,20 +13649,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.completion_label.hide()
         self.waiting_for_results = False
         more = self._phase_index + 1 < len(self._run_phases)
-        info = getattr(self, "_after_final", None) or {}
+        info = self._live_continue_info(getattr(self, "_after_final", None) or {})
         try:
             seconds_left = float(info.get("seconds_left") or 0)
         except (TypeError, ValueError):
             seconds_left = 0
-        if info.get("continue_play") and seconds_left > 30 and self._restart_highest_level(info):
+        should_continue = self._should_continue_booked_play(info)
+        if should_continue and self._restart_highest_level(info):
             self.playlist_finished = False
-            self.display_phase = "action"
+            self.display_phase = "level_card"
+            self._publish_field_controls()
+            logger.info(
+                "Field final done — continuing booked play (%.0fs left); Pause/Stop stay live",
+                seconds_left,
+            )
             return
         if more:
             logger.info("Field phase done — starting next field")
             self.playlist_finished = False
             self.display_phase = "action"
             self._advance_to_next_field_phase()
+            self._publish_field_controls()
             return
         # All fields finished — keep Stop released (do not flip playlist_finished
         # back to False while phase_active still looks live).
@@ -13189,8 +13779,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._show_waiting_overlay()
         video_num = self._current_test_num()
         logger.info(
-            "Test %s/%s finished; 5s wait then 20s per-video results",
-            video_num, self.total_videos,
+            "Test %s/%s finished; %.0fs processing then %.0fs results",
+            video_num,
+            self.total_videos,
+            WAIT_ANIMATION_MS / 1000.0,
+            PER_VIDEO_RESULTS_MS / 1000.0,
         )
         try:
             self.player.stop()
@@ -13532,8 +14125,530 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._consume_field_stops()
             self._consume_field_joins()
             self._apply_operator_pause(self._all_live_fields_paused(fields))
+            self._check_booking_deadline_abort()
         except Exception as exc:
             logger.warning("Pause control check failed: %s", exc)
+
+    def _parse_booking_end_ts(self, raw) -> float:
+        text = str(raw or "").strip()
+        if not text:
+            return 0.0
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00").split("+")[0])
+            return float(dt.timestamp())
+        except Exception:
+            return 0.0
+
+    def _booking_slot_for_field(self, fid):
+        """Return (payload, slot_dict, player_id) for a field, or (None, None, "")."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return None, None, ""
+        payload = _read_players_fields_payload() or {}
+        fields = payload.get("fields") if isinstance(payload, dict) else {}
+        slot = fields.get(fid) if isinstance(fields, dict) else {}
+        if not isinstance(slot, dict):
+            return payload, None, ""
+        pid = str(slot.get("player_id") or "").strip()
+        return payload, slot, pid
+
+    def _refresh_booking_end_from_server(self, fid) -> Optional[float]:
+        """Live contiguous booking chain (back-to-back rounds). Updates stamped end."""
+        fid = str(fid or "").upper()[:1]
+        now = time.time()
+        try:
+            cache = object.__getattribute__(self, "_booking_deadline_cache")
+        except Exception:
+            cache = {}
+        if not isinstance(cache, dict):
+            cache = {}
+        hit = cache.get(fid)
+        if hit and (now - float(hit[0])) < 5.0:
+            return hit[1]
+        payload, slot, pid = self._booking_slot_for_field(fid)
+        if not isinstance(slot, dict):
+            return None
+        if not pid or pid.startswith("__sim_"):
+            score = str((payload or {}).get("score_field") or "").upper()[:1]
+            if score in ("A", "B") and score != fid:
+                return self._refresh_booking_end_from_server(score)
+            return None
+        if not HAS_REQUESTS:
+            return None
+        try:
+            resp = requests.get(
+                "http://127.0.0.1:8000/booking-play-deadline",
+                params={"player_id": pid, "field": fid},
+                timeout=1.2,
+            )
+            data = resp.json() if resp is not None else {}
+        except Exception:
+            cache[fid] = (now, None)
+            try:
+                object.__setattr__(self, "_booking_deadline_cache", cache)
+            except Exception:
+                try:
+                    self.__dict__["_booking_deadline_cache"] = cache
+                except Exception:
+                    pass
+            return None
+        if not isinstance(data, dict):
+            return None
+        end_raw = str(data.get("booking_end") or "").strip()
+        left = data.get("seconds_left")
+        result = None
+        try:
+            if left is not None:
+                result = max(0.0, float(left))
+        except (TypeError, ValueError):
+            result = None
+        if result is None:
+            end_ts = self._parse_booking_end_ts(end_raw)
+            if end_ts > 0:
+                result = max(0.0, end_ts - time.time())
+        if end_raw and result is not None:
+            try:
+                # Keep players_fields.json in sync so partner/sim half stays aligned.
+                fields = dict((payload or {}).get("fields") or {})
+                cur = dict(fields.get(fid) or slot)
+                if str(cur.get("booking_end") or "") != end_raw:
+                    cur["booking_end"] = end_raw
+                    fields[fid] = cur
+                    other = "B" if fid == "A" else "A"
+                    other_slot = fields.get(other) if isinstance(fields.get(other), dict) else None
+                    if other_slot and str(other_slot.get("player_id") or "").startswith("__sim_"):
+                        other_slot = dict(other_slot)
+                        other_slot["booking_end"] = end_raw
+                        fields[other] = other_slot
+                    new_payload = dict(payload or {})
+                    new_payload["fields"] = fields
+                    path = os.path.join(
+                        self._player_attr("speed_file_dir")
+                        or "C:/Users/siama/Documents/simust_player",
+                        "players_fields.json",
+                    )
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as handle:
+                        json.dump(new_payload, handle, indent=2)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp, path)
+            except Exception:
+                logger.debug("Could not refresh booking_end stamp for Field %s", fid, exc_info=True)
+        cache[fid] = (now, result)
+        try:
+            object.__setattr__(self, "_booking_deadline_cache", cache)
+        except Exception:
+            try:
+                self.__dict__["_booking_deadline_cache"] = cache
+            except Exception:
+                pass
+        return result
+
+    def _booking_seconds_left_for_field(self, fid) -> Optional[float]:
+        """Seconds left on this field's booking chain, or None if no booking (admin test).
+
+        Prefers the live contiguous deadline (keeps going through back-to-back
+        reservations). Falls back to the stamped booking_end from session start.
+        """
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return None
+        live = self._refresh_booking_end_from_server(fid)
+        if live is not None:
+            return live
+        payload, slot, pid = self._booking_slot_for_field(fid)
+        if not isinstance(slot, dict):
+            return None
+        if not pid or pid.startswith("__sim_"):
+            score = str((payload or {}).get("score_field") or "").upper()[:1]
+            if score in ("A", "B") and score != fid:
+                return self._booking_seconds_left_for_field(score)
+            return None
+        end_raw = slot.get("booking_end") or ""
+        end_ts = self._parse_booking_end_ts(end_raw)
+        if end_ts <= 0:
+            return None
+        return max(0.0, end_ts - time.time())
+
+    def _field_needs_booking_abort(self, fid) -> bool:
+        """True while this field is mid-play or waiting for finals and booking is in the last minute."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return False
+        done = getattr(self, "_booking_abort_done", None) or set()
+        if fid in done:
+            return False
+        left = self._booking_seconds_left_for_field(fid)
+        if left is None:
+            return False
+        if left > float(BOOKING_ABORT_LEAD_SEC):
+            return False
+        # Still in play / results pipeline (not idle/ready).
+        if self._field_is_live(fid):
+            return True
+        phase = str(getattr(self, "display_phase", "") or "")
+        if phase in (
+            "action", "starting", "opening", "intro", "level_intro", "level_card",
+            "wait_per_video", "per_video_results", "wait_final", "final", "prestart",
+        ):
+            # Combined single-timeline: abort whichever half is still active.
+            active = {str(x).upper()[:1] for x in (getattr(self, "_phase_active", None) or [])}
+            if not active or fid in active:
+                return True
+        return False
+
+    def _cancel_results_wait_animation(self):
+        """Stop Processing/Results wait rings and invalidate any in-flight results thread."""
+        try:
+            self._results_epoch = int(getattr(self, "_results_epoch", 0) or 0) + 1
+        except Exception:
+            self._results_epoch = 1
+        self._results_finished_epoch = self._results_epoch
+        self.waiting_for_results = False
+        self.video_end_called = False
+        try:
+            timer = getattr(self, "results_timer", None)
+            if timer is not None:
+                timer.stop()
+            self.results_timer = None
+        except Exception:
+            self.results_timer = None
+        try:
+            self._stop_action_timer()
+        except Exception:
+            pass
+        try:
+            self._stop_goal_advance_poll()
+        except Exception:
+            pass
+        try:
+            self._hide_waiting_overlay()
+        except Exception:
+            pass
+        try:
+            self._hide_projected_results()
+        except Exception:
+            pass
+        for fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(fid)
+            except Exception:
+                pass
+            overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+            if overlay is not None:
+                try:
+                    overlay.hide()
+                except Exception:
+                    pass
+            try:
+                bucket = dict(getattr(self, "_field_result_state", None) or {})
+                bucket.pop(fid, None)
+                self._field_result_state = bucket
+            except Exception:
+                pass
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        try:
+            self._stop_results_playback()
+        except Exception:
+            pass
+
+    def _hard_clear_play_display(self):
+        """Blank every cabinet screen — no leftover digits / cues after booking end."""
+        try:
+            self._cancel_results_wait_animation()
+        except Exception:
+            pass
+        try:
+            canvas = getattr(self, "image_canvas", None)
+            if canvas is not None and hasattr(canvas, "stop_screen_players"):
+                canvas.stop_screen_players()
+        except Exception:
+            logger.exception("Could not stop screen players on booking abort")
+        try:
+            self._stop_screen_video(clear_screensaver=True)
+        except Exception:
+            pass
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        try:
+            # Black screens, no screensaver — session is fully over until next start.
+            self._flash_idle_display(then_screensaver=False)
+        except Exception:
+            logger.exception("Could not blank cabinet on booking abort")
+        try:
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
+
+    def _release_session_after_booking_abort(self):
+        """Fully stop play: clear screens, stop camera/player processes, free the cabinet."""
+        try:
+            self._hard_clear_play_display()
+        except Exception:
+            logger.exception("Could not hard-clear display on booking abort")
+        self._phase_active = []
+        self._fields_opening = set()
+        self.playlist_finished = True
+        self.display_phase = "ready"
+        try:
+            self.check_timer.stop()
+        except Exception:
+            pass
+        try:
+            _write_players_fields_active([])
+        except Exception:
+            pass
+        try:
+            self._publish_field_controls()
+        except Exception:
+            pass
+        self._update_status_file(
+            "ready", 0, 0,
+            "Booking time ended — fully stopped until next reservation",
+        )
+        # Never block the Qt thread on HTTP — a stuck create-video-results
+        # used to hang stop-camera for 10s while the wait animation kept running.
+        try:
+            threading.Thread(
+                target=self._close_camera_feed_display_nonblocking,
+                daemon=True,
+            ).start()
+        except Exception:
+            try:
+                self._close_camera_feed_display_nonblocking()
+            except Exception:
+                pass
+        # Exit this player window shortly after the release call is in flight.
+        try:
+            QtCore.QTimer.singleShot(900, self._quit_after_booking_abort)
+        except Exception:
+            try:
+                self._quit_after_booking_abort()
+            except Exception:
+                pass
+
+    def _quit_after_booking_abort(self):
+        """Close the smart player so no terminal/window stays open until next start."""
+        if getattr(self, "_booking_abort_quit_done", False):
+            return
+        self._booking_abort_quit_done = True
+        self._is_closing = True
+        try:
+            self._hard_clear_play_display()
+        except Exception:
+            pass
+        try:
+            self.close()
+        except Exception:
+            pass
+        try:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.quit()
+        except Exception:
+            pass
+
+    def _close_camera_feed_display_nonblocking(self):
+        """Turn off visualization + fully stop camera/player without blocking the UI."""
+        directory = (
+            self._player_attr("speed_file_dir")
+            or "C:/Users/siama/Documents/simust_player"
+        )
+        try:
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, "visualization.txt")
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write("false")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            logger.exception("Could not turn off camera visualization")
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        try:
+            if HAS_REQUESTS:
+                requests.post(
+                    "http://127.0.0.1:8000/set-visualization",
+                    json={"enabled": False},
+                    timeout=1.5,
+                )
+        except Exception:
+            pass
+        try:
+            if HAS_REQUESTS:
+                # Full stop: camera + smart player terminals/processes exit.
+                requests.post(
+                    "http://127.0.0.1:8000/booking-deadline-release",
+                    json={"reason": "booking_end", "full_stop": True},
+                    timeout=3.0,
+                )
+            else:
+                self._stop_camera_only_quick()
+        except Exception as exc:
+            logger.warning("Booking deadline release failed: %s", exc)
+            try:
+                self._stop_camera_only_quick()
+            except Exception:
+                pass
+
+    def _stop_camera_only_quick(self):
+        """Best-effort camera stop with a short timeout (safe from worker threads)."""
+        if self._realtime_stopped:
+            return
+        self._signal_stop_video_save("booking abort")
+        self._realtime_stopped = True
+        try:
+            if HAS_REQUESTS:
+                requests.post("http://127.0.0.1:8000/stop-realtime-camera", timeout=2.5)
+        except Exception as exc:
+            logger.warning("Quick camera stop failed: %s", exc)
+
+    def _abort_field_for_booking_end(self, fid):
+        """Flash + stop this field and leave it ready for the next booking."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return
+        done = set(getattr(self, "_booking_abort_done", None) or set())
+        if fid in done:
+            return
+        done.add(fid)
+        self._booking_abort_done = done
+        left = self._booking_seconds_left_for_field(fid)
+        logger.info(
+            "Booking deadline: aborting Field %s with %.0fs left (lead=%ss)",
+            fid,
+            float(left if left is not None else 0),
+            BOOKING_ABORT_LEAD_SEC,
+        )
+        # Kill Processing/Results animation immediately — before any HTTP work.
+        try:
+            self._cancel_results_wait_animation()
+        except Exception:
+            logger.exception("Could not cancel results animation on booking abort")
+        self._update_status_file(
+            "booking_abort",
+            getattr(self, "current_video_index", 0) or 0,
+            getattr(self, "total_videos", 0) or 0,
+            "Field %s stopped — booking ends in under 1 minute" % fid,
+        )
+        cur = None
+        try:
+            files = getattr(self, "video_files", None) or []
+            idx = int(getattr(self, "current_video_index", 0) or 0)
+            if 0 <= idx < len(files):
+                cur = files[idx]
+        except Exception:
+            cur = None
+        independent = isinstance(cur, dict) and bool(cur.get("independent_fields"))
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        if independent or (isinstance(parts, dict) and (parts.get(fid) or parts.get("A") or parts.get("B"))):
+            try:
+                if parts.get(fid):
+                    self._stop_independent_field(fid)
+                else:
+                    # Playlist already empty but phase still live — clear this half.
+                    self._bump_field_epoch(fid)
+                    try:
+                        canvas = object.__getattribute__(self, "image_canvas")
+                        if canvas is not None:
+                            canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
+                    except Exception:
+                        pass
+                    stopped = dict(getattr(self, "_field_operator_stopped", None) or {})
+                    stopped[fid] = True
+                    self._field_operator_stopped = stopped
+                    try:
+                        self._publish_field_controls()
+                    except Exception:
+                        pass
+            except Exception:
+                logger.exception("Booking abort stop failed for Field %s", fid)
+            # If the other field is also out of time (or already free), finish cleanly.
+            other = "B" if fid == "A" else "A"
+            other_live = self._field_is_live(other)
+            other_also = self._field_needs_booking_abort(other) if other_live else False
+            if other_also:
+                try:
+                    if parts.get(other):
+                        self._stop_independent_field(other)
+                    else:
+                        self._bump_field_epoch(other)
+                        stopped = dict(getattr(self, "_field_operator_stopped", None) or {})
+                        stopped[other] = True
+                        self._field_operator_stopped = stopped
+                except Exception:
+                    logger.exception("Booking abort stop failed for Field %s", other)
+                done.add(other)
+                self._booking_abort_done = done
+                other_live = False
+            if not other_live and not self._field_is_live(other):
+                self.playlist_finished = True
+                self.display_phase = "ready"
+                self._booking_abort_done = {"A", "B"}
+                self._field_opening_playlists = {}
+                self._independent_index = {}
+                self._independent_done = {}
+                self._release_session_after_booking_abort()
+            else:
+                # One field freed; other keeps playing — mark this half ready.
+                try:
+                    _silence_image_action_cue_for_fields([fid])
+                except Exception:
+                    pass
+                try:
+                    self._sync_screensaver()
+                except Exception:
+                    pass
+                self._update_status_file(
+                    "playing",
+                    getattr(self, "current_video_index", 0) or 0,
+                    getattr(self, "total_videos", 0) or 0,
+                    "Field %s stopped — booking ends in under 1 minute" % fid,
+                )
+            return
+        # Combined Elite/World Class (or single-field timeline): stop the whole play.
+        try:
+            self.check_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._bump_field_epoch("A")
+            self._bump_field_epoch("B")
+        except Exception:
+            pass
+        self._field_opening_playlists = {}
+        self._independent_index = {}
+        self._independent_done = {}
+        self.playlist_finished = True
+        self.display_phase = "ready"
+        self._booking_abort_done = {"A", "B"}
+        self._release_session_after_booking_abort()
+
+    def _check_booking_deadline_abort(self):
+        """One minute before reservation end: abort mid-play / pre-final and free the field."""
+        if self._is_closing:
+            return
+        if self._player_attr("_idle_screensaver_mode", False):
+            return
+        phase = str(getattr(self, "display_phase", "") or "")
+        if phase in ("idle", "ready", "closed", "completed"):
+            return
+        for fid in ("A", "B"):
+            try:
+                if self._field_needs_booking_abort(fid):
+                    self._abort_field_for_booking_end(fid)
+            except Exception:
+                logger.exception("Booking deadline check failed for Field %s", fid)
 
     def _check_video_position(self):
         if self._is_closing:

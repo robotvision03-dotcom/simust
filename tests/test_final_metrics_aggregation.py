@@ -70,12 +70,14 @@ class FinalMetricsAggregationTests(unittest.TestCase):
                 "total_actions": 9,
             })
             final = simust_app.aggregate_final_section_metrics(all_results, session_folder=tmp)
-        # Boards showed 3+3+11; must NOT become 18 from summing raw floats.
-        self.assertEqual(final["distance_m_display"], 17)
-        self.assertAlmostEqual(final["total_distance"], 17.0)
+        # Boards showed 3, 3, 11 → average (not sum 17, not raw-float 18).
+        self.assertEqual(final["distance_m_display"], round((3 + 3 + 11) / 3.0))
+        self.assertAlmostEqual(final["total_distance"], (3 + 3 + 11) / 3.0)
         self.assertAlmostEqual(final["avg_ae"], (53.0 + 53.0 + 43.0) / 3.0)
+        self.assertAlmostEqual(final["aac"], (50.0 + 50.0 + 44.0) / 3.0)
+        self.assertAlmostEqual(final["aet_percent"], (40.0 + 40.0 + 40.0) / 3.0)
 
-    def test_final_fallback_sums_recomputed_sections(self):
+    def test_final_fallback_averages_recomputed_sections(self):
         all_results = [
             {"id": "S1", "video_index": 1, "result": "Correct", "finishing_time": "1.20",
              "session_duration": "1.50", "ae": 80, "total_distance": 37.2},
@@ -88,17 +90,15 @@ class FinalMetricsAggregationTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp:
             final = simust_app.aggregate_final_section_metrics(all_results, session_folder=tmp)
-        # Display metres 37+42+54 = 133 (not raw float sum).
-        self.assertEqual(final["distance_m_display"], 37 + 42 + 54)
+        # Display metres averaged: (37+42+54)/3
+        self.assertEqual(final["distance_m_display"], round((37 + 42 + 54) / 3.0))
+        self.assertAlmostEqual(final["total_distance"], (37 + 42 + 54) / 3.0)
         # Per video avg goals: (1.2+0.6)/2=0.9, 0.8, 1.0 → final avg 0.9
         self.assertAlmostEqual(final["aet"], 0.9)
-        # Sessions: (1.5+0.9)/2=1.2, 1.0, 1.2 → avg 1.133…; ring from combined avgs
-        # _combine averages section aets and sessions then 1-(aet/session)
         self.assertAlmostEqual(final["aac"], 100.0)
         self.assertAlmostEqual(final["avg_ae"], (70 + 70 + 50) / 3.0)
-        # Section percents recomputed from avg aet / avg session across boards
-        self.assertGreater(final["aet_percent"], 0.0)
-        self.assertLess(final["aet_percent"], 100.0)
+        self.assertGreaterEqual(final["aet_percent"], 0.0)
+        self.assertLessEqual(final["aet_percent"], 100.0)
 
 
 if __name__ == "__main__":

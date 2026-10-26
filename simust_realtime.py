@@ -200,6 +200,10 @@ SAVE_VIDEO_EXT = ".mp4"
 
 VIZ_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
 SIM_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
+# Admin: 1 = sim cannot unlock/level-up, 2 = sim always hits unlock scores.
+SIM_SCORE_MODE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "simulator_score_mode.txt")
+SIM_SCORE_MODE_FAIL = 1
+SIM_SCORE_MODE_PASS = 2
 PAUSE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
 STOP_SAVE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_save.txt")
 DISPLAY_WIDTH = 1280
@@ -2077,6 +2081,79 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
             return 'N/A'
 
 # ================================================================
+# Mode 2 finish-balls shared clock
+# ================================================================
+def mode2_pass_finish_ae(aet_percent: float, movement: float = 100.0) -> float:
+    """PASS Correct finish-balls AE used to stamp Mode 2 action rows."""
+    try:
+        aet = max(0.0, min(100.0, float(aet_percent or 0.0)))
+    except (TypeError, ValueError):
+        aet = 0.0
+    try:
+        mov = float(movement or 0.0)
+    except (TypeError, ValueError):
+        mov = 0.0
+    if mov > 0:
+        displacement = max(0.0, min(100.0, 100.0 - mov))
+    else:
+        displacement = 100.0
+    ae = (
+        (0.40 * 70.0)
+        + (0.30 * 100.0)
+        + (0.20 * aet)
+        + (0.10 * (100.0 - displacement))
+    )
+    return max(0.0, min(100.0, ae))
+
+
+def mode2_finish_balls_clock_sec(
+    action_data=None,
+    qr_block=None,
+    elapsed_sec=0.0,
+    arrive_sec=None,
+    travel_sec=0.40,
+) -> float:
+    """Ideal shared-clock stamp for Mode 2 Correct finish-balls actions.
+
+    Real play uses cumulative budget_elapsed, so max(clock) ≈ wall time of the
+    last ball. Short budgets (High Performance S1.T5 ≈ 11.7s, and every later
+    series that decays further) then lock AET near 54% and PASS Correct AE at
+    ~79% — below the unlock gate. Mode 2 stamps action_index × travel instead
+    so every finish-balls band (Entry / Activated / HP / Elite / WC) clears 80%.
+    """
+    try:
+        travel = float(travel_sec if travel_sec is not None else 0.40)
+    except (TypeError, ValueError):
+        travel = 0.40
+    if travel <= 0:
+        travel = 0.40
+
+    action_i = None
+    for src in (action_data, qr_block):
+        if not isinstance(src, dict):
+            continue
+        raw = src.get("action_in_set")
+        if raw is None:
+            continue
+        try:
+            action_i = int(raw)
+            break
+        except (TypeError, ValueError):
+            continue
+
+    if action_i is None or action_i < 1:
+        # Prefer a single fast finish over re-adding cumulative elapsed
+        # (that path is what pinned short-budget series under 80%).
+        try:
+            arrive = float(arrive_sec) if arrive_sec is not None else travel
+        except (TypeError, ValueError):
+            arrive = travel
+        return max(travel, min(arrive, travel + 0.12))
+
+    return float(max(1, action_i)) * travel
+
+
+# ================================================================
 # Compute Action Efficiency (AE)
 # ================================================================
 def compute_action_efficiency(action_type: str, result: str, finishing_time: float,
@@ -2493,6 +2570,29 @@ def read_simulation_fields() -> dict:
         return {"A": False, "B": False}
 
 
+def parse_simulator_score_mode(raw) -> int:
+    """Mode 1 = fail unlock scores. Mode 2 = always unlock / level up."""
+    try:
+        if isinstance(raw, dict):
+            raw = raw.get("mode", raw.get("score_mode", 2))
+        mode = int(str(raw or "2").strip().split()[0])
+    except (TypeError, ValueError):
+        mode = SIM_SCORE_MODE_PASS
+    if mode not in (SIM_SCORE_MODE_FAIL, SIM_SCORE_MODE_PASS):
+        return SIM_SCORE_MODE_PASS
+    return mode
+
+
+def read_simulator_score_mode() -> int:
+    try:
+        if not os.path.exists(SIM_SCORE_MODE_FILE):
+            return SIM_SCORE_MODE_PASS
+        with open(SIM_SCORE_MODE_FILE, "r", encoding="utf-8") as handle:
+            return parse_simulator_score_mode(handle.read())
+    except Exception:
+        return SIM_SCORE_MODE_PASS
+
+
 def read_simulation_setting():
     fields = read_simulation_fields()
     return bool(fields.get("A") or fields.get("B"))
@@ -2612,9 +2712,12 @@ class ArenaSimulator:
         self.border_index = 0
         self.finish_balls = False
         self.always_correct = False
+        self.always_fail = False
 
     def _finish_plan(self, test_num, action_in_set, actions_in_set):
         """Tests 1–5: about 100%, 80%, 50%, 20%, then 100% in the goal."""
+        if getattr(self, "always_fail", False):
+            return "miss"
         if getattr(self, "always_correct", False):
             return "finish"
         from smart_simust_player import finish_balls_sim_plan
@@ -2733,12 +2836,16 @@ class ArenaSimulator:
             xy = (xy[0], xy[1] + 29.0)
         self.target_xy = xy
         if getattr(self, "always_correct", False) and self.line_p0 and self.line_p1:
-            # Post-end aims sit on one cell. The static filter drops that cell,
-            # so a far screen never counts. Cross the middle while the ball moves.
-            self.intended = "correct"
+            # Mode 2 must score every action quickly and STAY in the goal.
+            # Intended "correct" returns home after 0.7s and was burning the
+            # clock (Foundation AE ~62%, finish-balls Wrongs → ~64%).
+            # "finish" arrives and holds so advance_on_goal / Correct can fire.
+            self.intended = "finish"
             self.aim_name = "center"
             self.target_xy = self._center_inside_goal(40.0)
             tracked = self.target_xy
+            # Keep AET high enough that PASS Correct AE clears unlock gates.
+            self.finish_travel_s = 0.40
         dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
         now_in = in_goal_area(
             tracked, self.line_p0, self.line_p1, depth, post_radius=post_radius_for(self.action)
@@ -2796,6 +2903,8 @@ class ArenaSimulator:
         return name, xy
 
     def _next_outcome(self, action):
+        if getattr(self, "always_fail", False):
+            return "miss"
         if getattr(self, "always_correct", False):
             return "correct"
         if action == "GOAL":
@@ -3139,8 +3248,15 @@ class ArenaSimulator:
 
         if intended in ("miss", "finish", "slow"):
             # Arrive in the goal area and stay. A slow ball still counts, but
-            # it uses more of the shared clock.
-            travel = 2.40 if intended == "slow" else 0.70
+            # it uses more of the shared clock. Mode 2 uses a shorter finish_travel_s.
+            if intended == "slow":
+                travel = 2.40
+            else:
+                try:
+                    travel = float(getattr(self, "finish_travel_s", 0.70) or 0.70)
+                except (TypeError, ValueError):
+                    travel = 0.70
+                travel = max(0.35, min(2.40, travel))
             u = min(1.0, t / travel)
             if is_press:
                 px, py = self._lerp(self.PLAYER_HOME, target, u)
@@ -3786,6 +3902,7 @@ class SimustRealtimeCamera:
         fields = read_simulation_fields()
         self.simulation_fields = {"A": bool(fields.get("A")), "B": bool(fields.get("B"))}
         self.simulation_enabled = bool(self.simulation_fields["A"] or self.simulation_fields["B"])
+        self.simulator_score_mode = read_simulator_score_mode()
         self.simulator_a = ArenaSimulator(field_id="A")
         self.simulator_b = ArenaSimulator(field_id="B")
         self.simulator = self.simulator_a  # back-compat alias
@@ -3801,6 +3918,11 @@ class SimustRealtimeCamera:
         self.active_fields = set(("A", "B"))
         self._refresh_active_fields()
         self._sync_simulator_partner_mode()
+        print(
+            "Simulator score mode: "
+            f"{self.simulator_score_mode} "
+            f"({'fail unlock' if self.simulator_score_mode == SIM_SCORE_MODE_FAIL else 'always unlock'})"
+        )
 
         # Back-compat aliases → Field A (legacy single-field call sites)
         ch_a = self.channels["A"]
@@ -3987,10 +4109,29 @@ class SimustRealtimeCamera:
         return bool((getattr(self, "simulation_fields", None) or {}).get(key))
 
     def _sync_simulator_partner_mode(self):
-        """A running simulator sends every ball in, so that field scores 100%."""
+        """Apply admin simulator score mode to each simulated field.
+
+        Mode 2: every finish is Correct (always unlock / level up).
+        Mode 1: every finish is Miss (cannot reach unlock thresholds).
+        """
+        mode = int(getattr(self, "simulator_score_mode", SIM_SCORE_MODE_PASS) or SIM_SCORE_MODE_PASS)
+        if mode not in (SIM_SCORE_MODE_FAIL, SIM_SCORE_MODE_PASS):
+            mode = read_simulator_score_mode()
+            self.simulator_score_mode = mode
         for fid, sim in (self.simulators or {}).items():
-            if sim is not None:
-                sim.always_correct = self._field_is_simulated(fid)
+            if sim is None:
+                continue
+            simulated = self._field_is_simulated(fid)
+            if not simulated:
+                sim.always_correct = False
+                sim.always_fail = False
+                continue
+            if mode == SIM_SCORE_MODE_FAIL:
+                sim.always_correct = False
+                sim.always_fail = True
+            else:
+                sim.always_correct = True
+                sim.always_fail = False
 
     def _mask_inactive_half(self, frame):
         """Black out the unused half so saved/live video has no inactive-field content."""
@@ -4690,15 +4831,51 @@ class SimustRealtimeCamera:
             'ae': analysis_result.get('AE', 0.0),
             'video_start_sec': (action_data or {}).get('video_start_sec'),
         }
-        if analysis_result.get("finish_balls") or (action_data or {}).get("finish_balls"):
+        sim = (getattr(self, "simulators", None) or {}).get(ch.field_id)
+        mode2_sim = bool(sim is not None and getattr(sim, "always_correct", False))
+        qr_block = getattr(ch, "current_qr_block", None) or {}
+        finish_balls = bool(
+            analysis_result.get("finish_balls")
+            or (action_data or {}).get("finish_balls")
+            or qr_block.get("finish_balls")
+            or mode2_sim
+        )
+        if finish_balls:
             try:
-                elapsed = float(analysis_result.get("budget_elapsed_sec") or 0)
+                elapsed = float(
+                    analysis_result.get("budget_elapsed_sec")
+                    or (action_data or {}).get("budget_elapsed_sec")
+                    or qr_block.get("budget_elapsed_sec")
+                    or 0
+                )
             except (TypeError, ValueError):
                 elapsed = 0.0
-            try:
-                total = float(analysis_result.get("budget_total_sec") or 0)
-            except (TypeError, ValueError):
-                total = 0.0
+            total = 0.0
+            for raw in (
+                analysis_result.get("budget_total_sec"),
+                (action_data or {}).get("budget_total_sec"),
+                qr_block.get("budget_total_sec"),
+                analysis_result.get("efficiency_max_sec"),
+                (action_data or {}).get("efficiency_max_sec"),
+                qr_block.get("efficiency_max_sec"),
+            ):
+                try:
+                    cand = float(raw or 0)
+                except (TypeError, ValueError):
+                    cand = 0.0
+                if cand > total:
+                    total = cand
+            if total <= 0 and mode2_sim:
+                # Entry/Activated default: 6 actions × 3.0s On.
+                try:
+                    n_act = int(
+                        (action_data or {}).get("actions_in_set")
+                        or qr_block.get("actions_in_set")
+                        or 6
+                    )
+                except (TypeError, ValueError):
+                    n_act = 6
+                total = float(max(1, n_act)) * 3.0
             arrive = None
             try:
                 raw_arrive = result_entry.get("finishing_time")
@@ -4709,7 +4886,30 @@ class SimustRealtimeCamera:
             # Cue ON is 17 frames before the session clock. The shared
             # stopwatch starts at the first screen, so add that delay once.
             shift = 17.0 / 20.0
-            if str(result_entry.get("result") or "") == "Correct" and arrive is not None:
+            if mode2_sim:
+                # Mode 2: every action is Correct, stays in goal, ideal clock.
+                result_entry["result"] = "Correct"
+                if arrive is None:
+                    arrive = float(getattr(sim, "finish_travel_s", 0.40) or 0.40)
+                clock = mode2_finish_balls_clock_sec(
+                    action_data=action_data,
+                    qr_block=qr_block,
+                    elapsed_sec=elapsed,
+                    arrive_sec=arrive,
+                    travel_sec=getattr(sim, "finish_travel_s", 0.40),
+                )
+                result_entry["movement"] = 100.0
+                if total > 0:
+                    aet_pct = max(
+                        0.0, min(100.0, (1.0 - (float(clock) / float(total))) * 100.0)
+                    )
+                else:
+                    aet_pct = 85.0
+                result_entry["ae"] = mode2_pass_finish_ae(aet_pct, 100.0)
+                result_entry["finishing_time"] = float(
+                    getattr(sim, "finish_travel_s", 0.40) or 0.40
+                )
+            elif str(result_entry.get("result") or "") == "Correct" and arrive is not None:
                 clock = elapsed + shift + arrive
             else:
                 clock = total if total > 0 else elapsed
@@ -6361,16 +6561,28 @@ class SimustRealtimeCamera:
     def _apply_simulation_setting(self):
         new_fields = read_simulation_fields()
         old_fields = dict(getattr(self, "simulation_fields", {}) or {})
-        if new_fields == old_fields:
+        new_mode = read_simulator_score_mode()
+        old_mode = int(getattr(self, "simulator_score_mode", SIM_SCORE_MODE_PASS) or SIM_SCORE_MODE_PASS)
+        fields_changed = new_fields != old_fields
+        mode_changed = new_mode != old_mode
+        if not fields_changed and not mode_changed:
             return
         self.simulation_fields = new_fields
         self.simulation_enabled = bool(new_fields.get("A") or new_fields.get("B"))
+        self.simulator_score_mode = new_mode
         self._sync_simulator_partner_mode()
-        print(
-            "Arena simulation: "
-            f"A={'ON' if new_fields.get('A') else 'OFF'} "
-            f"B={'ON' if new_fields.get('B') else 'OFF'}"
-        )
+        if fields_changed:
+            print(
+                "Arena simulation: "
+                f"A={'ON' if new_fields.get('A') else 'OFF'} "
+                f"B={'ON' if new_fields.get('B') else 'OFF'}"
+            )
+        if mode_changed:
+            print(
+                "Simulator score mode: "
+                f"{new_mode} "
+                f"({'fail unlock' if new_mode == SIM_SCORE_MODE_FAIL else 'always unlock'})"
+            )
         for fid in ("A", "B"):
             now_on = bool(new_fields.get(fid))
             was_on = bool(old_fields.get(fid))

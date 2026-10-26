@@ -18,6 +18,7 @@ ALLOWED_ACTIONS = {
     "stop-realtime",
     "pause-realtime",
     "set-simulation",
+    "simulator-score-mode",
     "set-visualization",
     "lab-upsert-player",
     "unlock-level",

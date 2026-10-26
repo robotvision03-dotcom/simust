@@ -1187,12 +1187,13 @@
             background: var(--portal-panel);
             border: 1px solid var(--line);
             border-radius: 8px;
-            padding: 20px;
+            padding: 20px 20px 28px;
             margin-top: 20px;
             max-width: 1400px;
+            min-height: 320px;
         }
         .trend-single-chart canvas {
-            max-height: 280px;
+            max-height: 300px;
             width: 100% !important;
         }
 
@@ -5626,17 +5627,23 @@
             }
 
             function sessionLevelLabel(session) {
+                // e.g. "Foundation, SF-30N" or "Activated, S1.T1"
                 var meta = (session && session.session) || {};
-                var level = String(meta.level || '');
-                var sub = String(meta.subdirectory || '');
-                var name = level;
-                if (level.indexOf('Foundation') !== -1 || level === 'L00-Foundation') name = 'Foundation';
-                else if (level.indexOf('L01-Entry') === 0) name = 'Entry';
-                else if (level.indexOf('L02-Activated') === 0) name = 'Activated';
-                else if (level.indexOf('L03-HighPerformance') === 0) name = 'High Performance';
-                else if (level.indexOf('L04-Elite') === 0) name = 'Elite';
-                else if (level.indexOf('L05-WorldClass') === 0) name = 'World Class';
-                if (sub) name += ' · ' + sub;
+                var level = String(meta.level || session.level || '');
+                var sub = String(meta.subdirectory || session.subdirectory || '').trim();
+                var band = level;
+                if (level.indexOf('Foundation') !== -1 || level === 'L00-Foundation') band = 'Foundation';
+                else if (level.indexOf('L01-Entry') === 0) band = 'Entry';
+                else if (level.indexOf('L02-Activated') === 0) band = 'Activated';
+                else if (level.indexOf('L03-HighPerformance') === 0) band = 'High Performance';
+                else if (level.indexOf('L04-Elite') === 0) band = 'Elite';
+                else if (level.indexOf('L05-WorldClass') === 0) band = 'World Class';
+                else if (level.indexOf('/') !== -1) band = level.split('/')[0].replace(/^L\d+-/, '') || band;
+                var set = sub;
+                if (!set && level.indexOf('/') !== -1) {
+                    set = level.split('/').pop() || '';
+                }
+                var name = set ? (band + ', ' + set) : (band || '—');
                 if (meta.simulation) name += ' · Simulator';
                 return name;
             }
@@ -6080,11 +6087,15 @@
 
                 var labels = pageData.map(function(s) {
                     var d = new Date(s.session && s.session.timestamp || s.timestamp);
-                    if (isNaN(d.getTime())) return '—';
+                    var levelLine = sessionLevelLabel(s);
+                    if (isNaN(d.getTime())) {
+                        return levelLine ? ('—\n' + levelLine) : '—';
+                    }
                     var day = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
                     var hh = String(d.getHours()).padStart(2, '0');
                     var mm = String(d.getMinutes()).padStart(2, '0');
-                    return day + ' ' + hh + ':' + mm;
+                    // Date/time on first line; level + sublevel under it (e.g. Foundation, SF-30N).
+                    return day + ' ' + hh + ':' + mm + '\n' + levelLine;
                 });
 
                 var aeData = pageData.map(function(s) { return s.statistics && s.statistics.avg_ae || 0; });
@@ -6182,6 +6193,11 @@
                                 mode: 'index',
                                 intersect: false,
                                 callbacks: {
+                                    title: function(items) {
+                                        if (!items || !items.length) return '';
+                                        var raw = String(items[0].label || '').split('\n');
+                                        return raw;
+                                    },
                                     label: function(ctx) { return ctx.dataset.label + ': ' + ctx.parsed.y
                                             .toFixed(1); }
                                 }
@@ -6204,8 +6220,15 @@
                             },
                             x: {
                                 grid: { color: '#2a2e42' },
-                                ticks: { color: '#e2e8f0', maxRotation: 30, minRotation: 20, autoSkip: true,
-                                    maxTicksLimit: 10 }
+                                ticks: {
+                                    color: '#e2e8f0',
+                                    maxRotation: 0,
+                                    minRotation: 0,
+                                    autoSkip: true,
+                                    maxTicksLimit: 8,
+                                    font: { size: 10 },
+                                    padding: 6
+                                }
                             }
                         }
                     }
@@ -7888,6 +7911,24 @@
                     window.__simustRefreshBusy = true;
                     try {
                         if (currentUser.role === 'player' && selectedPlayerId) {
+                            // Operator lock/unlock must refresh CURRENT DEVELOPMENT LEVEL live.
+                            var playersResp = await fetch(API_BASE + '/get-players', { headers: apiHeaders() });
+                            if (playersResp.ok) {
+                                var playersData = await playersResp.json();
+                                allPlayers = playersData.players || [];
+                                authorisedPlayers = filterPlayersByRole();
+                                var selfPlayer = allPlayers.find(function(p) { return p.id === selectedPlayerId; })
+                                    || authorisedPlayers[0];
+                                if (selfPlayer && selfPlayer.progress) {
+                                    currentUser.progress = selfPlayer.progress;
+                                    var levelSig = String(selfPlayer.progress.current_level || '') + ':'
+                                        + (selfPlayer.progress.unlocked_levels || []).join(',');
+                                    if (levelSig !== window._simustLevelSig) {
+                                        window._simustLevelSig = levelSig;
+                                        renderProgressionBar(selfPlayer.progress);
+                                    }
+                                }
+                            }
                             var reportResp = await fetch(API_BASE + '/get-player-reports/' + encodeURIComponent(selectedPlayerId), { headers: apiHeaders() });
                             if (reportResp.ok) {
                                 var reportData = await reportResp.json();
@@ -7897,8 +7938,11 @@
                                 var incomingSig = incoming.length + ':' + String(meta.id || '') + ':' + String(meta.timestamp || '');
                                 if (incomingSig !== window._simustSessionSig) {
                                     window._simustSessionSig = incomingSig;
-                                    var self = authorisedPlayers[0];
-                                    if (self) renderEnhancedPlayerDashboard(self, incoming);
+                                    var self = authorisedPlayers[0] || selfPlayer;
+                                    if (self) {
+                                        if (selfPlayer && selfPlayer.progress) self.progress = selfPlayer.progress;
+                                        renderEnhancedPlayerDashboard(self, incoming);
+                                    }
                                 }
                             }
                             return;

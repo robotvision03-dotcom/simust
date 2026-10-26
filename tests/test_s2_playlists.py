@@ -153,11 +153,11 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(first["motion_texts"][goal], goal_token)
         positions = first.get("motion_text_positions") or {}
         self.assertEqual(set(positions), set(first["motion_texts"]))
-        ys = [float(positions[sid][1]) for sid in positions]
-        bottom = 1.0 - player.WC_TEXT_EDGE_MARGIN - player.WC_TEXT_BOTTOM_LIFT
-        self.assertTrue(all(player.WC_TEXT_EDGE_MARGIN <= y <= bottom + 1e-6 for y in ys))
-        # Numbers are spread: not all stacked on one y.
-        self.assertGreater(len(set(round(y, 2) for y in ys)), 1)
+        # Same vertical line as Elite/Entry (results-ring value center).
+        expected_y = float(player._ring_value_center_frac(1080))
+        for sid, pos in positions.items():
+            self.assertAlmostEqual(float(pos[0]), 0.5, places=3, msg=sid)
+            self.assertAlmostEqual(float(pos[1]), expected_y, places=3, msg=sid)
         self.assertEqual(player._wc_s2_theme_for_series(1), "flowers")
         self.assertEqual(player._wc_s2_theme_for_series(2), "fruits")
         self.assertEqual(player._wc_s2_theme_for_series(3), "animals")

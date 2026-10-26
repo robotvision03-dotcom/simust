@@ -40,8 +40,8 @@ ISSUES_PATH = os.path.join(ROOT, "remote_operator_level_sim_issues.txt")
 # Default gates used by the product.
 PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}  # 75%, 70
 FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}  # 50%
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0}  # 85%, 80
-FAIL_SERIES = {"correct": 16, "late": 0, "wrong": 4, "miss": 0, "avg_ae": 80.0}  # 80%
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}  # AE-only gate
+FAIL_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}  # under AE 75
 
 
 def _accuracy(stats: dict) -> float:
@@ -161,7 +161,7 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             ok, reason = simust_progress.can_play(progress, level, "")
             self.assertTrue(ok, f"{level}: {reason}")
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (85, 80), level)
+            self.assertEqual((th_acc, th_ae), (0, 75), level)
 
             nxt = get_next_level(level)
             # Fail must not unlock next.

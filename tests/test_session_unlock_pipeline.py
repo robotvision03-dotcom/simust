@@ -87,7 +87,7 @@ class SessionUnlockPipelineTests(unittest.TestCase):
             "cristiano",
             "L01-Entry/S1.T1",
             "",
-            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0},
+            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 74.0},
         )
         progress = users["cristiano"]["progress"]
         self.assertFalse(progress["challenge_results"]["L01-Entry/S1.T1"]["passed"])
@@ -97,7 +97,7 @@ class SessionUnlockPipelineTests(unittest.TestCase):
             "cristiano",
             "L01-Entry/S1.T1",
             "",
-            {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0},
+            {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0},
         )
         progress = users["cristiano"]["progress"]
         self.assertTrue(progress["challenge_results"]["L01-Entry/S1.T1"]["passed"])
@@ -147,6 +147,56 @@ class FoundationProgressTests(unittest.TestCase):
         progress = users["james"]["progress"]
         self.assertTrue(progress["challenge_results"]["L00-Foundation"]["passed"])
         self.assertIn("L01-Entry/S1.T1", progress["unlocked_levels"])
+
+    def test_mode2_force_pass_unlocks_activated(self):
+        users = self._player()
+        progress = users["james"]["progress"]
+        progress["unlocked_levels"] = ["L00-Foundation", "L02-Activated/S1.T1"]
+        progress["current_level"] = "L02-Activated/S1.T1"
+        # Low average AE (what the rings showed) but Mode 2 force_pass unlocks.
+        apply_session_progress(
+            users,
+            "james",
+            "L02-Activated/S1.T1",
+            "",
+            {"aac": 100.0, "avg_ae": 63.6, "force_pass": True},
+            from_final=True,
+        )
+        progress = users["james"]["progress"]
+        self.assertTrue(progress["challenge_results"]["L02-Activated/S1.T1"]["passed"])
+        self.assertAlmostEqual(progress["challenge_results"]["L02-Activated/S1.T1"]["ae"], 63.6)
+        self.assertIn("L02-Activated/S1.T2", progress["unlocked_levels"])
+
+    def test_omid_and_omid2_never_unlock_sf_or_entry(self):
+        users = self._player()
+        progress = users["james"]["progress"]
+        progress["unlocked_playlists"] = ["SF-30N"]
+        progress["challenge_results"] = {
+            "L00-Foundation": {
+                "aac": 80.0,
+                "ae": 75.0,
+                "passed": True,
+                "subdirectory": "SF-30N",
+            }
+        }
+        stats = {
+            "correct": 10,
+            "late": 0,
+            "wrong": 0,
+            "miss": 0,
+            "aac": 100.0,
+            "avg_ae": 90.0,
+        }
+        for extra in ("omid", "omid_2"):
+            apply_session_progress(users, "james", "L00-Foundation", extra, stats)
+            progress = users["james"]["progress"]
+            self.assertNotIn("SF-60N", progress["unlocked_playlists"])
+            self.assertNotIn("L01-Entry/S1.T1", progress["unlocked_levels"])
+            self.assertEqual(
+                progress["challenge_results"]["L00-Foundation"]["subdirectory"],
+                "SF-30N",
+            )
+            self.assertIn(extra, progress.get("extra_challenge_results") or {})
 
 
 if __name__ == "__main__":

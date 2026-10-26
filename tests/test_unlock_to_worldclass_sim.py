@@ -32,9 +32,10 @@ ISSUES_PATH = os.path.join(ROOT, "unlock_to_worldclass_issues.txt")
 
 PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
 FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 80.0}
-FAIL_SERIES_ACC = {"correct": 16, "late": 0, "wrong": 4, "miss": 0, "avg_ae": 80.0}
-FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 79.0}
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}
+# Low ACC still unlocks when AE meets 75% (ACC is not part of the gate).
+PASS_SERIES_LOW_ACC = {"correct": 10, "late": 0, "wrong": 10, "miss": 0, "avg_ae": 75.0}
+FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}
 
 
 def _accuracy(stats: dict) -> float:
@@ -175,10 +176,6 @@ class UnlockToWorldClassSim(unittest.TestCase):
             if nxt:
                 self.assertNotIn(nxt, progress["unlocked_levels"])
                 apply_session_progress(
-                    users, PLAYER_ID, level, "", FAIL_SERIES_ACC, from_final=True
-                )
-                self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
-                apply_session_progress(
                     users, PLAYER_ID, level, "", FAIL_SERIES_AE, from_final=True
                 )
                 self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
@@ -187,7 +184,7 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 )
                 self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (85, 80))
+            self.assertEqual((th_acc, th_ae), (0, 75))
             apply_session_progress(
                 users, PLAYER_ID, level, "", PASS_SERIES, from_final=True
             )
@@ -197,8 +194,8 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 self.assertIn(nxt, progress["unlocked_levels"])
                 self.assertEqual(progress["current_level"], nxt)
             report.append(
-                "Passed %s at %.0f%% accuracy and 80 efficiency. Next is %s."
-                % (level, _accuracy(PASS_SERIES), nxt or "none")
+                "Passed %s at AE %.0f (ACC ignored for unlock). Next is %s."
+                % (level, PASS_SERIES["avg_ae"], nxt or "none")
             )
 
         progress = users[PLAYER_ID]["progress"]
@@ -209,7 +206,7 @@ class UnlockToWorldClassSim(unittest.TestCase):
 
         # A later short final must not lock the set again.
         apply_session_progress(
-            users, PLAYER_ID, "L05-WorldClass/S2.T5", "", FAIL_SERIES_ACC, from_final=True
+            users, PLAYER_ID, "L05-WorldClass/S2.T5", "", FAIL_SERIES_AE, from_final=True
         )
         progress = users[PLAYER_ID]["progress"]
         self.assertIn("L05-WorldClass/S2.T5", progress["unlocked_levels"])
@@ -232,13 +229,26 @@ class UnlockToWorldClassSim(unittest.TestCase):
             % (target_after_fail["level"], target_after_fail["subdirectory"])
         )
 
-        late_only = {"correct": 0, "late": 17, "wrong": 3, "miss": 0, "avg_ae": 80.0}
-        if _accuracy(late_only) >= 85:
+        # Low ACC with AE at the gate still unlocks (ACC is not used after Foundation).
+        low_acc_probe = {PLAYER_ID: _new_player()}
+        low_acc_probe[PLAYER_ID]["progress"]["unlocked_levels"] = [
+            "L00-Foundation",
+            "L01-Entry/S1.T1",
+        ]
+        low_acc_probe[PLAYER_ID]["progress"]["unlocked_playlists"] = list(
+            simust_progress.FOUNDATION_PLAYLISTS
+        )
+        apply_session_progress(
+            low_acc_probe,
+            PLAYER_ID,
+            "L01-Entry/S1.T1",
+            "",
+            PASS_SERIES_LOW_ACC,
+            from_final=True,
+        )
+        if "L01-Entry/S1.T2" not in low_acc_probe[PLAYER_ID]["progress"]["unlocked_levels"]:
             issues.append(
-                "Late finishes count toward accuracy. "
-                "17 late and 3 wrong is %.0f%% accuracy, so it meets the 85%% gate "
-                "with no correct finishes."
-                % _accuracy(late_only)
+                "Entry unlock should use AE only. 50%% ACC with AE 75 did not open S1.T2."
             )
 
         aac_overrides = {"correct": 20, "late": 0, "wrong": 0, "miss": 0, "avg_ae": 90.0, "aac": 10}
@@ -345,16 +355,11 @@ class UnlockToWorldClassSim(unittest.TestCase):
             item for item in store["reservations"]
             if item.get("player_id") == PLAYER_ID and item.get("start") == start3.isoformat(timespec="seconds")
         ]
-        self.assertEqual([item.get("field") for item in mine], ["A"])
+        # Elite/WC booking clears a conflicting Field B slot and keeps both fields.
+        self.assertEqual(sorted(item.get("field") for item in mine), ["A", "B"])
         report.append(
-            "If Field B is already taken, an Elite booking on Field A stays on Field A only."
+            "If Field B was taken, an Elite booking on Field A clears that slot and books A+B."
         )
-        if len(mine) == 1:
-            issues.append(
-                "Elite and World Class are supposed to use both fields. "
-                "If the other field is already booked, the original booking is kept on one field "
-                "and play can still be started without the second field."
-            )
         if created.get("field") != "A":
             issues.append("The field that was booked first did not stay the score field.")
 

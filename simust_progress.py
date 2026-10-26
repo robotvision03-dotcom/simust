@@ -4,8 +4,9 @@ Rules:
 - A new player starts with Foundation SF-30N unlocked. Everything else stays locked.
 - An admin password can unlock a locked level. A passed level stays unlocked.
 - Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry:
-  75% accuracy and 70% efficiency on the final results.
-- Entry and every later set: 85% accuracy and 80% efficiency on the final results.
+  75% accuracy and 70% efficiency on the final results (ACC + AE).
+- Entry and every later set: unlock / level-up uses AE only at 75%.
+  Accuracy is recorded but does not gate the next set.
 - Passing S1.T4 opens the next band (Entry S1.T4 → Activated S1.T1, and so on).
   World Class S1.T4 opens World Class S1.T5. Booking does not open levels.
   Sub-level names: A-T# / A.T# → S1.T#, A1.T# → S2.T#.
@@ -64,8 +65,9 @@ FOUNDATION_LEVEL = "L00-Foundation"
 SESSION_MINUTES = 30
 FOUNDATION_SCORE_ACC = 75.0
 FOUNDATION_SCORE_AE = 70.0
-SERIES_SCORE_ACC = 85.0
-SERIES_SCORE_AE = 80.0
+# Non-Foundation unlock is AE-only; ACC threshold is unused (0).
+SERIES_SCORE_ACC = 0.0
+SERIES_SCORE_AE = 75.0
 
 
 def slots_from_minutes(duration_minutes: int) -> int:
@@ -85,6 +87,8 @@ def default_progress() -> Dict[str, Any]:
         "completed_levels": [],
         "passed_playlists": [],
         "eligible_levels": [],
+        "manually_locked_levels": [],
+        "manually_locked_playlists": [],
         "session_credits": 0,
         "challenge_results": {},
         "granted_reservation_ids": [],
@@ -100,6 +104,8 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     progress.setdefault("completed_levels", [])
     progress.setdefault("passed_playlists", [])
     progress.setdefault("eligible_levels", [])
+    progress.setdefault("manually_locked_levels", [])
+    progress.setdefault("manually_locked_playlists", [])
     progress.setdefault("session_credits", 0)
     progress.setdefault("challenge_results", {})
     progress.setdefault("granted_reservation_ids", [])
@@ -115,6 +121,14 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     progress["unlocked_levels"] = _migrate_level_list(progress.get("unlocked_levels") or [])
     progress["completed_levels"] = _migrate_level_list(progress.get("completed_levels") or [])
     progress["eligible_levels"] = _migrate_level_list(progress.get("eligible_levels") or [])
+    progress["manually_locked_levels"] = _migrate_level_list(
+        progress.get("manually_locked_levels") or []
+    )
+    progress["manually_locked_playlists"] = [
+        str(name).strip()
+        for name in (progress.get("manually_locked_playlists") or [])
+        if str(name).strip()
+    ]
     progress["current_level"] = normalize_level_id(str(progress.get("current_level") or FOUNDATION_LEVEL)) or FOUNDATION_LEVEL
     results = dict(progress.get("challenge_results") or {})
     if results:
@@ -124,6 +138,8 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
         progress["challenge_results"] = migrated
     if not progress.get("current_level"):
         progress["current_level"] = FOUNDATION_LEVEL
+    # Operator locks must stick across pulls / score opens.
+    apply_manual_locks(progress)
     # Keep current_level inside the unlocked set (full sync needs ALL_LEVELS order).
     unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
     unlocked.add(FOUNDATION_LEVEL)
@@ -133,6 +149,97 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     if progress.get("current_level") == FOUNDATION_LEVEL:
         progress["current_playlist"] = highest_foundation_playlist(progress)
     return progress
+
+
+def apply_manual_locks(progress: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip operator-locked sets/playlists out of the open lists."""
+    locked_levels = {
+        normalize_level_id(x)
+        for x in (progress.get("manually_locked_levels") or [])
+        if normalize_level_id(x)
+    }
+    locked_playlists = {
+        str(name).strip()
+        for name in (progress.get("manually_locked_playlists") or [])
+        if str(name).strip()
+    }
+    if locked_levels:
+        progress["unlocked_levels"] = [
+            lvl
+            for lvl in (progress.get("unlocked_levels") or [])
+            if normalize_level_id(lvl) not in locked_levels
+        ]
+        progress["completed_levels"] = [
+            lvl
+            for lvl in (progress.get("completed_levels") or [])
+            if normalize_level_id(lvl) not in locked_levels
+        ]
+        progress["eligible_levels"] = [
+            lvl
+            for lvl in (progress.get("eligible_levels") or [])
+            if normalize_level_id(lvl) not in locked_levels
+        ]
+    if locked_playlists:
+        progress["unlocked_playlists"] = [
+            name
+            for name in (progress.get("unlocked_playlists") or [])
+            if str(name).strip() not in locked_playlists
+        ]
+        # SF-30N is the day-one floor — never leave a player with zero SF access.
+        if "SF-30N" not in locked_playlists and "SF-30N" not in (
+            progress.get("unlocked_playlists") or []
+        ):
+            playlists = list(progress.get("unlocked_playlists") or [])
+            playlists.insert(0, "SF-30N")
+            progress["unlocked_playlists"] = playlists
+    return progress
+
+
+def is_manually_locked(progress: Dict[str, Any], level_id: str = "", playlist: str = "") -> bool:
+    level = normalize_level_id(str(level_id or "").strip())
+    if level and level in {
+        normalize_level_id(x) for x in (progress.get("manually_locked_levels") or [])
+    }:
+        return True
+    name = str(playlist or "").strip()
+    if name and name in {
+        str(x).strip() for x in (progress.get("manually_locked_playlists") or [])
+    }:
+        return True
+    return False
+
+
+def mark_manual_lock(progress: Dict[str, Any], level_id: str = "", playlist: str = "") -> None:
+    if playlist:
+        name = str(playlist).strip()
+        locked = list(progress.get("manually_locked_playlists") or [])
+        if name and name not in locked:
+            locked.append(name)
+        progress["manually_locked_playlists"] = locked
+    if level_id:
+        nid = normalize_level_id(str(level_id).strip())
+        locked = _migrate_level_list(progress.get("manually_locked_levels") or [])
+        if nid and nid not in locked:
+            locked.append(nid)
+        progress["manually_locked_levels"] = locked
+    apply_manual_locks(progress)
+
+
+def clear_manual_lock(progress: Dict[str, Any], level_id: str = "", playlist: str = "") -> None:
+    if playlist:
+        name = str(playlist).strip()
+        progress["manually_locked_playlists"] = [
+            item
+            for item in (progress.get("manually_locked_playlists") or [])
+            if str(item).strip() != name
+        ]
+    if level_id:
+        nid = normalize_level_id(str(level_id).strip())
+        progress["manually_locked_levels"] = [
+            item
+            for item in _migrate_level_list(progress.get("manually_locked_levels") or [])
+            if item != nid
+        ]
 
 
 def highest_foundation_playlist(progress: Dict[str, Any]) -> str:
@@ -156,11 +263,32 @@ def next_foundation_playlist_after(subdirectory: str) -> Optional[str]:
 
 
 def score_gate(level_id: str) -> Tuple[float, float]:
-    """Return (accuracy, efficiency) required to open the next set."""
+    """Return (accuracy, efficiency) thresholds for the level.
+
+    Foundation requires both. Entry and later use AE only (ACC threshold is 0).
+    """
     main = str(level_id or "").split("/")[0]
     if main == FOUNDATION_LEVEL:
         return FOUNDATION_SCORE_ACC, FOUNDATION_SCORE_AE
     return SERIES_SCORE_ACC, SERIES_SCORE_AE
+
+
+def passes_score_gate(level_id: str, aac: float, ae: float) -> bool:
+    """True when finals meet the unlock / level-up gate for this set."""
+    th_acc, th_ae = score_gate(level_id)
+    try:
+        aac_v = float(aac or 0.0)
+    except (TypeError, ValueError):
+        aac_v = 0.0
+    try:
+        ae_v = float(ae or 0.0)
+    except (TypeError, ValueError):
+        ae_v = 0.0
+    main = str(level_id or "").split("/")[0]
+    if main == FOUNDATION_LEVEL:
+        return aac_v >= float(th_acc) and ae_v >= float(th_ae)
+    # Entry / Activated / High Performance / Elite / World Class: AE only.
+    return ae_v >= float(th_ae)
 
 
 def highest_unlocked_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
@@ -181,15 +309,17 @@ def sync_current_development_level(progress: Dict[str, Any], all_levels: List[st
     where the player continues next time (like a game save checkpoint).
     """
     progress = progress or default_progress()
+    progress.setdefault("manually_locked_levels", [])
+    progress.setdefault("manually_locked_playlists", [])
+    apply_manual_locks(progress)
     level = highest_unlocked_level(progress, all_levels or [])
     progress["current_level"] = level
     if level == FOUNDATION_LEVEL:
         playlist = highest_foundation_playlist(progress)
         progress["current_playlist"] = playlist
     else:
-        # Keep a playlist stamp only while still on Foundation.
-        if not str(progress.get("current_playlist") or "").strip():
-            progress["current_playlist"] = ""
+        # Leave Foundation — clear SF stamp so operator / My SIMUST show the series set.
+        progress["current_playlist"] = ""
     return progress
 
 
@@ -325,6 +455,9 @@ def can_play(
     progress = progress or {}
     unlocked_levels = list(progress.get("unlocked_levels") or [])
     unlocked_playlists = list(progress.get("unlocked_playlists") or [])
+    sub = (subdirectory or "").strip()
+    if is_manually_locked(progress, level_id, sub):
+        return False, f"{level_id}{('/' + sub) if sub else ''} is locked by an operator"
     if level_id == FOUNDATION_LEVEL:
         sub = (subdirectory or "").strip()
         if not sub:
@@ -345,10 +478,15 @@ def can_play(
 
 
 def merge_progress(local_progress: Optional[Dict[str, Any]], remote_progress: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Union unlock / eligibility fields from two progress blobs."""
+    """Union unlock / eligibility fields from two progress blobs.
+
+    Operator manual locks are also unioned, then stripped from open sets so a
+    host pull cannot re-open a level the lab just locked.
+    """
     dst = dict(local_progress or default_progress())
     src = remote_progress or {}
     if not src:
+        apply_manual_locks(dst)
         return dst
     for key in (
         "unlocked_playlists",
@@ -356,11 +494,15 @@ def merge_progress(local_progress: Optional[Dict[str, Any]], remote_progress: Op
         "eligible_levels",
         "completed_levels",
         "granted_reservation_ids",
+        "manually_locked_levels",
+        "manually_locked_playlists",
     ):
         merged = []
         for value in list(dst.get(key) or []) + list(src.get(key) or []):
             if value and value not in merged:
                 merged.append(value)
+        if key in ("unlocked_levels", "eligible_levels", "completed_levels", "manually_locked_levels"):
+            merged = _migrate_level_list(merged)
         dst[key] = merged
     local_depth = len(dst.get("unlocked_playlists") or []) + len(dst.get("unlocked_levels") or [])
     remote_depth = len(src.get("unlocked_playlists") or []) + len(src.get("unlocked_levels") or [])
@@ -376,9 +518,70 @@ def merge_progress(local_progress: Optional[Dict[str, Any]], remote_progress: Op
     results = dict(dst.get("challenge_results") or {})
     results.update(src.get("challenge_results") or {})
     dst["challenge_results"] = results
-    if src.get("current_level"):
-        dst["current_level"] = src.get("current_level")
+    apply_manual_locks(dst)
+    # Prefer lab current when locks removed a remote "highest" set.
+    if src.get("current_level") and not is_manually_locked(dst, str(src.get("current_level") or "")):
+        remote_cur = normalize_level_id(str(src.get("current_level") or ""))
+        unlocked = {normalize_level_id(x) for x in (dst.get("unlocked_levels") or [])}
+        if remote_cur in unlocked:
+            dst["current_level"] = remote_cur
     return dst
+
+
+def apply_lab_progress(
+    existing: Optional[Dict[str, Any]],
+    incoming: Optional[Dict[str, Any]],
+    all_levels: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Apply lab operator unlock/lock as the source of truth for open sets.
+
+    Union-merge cannot remove a locked level on the public host. Lab pushes after
+    manual lock/unlock therefore replace unlocked / completed lists, then stamp
+    CURRENT DEVELOPMENT LEVEL to the highest unlocked set.
+    """
+    dst = dict(default_progress())
+    dst.update(existing or {})
+    src = incoming or {}
+    if not src:
+        return sync_current_development_level(dst, all_levels or [])
+    for key in (
+        "unlocked_playlists",
+        "unlocked_levels",
+        "eligible_levels",
+        "completed_levels",
+        "passed_playlists",
+        "manually_locked_levels",
+        "manually_locked_playlists",
+    ):
+        if key in src:
+            values = list(src.get(key) or [])
+            if key in (
+                "unlocked_levels",
+                "eligible_levels",
+                "completed_levels",
+                "manually_locked_levels",
+            ):
+                values = _migrate_level_list(values)
+            dst[key] = values
+    if "current_playlist" in src:
+        dst["current_playlist"] = str(src.get("current_playlist") or "")
+    if "session_credits" in src:
+        try:
+            dst["session_credits"] = int(src.get("session_credits") or 0)
+        except (TypeError, ValueError):
+            dst["session_credits"] = 0
+    granted: List[str] = []
+    for value in list(dst.get("granted_reservation_ids") or []) + list(
+        src.get("granted_reservation_ids") or []
+    ):
+        if value and value not in granted:
+            granted.append(value)
+    dst["granted_reservation_ids"] = granted
+    results = dict(dst.get("challenge_results") or {})
+    results.update(src.get("challenge_results") or {})
+    dst["challenge_results"] = results
+    # Always recompute CURRENT DEVELOPMENT LEVEL from the open sets.
+    return sync_current_development_level(dst, all_levels or [])
 
 
 def sync_unlocks_from_reservations(
