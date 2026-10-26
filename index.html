@@ -133,19 +133,39 @@
         .calib-test { position: absolute; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border-radius: 50%; background: #276ce5; border: 2px solid #fff; pointer-events: none; }
         .homography-table input { width: 88px; background: #07111f; border: 1px solid var(--line); color: #fff; border-radius: 4px; padding: 6px 8px; }
         .refresh-btn:hover { border-color: var(--gold); color: var(--gold-light); }
-        .manual-coach-wrap { display: flex; flex-direction: column; gap: 16px; }
-        .manual-coach-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .manual-coach-wrap {
+            display: flex; flex-direction: column; gap: 14px;
+            width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
+            box-sizing: border-box;
+        }
+        .manual-coach-wrap > h2 { margin: 0; font-size: clamp(1.15rem, 4.2vw, 1.6rem); line-height: 1.2; }
+        .manual-coach-toolbar {
+            display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch;
+            width: 100%;
+        }
+        .manual-coach-toolbar > button {
+            flex: 1 1 140px; min-height: 44px; touch-action: manipulation;
+        }
         .manual-coach-toolbar .manual-status {
-            flex: 1 1 220px; min-height: 40px; padding: 10px 14px; border-radius: 8px;
+            flex: 1 1 100%; min-height: 44px; padding: 10px 14px; border-radius: 8px;
             border: 1px solid var(--line); background: #07111f; color: #dce7f5; font-weight: 700; font-size: 13px;
+            display: flex; align-items: center;
         }
         .manual-coach-toolbar .manual-status.waiting { border-color: var(--gold); color: var(--gold-light); }
         .manual-coach-toolbar .manual-status.hit { border-color: var(--green); color: var(--green); }
+        .manual-sim-row {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+            width: 100%; margin-top: 2px;
+        }
+        .manual-sim-row > span { font-size: 13px; white-space: nowrap; }
         .manual-pitch {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 18px; width: 100%;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+            width: 100%; max-width: 100%; min-width: 0;
         }
         .manual-field {
-            position: relative; min-height: 320px; border-radius: 16px; overflow: hidden;
+            position: relative; width: 100%; min-width: 0;
+            aspect-ratio: 5 / 4; min-height: 240px; max-height: 420px;
+            border-radius: 16px; overflow: hidden;
             border: 1px solid rgba(214,179,75,0.35);
             background:
                 radial-gradient(ellipse at 50% 110%, rgba(255,255,255,0.08), transparent 55%),
@@ -166,7 +186,8 @@
             position: absolute; width: 64px; height: 64px; margin-left: -32px; margin-top: -32px;
             border-radius: 50%; border: 2px solid rgba(255,255,255,0.55);
             background: rgba(7,17,31,0.78); color: #fff; font-weight: 900; font-size: 15px;
-            cursor: pointer; z-index: 3; transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+            cursor: pointer; z-index: 3; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+            transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
             box-shadow: 0 6px 18px rgba(0,0,0,0.35);
         }
         .manual-goal-btn:hover { transform: scale(1.08); border-color: var(--gold); color: var(--gold-light); }
@@ -178,11 +199,40 @@
             background: rgba(46,204,113,0.92); border-color: #fff;
         }
         .manual-goal-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-        .manual-help { font-size: 13px; color: #9ca3af; line-height: 1.45; max-width: 920px; }
+        .manual-help {
+            font-size: 13px; color: #9ca3af; line-height: 1.45;
+            max-width: 920px; margin: 0;
+        }
         @media (max-width: 900px) {
-            .manual-pitch { grid-template-columns: 1fr; }
-            .manual-field { min-height: 280px; }
-            .manual-goal-btn { width: 56px; height: 56px; margin-left: -28px; margin-top: -28px; font-size: 13px; }
+            .manual-pitch { grid-template-columns: 1fr; gap: 12px; }
+            .manual-field { min-height: 0; max-height: none; aspect-ratio: 4 / 3; }
+            .manual-goal-btn { width: 52px; height: 52px; margin-left: -26px; margin-top: -26px; font-size: 12px; }
+            .manual-coach-toolbar > button { flex: 1 1 calc(50% - 10px); font-size: 13px; padding: 10px 12px; }
+        }
+        @media (max-width: 480px) {
+            .manual-coach-wrap { gap: 10px; }
+            .manual-help { font-size: 12px; line-height: 1.35; }
+            .manual-field { aspect-ratio: 1 / 1; border-radius: 12px; }
+            .manual-field-label { font-size: 11px; top: 8px; padding: 3px 10px; }
+            .manual-goal-btn { width: 48px; height: 48px; margin-left: -24px; margin-top: -24px; font-size: 11px; }
+            .manual-coach-toolbar { gap: 8px; }
+            .manual-coach-toolbar > button { flex: 1 1 100%; min-height: 48px; }
+            .manual-sim-row { gap: 8px 12px; }
+            .manual-sim-row > span { font-size: 12px; }
+        }
+        html.simust-android .manual-coach-wrap { gap: 12px; padding-bottom: env(safe-area-inset-bottom, 0px); }
+        html.simust-android .manual-coach-toolbar > button { min-height: 48px; font-size: 15px; }
+        html.simust-android .manual-status { min-height: 48px; font-size: 14px; }
+        html.simust-android .manual-field { aspect-ratio: 4 / 3; }
+        html.simust-android .manual-goal-btn {
+            width: 56px; height: 56px; margin-left: -28px; margin-top: -28px; font-size: 13px;
+        }
+        @media (max-width: 480px) {
+            html.simust-android .manual-pitch { grid-template-columns: 1fr; }
+            html.simust-android .manual-field { aspect-ratio: 1 / 1; }
+            html.simust-android .manual-goal-btn {
+                width: 52px; height: 52px; margin-left: -26px; margin-top: -26px; font-size: 12px;
+            }
         }
         .auto-badge { background: var(--green); color: #07111f; border-radius: 6px; padding: 2px 8px; font-size: 10px; font-weight: 800; margin-inline-start: 8px; animation: pulse 1s infinite; }
         .metric-ring { background: var(--portal-panel); border-radius: 8px; border: 1px solid var(--line); padding: 14px 10px 10px 10px; text-align: center; transition: background 0.15s; display: flex; flex-direction: column; align-items: center; }
@@ -2600,8 +2650,7 @@
                     )
                 ),
                 React.createElement('div', {
-                    className: 'flex items-center gap-4 mb-2 flex-wrap',
-                    style: { marginTop: 4 }
+                    className: 'manual-sim-row'
                 },
                     React.createElement('span', { className: 'text-white font-bold' }, 'Sim A'),
                     React.createElement('label', {
