@@ -1618,9 +1618,10 @@ def _hp_s3_screen_numbers(ref: int) -> Tuple[List[int], Tuple[int, int]]:
 def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[dict]:
     """HP S3: encode a reference, then six different numbers (exactly two sum to it).
 
-    Encode (all screens) is separate from the answer clock. Each test's 6 answer
-    actions total 60s (10s each). Cylinders light both answer screens; the sim
-    finishes them one by one. Answers stay up for the full On window.
+    Encode (all screens) is separate from the answer clock (not counted). Each
+    test's 6 answer actions share a 60s clock. Both answer cylinders must detect
+    a ball before the next action starts; otherwise the display waits until the
+    60s clock ends.
 
     Background matches HP S1 (HP_TEST_BG), one color per timed test — no flowers.
     Reference is red; answer digits match S1 size and ring placement.
@@ -2414,7 +2415,8 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     Combined 12-screen field (A+B together). Background matches Elite S1
     (ELITE_TEST_BG), changing once per timed test. Reference is red; answers use
     S1 digit color / size / ring placement.
-    5 tests × 12 actions; answer clock 120s (10s each). Encode is separate (5s/3s).
+    5 tests × 12 actions; answer clock 120s (encode separate, not counted).
+    Next action waits until both cylinders detect a ball or the 120s clock ends.
     """
     series = max(1, min(5, int(series_num or 1)))
     actions = int(ELITE_S3_ACTIONS)
@@ -2511,10 +2513,11 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     Combined 12-screen field. Motion theme matches World Class S2 for the same Tn
     (T1 flowers, T2 fruits, T3 animals, T4 space, T5 orbs). Motion seed changes
     once per timed test. Reference is red at S1 digit size; answers keep S1 size.
-    All sets: 5 tests × 12 actions / 120s. Encode separate (5s T1–T2, 3s T3–T5).
+    All sets: 5 tests × 12 actions / 120s. Encode separate (not counted).
+    Next action waits until both cylinders detect a ball or the 120s clock ends.
     """
     series = max(1, min(5, int(series_num or 1)))
-    actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_TEST))
+    actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_CLASS))
     budget_ms = int(WC_S3_TEST_BUDGET_MS)
     on_ms = max(1, budget_ms // max(1, actions))
     gap_ms = 80
@@ -8723,20 +8726,41 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass
 
     def _control_fields_playing(self):
-        """Fields whose Stop button should stay down. A finished series releases it."""
-        if self._player_attr("playlist_finished", False):
-            return []
+        """Fields whose Stop button should stay down.
+
+        Keep Pause/Stop held through per-test / final processing and rings so
+        the next (or repeated) set can start without releasing the operator
+        Stop. Only idle/ready/completed/closed release it.
+        """
         phase = str(self._player_attr("display_phase") or "")
-        # Cabinet final / post-series: Stop must release even if phase_active is stale.
-        # Keep Pause/Stop live during opening card / intro of an auto-continued set.
-        if phase in ("wait_final", "final", "idle", "ready", "completed", "closed"):
+        if phase in ("idle", "ready", "completed", "closed"):
+            return []
+        # Finals / processing still count as playing when a continue may follow.
+        hold_phases = (
+            "wait_per_video",
+            "per_video_results",
+            "wait_final",
+            "final",
+            "level_up",
+            "level_card",
+            "opening",
+            "intro",
+        )
+        if self._player_attr("playlist_finished", False) and phase not in hold_phases:
             return []
         parts = getattr(self, "_field_opening_playlists", None) or {}
         if parts:
             playing = []
             for fid, rows in parts.items():
                 key = str(fid).upper()[:1]
-                if rows and not self._field_series_finished(key):
+                # During this field's own final wait/rings, keep its Stop down.
+                state = (getattr(self, "_field_result_state", None) or {}).get(key) or {}
+                field_phase = str(state.get("phase") or "")
+                if rows and (
+                    not self._field_series_finished(key)
+                    or field_phase in ("final_wait", "final", "playing", "wait")
+                    or phase in hold_phases
+                ):
                     playing.append(key)
             if playing:
                 return playing
@@ -8745,6 +8769,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             for fid in (getattr(self, "_phase_active", None) or [])
             if str(fid).upper()[:1] in ("A", "B")
         ]
+
 
     def _publish_field_controls(self):
         """Tell the operator page which fields are still playing."""
@@ -10256,11 +10281,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         must not be the hold for one shot: that shot would use the whole clock,
         and the next step would end both fields.
 
-        HP S3 (hold_full_on): each answer action uses its own on_ms (10s), not the
-        remaining 60s shared budget — otherwise Mode 2 never advances past a1.
+        S3 (require_all_goals): answer digits stay until both cylinders detect a
+        ball (goal-advance poll) or the shared test clock ends (HP 60s / Elite|WC
+        120s). Reference encode is outside budget_ms and is not counted here.
         """
         if isinstance(entry, dict) and entry.get("independent_fields"):
             return self._flash_delay_ms(on=True)
+        if (
+            isinstance(entry, dict)
+            and entry.get("require_all_goals")
+            and entry.get("budget_ms")
+        ):
+            delay = self._budget_remaining_ms(entry)
+            if delay <= 40:
+                return 0
+            return delay
         if isinstance(entry, dict) and entry.get("hold_full_on"):
             try:
                 return max(80, int(entry.get("on_ms") or HP_S3_ON_MS))
@@ -10304,26 +10339,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._on_video_ended()
 
     def _store_budget_wrongs(self, missed):
-        """Write a Wrong row for each action the player had no time to play."""
+        """Write a Wrong row for each action the player had no time to play.
+
+        Always stamp leftovers (including Mode 2) so an S3 test with no ball in
+        any goal still has rows for process/results rings. finish_balls_clock
+        ignores timeout fillers for AET and uses last Correct goal time.
+        """
         import urllib.request
-        # Mode 2 (admin always-pass): never inject timeout Wrongs. Those rows
-        # stamp balls_clock_sec = full budget and force shared-clock AET to 0%,
-        # which pinned every Foundation/Entry test AE around 58–65%.
-        try:
-            mode_path = os.path.join(
-                os.path.dirname(PLAYERS_FIELDS_FILE) or ".",
-                "simulator_score_mode.txt",
-            )
-            with open(mode_path, "r", encoding="utf-8") as handle:
-                mode = int(str(handle.read() or "2").strip().split()[0])
-            if mode == 2:
-                logger.info(
-                    "Mode 2: skip %s budget-timeout Wrong stamp(s)",
-                    len(missed or []),
-                )
-                return
-        except Exception:
-            pass
         root = "C:/Users/siama/Documents/simust_realtime_recordings"
         if not os.path.isdir(root):
             logger.warning("No recording folder for unfinished omid_2 actions")
@@ -12728,8 +12750,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "epoch": self._field_epoch(fid),
         }
         self._field_result_state = state
-        # Series is done for this field — release its Stop button now, not after
-        # the final rings and coach clip finish.
+        # Keep this field's Stop held through final processing / rings so a
+        # booked continue (next or repeat) does not release the operator Stop.
         self._publish_field_controls()
         try:
             canvas = object.__getattribute__(self, "image_canvas")
@@ -13671,6 +13693,39 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 (time.perf_counter() - shown),
                 need_ms / 1000.0,
             )
+        # S3 answers: never start the next action until both cylinders scored,
+        # unless the shared test clock (encode excluded) is finished.
+        if (
+            isinstance(cur, dict)
+            and cur.get("require_all_goals")
+            and not goal_hit
+            and cur.get("budget_ms")
+        ):
+            remain_budget = self._budget_remaining_ms(cur)
+            if remain_budget > 40:
+                self._stop_action_timer()
+                self.action_timer = QtCore.QTimer(singleShot=True)
+                self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
+                self.action_timer.timeout.connect(self._finish_label_action)
+                self.action_timer.start(remain_budget)
+                self._pass_on_ms = int(remain_budget)
+                self._pass_shown_at = time.perf_counter()
+                if cur.get("advance_on_goal"):
+                    self._start_goal_advance_poll()
+                logger.info(
+                    "S3 answers still waiting for both cylinders — %.1fs left on test clock",
+                    remain_budget / 1000.0,
+                )
+                return
+            logger.info(
+                "S3 test clock finished without both cylinder hits — closing remaining actions"
+            )
+            self._goal_arrived = False
+            self._stop_goal_advance_poll()
+            self._stop_action_timer()
+            self._cancel_next_screen_hint()
+            self._abandon_budget_rest()
+            return
         self._goal_arrived = False
         self._stop_goal_advance_poll()
         self._stop_action_timer()
@@ -15019,7 +15074,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.display_phase = "wait_final"
         self.waiting_for_results = True
         self._wait_started = time.time()
-        # Release Stop as soon as finish-process starts (not only after final rings).
+        # Keep Stop held through final processing / rings; release only when the
+        # series truly ends (or after continue restarts the next / repeat set).
         self._publish_field_controls()
         self._update_status_file(
             "wait_final", self.total_videos, self.total_videos,
@@ -15115,7 +15171,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.display_phase = "final"
             self._show_projected_results(panels)
             self.completion_label.hide()
-            self.playlist_finished = True
+            # Keep playlist_finished False while finals show so Stop stays held
+            # for continue / repeat; true end sets it in _on_field_final_finished.
+            self.playlist_finished = False
             self._publish_field_controls()
             self._update_status_file(
                 "playing_final", self.total_videos, self.total_videos,
@@ -15134,7 +15192,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if 0 <= self._phase_index < len(self._run_phases)
                 else {}
             )
-            self.playlist_finished = True
+            self.playlist_finished = False
             self._publish_field_controls()
             self._update_status_file(
                 "playing_final", self.total_videos, self.total_videos,

@@ -5686,11 +5686,15 @@ def _is_finish_balls_timeout_filler(row) -> bool:
 
 
 def finish_balls_clock(results_list):
-    """Shared-clock speed. All played balls in the goal → time used.
+    """Shared-clock AET for finish-balls / Mode 2 / S3.
 
-    Timeout filler Wrongs (unplayed leftovers when the clock ends) must not
-    force used=budget / AET=0% — that was pinning Mode 2 Foundation AE ~60%.
-    Real Wrong/Miss still burns the whole clock.
+    budget = test clock (encode excluded)
+    used   = max(Correct balls_clock_sec) when every playable action is Correct;
+             otherwise used = budget (any real Wrong / Miss burns the clock).
+    AET%   = (1 - used / budget) * 100
+
+    Timeout filler Wrongs (unplayed leftovers when the clock ends) are excluded
+    from AAC and must not force used=budget by themselves.
     """
     results_list = list(results_list or [])
     playable = [row for row in results_list if not _is_finish_balls_timeout_filler(row)]
@@ -5738,7 +5742,6 @@ def finish_balls_clock(results_list):
     percent = 0.0
     if budget > 0:
         percent = max(0.0, min(100.0, (1.0 - (used / budget)) * 100.0))
-    # AAC over played actions (timeout fillers excluded).
     accuracy = ((correct + late) / total) * 100.0 if total else 0.0
     return {
         "finish_balls": True,
@@ -5896,6 +5899,31 @@ def summarize_results_section_metrics(results_list):
         aet_display = clock["aet_display"]
         aet_session_display = clock["aet_session_display"]
         avg_ae = finish_balls_efficiency(results_list, aet_percent)
+        # Mode 2 stamps per-row AE from the ideal (action×0.4) clock for unlock.
+        # Keep that Efficiency value even when AET display uses real wall time.
+        playable = [
+            row for row in results_list
+            if not _is_finish_balls_timeout_filler(row)
+        ]
+        if not playable:
+            playable = results_list
+        stamped = []
+        mode2_like = True
+        for row in playable:
+            try:
+                stamped.append(float(row.get("ae")))
+            except (TypeError, ValueError):
+                mode2_like = False
+                break
+            res = str(row.get("result") or row.get("Result") or "").strip().lower()
+            try:
+                mov = float(row.get("movement") or 0)
+            except (TypeError, ValueError):
+                mov = 0.0
+            if res != "correct" or mov < 99.0:
+                mode2_like = False
+        if mode2_like and stamped and len(stamped) == len(playable):
+            avg_ae = sum(stamped) / len(stamped)
 
     return {
         "total_distance": float(total_distance),

@@ -4910,11 +4910,14 @@ class SimustRealtimeCamera:
             # stopwatch starts at the first screen, so add that delay once.
             shift = 17.0 / 20.0
             if mode2_sim:
-                # Mode 2: every action is Correct, stays in goal, ideal clock.
+                # Mode 2: Correct + ideal clock for unlock AE only.
+                # balls_clock_sec must be real shared-clock time (last ball in
+                # goal) so Execution Time is not stuck at action×0.4 / budget
+                # (e.g. always 2.40s / 60.00s on S3).
                 result_entry["result"] = "Correct"
                 if arrive is None:
                     arrive = float(getattr(sim, "finish_travel_s", 0.40) or 0.40)
-                clock = mode2_finish_balls_clock_sec(
+                ideal_clock = mode2_finish_balls_clock_sec(
                     action_data=action_data,
                     qr_block=qr_block,
                     elapsed_sec=elapsed,
@@ -4924,7 +4927,8 @@ class SimustRealtimeCamera:
                 result_entry["movement"] = 100.0
                 if total > 0:
                     aet_pct = max(
-                        0.0, min(100.0, (1.0 - (float(clock) / float(total))) * 100.0)
+                        0.0,
+                        min(100.0, (1.0 - (float(ideal_clock) / float(total))) * 100.0),
                     )
                 else:
                     aet_pct = 85.0
@@ -4932,10 +4936,16 @@ class SimustRealtimeCamera:
                 result_entry["finishing_time"] = float(
                     getattr(sim, "finish_travel_s", 0.40) or 0.40
                 )
+                if elapsed > 0.05:
+                    clock = float(elapsed) + shift + float(arrive or 0.0)
+                else:
+                    clock = float(ideal_clock)
             elif str(result_entry.get("result") or "") == "Correct" and arrive is not None:
                 clock = elapsed + shift + arrive
             else:
                 clock = total if total > 0 else elapsed
+            if total > 0 and clock > total:
+                clock = float(total)
             result_entry["finish_balls"] = True
             result_entry["balls_budget_sec"] = total
             result_entry["balls_clock_sec"] = clock

@@ -91,12 +91,31 @@ class FinishBallsTests(unittest.TestCase):
         self.assertAlmostEqual(score["aet_percent"], (1.0 - 20.0 / 30.0) * 100.0)
 
     def test_partial_goals_lower_accuracy_and_use_the_whole_clock(self):
+        # Any real Wrong/Miss → used = full budget, AET% = 0
         score = finish_balls_clock([
-            {"result": "Correct", "finish_balls": True, "balls_budget_sec": 30, "balls_clock_sec": 10},
-            {"result": "Wrong", "finish_balls": True, "balls_budget_sec": 30, "balls_clock_sec": 30},
+            {"result": "Correct", "finish_balls": True, "balls_budget_sec": 30, "balls_clock_sec": 10, "movement": 20},
+            {"result": "Wrong", "finish_balls": True, "balls_budget_sec": 30, "balls_clock_sec": 30, "movement": 40},
         ])
         self.assertEqual(score["aac"], 50.0)
         self.assertEqual(score["aet"], 30.0)
+        self.assertEqual(score["aet_percent"], 0.0)
+
+    def test_s3_all_correct_uses_last_ball_over_budget(self):
+        # All Correct: used = max(balls_clock_sec); 54/60 → AET% = 10
+        score = finish_balls_clock([
+            {"result": "Correct", "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 12},
+            {"result": "Correct", "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 54},
+        ])
+        self.assertEqual(score["aet"], 54.0)
+        self.assertAlmostEqual(score["aet_percent"], 10.0)
+
+    def test_no_ball_in_goal_uses_full_budget(self):
+        score = finish_balls_clock([
+            {"result": "Wrong", "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "movement": 10},
+            {"result": "Wrong", "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "movement": 10},
+        ])
+        self.assertEqual(score["aac"], 0.0)
+        self.assertEqual(score["aet"], 60.0)
         self.assertEqual(score["aet_percent"], 0.0)
 
     def test_late_counts_toward_finish_balls_accuracy(self):
@@ -117,12 +136,12 @@ class FinishBallsTests(unittest.TestCase):
         rows = [
             {"action": "PASS", "result": "Correct", "movement": 0, "finish_balls": True,
              "balls_budget_sec": 30, "balls_clock_sec": 10},
-            {"action": "PASS", "result": "Wrong", "movement": 0, "finish_balls": True,
+            {"action": "PASS", "result": "Wrong", "movement": 40, "finish_balls": True,
              "balls_budget_sec": 30, "balls_clock_sec": 30},
         ]
         clock = finish_balls_clock(rows)
         self.assertEqual(clock["aet_percent"], 0.0)
-        self.assertAlmostEqual(finish_balls_efficiency(rows, clock["aet_percent"]), 30.5)
+        self.assertAlmostEqual(finish_balls_efficiency(rows, clock["aet_percent"]), 32.5)
 
 
 if __name__ == "__main__":
