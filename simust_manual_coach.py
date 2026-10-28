@@ -18,7 +18,9 @@ PLAYER_DIR = os.environ.get(
     "C:/Users/siama/Documents/simust_player",
 )
 CMD_FILE = os.path.join(PLAYER_DIR, "manual_coach_cmd.json")
+QUEUE_FILE = os.path.join(PLAYER_DIR, "manual_coach_queue.json")
 STATUS_FILE = os.path.join(PLAYER_DIR, "manual_coach_status.json")
+QUEUE_MAX = 64
 
 # Graphical goal-area layout (percent of each field panel).
 # A1–A6 use the same positions as B1–B6 (same number → same spot on each half).
@@ -119,10 +121,36 @@ def read_status() -> dict:
     return data
 
 
+def _queue_items() -> List[dict]:
+    data = _read_json(QUEUE_FILE)
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    out = []
+    for row in items:
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def _write_queue(items: List[dict]) -> None:
+    trimmed = list(items or [])[-int(QUEUE_MAX) :]
+    _write_json(QUEUE_FILE, {"items": trimmed, "timestamp": time.time()})
+
+
 def write_command(cmd: str, screen: Optional[str] = None, seq: Optional[int] = None) -> dict:
+    """Append a coach command. Latest also lands in CMD_FILE for compatibility.
+
+    Rapid A/B taps are queued so the player can light every press instead of
+    last-writer-wins dropping earlier screens.
+    """
     current = _read_json(CMD_FILE)
+    queue = _queue_items()
     try:
-        next_seq = int(seq if seq is not None else (current.get("seq") or 0)) + (
+        base = int(current.get("seq") or 0)
+        if queue:
+            base = max(base, max(int(row.get("seq") or 0) for row in queue))
+        next_seq = int(seq if seq is not None else base) + (
             0 if seq is not None else 1
         )
     except (TypeError, ValueError):
@@ -135,6 +163,8 @@ def write_command(cmd: str, screen: Optional[str] = None, seq: Optional[int] = N
         "screen": normalize_screen(screen) if screen else None,
         "timestamp": time.time(),
     }
+    queue.append(payload)
+    _write_queue(queue)
     _write_json(CMD_FILE, payload)
     return payload
 
@@ -143,8 +173,53 @@ def read_command() -> dict:
     return _read_json(CMD_FILE)
 
 
+def drain_commands(after_seq: int = 0) -> List[dict]:
+    """Return queued commands with seq > after_seq, oldest first, then drop them."""
+    try:
+        floor = int(after_seq or 0)
+    except (TypeError, ValueError):
+        floor = 0
+    queue = _queue_items()
+    # Recover a lone CMD_FILE write if the queue was cleared underfoot.
+    latest = _read_json(CMD_FILE)
+    if latest and isinstance(latest, dict) and latest.get("seq") is not None:
+        try:
+            latest_seq = int(latest.get("seq") or 0)
+        except (TypeError, ValueError):
+            latest_seq = 0
+        if latest_seq > floor and not any(
+            int(row.get("seq") or 0) == latest_seq for row in queue
+        ):
+            queue.append(latest)
+    pending = []
+    seen = set()
+    for row in queue:
+        try:
+            seq = int(row.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        if seq <= floor or seq in seen:
+            continue
+        seen.add(seq)
+        pending.append(row)
+    pending.sort(key=lambda row: int(row.get("seq") or 0))
+    if pending:
+        max_taken = int(pending[-1].get("seq") or 0)
+        # Re-read so taps that arrived while we drained are not lost.
+        remain = []
+        for row in _queue_items():
+            try:
+                seq = int(row.get("seq") or 0)
+            except (TypeError, ValueError):
+                seq = 0
+            if seq > max_taken:
+                remain.append(row)
+        _write_queue(remain)
+    return pending
+
+
 def clear_command_files() -> None:
-    for path in (CMD_FILE, STATUS_FILE):
+    for path in (CMD_FILE, QUEUE_FILE, STATUS_FILE):
         try:
             if os.path.isfile(path):
                 os.remove(path)
@@ -153,6 +228,7 @@ def clear_command_files() -> None:
     write_status(
         active=False,
         lit_screen=None,
+        lit_screens=[],
         waiting_hit=False,
         last_hit=None,
         seq=0,

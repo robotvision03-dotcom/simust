@@ -3696,9 +3696,17 @@ async def manual_coach_start(request: Request):
         realtime_aborted = False
         clear_image_action_cue(force_end=True)
         simust_manual_coach.clear_command_files()
+        # Drop stale Correct scores so the first A/B tap does not clear instantly.
+        try:
+            live_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "live_action_result.json")
+            with open(live_path, "w", encoding="utf-8") as handle:
+                json.dump({"fields": {}}, handle)
+        except Exception:
+            logger.exception("Manual coach: could not reset live_action_result.json")
         simust_manual_coach.write_status(
             active=True,
             lit_screen=None,
+            lit_screens=[],
             waiting_hit=False,
             last_hit=None,
             seq=0,
@@ -5685,21 +5693,44 @@ def _is_finish_balls_timeout_filler(row) -> bool:
     return False
 
 
-def finish_balls_clock(results_list):
+def _finish_balls_playable(results_list, mode=None):
+    """Rows that count toward finish-balls AAC / AET / AE.
+
+    Mode 2: drop timeout-filler Wrongs so an early all-Correct finish is not
+    forced to used=budget. Real / Mode 1: every stamped row counts — unplayed
+    leftovers are real misses and burn the shared clock.
+    """
+    rows = list(results_list or [])
+    if mode is None:
+        try:
+            mode = int(read_simulator_score_mode())
+        except Exception:
+            mode = 1
+    if int(mode) == 2:
+        playable = [row for row in rows if not _is_finish_balls_timeout_filler(row)]
+        return playable if playable else rows
+    return rows
+
+
+
+def finish_balls_clock(results_list, mode=None):
     """Shared-clock AET for finish-balls / Mode 2 / S3.
 
     budget = test clock (encode excluded)
     used   = max(Correct balls_clock_sec) when every playable action is Correct;
-             otherwise used = budget (any real Wrong / Miss burns the clock).
+             otherwise used = budget (any Wrong / Miss burns the clock).
     AET%   = (1 - used / budget) * 100
 
-    Timeout filler Wrongs (unplayed leftovers when the clock ends) are excluded
-    from AAC and must not force used=budget by themselves.
+    Mode 2 only: timeout filler Wrongs are excluded from playable so leftovers
+    after an early finish do not zero AET. Real tests keep those rows.
     """
+    if mode is None:
+        try:
+            mode = int(read_simulator_score_mode())
+        except Exception:
+            mode = 1
     results_list = list(results_list or [])
-    playable = [row for row in results_list if not _is_finish_balls_timeout_filler(row)]
-    if not playable:
-        playable = results_list
+    playable = _finish_balls_playable(results_list, mode=mode)
     budgets = []
     clocks = []
     saw = False
@@ -5733,7 +5764,6 @@ def finish_balls_clock(results_list):
         if used > budget:
             used = budget
     elif clocks and budget > 0 and real_wrong == 0:
-        # Only timeout fillers were dropped — keep Correct pace.
         used = max(clocks)
         if used > budget:
             used = budget
@@ -5794,14 +5824,14 @@ def finish_balls_action_ae(row, aet_percent):
     return max(0.0, min(100.0, ae))
 
 
-def finish_balls_efficiency(results_list, aet_percent):
+def finish_balls_efficiency(results_list, aet_percent, mode=None):
     """Test efficiency is the average of the action scores."""
-    rows = [
-        row for row in (results_list or [])
-        if not _is_finish_balls_timeout_filler(row)
-    ]
-    if not rows:
-        rows = list(results_list or [])
+    if mode is None:
+        try:
+            mode = int(read_simulator_score_mode())
+        except Exception:
+            mode = 1
+    rows = _finish_balls_playable(results_list, mode=mode)
     scores = [finish_balls_action_ae(row, aet_percent) for row in rows]
     if not scores:
         return 0.0
@@ -5891,39 +5921,24 @@ def summarize_results_section_metrics(results_list):
     else:
         aet_percent = 0.0
 
-    clock = finish_balls_clock(results_list)
+    score_mode_for_clock = 1
+    try:
+        score_mode_for_clock = int(read_simulator_score_mode())
+    except Exception:
+        score_mode_for_clock = 1
+    clock = finish_balls_clock(results_list, mode=score_mode_for_clock)
     if clock:
         aac = clock["aac"]
         aet = clock["aet"]
         aet_percent = clock["aet_percent"]
         aet_display = clock["aet_display"]
         aet_session_display = clock["aet_session_display"]
-        avg_ae = finish_balls_efficiency(results_list, aet_percent)
-        # Mode 2 stamps per-row AE from the ideal (action×0.4) clock for unlock.
-        # Keep that Efficiency value even when AET display uses real wall time.
-        playable = [
-            row for row in results_list
-            if not _is_finish_balls_timeout_filler(row)
-        ]
-        if not playable:
-            playable = results_list
-        stamped = []
-        mode2_like = True
-        for row in playable:
-            try:
-                stamped.append(float(row.get("ae")))
-            except (TypeError, ValueError):
-                mode2_like = False
-                break
-            res = str(row.get("result") or row.get("Result") or "").strip().lower()
-            try:
-                mov = float(row.get("movement") or 0)
-            except (TypeError, ValueError):
-                mov = 0.0
-            if res != "correct" or mov < 99.0:
-                mode2_like = False
-        if mode2_like and stamped and len(stamped) == len(playable):
-            avg_ae = sum(stamped) / len(stamped)
+        # Always recompute AE from shared-clock AET% (finish-balls formula).
+        # Do not reuse per-row stamped AE — that pinned real S3 rings at ~88%.
+        # Mode 2 unlock still uses force_pass; display must follow the formula.
+        avg_ae = finish_balls_efficiency(
+            results_list, aet_percent, mode=score_mode_for_clock
+        )
 
     return {
         "total_distance": float(total_distance),

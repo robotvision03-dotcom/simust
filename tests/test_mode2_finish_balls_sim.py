@@ -183,9 +183,9 @@ class Mode2FinishBallsSimTests(unittest.TestCase):
             "balls_clock_sec": budget,
             "ae": 3.0,
         })
-        clock = app_mod.finish_balls_clock(rows)
+        clock = app_mod.finish_balls_clock(rows, mode=2)
         self.assertGreaterEqual(clock["aet_percent"], 60.0)
-        ae = app_mod.finish_balls_efficiency(rows, clock["aet_percent"])
+        ae = app_mod.finish_balls_efficiency(rows, clock["aet_percent"], mode=2)
         self.assertGreaterEqual(ae, 75.0)
         section = app_mod.summarize_results_section_metrics(rows)
         self.assertGreaterEqual(section["avg_ae"], 75.0)

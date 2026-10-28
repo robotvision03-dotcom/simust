@@ -254,7 +254,7 @@ class Series2PlaylistTests(unittest.TestCase):
         for test_num, actions in by_test.items():
             self.assertEqual(actions, [1, 2, 3, 4, 5, 6], test_num)
         first = playlist[0]
-        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("encode_ms"), 4000)
         self.assertEqual(first.get("actions_in_set"), 6)
         self.assertEqual(first.get("on_ms"), 10000)
         self.assertEqual(first.get("budget_ms"), 60000)
@@ -266,12 +266,15 @@ class Series2PlaylistTests(unittest.TestCase):
         # S1 solid backgrounds — no motion flowers; bg changes per test.
         self.assertIsNone(first.get("motion_theme"))
         self.assertFalse(first.get("motion_bg"))
-        self.assertEqual(first.get("test_bg"), player.HP_TEST_BG[1])
+        self.assertEqual(first.get("test_bg"), player.HP_S3_TEST_BG[1])
         by_test_bg = {}
         for step in playlist:
             by_test_bg.setdefault(step["test_num"], set()).add(step.get("test_bg"))
         for test_num, bgs in by_test_bg.items():
-            self.assertEqual(bgs, {player.HP_TEST_BG[test_num]}, test_num)
+            self.assertEqual(bgs, {player.HP_S3_TEST_BG[test_num]}, test_num)
+        # No red/maroon fills — reference digits are red.
+        self.assertNotEqual(player.HP_S3_TEST_BG[5], player.HP_TEST_BG[5])
+        self.assertNotEqual(player.HP_S3_TEST_BG[5], player.S3_REFERENCE_FG)
         # Encode + answers on all 6 screens; cylinders only on the 2 sum screens.
         self.assertEqual(len(first.get("encode_images") or {}), 12)
         self.assertEqual(len(first.get("screen_images") or {}), 12)
@@ -332,7 +335,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertTrue(first.get("cognitive_encode"))
         self.assertTrue(first.get("require_all_goals"))
         self.assertTrue(first.get("hold_full_on"))
-        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("encode_ms"), 3000)
         self.assertEqual(first.get("actions_in_set"), 12)
         self.assertEqual(first.get("on_ms"), 10000)
         self.assertEqual(first.get("budget_ms"), 120000)
@@ -344,8 +347,9 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(len(refs), 1)
         ref = next(iter(refs))
         self.assertTrue(10 <= ref <= 49)
-        # Red reference + Elite S1 background/digit styling per timed test.
-        self.assertEqual(first.get("test_bg"), player.ELITE_TEST_BG[1])
+        # Red reference + non-red Elite S3 fills (no maroon T4).
+        self.assertEqual(first.get("test_bg"), player.ELITE_S3_TEST_BG[1])
+        self.assertNotEqual(player.ELITE_S3_TEST_BG[4], player.ELITE_TEST_BG[4])
         encode_fg = {
             path.split(":")[3] for path in first["encode_images"].values()
         }
@@ -365,7 +369,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(g0 + g1, ref)
         t3 = player._build_elite_s3_playlist(3)[0]
         self.assertEqual(t3.get("encode_ms"), 3000)
-        self.assertEqual(t3.get("test_bg"), player.ELITE_TEST_BG[1])
+        self.assertEqual(t3.get("test_bg"), player.ELITE_S3_TEST_BG[1])
         self.assertEqual(
             player._elite_s3_series_num("L04-Elite/S3.T4"), 4
         )
@@ -376,43 +380,49 @@ class Series2PlaylistTests(unittest.TestCase):
             ("play", "elite", 2, 3),
         )
 
-    def test_elite_and_wc_s3_goals_can_split_across_fields(self):
-        """Sum answers: both on A, both on B, or one on each — all must appear."""
-        modes = set()
-        for _ in range(60):
+    def test_elite_and_wc_s3_goals_always_split_across_fields(self):
+        """Sum answers: always one goal on Field A and one on Field B."""
+        screens = player._elite_screen_ids()
+        for _ in range(40):
             g0, g1 = player._s3_combined_goal_indexes(12)
-            screens = player._elite_screen_ids()
-            fields = {screens[g0][0], screens[g1][0]}
-            if fields == {"A"}:
-                modes.add("A")
-            elif fields == {"B"}:
-                modes.add("B")
-            else:
-                modes.add("split")
-            if modes == {"A", "B", "split"}:
-                break
-        self.assertEqual(modes, {"A", "B", "split"})
-        # Playlist entries also publish both fields when split.
-        seen = set()
+            self.assertEqual({screens[g0][0], screens[g1][0]}, {"A", "B"})
         for builder in (
             player._build_elite_s3_playlist,
             player._build_world_class_s3_playlist,
         ):
-            for step in builder(1):
-                keys = tuple(sorted((step.get("field_screens") or {}).keys()))
-                if keys == ("A", "B"):
-                    seen.add("split")
+            for series in (1, 3):
+                for step in builder(series):
+                    keys = set((step.get("field_screens") or {}).keys())
+                    self.assertEqual(keys, {"A", "B"})
                     goals = []
                     for sids in step["field_screens"].values():
                         goals.extend(sids)
                     self.assertEqual(len(goals), 2)
                     self.assertEqual({goals[0][0], goals[1][0]}, {"A", "B"})
-                elif keys == ("A",):
-                    seen.add("A")
-                elif keys == ("B",):
-                    seen.add("B")
-        self.assertIn("split", seen)
-        self.assertTrue({"A", "B"} & seen)
+
+    def test_elite_s3_t3_uses_varied_digit_colors(self):
+        """Elite S3.T1 one digit color; S3.T3+ different digit colors per screen."""
+        t1 = player._build_elite_s3_playlist(1)[0]
+        t3 = player._build_elite_s3_playlist(3)[0]
+        t1_fg = {path.split(":")[3] for path in t1["screen_images"].values()}
+        t3_fg = {path.split(":")[3] for path in t3["screen_images"].values()}
+        self.assertEqual(len(t1_fg), 1)
+        self.assertGreaterEqual(len(t3_fg), 6)
+        self.assertEqual(t1.get("encode_ms"), 3000)
+        self.assertEqual(t3.get("encode_ms"), 3000)
+
+    def test_wc_s3_t3_uses_varied_screen_and_digit_colors(self):
+        """World Class S3.T1 keeps camo; S3.T3+ per-screen fill + digit colors."""
+        t1 = player._build_world_class_s3_playlist(1)[0]
+        t3 = player._build_world_class_s3_playlist(3)[0]
+        self.assertTrue(t1.get("motion_bg"))
+        self.assertFalse(bool(t3.get("motion_bg")))
+        t3_bg = {path.split(":")[2] for path in t3["screen_images"].values()}
+        t3_fg = {path.split(":")[3] for path in t3["screen_images"].values()}
+        self.assertGreaterEqual(len(t3_bg), 6)
+        self.assertGreaterEqual(len(t3_fg), 6)
+        self.assertEqual(t1.get("encode_ms"), 3000)
+        self.assertEqual(t3.get("encode_ms"), 3000)
 
     def test_world_class_s3_themes_and_action_counts(self):
         t1 = player._build_world_class_s3_playlist(1)
@@ -421,7 +431,7 @@ class Series2PlaylistTests(unittest.TestCase):
         first = t1[0]
         self.assertEqual(first.get("motion_theme"), "flowers")
         self.assertTrue(first.get("motion_bg"))
-        self.assertEqual(first.get("encode_ms"), 5000)
+        self.assertEqual(first.get("encode_ms"), 3000)
         self.assertEqual(first.get("actions_in_set"), 12)
         self.assertEqual(first.get("on_ms"), 10000)
         self.assertEqual(first.get("budget_ms"), 120000)
@@ -444,14 +454,15 @@ class Series2PlaylistTests(unittest.TestCase):
             self.assertEqual(len(seeds), 1, test_num)
         t2 = player._build_world_class_s3_playlist(2)[0]
         self.assertEqual(t2.get("motion_theme"), "fruits")
-        self.assertEqual(t2.get("encode_ms"), 5000)
+        self.assertEqual(t2.get("encode_ms"), 3000)
         self.assertEqual(t2.get("actions_in_set"), 12)
         self.assertEqual(t2.get("on_ms"), 10000)
         self.assertEqual(t2.get("budget_ms"), 120000)
         t3 = player._build_world_class_s3_playlist(3)
         self.assertEqual(len(t3), 60)
         step = t3[0]
-        self.assertEqual(step.get("motion_theme"), "animals")
+        # S3.T3 uses multi-color solid screens (no camo theme on answers).
+        self.assertFalse(bool(step.get("motion_bg")))
         self.assertEqual(step.get("encode_ms"), 3000)
         self.assertEqual(step.get("actions_in_set"), 12)
         self.assertEqual(step.get("on_ms"), 10000)

@@ -143,6 +143,38 @@ class FinishBallsTests(unittest.TestCase):
         self.assertEqual(clock["aet_percent"], 0.0)
         self.assertAlmostEqual(finish_balls_efficiency(rows, clock["aet_percent"]), 32.5)
 
+    def test_real_mode_timeout_leftovers_burn_budget_and_formula_ae(self):
+        """Real S3: unplayed T1a* Wrongs count — used=budget, AE from formula (not ~88)."""
+        rows = [
+            {"id": "S1", "action": "PASS", "result": "Correct", "movement": 194,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 1.65,
+             "ae": 87.7},
+            {"id": "T1a2", "action": "PASS", "result": "Wrong", "movement": 0,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "ae": 3.0},
+            {"id": "T1a3", "action": "PASS", "result": "Wrong", "movement": 0,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "ae": 3.0},
+        ]
+        clock = finish_balls_clock(rows, mode=1)
+        self.assertEqual(clock["aet"], 60.0)
+        self.assertEqual(clock["aet_percent"], 0.0)
+        self.assertAlmostEqual(clock["aac"], 100.0 / 3.0)
+        ae = finish_balls_efficiency(rows, clock["aet_percent"], mode=1)
+        # Must not stick at Mode-2-like ~88
+        self.assertLess(ae, 50.0)
+
+    def test_mode2_timeout_fillers_excluded_from_aet(self):
+        rows = [
+            {"id": "S1", "action": "PASS", "result": "Correct", "movement": 100,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 12},
+            {"id": "S2", "action": "PASS", "result": "Correct", "movement": 100,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 24},
+            {"id": "T1a3", "action": "PASS", "result": "Wrong", "movement": 0,
+             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "ae": 3.0},
+        ]
+        clock = finish_balls_clock(rows, mode=2)
+        self.assertEqual(clock["aet"], 24.0)
+        self.assertAlmostEqual(clock["aet_percent"], (1.0 - 24.0 / 60.0) * 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

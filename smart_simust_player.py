@@ -479,26 +479,34 @@ HP_S2_BG = (49, 95, 145)
 # High Performance S2: paint only the middle letter (no yellow patch behind it).
 HP_S2_MID_LETTER = (255, 196, 64)
 # High Performance S3: encode reference, then two screens whose numbers sum to it.
-# T1–T2: 1-digit reference for 5s. T3–T5: 2-digit reference < 20 for 3s.
+# T1–T2: 1-digit reference for 4s. T3–T5: 2-digit reference < 20 for 3s.
 # Answer phase: 6 actions × 10s = 60s per test (encode time is separate).
 # Reference digit is red; answers match S1 size/placement on the same per-test bg.
-HP_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+HP_S3_ENCODE_MS = {1: 4000, 2: 4000, 3: 3000, 4: 3000, 5: 3000}
 HP_S3_DIGIT_WIDTH = {1: 1, 2: 1, 3: 2, 4: 2, 5: 2}
 HP_S3_ON_MS = 10000
 HP_S3_TEST_BUDGET_MS = 60000
 # Red reference number on all S3 bands (HP / Elite / World Class).
 S3_REFERENCE_FG = (255, 0, 0)
+# S3 fills must not be red/maroon — the reference digit is already red.
+HP_S3_TEST_BG = {
+    1: HP_TEST_BG[1],
+    2: HP_TEST_BG[2],
+    3: HP_TEST_BG[3],
+    4: HP_TEST_BG[4],
+    5: (0, 96, 100),  # teal (was HP red 183,28,28)
+}
 ELITE_S2_BG = (75, 31, 120)
 # Elite / World Class S3: same sum scenario as HP S3 on the combined 12-screen field.
-# Encode times match HP S3 (T1–T2: 5s, T3–T5: 3s). Answer clock is 120s / test.
-ELITE_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+# Reference encode is 3s on every Elite S3 set. Answer clock is 120s / test.
+ELITE_S3_ENCODE_MS = {1: 3000, 2: 3000, 3: 3000, 4: 3000, 5: 3000}
 ELITE_S3_TEST_BUDGET_MS = 120000
 ELITE_S3_ACTIONS = 12  # all Elite S3 sets
 # Elite refs are two-digit and strictly below 50.
 ELITE_S3_REF_MIN = 10
 ELITE_S3_REF_MAX = 49
 # World Class S3: 50 < ref < 100. All sets: 12 actions / 120s answer clock.
-WC_S3_ENCODE_MS = {1: 5000, 2: 5000, 3: 3000, 4: 3000, 5: 3000}
+WC_S3_ENCODE_MS = {1: 3000, 2: 3000, 3: 3000, 4: 3000, 5: 3000}
 WC_S3_TEST_BUDGET_MS = 120000
 WC_S3_ACTIONS = {1: 12, 2: 12, 3: 12, 4: 12, 5: 12}
 WC_S3_REF_MIN = 51
@@ -523,6 +531,14 @@ ELITE_TEST_BG = {
     4: (90, 8, 12),
     5: (0, 48, 52),
 }
+# Elite/WC S3: swap maroon T4 fill — red reference must stay readable.
+ELITE_S3_TEST_BG = {
+    1: ELITE_TEST_BG[1],
+    2: ELITE_TEST_BG[2],
+    3: ELITE_TEST_BG[3],
+    4: (8, 72, 90),  # teal (was maroon 90,8,12)
+    5: ELITE_TEST_BG[5],
+}
 ELITE_DIGIT_ON_BG = {
     1: (255, 235, 59),
     2: (255, 255, 255),
@@ -530,6 +546,37 @@ ELITE_DIGIT_ON_BG = {
     4: (187, 222, 251),
     5: (178, 255, 89),
 }
+# Elite S3.T3–T5: different digit colors per screen (shared test fill).
+# World Class S3.T3–T5: different fill + digit color per screen for visibility.
+# No red/maroon fills — encode reference stays red.
+ELITE_S3_SCREEN_BG = (
+    (8, 24, 90),
+    (0, 55, 28),
+    (48, 8, 72),
+    (8, 72, 90),
+    (0, 48, 52),
+    (24, 12, 64),
+    (0, 36, 64),
+    (16, 48, 16),
+    (40, 20, 80),
+    (20, 60, 40),
+    (10, 40, 70),
+    (55, 25, 70),
+)
+ELITE_S3_SCREEN_FG = (
+    (255, 255, 255),
+    (255, 235, 59),
+    (0, 229, 255),
+    (187, 222, 251),
+    (178, 255, 89),
+    (255, 152, 0),
+    (224, 64, 251),
+    (129, 212, 250),
+    (255, 241, 118),
+    (128, 222, 234),
+    (244, 143, 177),
+    (255, 112, 67),
+)
 WORLD_DIGIT_COLORS = (
     (255, 255, 255),
     (255, 235, 59),
@@ -1506,9 +1553,10 @@ def _hp_s3_pair_sums_to(nums: List[int], ref: int) -> List[Tuple[int, int]]:
 
 
 def _s3_combined_goal_indexes(screen_count: int = ELITE_ACTIONS_PER_TEST) -> Tuple[int, int]:
-    """Pick two of 12 combined screens: both A, both B, or one on each — equal chance.
+    """Pick two of 12 combined screens: always one on Field A and one on Field B.
 
     Indexes follow `_elite_screen_ids()` order: 0–5 = A1–A6, 6–11 = B1–B6.
+    Which A/B screens are chosen is random each action.
     """
     count = max(2, int(screen_count or ELITE_ACTIONS_PER_TEST))
     half = count // 2
@@ -1517,14 +1565,8 @@ def _s3_combined_goal_indexes(screen_count: int = ELITE_ACTIONS_PER_TEST) -> Tup
     if len(a_idx) < 1 or len(b_idx) < 1:
         picks = random.sample(range(count), 2)
         return int(picks[0]), int(picks[1])
-    mode = random.choice(("A", "B", "split"))
-    if mode == "A" and len(a_idx) >= 2:
-        g0, g1 = random.sample(a_idx, 2)
-    elif mode == "B" and len(b_idx) >= 2:
-        g0, g1 = random.sample(b_idx, 2)
-    else:
-        g0 = random.choice(a_idx)
-        g1 = random.choice(b_idx)
+    g0 = random.choice(a_idx)
+    g1 = random.choice(b_idx)
     if random.random() < 0.5:
         g0, g1 = g1, g0
     return int(g0), int(g1)
@@ -1565,7 +1607,7 @@ def _s3_sum_screen_numbers(
                     candidate = random.randint(0, 9)
                 else:
                     candidate = random.randint(0, max(9, min(99, ref + 20)))
-                if candidate in used and random.random() < 0.7:
+                if candidate in used:
                     continue
                 trial = list(values)
                 trial[idx] = candidate
@@ -1623,8 +1665,8 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
     a ball before the next action starts; otherwise the display waits until the
     60s clock ends.
 
-    Background matches HP S1 (HP_TEST_BG), one color per timed test — no flowers.
-    Reference is red; answer digits match S1 size and ring placement.
+    Background uses HP_S3_TEST_BG (S1 palette without red) — reference is red.
+    Answer digits match S1 size and ring placement.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
@@ -1635,7 +1677,7 @@ def _build_high_performance_s3_playlist(series_num: int, active_fields) -> List[
     encode_ms = int(HP_S3_ENCODE_MS.get(series, 5000))
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
-        bg = HP_TEST_BG[int(test_num)]
+        bg = HP_S3_TEST_BG[int(test_num)]
         for action_in_set in range(1, ENTRY_ACTIONS_PER_TEST + 1):
             images = {}
             encode_images = {}
@@ -2412,22 +2454,22 @@ def _s3_combined_field_screens(goal_sids: List[str]) -> dict:
 def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     """Elite S3: encode a two-digit ref (<50), then 12 numbers with exactly two summing to it.
 
-    Combined 12-screen field (A+B together). Background matches Elite S1
-    (ELITE_TEST_BG), changing once per timed test. Reference is red; answers use
-    S1 digit color / size / ring placement.
-    5 tests × 12 actions; answer clock 120s (encode separate, not counted).
-    Next action waits until both cylinders detect a ball or the 120s clock ends.
+    Combined 12-screen field. Answer goals always split: one on A, one on B.
+    S3.T1–T2: shared per-test fill + one digit color. S3.T3–T5: same fill, but
+    each screen's number uses a different color for visibility.
+    Reference encode is 3s on every set. Answer clock 120s (encode not counted).
     """
     series = max(1, min(5, int(series_num or 1)))
     actions = int(ELITE_S3_ACTIONS)
     budget_ms = int(ELITE_S3_TEST_BUDGET_MS)
     on_ms = max(1, budget_ms // actions)
     gap_ms = 80
-    encode_ms = int(ELITE_S3_ENCODE_MS.get(series, 5000))
+    encode_ms = int(ELITE_S3_ENCODE_MS.get(series, 3000))
+    multi_digit_colors = int(series) >= 3
     screens = _elite_screen_ids()
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
-        bg = ELITE_TEST_BG[int(test_num)]
+        bg = ELITE_S3_TEST_BG[int(test_num)]
         answer_fg = ELITE_DIGIT_ON_BG[int(test_num)]
         for action_in_set in range(1, actions + 1):
             ref = _elite_s3_reference()
@@ -2441,7 +2483,12 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
             encode_images = {sid: ref_png for sid in screens}
             images = {}
             for idx, sid in enumerate(screens):
-                png = _render_band_digit_image(str(nums[idx]), bg, answer_fg)
+                fg = (
+                    ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
+                    if multi_digit_colors
+                    else answer_fg
+                )
+                png = _render_band_digit_image(str(nums[idx]), bg, fg)
                 if not png:
                     images = {}
                     break
@@ -2450,7 +2497,8 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
                 continue
             goal_sids = [screens[g0], screens[g1]]
             field_screens = _s3_combined_field_screens(goal_sids)
-            if len(goal_sids) < 2 or not field_screens:
+            # Never place both answers on the same field.
+            if len(goal_sids) < 2 or set(field_screens.keys()) != {"A", "B"}:
                 continue
             entry = {
                 "kind": "labeled_action",
@@ -2510,23 +2558,24 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
 def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     """World Class S3: encode ref (50<ref<100), then 12 numbers with exactly two summing to it.
 
-    Combined 12-screen field. Motion theme matches World Class S2 for the same Tn
-    (T1 flowers, T2 fruits, T3 animals, T4 space, T5 orbs). Motion seed changes
-    once per timed test. Reference is red at S1 digit size; answers keep S1 size.
-    All sets: 5 tests × 12 actions / 120s. Encode separate (not counted).
+    Combined 12-screen field. Goals always split: one on A, one on B.
+    S3.T1–T2: camo motion themes (flowers / fruits). S3.T3–T5: solid per-screen
+    fills + different digit colors (no camo). Reference is red at S1 digit size.
+    Encode is 3s on every set. Answer clock 120s (encode not counted).
     Next action waits until both cylinders detect a ball or the 120s clock ends.
     """
     series = max(1, min(5, int(series_num or 1)))
-    actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_CLASS))
+    actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_TEST))
     budget_ms = int(WC_S3_TEST_BUDGET_MS)
     on_ms = max(1, budget_ms // max(1, actions))
     gap_ms = 80
-    encode_ms = int(WC_S3_ENCODE_MS.get(series, 5000))
+    encode_ms = int(WC_S3_ENCODE_MS.get(series, 3000))
     theme = _wc_s2_theme_for_series(series)
     base_seed = WORLD_S2_FLOWER_SEEDS[(series - 1) % len(WORLD_S2_FLOWER_SEEDS)]
     motion_bg = _ensure_wc_motion_bg_video(theme, int(base_seed))
     screens = _elite_screen_ids()
     playlist = []
+    multi_screen_colors = int(series) >= 3
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
         test_seed = (
             int(base_seed) * 1009
@@ -2542,9 +2591,9 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 ref, len(screens), goal_indexes=goal_idx
             )
             ref_text = str(ref)
-            # Red reference at S1 digit size / ring placement (solid theme fill).
+            # Red reference at S1 digit size / ring placement (non-red S3 fill).
             ref_png = _render_band_digit_image(
-                ref_text, ELITE_TEST_BG[int(test_num)], S3_REFERENCE_FG
+                ref_text, ELITE_S3_TEST_BG[int(test_num)], S3_REFERENCE_FG
             )
             if not ref_png:
                 continue
@@ -2558,19 +2607,26 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
             motion_texts = {}
             motion_positions = {}
             for idx, sid in enumerate(screens):
-                text = str(nums[idx])
-                motion_texts[sid] = text
+                digit = str(nums[idx])
+                motion_texts[sid] = digit
                 motion_positions[sid] = _wc_text_anchor_frac(
-                    test_seed, f"{sid}:{text}"
+                    test_seed, f"{sid}:{digit}"
                 )
-                png = _render_camouflage_text_image(
-                    text,
-                    seed=test_seed,
-                    camouflage=True,
-                    theme=theme,
-                    phase=0.0,
-                    fast=True,
-                )
+                if multi_screen_colors:
+                    # S3.T3–T5: each screen fill + digit color differs (visibility).
+                    screen_bg = ELITE_S3_SCREEN_BG[idx % len(ELITE_S3_SCREEN_BG)]
+                    screen_fg = ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
+                    png = _render_band_digit_image(digit, screen_bg, screen_fg)
+                else:
+                    # S3.T1–T2: keep camouflage motion theme.
+                    png = _render_camouflage_text_image(
+                        digit,
+                        seed=test_seed,
+                        camouflage=True,
+                        theme=theme,
+                        phase=0.0,
+                        fast=True,
+                    )
                 if not png:
                     images = {}
                     break
@@ -2579,7 +2635,8 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 continue
             goal_sids = [screens[g0], screens[g1]]
             field_screens = _s3_combined_field_screens(goal_sids)
-            if len(goal_sids) < 2 or not field_screens:
+            # Never place both answers on the same field.
+            if len(goal_sids) < 2 or set(field_screens.keys()) != {"A", "B"}:
                 continue
             entry = {
                 "kind": "labeled_action",
@@ -2609,17 +2666,12 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
-                "motion_theme": theme,
-                "motion_seed": test_seed,
-                "motion_start_frame": start_frame,
-                "motion_texts": dict(motion_texts),
-                "motion_text_positions": dict(motion_positions),
-                "motion_fill": True,
                 "label": (
                     f"WorldClass S3.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{actions} "
                     f"ref={ref} goals={goal_sids[0]}+{goal_sids[1]} "
-                    f"({nums[g0]}+{nums[g1]}={ref}) theme={theme} "
+                    f"({nums[g0]}+{nums[g1]}={ref}) "
+                    f"{'colors' if multi_screen_colors else f'theme={theme}'} "
                     f"encode={encode_ms}ms on={on_ms}ms"
                 ),
                 "path": (
@@ -2629,9 +2681,21 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 "series_group": 3,
                 "series_num": int(series),
             }
-            if motion_bg:
-                entry["screen_video"] = motion_bg
-                entry["motion_bg"] = motion_bg
+            if multi_screen_colors:
+                # S3.T3–T5: solid per-screen fills + digit colors (no camo video).
+                entry["test_bg"] = tuple(
+                    ELITE_S3_SCREEN_BG[0 % len(ELITE_S3_SCREEN_BG)]
+                )
+            else:
+                entry["motion_theme"] = theme
+                entry["motion_seed"] = test_seed
+                entry["motion_start_frame"] = start_frame
+                entry["motion_texts"] = dict(motion_texts)
+                entry["motion_text_positions"] = dict(motion_positions)
+                entry["motion_fill"] = True
+                if motion_bg:
+                    entry["screen_video"] = motion_bg
+                    entry["motion_bg"] = motion_bg
             playlist.append(entry)
     stamped = _stamp_finish_balls(playlist)
     for entry in stamped:
@@ -5519,13 +5583,14 @@ def _read_image_action_cue_fields():
         return {}
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None, field_meta=None, field_seqs=None, keep_other_fields=True):
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None, field_meta=None, field_seqs=None, keep_other_fields=True, manual_coach=False):
     """Tell simust_realtime which screens are lit (no QR on canvas).
 
     force_end=True: sequence finished — realtime must clear keypoints now.
     on_sec: effective teammate On duration for this action (session length).
     keep_other_fields: when updating one half, preserve the other half's cue so a
     mid-session join / goal does not blank the live field for 5s+ of opening.
+    manual_coach: operator Manual tab — realtime should arm cylinders immediately.
     """
     payload = {
         "active": bool(active) and not force_end,
@@ -5534,6 +5599,8 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
         "fields": {},
         "timestamp": time.time(),
     }
+    if manual_coach:
+        payload["manual_coach"] = True
     if keep_other_fields and active and not force_end:
         # Start from the other field's live cue, then overwrite fields we touch.
         payload["fields"] = {
@@ -5639,8 +5706,15 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
             }
     try:
         os.makedirs(os.path.dirname(IMAGE_ACTION_CUE_FILE), exist_ok=True)
-        with open(IMAGE_ACTION_CUE_FILE, "w", encoding="utf-8") as f:
+        tmp = IMAGE_ACTION_CUE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, IMAGE_ACTION_CUE_FILE)
     except Exception as exc:
         logger.warning("Could not write image action cue: %s", exc)
 
@@ -8098,8 +8172,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         )
         self._manual_coach_cmd_seq = 0
         self._manual_coach_lit_screens = set()
+        self._manual_coach_lit_at = {}
         self._manual_coach_pass = None
         self._manual_coach_hit_seen = set()
+        self._manual_coach_ready = False
+        self._manual_coach_timer = None
         self._booking_abort_done = set()
         self.video_files = []
 
@@ -8274,14 +8351,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             QtCore.QTimer.singleShot(300, self._sync_screensaver)
         elif self._manual_coach_mode:
             self.speed_monitor_timer.start()
-            self._update_status_file("playing", 0, 0, "Manual coach ready")
+            self._update_status_file("playing", 0, 0, "Manual coach starting")
             for delay in (20, 60, 120, 250, 400, 600):
                 QtCore.QTimer.singleShot(delay, self._force_top_512)
-            self._manual_coach_timer = QtCore.QTimer(self)
-            self._manual_coach_timer.setTimerType(QtCore.Qt.PreciseTimer)
-            self._manual_coach_timer.timeout.connect(self._poll_manual_coach)
-            self._manual_coach_timer.start(40)
-            QtCore.QTimer.singleShot(200, self._manual_coach_boot)
+            # Boot first (preload pass still), then poll — avoids wiping an
+            # early operator tap that arrived before the blank canvas ran.
+            QtCore.QTimer.singleShot(50, self._manual_coach_boot)
         else:
             # Level intro clip before each test (replaces "starting" ring animation)
             self._begin_level_intro(0)
@@ -8298,33 +8373,59 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         sys.exit(0)
 
     def _manual_coach_boot(self):
-        """Blank the band and advertise ready status for the operator Manual tab."""
+        """Blank the band, preload pass still, then start accepting cues."""
         if not self._manual_coach_mode:
             return
-        self._manual_coach_lit_screens = set()
-        self._manual_coach_hit_seen = set()
-        try:
-            if self.image_canvas:
-                self.image_canvas.clear()
-                self.image_canvas.show()
-                self.image_canvas.raise_()
-        except Exception:
-            pass
+        # Only wipe once at boot — never after the first cue already painted.
+        if not getattr(self, "_manual_coach_ready", False):
+            self._manual_coach_lit_screens = set()
+            self._manual_coach_lit_at = {}
+            self._manual_coach_hit_seen = set()
+            # Drop leftover Correct scores from prior plays — otherwise the first
+            # tap paints then instantly clears from a stale winning_screen.
+            try:
+                _reset_live_action_results()
+            except Exception:
+                logger.exception("Manual coach could not reset live action results")
+            try:
+                if self.image_canvas:
+                    self.image_canvas.clear()
+                    self.image_canvas.show()
+                    self.image_canvas.raise_()
+            except Exception:
+                pass
         self._manual_coach_pass = _resolve_manual_coach_pass_image(
             getattr(self, "speed_file_dir", None)
         )
-        self._manual_coach_publish_status(
-            message=(
-                "Manual coach ready — tap goal areas (several can stay lit)"
-                if self._manual_coach_pass
-                else "Pass image missing — check Foundation SF folders or pass.jpeg"
-            ),
-            last_hit=None,
-        )
+        # Warm the pixmap cache so the first tap paints without disk lag.
+        try:
+            if self._manual_coach_pass and self.image_canvas:
+                self.image_canvas._load_pixmap(self._manual_coach_pass)
+        except Exception:
+            pass
+        self._manual_coach_ready = True
         logger.info(
             "Manual coach boot — pass image %s",
             self._manual_coach_pass or "(missing)",
         )
+        if self._manual_coach_timer is None:
+            self._manual_coach_timer = QtCore.QTimer(self)
+            self._manual_coach_timer.setTimerType(QtCore.Qt.PreciseTimer)
+            self._manual_coach_timer.timeout.connect(self._poll_manual_coach)
+        if not self._manual_coach_timer.isActive():
+            self._manual_coach_timer.start(20)
+        # Apply any taps that arrived while the player was still starting
+        # before publishing idle-ready (so early presses are not wiped).
+        self._poll_manual_coach()
+        if not self._manual_coach_lit_screens:
+            self._manual_coach_publish_status(
+                message=(
+                    "Manual coach ready — tap goal areas (several can stay lit)"
+                    if self._manual_coach_pass
+                    else "Pass image missing — check Foundation SF folders or pass.jpeg"
+                ),
+                last_hit=None,
+            )
 
     def _manual_coach_lit_list(self) -> List[str]:
         return sorted(str(s).upper() for s in (self._manual_coach_lit_screens or set()) if s)
@@ -8343,33 +8444,76 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             message=message,
         )
 
-    def _poll_manual_coach(self):
-        if not self._manual_coach_mode or self._is_closing:
-            return
-        if self.operator_paused:
-            return
-        cmd = _manual_coach.read_command() if _manual_coach else {}
+    def _manual_coach_apply_cmd(self, cmd: dict, defer_paint: bool = False) -> bool:
+        """Apply one queued coach command. Returns True if the session should stop."""
+        if not isinstance(cmd, dict):
+            return False
         try:
             seq = int(cmd.get("seq") or 0)
         except (TypeError, ValueError):
             seq = 0
-        if seq and seq != int(self._manual_coach_cmd_seq or 0):
-            self._manual_coach_cmd_seq = seq
-            action = str(cmd.get("cmd") or "").strip().lower()
-            screen = (
-                _manual_coach.normalize_screen(cmd.get("screen"))
-                if _manual_coach
-                else None
-            )
-            if action == "stop":
-                self._manual_coach_clear_all(reason="stopped")
-                self._update_status_file("completed", 0, 0, "Manual coach stopped")
-                QtCore.QTimer.singleShot(200, self.close)
+        if seq:
+            self._manual_coach_cmd_seq = max(int(self._manual_coach_cmd_seq or 0), seq)
+        action = str(cmd.get("cmd") or "").strip().lower()
+        screen = (
+            _manual_coach.normalize_screen(cmd.get("screen"))
+            if _manual_coach
+            else None
+        )
+        if action == "stop":
+            self._manual_coach_clear_all(reason="stopped")
+            self._update_status_file("completed", 0, 0, "Manual coach stopped")
+            QtCore.QTimer.singleShot(200, self.close)
+            return True
+        if action == "clear":
+            self._manual_coach_clear_all(reason="cleared")
+        elif action == "cue" and screen:
+            self._manual_coach_light(screen, seq, defer_paint=defer_paint)
+        return False
+
+    def _poll_manual_coach(self):
+        if not self._manual_coach_mode or self._is_closing:
+            return
+        if not getattr(self, "_manual_coach_ready", False):
+            return
+        if self.operator_paused:
+            return
+        if not _manual_coach:
+            return
+        pending = []
+        try:
+            if hasattr(_manual_coach, "drain_commands"):
+                pending = list(
+                    _manual_coach.drain_commands(int(self._manual_coach_cmd_seq or 0))
+                    or []
+                )
+        except Exception:
+            logger.exception("Manual coach queue drain failed")
+            pending = []
+        if not pending:
+            # Fallback: single-slot cmd file (older writers / recovery).
+            cmd = _manual_coach.read_command() or {}
+            try:
+                seq = int(cmd.get("seq") or 0)
+            except (TypeError, ValueError):
+                seq = 0
+            if seq and seq != int(self._manual_coach_cmd_seq or 0):
+                pending = [cmd]
+        # Fast multi-tap: apply all lights first, then one paint + one cue write
+        # so realtime soft-updates once instead of wiping mid-burst.
+        lit_before = set(self._manual_coach_lit_screens or set())
+        defer = len(pending) > 1
+        for cmd in pending:
+            if self._manual_coach_apply_cmd(cmd, defer_paint=defer):
                 return
-            if action == "clear":
-                self._manual_coach_clear_all(reason="cleared")
-            elif action == "cue" and screen:
-                self._manual_coach_light(screen, seq)
+        if defer and set(self._manual_coach_lit_screens or set()) != lit_before:
+            self._manual_coach_paint_lit()
+            self._manual_coach_rewrite_cue(keep_seq=True)
+            lit = self._manual_coach_lit_list()
+            self._manual_coach_publish_status(
+                message=f"Lit {len(lit)} screens — ball clears each",
+                last_hit=None,
+            )
         # Keep every lit screen until its own ball arrives.
         if self._manual_coach_lit_screens:
             self._manual_coach_check_hit()
@@ -8379,7 +8523,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self._manual_coach_rewrite_cue(keep_seq=True)
                 self._cue_heartbeat_at = now
 
-    def _manual_coach_light(self, screen: str, seq: int):
+    def _manual_coach_light(self, screen: str, seq: int, defer_paint: bool = False):
         """Add a pass image + cylinder on this screen; keep any already lit screens."""
         sid = (
             _manual_coach.normalize_screen(screen)
@@ -8405,10 +8549,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
             return
         self._manual_coach_pass = pass_path
+        # Preload before paint so the first tap does not wait on disk I/O.
+        try:
+            if self.image_canvas:
+                self.image_canvas._load_pixmap(pass_path)
+        except Exception:
+            pass
         prev = set(self._manual_coach_lit_screens or set())
         already = sid in prev
         self._manual_coach_lit_screens = set(prev)
         self._manual_coach_lit_screens.add(sid)
+        lit_at = dict(getattr(self, "_manual_coach_lit_at", None) or {})
+        # Re-tapping an already-lit screen must not refresh lit_at — that would
+        # ignore a ball that is already in flight toward this cylinder.
+        if not already:
+            lit_at[sid] = time.time()
+            self._manual_coach_hit_seen = {
+                key
+                for key in (self._manual_coach_hit_seen or set())
+                if not str(key).endswith(f":{sid}")
+            }
+        self._manual_coach_lit_at = lit_at
         # Keep cue seq stable when adding to an already-lit set so existing
         # cylinders are soft-updated instead of cleared and reappearing.
         if not prev:
@@ -8424,6 +8585,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.display_phase = "action"
         self._label_phase = "action"
         self._action_phase = "label"
+        if defer_paint:
+            logger.info(
+                "Manual coach queued lit %s (seq=%s, waiting=%s)",
+                sid,
+                self._flash_seq,
+                ",".join(self._manual_coach_lit_list()),
+            )
+            return
         self._manual_coach_paint_lit()
         self._manual_coach_rewrite_cue(keep_seq=True)
         lit = self._manual_coach_lit_list()
@@ -8454,6 +8623,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas.set_screen_images(images, keep_videos=False)
                 self.image_canvas.show()
                 self.image_canvas.raise_()
+                self.image_canvas.update()
+                # Flush paint so the pass still appears on the next display refresh.
+                QtWidgets.QApplication.processEvents(
+                    QtCore.QEventLoop.ExcludeUserInputEvents
+                )
         except Exception:
             logger.exception("Manual coach could not paint lit screens")
 
@@ -8475,6 +8649,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._flash_seq = seq
         field_seqs = {fid: seq for fid in field_screens}
         self._field_cue_seq = dict(field_seqs)
+        # Keep actions_in_set fixed so cue raw only changes when the screen
+        # list changes — avoids realtime treating every tap as a new action.
         _write_image_action_cue(
             True,
             field_screens,
@@ -8486,10 +8662,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             budget_elapsed_sec=0.0,
             budget_total_sec=3600.0,
             action_in_set=1,
-            actions_in_set=max(1, len(lit)),
+            actions_in_set=12,
             test_num=1,
             field_seqs=field_seqs,
             keep_other_fields=False,
+            manual_coach=True,
         )
         self._cue_heartbeat_at = time.time()
 
@@ -8501,6 +8678,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         lit.discard(sid)
         self._manual_coach_lit_screens = lit
+        lit_at = dict(getattr(self, "_manual_coach_lit_at", None) or {})
+        lit_at.pop(sid, None)
+        self._manual_coach_lit_at = lit_at
         # Repaint remaining pass images only — scored screen drops off the band.
         self._manual_coach_paint_lit()
         if lit:
@@ -8524,6 +8704,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _manual_coach_clear_all(self, reason: str = "cleared"):
         was = self._manual_coach_lit_list()
         self._manual_coach_lit_screens = set()
+        self._manual_coach_lit_at = {}
         self._manual_coach_hit_seen = set()
         self._goal_arrived = False
         try:
@@ -8554,11 +8735,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not isinstance(fields, dict):
             return
         want = int(self._flash_seq or 0)
+        lit_at_map = getattr(self, "_manual_coach_lit_at", None) or {}
         for sid in list(lit):
             fid = "B" if sid.startswith("B") else "A"
             item = fields.get(fid) or {}
             if not isinstance(item, dict):
                 continue
+            try:
+                lit_at = float(lit_at_map.get(sid) or 0.0)
+            except (TypeError, ValueError):
+                lit_at = 0.0
             candidates = []
             by_seq = item.get("by_seq") if isinstance(item.get("by_seq"), dict) else {}
             if by_seq:
@@ -8576,6 +8762,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     item_seq = int(chosen.get("seq") or 0)
                 except (TypeError, ValueError):
                     item_seq = 0
+                try:
+                    hit_ts = float(chosen.get("ts") or 0.0)
+                except (TypeError, ValueError):
+                    hit_ts = 0.0
+                # Ignore leftovers from earlier Manual / level plays.
+                if lit_at:
+                    if hit_ts and hit_ts < (lit_at - 0.05):
+                        continue
+                    if not hit_ts and want and item_seq and item_seq < want:
+                        continue
+                elif want and item_seq and item_seq < want:
+                    continue
                 win = str(chosen.get("winning_screen") or "").strip().upper()
                 # Multi-goal hits may use seq, seq+1, … — accept matching screen.
                 # A Correct aimed at this lit tile always clears it (sim off or on).
@@ -8590,10 +8788,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     if len(field_lit) != 1 or field_lit[0] != sid:
                         continue
                     matched = True
-                    # Stale anonymous Correct from an older seq must not clear a new light.
-                    if want and item_seq and item_seq < want:
-                        continue
-                key = f"{fid}:{item_seq}:{win or name}:{sid}"
+                key = f"{fid}:{item_seq}:{win or name}:{sid}:{int(hit_ts * 1000)}"
                 if key in self._manual_coach_hit_seen:
                     continue
                 if not matched:
@@ -12335,6 +12530,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "epoch": self._field_epoch(fid),
         }
         self._field_result_state = state
+        # Clear this field's finish cylinders while Processing rings show; keep
+        # the other field's cue lit if it is still mid-action.
+        try:
+            _silence_image_action_cue_for_fields([fid])
+        except Exception:
+            pass
         try:
             canvas = object.__getattribute__(self, "image_canvas")
         except AttributeError:
@@ -12750,6 +12951,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "epoch": self._field_epoch(fid),
         }
         self._field_result_state = state
+        try:
+            _silence_image_action_cue_for_fields([fid])
+        except Exception:
+            pass
         # Keep this field's Stop held through final processing / rings so a
         # booked continue (next or repeat) does not release the operator Stop.
         self._publish_field_controls()
@@ -15074,6 +15279,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.display_phase = "wait_final"
         self.waiting_for_results = True
         self._wait_started = time.time()
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
         # Keep Stop held through final processing / rings; release only when the
         # series truly ends (or after continue restarts the next / repeat set).
         self._publish_field_controls()
@@ -15361,6 +15570,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.info("Last test finished — saved video stays open until final results end")
         self.check_timer.stop()
         self._stop_action_timer()
+        self._stop_goal_advance_poll()
+        # Drop green finish cylinders as soon as Processing starts (finish_balls
+        # cues otherwise stay live for the whole shared clock).
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
         self._wait_started = time.time()
         if self.image_canvas:
             self.image_canvas.clear()

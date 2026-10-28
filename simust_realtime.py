@@ -147,7 +147,13 @@ def _cue_on_sec(cue=None):
     """Effective On seconds from cue file, else teammate_flash_timing.json."""
     if isinstance(cue, dict) and cue.get("on_sec") is not None:
         try:
-            return max(0.1, min(60.0, float(cue.get("on_sec"))))
+            # Manual / finish_balls hold until the ball — do not clamp to 60s.
+            cap = (
+                3600.0
+                if (cue.get("finish_balls") or cue.get("manual_coach"))
+                else 60.0
+            )
+            return max(0.1, min(cap, float(cue.get("on_sec"))))
         except (TypeError, ValueError):
             pass
     on_sec, _ = _read_teammate_on_gap()
@@ -4933,6 +4939,7 @@ class SimustRealtimeCamera:
                 else:
                     aet_pct = 85.0
                 result_entry["ae"] = mode2_pass_finish_ae(aet_pct, 100.0)
+                result_entry["mode2_sim"] = True
                 result_entry["finishing_time"] = float(
                     getattr(sim, "finish_travel_s", 0.40) or 0.40
                 )
@@ -5564,6 +5571,18 @@ class SimustRealtimeCamera:
             hit = self._image_cue_for_field(cue, fid) if cue_active else None
             field_on = bool(hit and hit.get("raw") and hit.get("screens"))
             cue_raw = hit.get("raw") if field_on else None
+            manual_coach = bool((cue or {}).get("manual_coach"))
+            # Manual: cue still wants screens but cylinders/session are gone
+            # (hard-clear / restart) — force a re-arm so pass+cylinder return.
+            if (
+                manual_coach
+                and field_on
+                and not ch.session_active
+                and not ch.pending_start
+                and ch.kp_appear_frames_left is None
+                and not (ch.active_goal_lines or {})
+            ):
+                ch._frame_sync_cue_raw = None
 
             # Stale cue gaps (join opening >5s without heartbeat) clear field_on.
             # When the cue returns — even with the same raw — re-arm if this
@@ -5606,6 +5625,7 @@ class SimustRealtimeCamera:
                 old_screens = [str(s) for s in (ch.current_screens or [])]
                 same_action = False
                 soft_multi_goal = False
+                scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
                 if ch.session_active and block and not recover_after_stale:
                     try:
                         same_test = int(hit.get("test_num") or 0) == int(block.get("test_num") or 0)
@@ -5617,11 +5637,16 @@ class SimustRealtimeCamera:
                     same_action = bool(same_test and same_step and same_screens)
                     # Manual coach / multi-goal: expanding or shrinking the lit
                     # set must keep already-drawn cylinders (no clear → reappear).
-                    if finish_balls and old_screens and new_screens and not same_screens:
+                    if (finish_balls or manual_coach) and new_screens and not same_screens:
                         old_set = set(old_screens)
                         new_set = set(new_screens)
-                        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
-                        if old_set.issubset(new_set) or new_set.issubset(old_set | scored):
+                        if manual_coach or (
+                            old_screens
+                            and (
+                                old_set.issubset(new_set)
+                                or new_set.issubset(old_set | scored)
+                            )
+                        ):
                             soft_multi_goal = True
                 if same_action:
                     ch._frame_sync_cue_raw = cue_raw
@@ -5632,11 +5657,23 @@ class SimustRealtimeCamera:
                     lines = {
                         name: data
                         for name, data in (ch.active_goal_lines or {}).items()
-                        if str(name) not in removed
+                        if str(name) not in removed and str(name) not in scored
                     }
                     if added:
                         extra = self.get_goal_lines(
                             added, hit.get("action") or ch.current_action or "PASS", []
+                        )
+                        lines.update(extra or {})
+                    # Re-draw any lit screens that lost their line after a wipe.
+                    missing = [
+                        s for s in new_screens
+                        if s not in lines and s not in scored
+                    ]
+                    if missing:
+                        extra = self.get_goal_lines(
+                            missing,
+                            hit.get("action") or ch.current_action or "PASS",
+                            [],
                         )
                         lines.update(extra or {})
                     ch.active_goal_lines = lines
@@ -5656,59 +5693,96 @@ class SimustRealtimeCamera:
                             ch._display_seq = new_seq
                     except (TypeError, ValueError):
                         pass
-                    if self._field_is_simulated(fid) and added:
-                        sim = (self.simulators or {}).get(fid)
-                        if sim is not None:
-                            sim.start_action(
-                                ch.current_action,
-                                list(ch.current_screens),
-                                finish_balls=True,
-                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
-                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
-                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
-                            )
+                    if self._field_is_simulated(fid):
+                        self._manual_or_finish_retarget_sim(
+                            fid,
+                            ch,
+                            list(new_screens),
+                            scored,
+                            force=bool(added or missing),
+                        )
                     print(
                         f"[{ch.label}] finish_balls soft-update screens "
                         f"{old_screens} → {new_screens} (cylinders kept)"
                     )
                 else:
-                    if ch.session_active and finish_balls:
-                        self._clear_goal_area_now(ch, current_timestamp)
-                    on_sec = hit.get("on_sec")
-                    if on_sec is None:
-                        on_sec = _cue_on_sec(cue)
-                    hold_frames = _on_hold_frames(on_sec)
-                    ch._frame_sync_cue_raw = cue_raw
-                    ch._pending_cue_info = {
-                        "action": hit["action"],
-                        "screens": list(hit["screens"]),
-                        "keypoints": list(hit.get("keypoints") or []),
-                        "on_sec": on_sec,
-                        "efficiency_max_sec": hit.get("efficiency_max_sec")
-                        if hit.get("efficiency_max_sec") is not None
-                        else (cue or {}).get("efficiency_max_sec"),
-                        "finish_balls": bool((cue or {}).get("finish_balls")),
-                        "budget_elapsed_sec": hit.get("budget_elapsed_sec")
-                        if hit.get("budget_elapsed_sec") is not None
-                        else (cue or {}).get("budget_elapsed_sec"),
-                        "budget_total_sec": hit.get("budget_total_sec")
-                        if hit.get("budget_total_sec") is not None
-                        else (cue or {}).get("budget_total_sec"),
-                        "action_in_set": hit.get("action_in_set") if hit.get("action_in_set") is not None else (cue or {}).get("action_in_set"),
-                        "actions_in_set": hit.get("actions_in_set") if hit.get("actions_in_set") is not None else (cue or {}).get("actions_in_set"),
-                        "test_num": hit.get("test_num") if hit.get("test_num") is not None else (cue or {}).get("test_num"),
-                        "raw": cue_raw,
-                        "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
-                        "hold_frames": hold_frames,
-                    }
-                    ch.kp_appear_frames_left = shift
-                    just_armed = True
-                    recover_note = " [recover after stale]" if recover_after_stale else ""
-                    print(
-                        f"[{ch.label}] cue ON -> keypoints in {shift}f, "
-                        f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
-                        f"{recover_note}"
-                    )
+                    # Manual coach: never wipe live cylinders on a cue rewrite —
+                    # merge / re-arm instead so pass images stay matched.
+                    if ch.session_active and (finish_balls or manual_coach) and manual_coach and new_screens:
+                        ch._frame_sync_cue_raw = cue_raw
+                        lines = dict(ch.active_goal_lines or {})
+                        missing = [
+                            s for s in new_screens
+                            if s not in lines and s not in scored
+                        ]
+                        if missing:
+                            extra = self.get_goal_lines(
+                                missing,
+                                hit.get("action") or ch.current_action or "PASS",
+                                [],
+                            )
+                            lines.update(extra or {})
+                        removed = set(old_screens) - set(new_screens)
+                        if removed:
+                            lines = {
+                                name: data
+                                for name, data in lines.items()
+                                if str(name) not in removed
+                            }
+                        ch.active_goal_lines = lines
+                        ch.current_screens = list(new_screens)
+                        if isinstance(ch.current_qr_block, dict):
+                            ch.current_qr_block["screens"] = list(new_screens)
+                        if self._field_is_simulated(fid):
+                            self._manual_or_finish_retarget_sim(
+                                fid, ch, list(new_screens), scored, force=True
+                            )
+                        print(
+                            f"[{ch.label}] manual_coach merge screens "
+                            f"{old_screens} → {new_screens} (no wipe)"
+                        )
+                    else:
+                        if ch.session_active and finish_balls and not manual_coach:
+                            self._clear_goal_area_now(ch, current_timestamp)
+                        on_sec = hit.get("on_sec")
+                        if on_sec is None:
+                            on_sec = _cue_on_sec(cue)
+                        hold_frames = _on_hold_frames(on_sec)
+                        ch._frame_sync_cue_raw = cue_raw
+                        ch._pending_cue_info = {
+                            "action": hit["action"],
+                            "screens": list(hit["screens"]),
+                            "keypoints": list(hit.get("keypoints") or []),
+                            "on_sec": on_sec,
+                            "efficiency_max_sec": hit.get("efficiency_max_sec")
+                            if hit.get("efficiency_max_sec") is not None
+                            else (cue or {}).get("efficiency_max_sec"),
+                            "finish_balls": bool((cue or {}).get("finish_balls")),
+                            "manual_coach": bool((cue or {}).get("manual_coach")),
+                            "budget_elapsed_sec": hit.get("budget_elapsed_sec")
+                            if hit.get("budget_elapsed_sec") is not None
+                            else (cue or {}).get("budget_elapsed_sec"),
+                            "budget_total_sec": hit.get("budget_total_sec")
+                            if hit.get("budget_total_sec") is not None
+                            else (cue or {}).get("budget_total_sec"),
+                            "action_in_set": hit.get("action_in_set") if hit.get("action_in_set") is not None else (cue or {}).get("action_in_set"),
+                            "actions_in_set": hit.get("actions_in_set") if hit.get("actions_in_set") is not None else (cue or {}).get("actions_in_set"),
+                            "test_num": hit.get("test_num") if hit.get("test_num") is not None else (cue or {}).get("test_num"),
+                            "raw": cue_raw,
+                            "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
+                            "hold_frames": hold_frames,
+                        }
+                        # Manual coach needs the cylinder as soon as the pass still
+                        # lights — skip the normal ~0.85s appear delay.
+                        appear = 1 if manual_coach else shift
+                        ch.kp_appear_frames_left = appear
+                        just_armed = True
+                        recover_note = " [recover after stale]" if recover_after_stale else ""
+                        print(
+                            f"[{ch.label}] cue ON -> keypoints in {appear}f, "
+                            f"then hold {hold_frames}f ({on_sec:.2f}s) and clear"
+                            f"{recover_note}"
+                        )
 
             # --- Appear countdown runs even while the previous hold is still up ---
             if not just_armed and ch.kp_appear_frames_left is not None:
@@ -5788,13 +5862,20 @@ class SimustRealtimeCamera:
                     ch._live_display_busy = False
                     self._schedule_live_display(ch)
                 if ch.kp_clear_frames_left <= 0:
-                    ch.kp_clear_frames_left = None
-                    with self.session_lock:
-                        if ch.session_active:
-                            self._end_session_locked(
-                                current_time_str, current_timestamp, ch
-                            )
-                    print(f"[{ch.label}] keypoints CLEAR (On countdown done)")
+                    # Manual coach holds until each lit screen gets a ball —
+                    # never tear cylinders down on the On countdown alone.
+                    if manual_coach or bool((cue or {}).get("manual_coach")):
+                        ch.kp_clear_frames_left = max(
+                            1, _on_hold_frames(_cue_on_sec(cue))
+                        )
+                    else:
+                        ch.kp_clear_frames_left = None
+                        with self.session_lock:
+                            if ch.session_active:
+                                self._end_session_locked(
+                                    current_time_str, current_timestamp, ch
+                                )
+                        print(f"[{ch.label}] keypoints CLEAR (On countdown done)")
                 else:
                     ch.kp_clear_frames_left -= 1
 
@@ -6008,6 +6089,48 @@ class SimustRealtimeCamera:
                 ch.active_goal_lines = {}
                 ch.current_keypoints = []
 
+    def _manual_or_finish_retarget_sim(
+        self, fid, ch, screens, scored=None, force: bool = False
+    ):
+        """Aim sim at the next unscored lit screen without restarting mid-flight.
+
+        Rapid Manual taps used to call start_action on every expand, which reset
+        the ball and starved later screens. Only retarget when idle, the current
+        aim was scored/removed, or force=True after a confirmed hit.
+        """
+        if not self._field_is_simulated(fid):
+            return
+        sim = (self.simulators or {}).get(fid)
+        if sim is None:
+            return
+        scored_set = set(scored or getattr(ch, "_cylinder_scored_screens", None) or set())
+        remaining = [str(s) for s in (screens or []) if str(s) not in scored_set]
+        if not remaining:
+            try:
+                sim.end_action()
+            except Exception:
+                pass
+            return
+        aimed = [str(s) for s in (getattr(sim, "screens", None) or [])]
+        aim_live = bool(
+            getattr(sim, "active", False)
+            and aimed
+            and aimed[0] in remaining
+        )
+        if aim_live and not force:
+            return
+        # Force only when the current aim is no longer valid (or sim idle).
+        if force and aim_live and aimed and aimed[0] == remaining[0]:
+            return
+        sim.start_action(
+            ch.current_action or "PASS",
+            list(remaining),
+            finish_balls=True,
+            action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
+            actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
+            test_num=(ch.current_qr_block or {}).get("test_num") or 0,
+        )
+
     def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
         """Finish-balls: as soon as the ball is in the cylinder, score Correct.
 
@@ -6084,16 +6207,13 @@ class SimustRealtimeCamera:
                     if isinstance(ch.current_qr_block, dict):
                         ch.current_qr_block["screens"] = list(ch.current_screens)
                     if self._field_is_simulated(ch.field_id):
-                        sim = (self.simulators or {}).get(ch.field_id)
-                        if sim is not None:
-                            sim.start_action(
-                                ch.current_action,
-                                list(ch.current_screens),
-                                finish_balls=True,
-                                action_in_set=(ch.current_qr_block or {}).get("action_in_set") or 0,
-                                actions_in_set=(ch.current_qr_block or {}).get("actions_in_set") or 0,
-                                test_num=(ch.current_qr_block or {}).get("test_num") or 0,
-                            )
+                        self._manual_or_finish_retarget_sim(
+                            ch.field_id,
+                            ch,
+                            list(ch.current_screens),
+                            scored,
+                            force=True,
+                        )
                     print(
                         f"  [{ch.label}] cylinder hit {sid} — "
                         f"{len(remaining_lines)} goal(s) still lit"

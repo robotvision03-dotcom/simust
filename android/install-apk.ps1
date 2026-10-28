@@ -94,11 +94,11 @@ if (-not (Test-Path $apk)) {
     Write-Host "APK was not created at $apk"
     exit 1
 }
-$named = Join-Path $Root "SIMUST-2.18-debug.apk"
-$flip = Join-Path $Root "SIMUST-ZFlip6-2.18-debug.apk"
+$named = Join-Path $Root "SIMUST-2.19-debug.apk"
+$flip = Join-Path $Root "SIMUST-ZFlip6-2.19-debug.apk"
 Copy-Item $apk $named -Force
 Copy-Item $apk $flip -Force
-Copy-Item $apk (Join-Path (Split-Path $apk) "SIMUST-2.18-debug.apk") -Force
+Copy-Item $apk (Join-Path (Split-Path $apk) "SIMUST-2.19-debug.apk") -Force
 Write-Host "APK ready:"
 Write-Host "  $named"
 Write-Host "  $flip"
