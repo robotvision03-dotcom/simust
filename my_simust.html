@@ -5184,6 +5184,75 @@
                 } catch (_) {}
             }
 
+            // Remote Manage Players rename updates users.json; dashboard must not keep
+            // the old name from sessionStorage / a detached greeting node.
+            function applyLivePlayerIdentity(player) {
+                if (!player) return false;
+                var pid = String(player.id || player.playerId || '').trim();
+                if (!pid) return false;
+                var nextName = player.name != null ? String(player.name) : '';
+                var nextSurname = player.surname != null ? String(player.surname) : '';
+                var changed = false;
+
+                function patchRow(row) {
+                    if (!row) return row;
+                    var rid = String(row.id || row.playerId || row.username || '').trim();
+                    if (rid !== pid) return row;
+                    var out = Object.assign({}, row, {
+                        name: nextName || row.name || '',
+                        surname: nextSurname,
+                        club: player.club != null ? player.club : row.club,
+                        team: player.team != null ? player.team : row.team,
+                        age: player.age != null ? player.age : row.age,
+                        gender: player.gender != null ? player.gender : row.gender,
+                        image: player.image != null ? player.image : row.image,
+                        profile_updated_at: player.profile_updated_at != null
+                            ? player.profile_updated_at
+                            : row.profile_updated_at
+                    });
+                    if (player.progress) out.progress = player.progress;
+                    if ((out.name || '') !== (row.name || '') || (out.surname || '') !== (row.surname || '')) {
+                        changed = true;
+                    }
+                    return out;
+                }
+
+                allPlayers = (allPlayers || []).map(patchRow);
+                authorisedPlayers = (authorisedPlayers || []).map(patchRow);
+
+                if (currentUser && String(currentUser.username || '') === pid) {
+                    if ((currentUser.name || '') !== nextName || (currentUser.surname || '') !== nextSurname) {
+                        changed = true;
+                    }
+                    currentUser.name = nextName || currentUser.name || '';
+                    currentUser.surname = nextSurname;
+                    if (player.club != null) currentUser.club = player.club;
+                    if (player.team != null) currentUser.team = player.team;
+                    if (player.age != null) currentUser.age = player.age;
+                    if (player.gender != null) currentUser.gender = player.gender;
+                    if (player.image != null) currentUser.image = player.image;
+                    if (player.progress) currentUser.progress = player.progress;
+                    saveSessionUser(currentUser);
+                }
+
+                if (String(selectedPlayerId || '') === pid || (currentUser && currentUser.username === pid && currentView === 'player')) {
+                    var displayName = nextName || tt('viewAsPlayer', 'Player');
+                    var fullName = (displayName + ' ' + nextSurname).trim();
+                    var greet = document.getElementById('player-greeting');
+                    if (greet) {
+                        greet.innerHTML =
+                            '<span data-i18n="goodDay">' + escapeHtml(tt('goodDay', 'Good Day')) + '</span><br><em id="player-name-display">' + escapeHtml(fullName) + '</em>';
+                    }
+                    playerNameDisplay = document.getElementById('player-name-display');
+                    if (sidebarRoleName) sidebarRoleName.textContent = displayName + ' ' + nextSurname;
+                    if (profileLabel && currentUser && currentUser.username === pid) {
+                        profileLabel.textContent = tt('playerRoleTag', 'PLAYER') + ' ' + pid;
+                    }
+                    setSafeAvatar(profileAvatar, player.image, displayName);
+                }
+                return changed;
+            }
+
             function clearSessionUser() {
                 try {
                     sessionStorage.removeItem(SESSION_KEY);
@@ -7912,20 +7981,25 @@
                     try {
                         if (currentUser.role === 'player' && selectedPlayerId) {
                             // Operator lock/unlock must refresh CURRENT DEVELOPMENT LEVEL live.
+                            // Renames from remote Manage Players must refresh the greeting too.
                             var playersResp = await fetch(API_BASE + '/get-players', { headers: apiHeaders() });
+                            var selfPlayer = null;
                             if (playersResp.ok) {
                                 var playersData = await playersResp.json();
                                 allPlayers = playersData.players || [];
                                 authorisedPlayers = filterPlayersByRole();
-                                var selfPlayer = allPlayers.find(function(p) { return p.id === selectedPlayerId; })
+                                selfPlayer = allPlayers.find(function(p) { return p.id === selectedPlayerId; })
                                     || authorisedPlayers[0];
-                                if (selfPlayer && selfPlayer.progress) {
-                                    currentUser.progress = selfPlayer.progress;
-                                    var levelSig = String(selfPlayer.progress.current_level || '') + ':'
-                                        + (selfPlayer.progress.unlocked_levels || []).join(',');
-                                    if (levelSig !== window._simustLevelSig) {
-                                        window._simustLevelSig = levelSig;
-                                        renderProgressionBar(selfPlayer.progress);
+                                if (selfPlayer) {
+                                    applyLivePlayerIdentity(selfPlayer);
+                                    if (selfPlayer.progress) {
+                                        currentUser.progress = selfPlayer.progress;
+                                        var levelSig = String(selfPlayer.progress.current_level || '') + ':'
+                                            + (selfPlayer.progress.unlocked_levels || []).join(',');
+                                        if (levelSig !== window._simustLevelSig) {
+                                            window._simustLevelSig = levelSig;
+                                            renderProgressionBar(selfPlayer.progress);
+                                        }
                                     }
                                 }
                             }
@@ -7956,8 +8030,11 @@
                             authorisedPlayers = filterPlayersByRole();
                             if (selectedPlayerId) {
                                 var updatedPlayer = allPlayers.find(function(p) { return p.id === selectedPlayerId; });
-                                if (updatedPlayer && updatedPlayer.progress) {
-                                    renderProgressionBar(updatedPlayer.progress);
+                                if (updatedPlayer) {
+                                    applyLivePlayerIdentity(updatedPlayer);
+                                    if (updatedPlayer.progress) {
+                                        renderProgressionBar(updatedPlayer.progress);
+                                    }
                                 }
                             }
                             if (currentView === 'coach' && coachPlayerCount) {
@@ -8168,7 +8245,15 @@
                     };
                     authorisedPlayers = [selfPlayer];
                     showDashboard('player');
-                    selectPlayer(selfPlayer).catch(function(err) {
+                    // Prefer live users.json over stale sessionStorage after a remote rename.
+                    fetchPlayers().then(function() {
+                        authorisedPlayers = filterPlayersByRole();
+                        var live = authorisedPlayers[0] || selfPlayer;
+                        applyLivePlayerIdentity(live);
+                        return selectPlayer(live);
+                    }).catch(function() {
+                        return selectPlayer(selfPlayer);
+                    }).catch(function(err) {
                         console.warn('Session restore player load failed:', err);
                     });
                     return;
