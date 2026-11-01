@@ -74,6 +74,8 @@ LAB_ONLY_PREFIXES = (
     "/stop-realtime-camera",
     "/booking-deadline-release",
     "/homography",
+    "/goal-lines",
+    "/hip-zone",
     "/cabinet-controls",
     "/manual-coach",
 )

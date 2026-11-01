@@ -379,13 +379,19 @@ def furthest_reached_level(progress: Dict[str, Any], all_levels: List[str]) -> s
     return best or FOUNDATION_LEVEL
 
 
-def heal_unlock_gaps(progress: Dict[str, Any], all_levels: List[str]) -> List[str]:
-    """Fill holes between already-reached sets; return the healed level ids.
+def heal_unlock_gaps(
+    progress: Dict[str, Any],
+    all_levels: List[str],
+    *,
+    clear_locks: bool = False,
+) -> List[str]:
+    """Fill unlock holes between already-reached sets; return healed level ids.
 
-    Sticky locks / missing middles between two reached sets (HP S2.T4 locked
-    while Elite S3.T5 is open) are cleared. A World Class wall beyond the
-    furthest reached set is left alone. Does not unlock Entry→… when only a
-    sparse later band was opened for a test.
+    By default, admin sticky locks stay locked (so lock/unlock UI cannot snap
+    back open after save). Score-pass / Mode 2 may pass ``clear_locks=True`` to
+    open locked middles inside the reached span only — never Entry→… from a
+    sparse later band. A World Class wall beyond the furthest reached set is
+    left alone.
     """
     progress = progress or {}
     series = _series_level_ids(all_levels or [])
@@ -413,8 +419,11 @@ def heal_unlock_gaps(progress: Dict[str, Any], all_levels: List[str]) -> List[st
     healed: List[str] = []
     for idx in range(lo, hi + 1):
         nid = series[idx]
+        if nid in locked and not clear_locks:
+            # Admin sticky lock wins — do not auto-open.
+            continue
         was_hole = nid in locked or nid not in unlocked
-        if nid in locked:
+        if nid in locked and clear_locks:
             clear_manual_lock(progress, level_id=nid)
         if nid not in {normalize_level_id(x) for x in levels}:
             levels.append(nid)
@@ -477,8 +486,9 @@ def sync_current_development_level(progress: Dict[str, Any], all_levels: List[st
     progress.setdefault("manually_locked_levels", [])
     progress.setdefault("manually_locked_playlists", [])
     apply_manual_locks(progress)
-    # Close holes created by sticky locks + jumped continues before choosing next.
+    # Fill accidental unlock gaps only; admin sticky locks stay locked.
     heal_unlock_gaps(progress, all_levels or [])
+    apply_manual_locks(progress)
     level = next_playable_level(progress, all_levels or [])
     progress["current_level"] = level
     if level == FOUNDATION_LEVEL:

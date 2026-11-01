@@ -122,6 +122,8 @@ os.makedirs("static", exist_ok=True)
 
 USERS_FILE = "users.json"
 _USERS_IO_LOCK = threading.Lock()
+# Serializes load→modify→save so the 15s My SIMUST pull cannot wipe a rename.
+_USERS_RMW_LOCK = threading.Lock()
 
 
 def load_users():
@@ -1498,9 +1500,9 @@ def _open_level(progress: dict, next_level: Optional[str], *, from_score_pass: b
     simust_progress._unique_append(levels, next_level)
     progress["unlocked_levels"] = levels
     if from_score_pass:
-        # Fill only holes inside the already-reached span (not Entry→… from a
-        # sparse World Class unlock in tests / admin jumps).
-        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
+        # Fill holes inside the already-reached span only; earned pass may clear
+        # sticky locks there. Does not unlock Entry→… from a sparse WC jump.
+        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS, clear_locks=True)
     simust_progress.sync_current_development_level(progress, ALL_LEVELS)
     eligible = [item for item in (progress.get("eligible_levels") or []) if item != next_level]
     progress["eligible_levels"] = eligible
@@ -2218,6 +2220,21 @@ def request_realtime_camera_stop() -> None:
         logger.exception("Could not write stop_camera request")
 
 
+def request_realtime_video_finalize() -> None:
+    """Ask simust_realtime to close the MP4 cleanly before the process exits."""
+    path = os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_save.txt")
+    try:
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("1")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        logger.exception("Could not write stop_save request")
+
+
 def stop_realtime_camera_process(grace_sec: float = 1.8) -> int:
     """Graceful stop (close feed) then kill leftovers. Returns orphan kill count."""
     global realtime_camera_process
@@ -2931,20 +2948,29 @@ def should_ignore_remote_stop(data: Optional[dict]) -> bool:
     Operator Stop always runs a sweep when orphans exist.
     """
     payload = data or {}
-    abort = bool(payload.get("abort") or payload.get("discard") or payload.get("operator_stop"))
-    if not abort:
+    is_stop = bool(
+        payload.get("abort")
+        or payload.get("discard")
+        or payload.get("operator_stop")
+        or payload.get("save")
+    )
+    if not is_stop:
         return False
     return not _realtime_is_running()
 
 
 def apply_stop_realtime(data: Optional[dict] = None) -> dict:
-    """Stop / abort realtime playback. Used by HTTP and the remote command loop."""
+    """Stop realtime playback. Used by HTTP and the remote command loop.
+
+    Normal operator Stop keeps recordings + results (mid-test data is saved by
+    the UI before this call). Only explicit abort/discard deletes folders.
+    """
     global smart_player_process, realtime_camera_process, realtime_aborted, realtime_active_player_id
     global _realtime_session_active
     data = data or {}
     if should_ignore_remote_stop(data):
         # Always sweep on operator Stop — Mode 2 can leave orphans with no handle.
-        if bool(data.get("abort") or data.get("discard") or data.get("operator_stop")):
+        if bool(data.get("abort") or data.get("discard") or data.get("operator_stop") or data.get("save")):
             logger.info("Stop with no tracked session — sweeping stray realtime processes")
             force_kill_smart_player()
             try:
@@ -2957,7 +2983,7 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
             write_playback_status("idle", "Ready for the next test")
             return {
                 "status": "success",
-                "aborted": True,
+                "aborted": False,
                 "discarded": [],
                 "message": "No tracked session — swept leftover player/camera processes",
             }
@@ -2982,20 +3008,39 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
             "aborted": False,
             "message": f"Field {stop_field} stopped. The other field keeps playing.",
         }
-    abort = bool(data.get("abort") or data.get("discard") or data.get("operator_stop"))
-    logger.info("Stopping realtime playback (abort=%s, remote=%s)...", abort, bool(data.get("_remote")))
+    # operator_stop alone is a graceful Stop: keep video + allow session save.
+    # Only abort/discard deletes the realtime recording folders.
+    abort = bool(data.get("abort") or data.get("discard"))
+    logger.info(
+        "Stopping realtime playback (abort=%s, save=%s, remote=%s)...",
+        abort,
+        bool(data.get("save") or data.get("operator_stop")),
+        bool(data.get("_remote")),
+    )
     write_pause_setting(False)
     if abort:
         realtime_aborted = True
-        write_playback_status("aborted", "Operator stopped. Session discarded.")
+        write_playback_status("aborted", "Operator discarded the session.")
+    else:
+        # Do not set realtime_aborted — /save-session-to-player must still accept
+        # mid-test data, and the camera process must finalize the video file.
+        write_playback_status("completed", "Operator stopped. Saving session and video.")
     try:
         import simust_instagram_live
         simust_instagram_live.stop_live()
     except Exception:
         logger.info("Instagram live was not running")
+    # Finalize MP4 before killing player/camera so mid-test Stop keeps a playable file.
+    if not abort:
+        try:
+            request_realtime_video_finalize()
+            time.sleep(0.35)
+        except Exception:
+            pass
     force_kill_smart_player()
     try:
-        stop_realtime_camera_process(0.8)
+        # Longer grace on save-stop so stop_recording() can finish the video.
+        stop_realtime_camera_process(1.6 if not abort else 0.8)
     except Exception:
         kill_process_tree(realtime_camera_process)
         realtime_camera_process = None
@@ -3009,6 +3054,8 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
         discarded = discard_aborted_realtime_folders()
         clear_live_snapshot(realtime_active_player_id)
         write_playback_status("idle", "Ready for the next test")
+    else:
+        write_playback_status("idle", "Ready for the next test")
     _realtime_session_active = False
     try:
         speed_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "simust_speed.txt")
@@ -3020,7 +3067,11 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
         "status": "success",
         "aborted": abort,
         "discarded": discarded,
-        "message": "Test stopped. Nothing was saved." if abort else "Realtime playback stopped",
+        "message": (
+            "Test discarded. Nothing was saved."
+            if abort
+            else "Realtime stopped. Session and video kept."
+        ),
     }
 
 
@@ -3219,6 +3270,7 @@ async def lifespan(app: FastAPI):
                     load_reservations,
                     save_reservations,
                     apply_reservation_unlocks_fn=_apply_reservation_unlocks,
+                    mutate_lock=_USERS_RMW_LOCK,
                 )
 
                 def _pull_loop():
@@ -3232,6 +3284,7 @@ async def lifespan(app: FastAPI):
                                 load_reservations,
                                 save_reservations,
                                 apply_reservation_unlocks_fn=_apply_reservation_unlocks,
+                                mutate_lock=_USERS_RMW_LOCK,
                             )
                         except Exception as pull_exc:
                             logger.warning("Account pull loop: %s", pull_exc)
@@ -3690,7 +3743,10 @@ async def start_realtime_playback(req: Request):
             level_path = field_dirs.get("A") or field_dirs.get("B")
             launch_path = level_path
 
-        write_visualization_setting(bool(data.get("visualization_enabled", False)))
+        # Wanted viz flag — force_kill_smart_player() turns viz off so the old
+        # OpenCV feed closes; re-apply this after kill, before the new camera boots.
+        viz_wanted = bool(data.get("visualization_enabled", False))
+        write_visualization_setting(viz_wanted)
         sim_fields = data.get("simulation_fields")
         if not isinstance(sim_fields, dict):
             both = bool(data.get("simulation_enabled", False))
@@ -3867,6 +3923,8 @@ async def start_realtime_playback(req: Request):
         # blocks the next Realtime Play until the orphan is gone.
         force_kill_smart_player()
         clear_image_action_cue(force_end=True)
+        # Kill path wrote visualization.txt=false; restore operator toggle now.
+        write_visualization_setting(viz_wanted)
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         python_exe = sys.executable
@@ -3879,6 +3937,7 @@ async def start_realtime_playback(req: Request):
             logger.warning(f"simust_realtime.py not found - only video player will run")
         else:
             clear_realtime_camera_stop_request()
+            write_visualization_setting(viz_wanted)
             realtime_camera_process = _popen_no_console(
                 [python_exe, realtime_script, level_path, str(player_speed)],
             )
@@ -5286,6 +5345,188 @@ async def homography_test(req: Request):
     result = {"status": "success", "x": world[0], "y": world[1], "u": float(u), "v": float(v), "camera": camera_name}
     _homography_last_test[camera_name] = result
     return result
+
+
+# ============================================================
+# GOAL AREA CALIBRATION (stitched 1280×360 → green cylinder zones)
+# ============================================================
+
+import simust_goal_calibrate  # noqa: E402
+import simust_hip_calibrate  # noqa: E402
+
+
+def _goal_lines_builtin() -> dict:
+    try:
+        from simust_realtime import GOAL_LINES
+
+        return dict(GOAL_LINES)
+    except Exception:
+        return {}
+
+
+def goal_lines_status_snapshot() -> dict:
+    return simust_goal_calibrate.public_status(_goal_lines_builtin())
+
+
+def hip_zone_status_snapshot() -> dict:
+    try:
+        from simust_fields import POLYGON_POINTS_A, POLYGON_POINTS_B
+
+        return simust_hip_calibrate.public_status(POLYGON_POINTS_A, POLYGON_POINTS_B)
+    except Exception:
+        return simust_hip_calibrate.public_status()
+
+
+@app.get("/goal-lines/status")
+async def goal_lines_status():
+    if PUBLIC_MODE:
+        status = simust_remote.get_status() or {}
+        return status.get("goal_lines") or goal_lines_status_snapshot()
+    return goal_lines_status_snapshot()
+
+
+@app.post("/goal-lines/capture")
+async def goal_lines_capture(req: Request):
+    """Capture camera-1 + camera-8 with the same stitch as Realtime Play."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Capture runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        preview = simust_goal_calibrate.capture_stitched_preview(
+            force_live=True, goal_lines=_goal_lines_builtin()
+        )
+    except Exception as exc:
+        raise HTTPException(503, str(exc))
+    return {"status": "success", "frame": preview, **goal_lines_status_snapshot()}
+
+
+@app.get("/goal-lines/frame")
+async def goal_lines_frame():
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Frame is served from lab status on the public host")
+    snap = goal_lines_status_snapshot()
+    frame = snap.get("frame") or {}
+    data_url = frame.get("data_url") or ""
+    if not data_url.startswith("data:image/jpeg;base64,"):
+        raise HTTPException(404, "No stitched calibration frame yet — press Capture")
+    raw = base64.b64decode(data_url.split(",", 1)[1])
+    return Response(content=raw, media_type="image/jpeg", headers={
+        "X-Image-Width": str(frame.get("width") or 1280),
+        "X-Image-Height": str(frame.get("height") or 360),
+    })
+
+
+@app.post("/goal-lines/save")
+async def goal_lines_save(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Save runs on the training lab")
+    screens = data.get("screens") or {}
+    try:
+        from simust_realtime import GOAL_LINES, reload_goal_line_calibration
+
+        saved = simust_goal_calibrate.save_screens(screens, GOAL_LINES)
+        reload_goal_line_calibration()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", "calibration": saved, **goal_lines_status_snapshot()}
+
+
+@app.post("/goal-lines/reset")
+async def goal_lines_reset(req: Request):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Reset runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        from simust_realtime import reload_goal_line_calibration
+
+        simust_goal_calibrate.reset_store()
+        reload_goal_line_calibration()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **goal_lines_status_snapshot()}
+
+
+@app.get("/hip-zone/status")
+async def hip_zone_status():
+    if PUBLIC_MODE:
+        status = simust_remote.get_status() or {}
+        return status.get("hip_zone") or hip_zone_status_snapshot()
+    return hip_zone_status_snapshot()
+
+
+@app.post("/hip-zone/capture")
+async def hip_zone_capture(req: Request):
+    """Capture stitched camera-1 + camera-8 (same as goal / Realtime Play)."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Capture runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        preview = simust_hip_calibrate.capture_stitched_preview(force_live=True)
+    except Exception as exc:
+        raise HTTPException(503, str(exc))
+    return {"status": "success", "frame": preview, **hip_zone_status_snapshot()}
+
+
+@app.post("/hip-zone/save")
+async def hip_zone_save(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Save runs on the training lab")
+    fields = data.get("fields") or {}
+    try:
+        from simust_fields import POLYGON_POINTS_A, POLYGON_POINTS_B, reload_hip_zone_calibration
+
+        saved = simust_hip_calibrate.save_fields(fields, POLYGON_POINTS_A, POLYGON_POINTS_B)
+        reload_hip_zone_calibration()
+        try:
+            from simust_realtime import reload_hip_zone_calibration as rt_reload
+
+            rt_reload()
+        except Exception:
+            pass
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", "calibration": saved, **hip_zone_status_snapshot()}
+
+
+@app.post("/hip-zone/reset")
+async def hip_zone_reset(req: Request):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Reset runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        from simust_fields import reload_hip_zone_calibration
+
+        simust_hip_calibrate.reset_store()
+        reload_hip_zone_calibration()
+        try:
+            from simust_realtime import reload_hip_zone_calibration as rt_reload
+
+            rt_reload()
+        except Exception:
+            pass
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **hip_zone_status_snapshot()}
 
 
 # ============================================================
@@ -8007,7 +8248,9 @@ async def save_session_to_player(req: Request):
             "video_count": session_data.get("video_count", 0),
             "directory": directory,
             "original_report_path": session_data.get("report_path", ""),
-            "final_results": True,
+            # Mid-test Stop still saves actions; mark so unlock stays from_final=False path.
+            "final_results": not bool(session_data.get("stopped_mid_test")),
+            "stopped_mid_test": bool(session_data.get("stopped_mid_test")),
         },
             "statistics": statistics,
             "goals_by_screen": session_data.get("goals_by_screen", {}),
@@ -8038,7 +8281,8 @@ async def save_session_to_player(req: Request):
             "miss": statistics.get("miss", 0),
             "avg_ae": round(float(statistics.get("avg_ae") or 0), 2),
             "file": f"{session_id}.json",
-            "final_results": True,
+            "final_results": not bool(session_data.get("stopped_mid_test")),
+            "stopped_mid_test": bool(session_data.get("stopped_mid_test")),
         })
         index.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         with open(index_file, 'w', encoding='utf-8') as f:
@@ -8583,7 +8827,10 @@ async def get_players(request: Request):
                 "club": user_data.get("club", ""),
                 "team": user_data.get("team", ""),
                 "age": user_data.get("age", ""),
+                "gender": user_data.get("gender", ""),
+                "birthday": user_data.get("birthday", ""),
                 "image": user_data.get("image", ""),
+                "profile_updated_at": user_data.get("profile_updated_at") or 0,
                 "progress": progress,
                 "avgAe": avg_ae,
                 "avgAcc": avg_acc,
@@ -8689,46 +8936,189 @@ async def get_players(request: Request):
     return {"players": visible}
 
 
+def _apply_staff_player_fields(existing: dict, data: dict, *, force_player_role: bool = True) -> dict:
+    """Apply operator/dashboard profile fields and stamp for lab↔host sync."""
+    row = dict(existing or {})
+    name = (data.get("name") or row.get("name") or "").strip()
+    surname = (data.get("surname") or row.get("surname") or "").strip()
+    if not name or not surname:
+        raise HTTPException(400, "Name and surname are required")
+    row["name"] = name
+    row["surname"] = surname
+    if "club" in data:
+        row["club"] = str(data.get("club") or "").strip()
+    if "team" in data:
+        row["team"] = str(data.get("team") or "").strip()
+    if "age" in data:
+        row["age"] = str(data.get("age") or "").strip()
+    if "gender" in data:
+        row["gender"] = str(data.get("gender") or "").strip()
+    if "email" in data:
+        row["email"] = str(data.get("email") or "").strip()
+    if "birthday" in data:
+        row["birthday"] = str(data.get("birthday") or "").strip()
+    image = data.get("image")
+    if image:
+        try:
+            row["image"] = sanitize_profile_image(str(image).strip())
+        except Exception as exc:
+            logger.warning("Ignoring bad profile image on staff update: %s", exc)
+    if force_player_role:
+        row["role"] = "player"
+    row.setdefault("password", "")
+    row.setdefault("progress", simust_progress.default_progress())
+    incoming_ts = None
+    try:
+        if data.get("profile_updated_at") is not None:
+            incoming_ts = float(data.get("profile_updated_at") or 0) or None
+    except (TypeError, ValueError):
+        incoming_ts = None
+    # Prefer caller stamp (host→lab queue) so both sides share the same edit time.
+    # Always move strictly forward so a remote-operator rename beats later lab pushes.
+    prev_ts = simust_push.profile_updated_at(row)
+    now_ts = float(incoming_ts) if incoming_ts else time.time()
+    simust_push.stamp_profile(row, when=max(now_ts, prev_ts + 0.001, time.time()))
+    return row
+
+
+def _resolve_player_username(users: dict, raw_id: str) -> str:
+    """Canonical users.json key (case-insensitive match)."""
+    raw = (raw_id or "").strip()
+    if not raw:
+        return ""
+    found = find_username(users, raw)
+    return found or raw
+
+
 @app.post("/lab-upsert-player")
 async def lab_upsert_player(req: Request):
-    """Lab operator: create a player in users.json so search and tests use the SIMUST ID."""
+    """Lab operator: create/update a player in users.json so search and tests use the SIMUST ID."""
     if PUBLIC_MODE:
         raise HTTPException(403, "This action is only available on the training machine.")
     try:
         data = await req.json()
     except Exception:
         raise HTTPException(400, "Invalid JSON")
-    player_id = (data.get("player_id") or data.get("username") or "").strip()
-    name = (data.get("name") or "").strip()
-    surname = (data.get("surname") or "").strip()
-    if not player_id or not simust_push.PLAYER_ID_RE.match(player_id):
+    raw_id = (data.get("player_id") or data.get("username") or data.get("id") or "").strip()
+    if not raw_id or not simust_push.PLAYER_ID_RE.match(raw_id):
         raise HTTPException(400, "SIMUST ID must be letters, numbers, dot, underscore or dash")
-    if not name or not surname:
-        raise HTTPException(400, "Name and surname are required")
-    users = load_users()
-    existing = users.get(player_id) or {}
-    existing.update({
-        "name": name,
-        "surname": surname,
-        "club": (data.get("club") or existing.get("club") or "").strip(),
-        "age": (data.get("age") or existing.get("age") or "").strip(),
-        "role": "player",
-    })
-    existing.setdefault("password", "")
-    existing.setdefault("progress", simust_progress.default_progress())
-    users[player_id] = existing
-    save_users(users)
+    with _USERS_RMW_LOCK:
+        users = load_users()
+        player_id = _resolve_player_username(users, raw_id)
+        existing = users.get(player_id) or {}
+        existing = _apply_staff_player_fields(existing, data, force_player_role=True)
+        users[player_id] = existing
+        save_users(users)
+    try:
+        simust_push.push_accounts_async(users, force=True)
+    except Exception as exc:
+        logger.warning("Could not force-push accounts after lab-upsert %s: %s", player_id, exc)
     ensure_player_workspace(player_id)
     return {
         "status": "success",
         "player": {
             "id": player_id,
             "playerId": player_id,
-            "name": name,
-            "surname": surname,
+            "name": existing.get("name", ""),
+            "surname": existing.get("surname", ""),
             "club": existing.get("club", ""),
+            "team": existing.get("team", ""),
             "age": existing.get("age", ""),
+            "gender": existing.get("gender", ""),
+            "birthday": existing.get("birthday", ""),
+            "image": existing.get("image") or "",
             "progress": existing.get("progress"),
+            "profile_updated_at": existing.get("profile_updated_at"),
+        },
+    }
+
+
+@app.post("/staff-update-player")
+async def staff_update_player(req: Request):
+    """Coach/admin/manager: update player profile on this host and sync to the other side.
+
+    - Lab PC: writes users.json and force-pushes to My SIMUST.
+    - Public host: writes users.json and queues lab-upsert so local 127.0.0.1 updates.
+    """
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    users_preview = load_users()
+    viewer = current_user(req, users_preview, required=PUBLIC_MODE)
+    if PUBLIC_MODE:
+        role = str((viewer or {}).get("role") or "").strip().lower()
+        if role not in RESERVATION_STAFF_ROLES:
+            raise HTTPException(403, "Only coach, manager, or admin can update player profiles")
+    raw_id = (data.get("player_id") or data.get("username") or data.get("id") or "").strip()
+    if not raw_id or not simust_push.PLAYER_ID_RE.match(raw_id):
+        raise HTTPException(400, "SIMUST ID must be letters, numbers, dot, underscore or dash")
+    with _USERS_RMW_LOCK:
+        users = load_users()
+        player_id = _resolve_player_username(users, raw_id)
+        existing = users.get(player_id) or {}
+        # Keep non-player roles (coach accounts) when editing staff; only force player for new rows.
+        force_player = str(existing.get("role") or "player").strip().lower() in ("", "player")
+        try:
+            existing = _apply_staff_player_fields(existing, data, force_player_role=force_player)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("staff-update-player field apply failed for %s", player_id)
+            raise HTTPException(500, f"Could not update player: {exc}") from exc
+        users[player_id] = existing
+        save_users(users)
+    if player_id:
+        try:
+            ensure_player_workspace(player_id)
+        except Exception:
+            pass
+    queued = None
+    if PUBLIC_MODE:
+        try:
+            payload = {
+                "player_id": player_id,
+                "username": player_id,
+                "name": existing.get("name", ""),
+                "surname": existing.get("surname", ""),
+                "club": existing.get("club", ""),
+                "team": existing.get("team", ""),
+                "age": existing.get("age", ""),
+                "gender": existing.get("gender", ""),
+                "email": existing.get("email", ""),
+                "birthday": existing.get("birthday", ""),
+                "profile_updated_at": existing.get("profile_updated_at"),
+            }
+            item = simust_remote.enqueue(
+                "lab-upsert-player",
+                payload,
+                (viewer or {}).get("username") or "",
+            )
+            queued = item.get("id")
+        except Exception as exc:
+            logger.warning("Could not queue lab profile sync for %s: %s", player_id, exc)
+    else:
+        # Lab rename must reach My SIMUST / remote operator immediately.
+        try:
+            simust_push.push_accounts_async(users, force=True)
+        except Exception as exc:
+            logger.warning("Could not force-push accounts after staff-update %s: %s", player_id, exc)
+    return {
+        "status": "success",
+        "queued": queued,
+        "player": {
+            "id": player_id,
+            "playerId": player_id,
+            "name": existing.get("name", ""),
+            "surname": existing.get("surname", ""),
+            "club": existing.get("club", ""),
+            "team": existing.get("team", ""),
+            "age": existing.get("age", ""),
+            "gender": existing.get("gender", ""),
+            "birthday": existing.get("birthday", ""),
+            "image": existing.get("image") or "",
+            "progress": existing.get("progress"),
+            "profile_updated_at": existing.get("profile_updated_at"),
         },
     }
 
@@ -8769,33 +9159,45 @@ async def ingest_player_data(request: Request):
     def _merge_account(username: str, account: dict) -> None:
         existing = users.get(username) or {}
         merged = dict(existing)
-        for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
-            if field in account:
-                value = account.get(field)
-                merged[field] = "" if value is None else value
-            elif field not in merged:
-                merged[field] = ""
-        if account.get("progress"):
+        incoming = account or {}
+        host_ts = simust_push.profile_updated_at(existing)
+        lab_ts = simust_push.profile_updated_at(incoming)
+        # Remote-operator / My SIMUST renames must stick: never apply an older
+        # (or unstamped) lab profile over a newer host edit.
+        if lab_ts > host_ts:
+            simust_push.apply_newer_profile(merged, incoming)
+        elif host_ts <= 0 and lab_ts <= 0:
+            # Legacy both-unstamped: fill blanks only (apply_newer_profile equal path).
+            simust_push.apply_newer_profile(merged, incoming)
+        # else: host profile is newer/equal — keep host name/surname/club/etc.
+        for field in simust_push.PROFILE_FIELDS:
+            merged.setdefault(field, "")
+        if incoming.get("progress"):
             # Lab lock/unlock must replace open sets on the host (union cannot lock).
             merged["progress"] = simust_progress.apply_lab_progress(
-                existing.get("progress"), account.get("progress"), ALL_LEVELS
+                existing.get("progress"), incoming.get("progress"), ALL_LEVELS
             )
-        if account.get("password_hash"):
-            merged["password"] = account["password_hash"]
-        merged.setdefault("role", account.get("role") or "player")
+        if incoming.get("password_hash"):
+            merged["password"] = incoming["password_hash"]
+        merged.setdefault("role", incoming.get("role") or existing.get("role") or "player")
         if not merged.get("progress"):
             merged["progress"] = simust_progress.default_progress()
+        # Preserve host profile stamp when we skipped lab profile fields.
+        if host_ts > lab_ts and host_ts > 0:
+            merged["profile_updated_at"] = host_ts
         users[username] = merged
 
     if kind == "accounts":
         imported = 0
-        for username, account in (data.get("accounts") or {}).items():
-            username = (username or "").strip()
-            if not simust_push.PLAYER_ID_RE.match(username):
-                continue
-            _merge_account(username, account or {})
-            imported += 1
-        save_users(users)
+        with _USERS_RMW_LOCK:
+            users = load_users()
+            for username, account in (data.get("accounts") or {}).items():
+                username = (username or "").strip()
+                if not simust_push.PLAYER_ID_RE.match(username):
+                    continue
+                _merge_account(username, account or {})
+                imported += 1
+            save_users(users)
         logger.info("Ingested %s lab accounts", imported)
         return {"status": "success", "accounts": imported}
 
@@ -8956,6 +9358,12 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "homography-save",
     "homography-reset",
     "homography-test",
+    "goal-lines-capture",
+    "goal-lines-save",
+    "goal-lines-reset",
+    "hip-zone-capture",
+    "hip-zone-save",
+    "hip-zone-reset",
     "instagram-live",
     "cabinet-controls",
     "manual-coach/start",
@@ -9088,6 +9496,14 @@ def _publish_lab_status() -> None:
     except Exception:
         status["homography"] = {"cameras": [], "frames": {}}
     try:
+        status["goal_lines"] = goal_lines_status_snapshot()
+    except Exception:
+        status["goal_lines"] = {"screens": {}, "frame": {}}
+    try:
+        status["hip_zone"] = hip_zone_status_snapshot()
+    except Exception:
+        status["hip_zone"] = {"fields": {}, "frame": {}}
+    try:
         status["cabinet-controls"] = read_cabinet_controls()
     except Exception:
         status["cabinet-controls"] = {
@@ -9132,6 +9548,12 @@ def _run_queued_operator_command(command: dict) -> None:
         elif action.startswith("homography-"):
             suffix = action[len("homography-"):]
             _lab_local_request("POST", f"/homography/{suffix}", payload)
+        elif action.startswith("goal-lines-"):
+            suffix = action[len("goal-lines-"):]
+            _lab_local_request("POST", f"/goal-lines/{suffix}", payload)
+        elif action.startswith("hip-zone-"):
+            suffix = action[len("hip-zone-"):]
+            _lab_local_request("POST", f"/hip-zone/{suffix}", payload)
         else:
             _lab_local_request("POST", f"/{action}", payload)
         logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")
@@ -9484,30 +9906,65 @@ async def update_profile(req: Request):
     name = data.get("name", "").strip()
     surname = data.get("surname", "").strip()
     age = data.get("age", "").strip()
+    gender = str(data.get("gender") or "").strip()
     club = data.get("club", "").strip()
     team = data.get("team", "").strip()
+    birthday = str(data.get("birthday") or "").strip()
     image = data.get("image", "").strip()
 
     if not username:
         raise HTTPException(400, "Username required")
 
-    users = load_users()
-    viewer = current_user(req, users, required=PUBLIC_MODE)
+    users_preview = load_users()
+    viewer = current_user(req, users_preview, required=PUBLIC_MODE)
     if viewer and viewer["username"] != username:
         raise HTTPException(403, "You can only update your own profile")
-    if username not in users:
-        raise HTTPException(404, "User not found")
+    with _USERS_RMW_LOCK:
+        users = load_users()
+        matched = find_username(users, username) or username
+        if matched not in users:
+            raise HTTPException(404, "User not found")
+        username = matched
 
-    # Update fields
-    users[username]["name"] = name
-    users[username]["surname"] = surname
-    users[username]["age"] = age
-    users[username]["club"] = club
-    users[username]["team"] = team
-    if image:
-        users[username]["image"] = sanitize_profile_image(image)
+        # Update fields
+        users[username]["name"] = name
+        users[username]["surname"] = surname
+        users[username]["age"] = age
+        users[username]["club"] = club
+        users[username]["team"] = team
+        if gender:
+            users[username]["gender"] = gender
+        if birthday:
+            users[username]["birthday"] = birthday
+        if image:
+            try:
+                users[username]["image"] = sanitize_profile_image(image)
+            except Exception as exc:
+                logger.warning("Ignoring bad profile image on update-profile: %s", exc)
+        simust_push.stamp_profile(users[username])
 
-    save_users(users)
+        save_users(users)
+    # Public My SIMUST self-edit: also push the same profile to the lab PC.
+    if PUBLIC_MODE:
+        try:
+            simust_remote.enqueue(
+                "lab-upsert-player",
+                {
+                    "player_id": username,
+                    "username": username,
+                    "name": name,
+                    "surname": surname,
+                    "age": age,
+                    "gender": gender or users[username].get("gender", ""),
+                    "club": club,
+                    "team": team,
+                    "birthday": birthday or users[username].get("birthday", ""),
+                    "profile_updated_at": users[username].get("profile_updated_at"),
+                },
+                username,
+            )
+        except Exception as exc:
+            logger.warning("Could not queue lab profile sync after update-profile: %s", exc)
     return {"status": "success", "message": "Profile updated"}
 
 

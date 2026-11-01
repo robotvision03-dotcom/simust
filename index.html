@@ -743,6 +743,12 @@
                 'homography/save': true,
                 'homography/reset': true,
                 'homography/test': true,
+                'goal-lines/capture': true,
+                'goal-lines/save': true,
+                'goal-lines/reset': true,
+                'hip-zone/capture': true,
+                'hip-zone/save': true,
+                'hip-zone/reset': true,
                 'cabinet-controls': true,
                 'manual-coach/start': true,
                 'manual-coach/cue': true,
@@ -755,6 +761,8 @@
                 'results': true,
                 'get-levels': true,
                 'homography/status': true,
+                'goal-lines/status': true,
+                'hip-zone/status': true,
                 'cabinet-controls': true,
                 'manual-coach/status': true,
                 'manual-coach/layout': true
@@ -784,11 +792,20 @@
                     if (name.indexOf('homography/') === 0) {
                         action = 'homography-' + name.slice('homography/'.length);
                     }
+                    if (name.indexOf('goal-lines/') === 0) {
+                        action = 'goal-lines-' + name.slice('goal-lines/'.length);
+                    }
+                    if (name.indexOf('hip-zone/') === 0) {
+                        action = 'hip-zone-' + name.slice('hip-zone/'.length);
+                    }
                     config.url = '/remote/command';
                     config.data = { action: action, payload: config.data || {} };
                 } else if (method === 'get' && labGet[name]) {
                     config.url = '/remote/status';
-                    config._simustStatusKey = name === 'homography/status' ? 'homography' : name;
+                    config._simustStatusKey = name === 'homography/status'
+                        ? 'homography'
+                        : (name === 'goal-lines/status' ? 'goal_lines'
+                            : (name === 'hip-zone/status' ? 'hip_zone' : name));
                 }
                 return config;
             });
@@ -3189,6 +3206,763 @@
         };
 
         // =====================================================================
+        // GOAL AREA CALIBRATION (stitched frame → A1–A6 / B1–B6 cylinders)
+        // =====================================================================
+        var GoalAreaCalibration = function() {
+            var fieldState = useState('A');
+            var field = fieldState[0];
+            var setField = fieldState[1];
+            var screenState = useState('A1');
+            var selectedScreen = screenState[0];
+            var setSelectedScreen = screenState[1];
+            var screensState = useState({});
+            var screens = screensState[0];
+            var setScreens = screensState[1];
+            var orderState = useState({ A: ['A1','A2','A3','A4','A5','A6'], B: ['B1','B2','B3','B4','B5','B6'] });
+            var order = orderState[0];
+            var setOrder = orderState[1];
+            var frameUrlState = useState('');
+            var frameUrl = frameUrlState[0];
+            var setFrameUrl = frameUrlState[1];
+            var sizeState = useState({ w: 1280, h: 360 });
+            var imageSize = sizeState[0];
+            var setImageSize = sizeState[1];
+            var pendingState = useState(null);
+            var pendingP0 = pendingState[0];
+            var setPendingP0 = pendingState[1];
+            var msgState = useState('');
+            var message = msgState[0];
+            var setMessage = msgState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var imgRef = useRef(null);
+            var canvasRef = useRef(null);
+
+            // Scoring coords are always logical 1280×360 (same as GOAL_LINES).
+            // Live scales them by frame_w/1280 — overlay/clicks must do the same.
+            var LOG_W = 1280;
+            var LOG_H = 360;
+
+            var applyStatus = function(data) {
+                data = data || {};
+                if (data.order) setOrder(data.order);
+                if (data.screens) setScreens(data.screens);
+                var frame = data.frame || {};
+                if (frame.data_url) setFrameUrl(frame.data_url);
+                // Keep logical size for coords; stash native stitch size from the frame.
+                setImageSize({
+                    w: LOG_W,
+                    h: LOG_H,
+                    nativeW: frame.width || data.width || LOG_W,
+                    nativeH: frame.height || data.height || LOG_H,
+                    fitMode: frame.fit_mode || ''
+                });
+            };
+
+            var loadStatus = function() {
+                axios.get('/goal-lines/status').then(function(res) {
+                    applyStatus(res.data || {});
+                }).catch(function() {});
+            };
+
+            useEffect(function() {
+                loadStatus();
+            }, []);
+
+            useEffect(function() {
+                var list = (order && order[field]) || [];
+                if (list.indexOf(selectedScreen) === -1 && list[0]) {
+                    setSelectedScreen(list[0]);
+                    setPendingP0(null);
+                }
+            }, [field]);
+
+            var drawCylinder = function(ctx, cx, cy, radius, height) {
+                // Same green finish cylinder as simust_realtime.draw_finish_cylinder.
+                var r = Math.max(4, radius | 0);
+                var h = Math.max(8, height | 0);
+                var topCy = cy - h;
+                var ry = Math.max(3, Math.round(r * 0.35));
+                ctx.save();
+                ctx.globalAlpha = 0.45;
+                ctx.fillStyle = 'rgb(0,180,0)';
+                ctx.fillRect(cx - r, topCy, r * 2, h);
+                ctx.beginPath();
+                ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(cx, topCy, r, ry, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = 'rgb(0,220,0)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.ellipse(cx, topCy, r, ry, 0, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx - r, topCy);
+                ctx.lineTo(cx - r, cy);
+                ctx.moveTo(cx + r, topCy);
+                ctx.lineTo(cx + r, cy);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI);
+                ctx.stroke();
+                ctx.restore();
+            };
+
+            var redrawOverlay = function() {
+                var canvas = canvasRef.current;
+                var img = imgRef.current;
+                if (!canvas || !img || !img.naturalWidth) return;
+                canvas.width = img.clientWidth;
+                canvas.height = img.clientHeight;
+                var ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Image is SIM 1280×360 (same as cylinder frame). Map 1:1 to canvas.
+                var sx = canvas.width / LOG_W;
+                var sy = canvas.height / LOG_H;
+                var scale = Math.min(sx, sy);
+                var drawGoal = function(sid, selected) {
+                    var line = screens[sid];
+                    if (!line || !line.p0 || !line.p1) return;
+                    var x1 = line.p0[0] * sx, y1 = line.p0[1] * sy;
+                    var x2 = line.p1[0] * sx, y2 = line.p1[1] * sy;
+                    var mx = (x1 + x2) / 2;
+                    var my = (y1 + y2) / 2;
+                    var depth = 45;
+                    var radius = Math.max(4, Math.round(depth * 0.65 * 0.70 * 0.9 * 0.9 * 0.9 * 0.9 * 0.93 * 1.03 * scale));
+                    var heightPx = Math.max(8, Math.round(31 * sy));
+                    drawCylinder(ctx, mx, my, radius, heightPx);
+                    ctx.strokeStyle = selected ? '#22c55e' : '#ffff00';
+                    ctx.lineWidth = selected ? 3 : 2;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                    ctx.fillStyle = selected ? '#22c55e' : '#ef4444';
+                    ctx.beginPath();
+                    ctx.arc(x1, y1, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(x2, y2, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 11px sans-serif';
+                    ctx.fillText(sid, mx + 9, my - 6);
+                };
+                ((order && order[field]) || []).forEach(function(sid) {
+                    drawGoal(sid, sid === selectedScreen);
+                });
+                if (pendingP0) {
+                    ctx.fillStyle = '#276ce5';
+                    ctx.beginPath();
+                    ctx.arc(pendingP0[0] * sx, pendingP0[1] * sy, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            };
+
+            useEffect(function() {
+                redrawOverlay();
+            }, [screens, selectedScreen, field, frameUrl, pendingP0, imageSize]);
+
+            var frameReadyMessage = function(data) {
+                var frame = (data && data.frame) || {};
+                var nw = frame.width || LOG_W;
+                var nh = frame.height || LOG_H;
+                return 'Frame ready — ' + nw + '×' + nh + ' stitched (same as Realtime cylinder). Green cylinders = current goal areas. Click post A then post B to adjust.';
+            };
+
+            var captureStitched = function() {
+                setBusy(true);
+                setMessage('Capturing 1280×360 stitched frame (same image the green cylinder uses)…');
+                var started = Date.now();
+                axios.post('/goal-lines/capture', {}).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        var poll = function() {
+                            axios.get('/goal-lines/status').then(function(st) {
+                                var frame = (st.data || {}).frame || {};
+                                var fresh = frame.data_url && (!frame.captured_at || (frame.captured_at * 1000) >= started - 8000);
+                                if (fresh) {
+                                    applyStatus(st.data || {});
+                                    setMessage(frameReadyMessage(st.data || {}));
+                                    setBusy(false);
+                                    return;
+                                }
+                                if (Date.now() - started > 25000) {
+                                    setMessage('Lab did not return a stitched frame. Check cameras and Lab online.');
+                                    setBusy(false);
+                                    return;
+                                }
+                                setTimeout(poll, 1000);
+                            }).catch(function(e) {
+                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not read lab goal status');
+                                setBusy(false);
+                            });
+                        };
+                        setTimeout(poll, 900);
+                        return;
+                    }
+                    applyStatus(res.data || {});
+                    setMessage(frameReadyMessage(res.data || {}));
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Capture failed — is the lab online and cameras reachable?');
+                    setBusy(false);
+                });
+            };
+
+            var eventToImage = function(ev) {
+                var img = imgRef.current;
+                if (!img || !img.naturalWidth) return null;
+                var rect = img.getBoundingClientRect();
+                // Click → logical 1280×360 (inverse of live sx = frame_w/1280).
+                var x = (ev.clientX - rect.left) * (LOG_W / rect.width);
+                var y = (ev.clientY - rect.top) * (LOG_H / rect.height);
+                return [
+                    Math.max(0, Math.min(LOG_W, Math.round(x * 10) / 10)),
+                    Math.max(0, Math.min(LOG_H, Math.round(y * 10) / 10))
+                ];
+            };
+
+            var onImageClick = function(ev) {
+                var pt = eventToImage(ev);
+                if (!pt || !selectedScreen) return;
+                if (!pendingP0) {
+                    setPendingP0(pt);
+                    setMessage(selectedScreen + ' post A: (' + pt[0] + ', ' + pt[1] + '). Now click post B.');
+                    return;
+                }
+                var next = Object.assign({}, screens);
+                next[selectedScreen] = Object.assign({}, next[selectedScreen] || {}, {
+                    p0: pendingP0.slice(),
+                    p1: pt.slice(),
+                    calibrated: true,
+                    field: field
+                });
+                setScreens(next);
+                setPendingP0(null);
+                setMessage(selectedScreen + ' line set. Choose the next goal or press Save Goal Areas.');
+                var list = (order && order[field]) || [];
+                var idx = list.indexOf(selectedScreen);
+                if (idx >= 0 && idx + 1 < list.length) {
+                    setSelectedScreen(list[idx + 1]);
+                }
+            };
+
+            var saveGoalAreas = function() {
+                setBusy(true);
+                var payloadScreens = {};
+                Object.keys(screens || {}).forEach(function(sid) {
+                    var line = screens[sid];
+                    if (!line || !line.p0 || !line.p1) return;
+                    payloadScreens[sid] = { p0: line.p0, p1: line.p1 };
+                });
+                axios.post('/goal-lines/save', { screens: payloadScreens }).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        setMessage('Saving goal areas on the training lab…');
+                        setTimeout(function() {
+                            loadStatus();
+                            setBusy(false);
+                            setMessage('Save sent. Green cylinder zones update on the next Realtime Play (or immediately if already running after reload).');
+                        }, 2200);
+                        return;
+                    }
+                    applyStatus(res.data || {});
+                    setMessage('Goal areas saved. Cylinder scoring/display uses these lines for A1–A6 and B1–B6.');
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
+                    setBusy(false);
+                });
+            };
+
+            var resetGoalAreas = function() {
+                if (!window.confirm('Reset all goal-area calibrations to built-in defaults?')) return;
+                setBusy(true);
+                axios.post('/goal-lines/reset', {}).then(function(res) {
+                    applyStatus(res.data || {});
+                    setPendingP0(null);
+                    setMessage('Goal areas reset to defaults.');
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Reset failed');
+                    setBusy(false);
+                });
+            };
+
+            var fieldScreens = (order && order[field]) || [];
+            var current = screens[selectedScreen] || {};
+
+            return React.createElement('div', { className: 'panel p-5 mt-8' },
+                React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Goal Area Calibration'),
+                React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
+                    'Uses the same stitched 1280×360 image Realtime Play draws the green goal cylinder on (camera-1 + camera-8). Overlay shows those cylinders. Click two posts per goal (A1–A6 / B1–B6), then Save.'),
+                React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
+                    React.createElement('button', {
+                        className: 'btn-primary',
+                        disabled: busy,
+                        onClick: captureStitched
+                    }, 'Capture Stitched Camera'),
+                    React.createElement('button', {
+                        className: 'btn-realtime',
+                        disabled: busy || !Object.keys(screens || {}).length,
+                        onClick: saveGoalAreas
+                    }, 'Save Goal Areas'),
+                    React.createElement('button', {
+                        className: 'btn-danger',
+                        disabled: busy,
+                        onClick: resetGoalAreas
+                    }, 'Reset Goal Areas')
+                ),
+                message ? React.createElement('p', { className: 'text-sm mb-4', style: { color: '#ead48f' } }, message) : null,
+                React.createElement('div', { className: 'flex flex-wrap items-center gap-3 mb-3' },
+                    React.createElement('span', { className: 'text-sm font-bold' }, 'Field'),
+                    ['A', 'B'].map(function(fid) {
+                        return React.createElement('button', {
+                            key: fid,
+                            className: field === fid ? 'btn-resume' : 'refresh-btn',
+                            onClick: function() { setField(fid); setPendingP0(null); }
+                        }, 'Field ' + fid);
+                    }),
+                    React.createElement('span', { className: 'text-sm font-bold ml-2' }, 'Goal'),
+                    fieldScreens.map(function(sid) {
+                        var done = !!(screens[sid] && screens[sid].calibrated);
+                        return React.createElement('button', {
+                            key: sid,
+                            className: selectedScreen === sid ? 'btn-primary' : 'refresh-btn',
+                            style: done ? { borderColor: '#22c55e' } : null,
+                            onClick: function() { setSelectedScreen(sid); setPendingP0(null); }
+                        }, sid);
+                    })
+                ),
+                current.p0 && current.p1 ?
+                React.createElement('p', { className: 'text-xs text-gray-400 mb-2' },
+                    selectedScreen + ' · p0 (' + Number(current.p0[0]).toFixed(1) + ', ' + Number(current.p0[1]).toFixed(1) +
+                    ') → p1 (' + Number(current.p1[0]).toFixed(1) + ', ' + Number(current.p1[1]).toFixed(1) +
+                    ') · cabinet ' + (current.cabinet || '—')
+                ) : React.createElement('p', { className: 'text-xs text-gray-500 mb-2' },
+                    'Click post A, then post B for ' + selectedScreen + '.'
+                ),
+                frameUrl ?
+                React.createElement('div', {
+                    className: 'calib-stage mb-4',
+                    style: { position: 'relative', maxWidth: '100%' }
+                },
+                    React.createElement('img', {
+                        src: frameUrl,
+                        alt: 'Stitched goal calibration',
+                        ref: imgRef,
+                        onLoad: function() {
+                            var img = imgRef.current;
+                            if (img && img.naturalWidth) {
+                                setImageSize(function(prev) {
+                                    return Object.assign({}, prev || {}, {
+                                        w: LOG_W,
+                                        h: LOG_H,
+                                        nativeW: img.naturalWidth,
+                                        nativeH: img.naturalHeight
+                                    });
+                                });
+                            }
+                            redrawOverlay();
+                        },
+                        onClick: onImageClick,
+                        draggable: false,
+                        style: { width: '100%', display: 'block', cursor: 'crosshair' }
+                    }),
+                    React.createElement('canvas', {
+                        ref: canvasRef,
+                        style: {
+                            position: 'absolute', left: 0, top: 0, width: '100%', height: '100%',
+                            pointerEvents: 'none'
+                        }
+                    })
+                ) :
+                React.createElement('div', { className: 'panel p-8 text-center text-gray-400 mb-4' },
+                    'Press Capture Stitched Camera to load the live arena view for goal picking.'
+                ),
+                React.createElement('div', { className: 'table-wrap homography-table' },
+                    React.createElement('table', null,
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                React.createElement('th', null, 'Goal'),
+                                React.createElement('th', null, 'Field'),
+                                React.createElement('th', null, 'Post A (x, y)'),
+                                React.createElement('th', null, 'Post B (x, y)'),
+                                React.createElement('th', null, 'Status')
+                            )
+                        ),
+                        React.createElement('tbody', null,
+                            (order.A || []).concat(order.B || []).map(function(sid) {
+                                var line = screens[sid] || {};
+                                return React.createElement('tr', {
+                                    key: sid,
+                                    style: sid === selectedScreen ? { background: 'rgba(34,197,94,0.12)' } : null,
+                                    onClick: function() {
+                                        setField(sid.charAt(0));
+                                        setSelectedScreen(sid);
+                                        setPendingP0(null);
+                                    }
+                                },
+                                    React.createElement('td', null, sid),
+                                    React.createElement('td', null, line.field || sid.charAt(0)),
+                                    React.createElement('td', null, line.p0 ? Number(line.p0[0]).toFixed(1) + ', ' + Number(line.p0[1]).toFixed(1) : '—'),
+                                    React.createElement('td', null, line.p1 ? Number(line.p1[0]).toFixed(1) + ', ' + Number(line.p1[1]).toFixed(1) : '—'),
+                                    React.createElement('td', null, line.calibrated ? 'Calibrated' : 'Default')
+                                );
+                            })
+                        )
+                    )
+                )
+            );
+        };
+
+        // =====================================================================
+        // HIP PERSON ZONE CALIBRATION (17-point red polygon, Field A / B)
+        // =====================================================================
+        var HipZoneCalibration = function() {
+            var fieldState = useState('A');
+            var field = fieldState[0];
+            var setField = fieldState[1];
+            var fieldsState = useState({ A: { points: [] }, B: { points: [] } });
+            var fields = fieldsState[0];
+            var setFields = fieldsState[1];
+            var frameUrlState = useState('');
+            var frameUrl = frameUrlState[0];
+            var setFrameUrl = frameUrlState[1];
+            var msgState = useState('');
+            var message = msgState[0];
+            var setMessage = msgState[1];
+            var busyState = useState(false);
+            var busy = busyState[0];
+            var setBusy = busyState[1];
+            var dragState = useState(null);
+            var dragIndex = dragState[0];
+            var setDragIndex = dragState[1];
+            var imgRef = useRef(null);
+            var canvasRef = useRef(null);
+            var stageRef = useRef(null);
+            var LOG_W = 1280;
+            var LOG_H = 360;
+            var HIT_R = 14;
+
+            var applyStatus = function(data) {
+                data = data || {};
+                if (data.fields) {
+                    setFields({
+                        A: Object.assign({ points: [] }, data.fields.A || {}),
+                        B: Object.assign({ points: [] }, data.fields.B || {})
+                    });
+                }
+                var frame = data.frame || {};
+                if (frame.data_url) setFrameUrl(frame.data_url);
+            };
+
+            var loadStatus = function() {
+                axios.get('/hip-zone/status').then(function(res) {
+                    applyStatus(res.data || {});
+                }).catch(function() {});
+            };
+
+            useEffect(function() { loadStatus(); }, []);
+
+            var currentPoints = function() {
+                var rec = (fields && fields[field]) || {};
+                var pts = rec.points || [];
+                return pts.slice();
+            };
+
+            var setCurrentPoints = function(pts) {
+                var next = Object.assign({}, fields);
+                var closed = pts.slice();
+                if (closed.length >= 2) {
+                    closed[closed.length - 1] = [closed[0][0], closed[0][1]];
+                }
+                next[field] = Object.assign({}, next[field] || {}, {
+                    points: closed,
+                    calibrated: true,
+                    field: field
+                });
+                setFields(next);
+            };
+
+            var redrawOverlay = function() {
+                var canvas = canvasRef.current;
+                var img = imgRef.current;
+                if (!canvas || !img || !img.naturalWidth) return;
+                canvas.width = img.clientWidth;
+                canvas.height = img.clientHeight;
+                var ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                var sx = canvas.width / LOG_W;
+                var sy = canvas.height / LOG_H;
+                var pts = currentPoints();
+                if (pts.length < 2) return;
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(pts[0][0] * sx, pts[0][1] * sy);
+                for (var i = 1; i < pts.length; i++) {
+                    ctx.lineTo(pts[i][0] * sx, pts[i][1] * sy);
+                }
+                ctx.stroke();
+                pts.forEach(function(pt, idx) {
+                    var x = pt[0] * sx;
+                    var y = pt[1] * sy;
+                    var active = dragIndex === idx;
+                    ctx.fillStyle = active ? '#fbbf24' : '#ef4444';
+                    ctx.beginPath();
+                    ctx.arc(x, y, active ? 8 : 6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.fillText(String(idx + 1), x + 8, y - 6);
+                });
+            };
+
+            useEffect(function() {
+                redrawOverlay();
+            }, [fields, field, frameUrl, dragIndex]);
+
+            var eventToLogical = function(ev) {
+                var img = imgRef.current;
+                if (!img || !img.naturalWidth) return null;
+                var rect = img.getBoundingClientRect();
+                var x = (ev.clientX - rect.left) * (LOG_W / rect.width);
+                var y = (ev.clientY - rect.top) * (LOG_H / rect.height);
+                return [
+                    Math.max(0, Math.min(LOG_W, Math.round(x * 10) / 10)),
+                    Math.max(0, Math.min(LOG_H, Math.round(y * 10) / 10))
+                ];
+            };
+
+            var hitTest = function(ev) {
+                var img = imgRef.current;
+                if (!img) return -1;
+                var rect = img.getBoundingClientRect();
+                var sx = rect.width / LOG_W;
+                var sy = rect.height / LOG_H;
+                var pts = currentPoints();
+                var best = -1;
+                var bestD = HIT_R;
+                for (var i = 0; i < pts.length; i++) {
+                    var px = pts[i][0] * sx + rect.left;
+                    var py = pts[i][1] * sy + rect.top;
+                    var d = Math.hypot(ev.clientX - px, ev.clientY - py);
+                    if (d <= bestD) {
+                        bestD = d;
+                        best = i;
+                    }
+                }
+                return best;
+            };
+
+            var onPointerDown = function(ev) {
+                var idx = hitTest(ev);
+                if (idx < 0) return;
+                ev.preventDefault();
+                setDragIndex(idx);
+                if (ev.target && ev.target.setPointerCapture) {
+                    try { ev.target.setPointerCapture(ev.pointerId); } catch (e) {}
+                }
+            };
+
+            var onPointerMove = function(ev) {
+                if (dragIndex === null || dragIndex < 0) return;
+                var pt = eventToLogical(ev);
+                if (!pt) return;
+                var pts = currentPoints();
+                if (!pts.length) return;
+                var idx = dragIndex;
+                // Closing vertex (last) stays locked to first; dragging either moves both.
+                if (idx === 0 || idx === pts.length - 1) {
+                    pts[0] = pt.slice();
+                    pts[pts.length - 1] = pt.slice();
+                } else {
+                    pts[idx] = pt.slice();
+                }
+                setCurrentPoints(pts);
+            };
+
+            var onPointerUp = function() {
+                if (dragIndex !== null) setDragIndex(null);
+            };
+
+            var captureStitched = function() {
+                setBusy(true);
+                setMessage('Capturing stitched camera-1 + camera-8 for HIP zone…');
+                var started = Date.now();
+                axios.post('/hip-zone/capture', {}).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        var poll = function() {
+                            axios.get('/hip-zone/status').then(function(st) {
+                                var frame = (st.data || {}).frame || {};
+                                var fresh = frame.data_url && (!frame.captured_at || (frame.captured_at * 1000) >= started - 8000);
+                                if (fresh) {
+                                    applyStatus(st.data || {});
+                                    setMessage('Frame ready — red outline is the current software HIP zone. Nudge points only if needed, then Save Adjustment.');
+                                    setBusy(false);
+                                    return;
+                                }
+                                if (Date.now() - started > 25000) {
+                                    setMessage('Lab did not return a stitched frame. Check cameras and Lab online.');
+                                    setBusy(false);
+                                    return;
+                                }
+                                setTimeout(poll, 1000);
+                            }).catch(function(e) {
+                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not read lab HIP status');
+                                setBusy(false);
+                            });
+                        };
+                        setTimeout(poll, 900);
+                        return;
+                    }
+                    applyStatus(res.data || {});
+                    setMessage('Frame ready — red outline is the current software HIP zone. Nudge points only if needed, then Save Adjustment.');
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Capture failed');
+                    setBusy(false);
+                });
+            };
+
+            var saveHipZone = function() {
+                setBusy(true);
+                var payload = {
+                    A: { points: ((fields.A || {}).points) || [] },
+                    B: { points: ((fields.B || {}).points) || [] }
+                };
+                axios.post('/hip-zone/save', { fields: payload }).then(function(res) {
+                    if (res.data && res.data.status === 'queued') {
+                        setMessage('Saving HIP adjustment on the training lab…');
+                        setTimeout(function() {
+                            loadStatus();
+                            setBusy(false);
+                            setMessage('Adjustment saved. Realtime Play keeps this HIP zone.');
+                        }, 2200);
+                        return;
+                    }
+                    applyStatus(res.data || {});
+                    setMessage('HIP zone adjustment saved (still based on the software polygon).');
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
+                    setBusy(false);
+                });
+            };
+
+            var resetHipZone = function() {
+                if (!window.confirm('Restore the built-in software HIP zone (discard adjustments)?')) return;
+                setBusy(true);
+                axios.post('/hip-zone/reset', {}).then(function(res) {
+                    applyStatus(res.data || {});
+                    setMessage('Restored software HIP zone.');
+                    setBusy(false);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Reset failed');
+                    setBusy(false);
+                });
+            };
+
+            var pts = currentPoints();
+            var rec = (fields && fields[field]) || {};
+
+            return React.createElement('div', { className: 'panel p-5 mt-8' },
+                React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'HIP Person Zone (fine adjust)'),
+                React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
+                    'Starts from the current software HIP zone — you do not rebuild it. Capture the 1280×360 stitch, nudge any red points that are slightly off, then Save. Reset restores the built-in software polygon.'),
+                React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
+                    React.createElement('button', {
+                        className: 'btn-primary', disabled: busy, onClick: captureStitched
+                    }, 'Capture Stitched Camera'),
+                    React.createElement('button', {
+                        className: 'btn-realtime', disabled: busy || !pts.length, onClick: saveHipZone
+                    }, 'Save Adjustment'),
+                    React.createElement('button', {
+                        className: 'btn-danger', disabled: busy, onClick: resetHipZone
+                    }, 'Restore Software Zone')
+                ),
+                message ? React.createElement('p', { className: 'text-sm mb-4', style: { color: '#ead48f' } }, message) : null,
+                React.createElement('div', { className: 'flex flex-wrap items-center gap-3 mb-3' },
+                    React.createElement('span', { className: 'text-sm font-bold' }, 'Field'),
+                    ['A', 'B'].map(function(fid) {
+                        var done = !!(fields[fid] && fields[fid].calibrated);
+                        return React.createElement('button', {
+                            key: fid,
+                            className: field === fid ? 'btn-resume' : 'refresh-btn',
+                            style: done ? { borderColor: '#ef4444' } : null,
+                            onClick: function() { setField(fid); setDragIndex(null); }
+                        }, 'Field ' + fid + (done ? ' ●' : ''));
+                    }),
+                    React.createElement('span', { className: 'text-xs text-gray-500' },
+                        pts.length + ' points · ' + (rec.calibrated ? 'Adjusted' : 'Software default')
+                    )
+                ),
+                frameUrl ?
+                React.createElement('div', {
+                    className: 'calib-stage mb-4',
+                    ref: stageRef,
+                    style: { position: 'relative', maxWidth: '100%', touchAction: 'none' },
+                    onPointerDown: onPointerDown,
+                    onPointerMove: onPointerMove,
+                    onPointerUp: onPointerUp,
+                    onPointerCancel: onPointerUp
+                },
+                    React.createElement('img', {
+                        src: frameUrl,
+                        alt: 'Stitched HIP zone calibration',
+                        ref: imgRef,
+                        onLoad: function() { redrawOverlay(); },
+                        draggable: false,
+                        style: {
+                            width: '100%', display: 'block',
+                            cursor: dragIndex !== null ? 'grabbing' : 'grab'
+                        }
+                    }),
+                    React.createElement('canvas', {
+                        ref: canvasRef,
+                        style: {
+                            position: 'absolute', left: 0, top: 0, width: '100%', height: '100%',
+                            pointerEvents: 'none'
+                        }
+                    })
+                ) :
+                React.createElement('div', { className: 'panel p-8 text-center text-gray-400 mb-4' },
+                    'Press Capture Stitched Camera to see the current software HIP zone on the arena image.'
+                ),
+                React.createElement('div', { className: 'table-wrap homography-table' },
+                    React.createElement('table', null,
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                React.createElement('th', null, '#'),
+                                React.createElement('th', null, 'X'),
+                                React.createElement('th', null, 'Y')
+                            )
+                        ),
+                        React.createElement('tbody', null,
+                            pts.map(function(pt, idx) {
+                                return React.createElement('tr', {
+                                    key: idx,
+                                    style: dragIndex === idx ? { background: 'rgba(239,68,68,0.15)' } : null
+                                },
+                                    React.createElement('td', null, idx + 1),
+                                    React.createElement('td', null, Number(pt[0]).toFixed(1)),
+                                    React.createElement('td', null, Number(pt[1]).toFixed(1))
+                                );
+                            })
+                        )
+                    )
+                )
+            );
+        };
+
+        // =====================================================================
         // PLAYER PROFILE
         // =====================================================================
         var PlayerProfile = function(props) {
@@ -3561,6 +4335,10 @@
             var editFormState = useState({});
             var editForm = editFormState[0];
             var setEditForm = editFormState[1];
+            var editFormRef = useRef({});
+            useEffect(function() { editFormRef.current = editForm || {}; }, [editForm]);
+            var editingPlayerRef = useRef(null);
+            useEffect(function() { editingPlayerRef.current = editingPlayer; }, [editingPlayer]);
             var pendingDeleteState = useState(null);
             var pendingDelete = pendingDeleteState[0];
             var setPendingDelete = pendingDeleteState[1];
@@ -3579,6 +4357,8 @@
             var autoStopRemainingRef = useRef(45 * 60 * 1000);
             var autoStopDeadlineRef = useRef(0);
             var realtimeRunningRef = useRef(false);
+            var realtimeStartInFlightRef = useRef(false);
+            var progressHoldUntilRef = useRef({});
             var realtimePausedRef = useRef(false);
             var pausedFieldsRef = useRef({ A: false, B: false });
             var runningFieldsRef = useRef({ A: false, B: false });
@@ -3748,6 +4528,7 @@
                                 birthday: p.birthday || '',
                                 age: p.age || '',
                                 image: p.image || null,
+                                profile_updated_at: p.profile_updated_at || 0,
                                 simustScore: p.simustScore || 0,
                                 avgAe: p.avgAe != null ? p.avgAe : 0,
                                 avgAcc: p.avgAcc != null ? p.avgAcc : 0,
@@ -3761,15 +4542,54 @@
                         if (stored) {
                             try { localPlayers = JSON.parse(stored); } catch (e) {}
                         }
+                        var localById = {};
+                        localPlayers.forEach(function(lp) {
+                            var lid = lp.playerId || lp.id;
+                            if (lid) localById[lid] = lp;
+                        });
                         var existingIds = {};
-                        backendPlayers.forEach(function(p) { existingIds[p.id] = true; });
-                        var merged = backendPlayers.slice();
+                        // Prefer a fresher local rename when get-players briefly lags behind save.
+                        var merged = backendPlayers.map(function(bp) {
+                            existingIds[bp.id] = true;
+                            var lp = localById[bp.id];
+                            if (!lp) return bp;
+                            var localTs = Number(lp.profile_updated_at || 0);
+                            var backTs = Number(bp.profile_updated_at || 0);
+                            var localName = String(lp.name || "").trim();
+                            var localSurname = String(lp.surname || "").trim();
+                            if (localTs > backTs && localName && localSurname) {
+                                return Object.assign({}, bp, {
+                                    name: localName,
+                                    surname: localSurname,
+                                    club: lp.club != null ? lp.club : bp.club,
+                                    birthday: lp.birthday != null ? lp.birthday : bp.birthday,
+                                    age: lp.age != null ? lp.age : bp.age,
+                                    image: lp.image || bp.image,
+                                    profile_updated_at: localTs
+                                });
+                            }
+                            return bp;
+                        });
                         localPlayers.forEach(function(lp) {
                             var lid = lp.playerId || lp.id;
                             if (!existingIds[lid] && !existingIds[lp.id]) {
                                 merged.push(Object.assign({}, lp, { id: lid, playerId: lid }));
                             }
                         });
+                        // Keep optimistic lock/unlock while a brief hold is active.
+                        var nowMs = Date.now();
+                        var heldIds = progressHoldUntilRef.current || {};
+                        if (heldIds && typeof heldIds === "object") {
+                            merged = merged.map(function(bp) {
+                                var until = heldIds[bp.id] || 0;
+                                if (!until || nowMs >= until) return bp;
+                                var cur = (players || []).find(function(p) { return p.id === bp.id; });
+                                if (cur && cur.progress) {
+                                    return Object.assign({}, bp, { progress: cur.progress });
+                                }
+                                return bp;
+                            });
+                        }
                         setPlayers(merged);
                         localStorage.setItem("simust_players", JSON.stringify(merged));
                         // Keep empty until the operator searches/selects. Never auto-pick
@@ -3781,6 +4601,15 @@
                             if (!pid) return;
                             var player = merged.find(function(p) { return p.id === pid; });
                             if (!player) return;
+                            // Skip stale get-players right after lock/unlock so UI cannot snap back.
+                            var holdUntil = progressHoldUntilRef.current[pid] || 0;
+                            if (holdUntil && Date.now() < holdUntil) {
+                                var held = progressSigRef.current[pid];
+                                var incoming = progressSignature(player.progress);
+                                if (held && held !== incoming) {
+                                    return;
+                                }
+                            }
                             var sig = progressSignature(player.progress);
                             var prev = progressSigRef.current[pid];
                             progressSigRef.current[pid] = sig;
@@ -4204,8 +5033,12 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                axios.post("/lab-upsert-player", {
+                // Public/remote: staff-update writes this host + queues lab.
+                // Lab-only: lab-upsert writes users.json on the training PC.
+                var upsertUrl = window.SIMUST_PUBLIC ? "/staff-update-player" : "/lab-upsert-player";
+                axios.post(upsertUrl, {
                     player_id: simustId,
+                    username: simustId,
                     name: newPlayer.name.trim(),
                     surname: newPlayer.surname.trim(),
                     club: (newPlayer.club || '').trim(),
@@ -4253,32 +5086,97 @@
                 setEditingPlayer(null);
                 setEditForm({}); };
             var saveEdit = function() {
-                if (!editingPlayer) return;
-                var updatedPlayers = players.map(function(p) {
-                    if (p.id === editingPlayer.id) {
-                        return Object.assign({}, p, {
-                            name: editForm.name,
-                            surname: editForm.surname,
-                            playerId: editForm.playerId,
-                            club: editForm.club,
-                            birthday: editForm.birthday,
-                            age: editForm.age,
-                            image: editForm.image
-                        });
+                var current = editingPlayerRef.current;
+                var form = editFormRef.current || {};
+                if (!current) return;
+                var playerId = String(form.playerId || current.playerId || current.id || "").trim();
+                var payload = {
+                    player_id: playerId,
+                    username: playerId,
+                    id: playerId,
+                    name: String(form.name || "").trim(),
+                    surname: String(form.surname || "").trim(),
+                    club: String(form.club || "").trim(),
+                    birthday: String(form.birthday || "").trim(),
+                    age: String(form.age || "").trim(),
+                    // Only send image when the operator changed it — huge base64
+                    // payloads were failing the save and looking like “not saved”.
+                    image: (form.image && form.image !== current.image) ? form.image : ""
+                };
+                if (!payload.name || !payload.surname || !playerId) {
+                    showToast("Name, surname, and SIMUST ID are required", "error");
+                    return;
+                }
+                var applyLocal = function(serverPlayer) {
+                    var sid = String((serverPlayer && (serverPlayer.playerId || serverPlayer.id)) || playerId).trim();
+                    var next = Object.assign({}, current, payload, serverPlayer || {});
+                    next.id = sid;
+                    next.playerId = sid;
+                    next.name = payload.name;
+                    next.surname = payload.surname;
+                    next.club = payload.club;
+                    next.birthday = payload.birthday;
+                    next.age = payload.age;
+                    if (payload.image) next.image = payload.image;
+                    else next.image = current.image || next.image || null;
+                    if (serverPlayer && serverPlayer.profile_updated_at) {
+                        next.profile_updated_at = serverPlayer.profile_updated_at;
+                    } else {
+                        next.profile_updated_at = Date.now() / 1000;
                     }
-                    return p;
+                    var updatedPlayers = players.map(function(p) {
+                        if (p.id === current.id || p.id === playerId || p.id === sid) return next;
+                        return p;
+                    });
+                    if (!updatedPlayers.some(function(p) { return p.id === sid; })) {
+                        updatedPlayers = updatedPlayers.concat([next]);
+                    }
+                    savePlayers(updatedPlayers);
+                    if (selectedPlayerId === current.id || selectedPlayerId === playerId || selectedPlayerId === sid) {
+                        updateProgressForPlayer(next);
+                        setSearchQuery((next.name || "") + " " + (next.surname || "").trim() + " · " + sid);
+                    }
+                    if (selectedPlayerBId === current.id || selectedPlayerBId === playerId || selectedPlayerBId === sid) {
+                        updateProgressForPlayerB(next);
+                        setSearchQueryB((next.name || "") + " " + (next.surname || "").trim() + " · " + sid);
+                    }
+                    closeEditModal();
+                };
+                // Writes this host, pushes/queues the other side (lab ↔ My SIMUST / remote).
+                axios.post("/staff-update-player", payload).then(function(res) {
+                    if (res.data && res.data.status === "queued") {
+                        // Should not happen for staff-update; treat as failure to write this host.
+                        showToast("Update was queued only — name may not have saved on this PC", "error");
+                        return;
+                    }
+                    applyLocal((res.data && res.data.player) || payload);
+                    showToast(
+                        window.SIMUST_PUBLIC
+                            ? "Player renamed — saved here and syncing to the lab PC"
+                            : "Player renamed — saved here and syncing to My SIMUST / remote",
+                        "success"
+                    );
+                    // Soft reload: keep optimistic rename if server briefly lags.
+                    setTimeout(function() { loadPlayers(); }, 600);
+                }).catch(function(e) {
+                    // Lab-only fallback (never on public host — lab-upsert is blocked there).
+                    if (window.SIMUST_PUBLIC) {
+                        var detail = (e.response && e.response.data && e.response.data.detail)
+                            || e.message || "Update failed";
+                        showToast(detail, "error");
+                        return;
+                    }
+                    axios.post("/lab-upsert-player", payload).then(function(res) {
+                        applyLocal((res.data && res.data.player) || payload);
+                        showToast("Player renamed — saved on lab", "success");
+                        setTimeout(function() { loadPlayers(); }, 600);
+                    }).catch(function(e2) {
+                        var detail = (e2.response && e2.response.data && e2.response.data.detail)
+                            || (e.response && e.response.data && e.response.data.detail)
+                            || e2.message || e.message || "Update failed";
+                        showToast(detail, "error");
+                    });
                 });
-                savePlayers(updatedPlayers);
-                if (selectedPlayerId === editingPlayer.id) {
-                    var updated = updatedPlayers.find(function(p) { return p.id === editingPlayer.id; });
-                    if (updated) updateProgressForPlayer(updated);
-                }
-                if (selectedPlayerBId === editingPlayer.id) {
-                    var updatedB = updatedPlayers.find(function(p) { return p.id === editingPlayer.id; });
-                    if (updatedB) updateProgressForPlayerB(updatedB);
-                }
-                closeEditModal();
-                showToast("Player updated", 'success');
             };
             var deletePlayer = function(playerId) {
                 var updated = players.filter(function(p) { return p.id !== playerId; });
@@ -4460,23 +5358,47 @@
                 if (updatedPlayer && refreshB) updateProgressForPlayerB(updatedPlayer, { followCurrent: true });
             };
 
+            var applyServerProgressToPlayer = function(playerId, progress, refreshA, refreshB) {
+                if (!playerId || !progress) return;
+                progressHoldUntilRef.current[playerId] = Date.now() + 8000;
+                var updatedPlayers = players.map(function(p) {
+                    if (p.id !== playerId) return p;
+                    return Object.assign({}, p, { progress: progress });
+                });
+                setPlayers(updatedPlayers);
+                localStorage.setItem("simust_players", JSON.stringify(updatedPlayers));
+                var updatedPlayer = updatedPlayers.find(function(p) { return p.id === playerId; });
+                if (updatedPlayer) {
+                    progressSigRef.current[playerId] = progressSignature(updatedPlayer.progress);
+                    if (refreshA) updateProgressForPlayer(updatedPlayer, { followCurrent: true });
+                    if (refreshB) updateProgressForPlayerB(updatedPlayer, { followCurrent: true });
+                }
+            };
+
             var handleUnlockLevel = function(levelId) {
                 if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
                 applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
+                progressHoldUntilRef.current[selectedPlayerId] = Date.now() + 8000;
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
                     if (st === "success" || st === "info" || st === "queued") {
                         showToast(st === "queued" ? ("Unlock queued for " + levelId) : ("Unlocked " + levelId), 'success');
-                        // Keep optimistic UI on queued; only reload when lab returned progress.
-                        if (res.data.progress) loadPlayers();
+                        if (res.data.progress) {
+                            applyServerProgressToPlayer(
+                                selectedPlayerId, res.data.progress, true,
+                                selectedPlayerBId === selectedPlayerId
+                            );
+                        }
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
+                        delete progressHoldUntilRef.current[selectedPlayerId];
                         loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    delete progressHoldUntilRef.current[selectedPlayerId];
                     loadPlayers();
                 });
             };
@@ -4485,18 +5407,26 @@
                 if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
                 applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
+                progressHoldUntilRef.current[selectedPlayerBId] = Date.now() + 8000;
                 axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
                     if (st === "success" || st === "info" || st === "queued") {
                         showToast(st === "queued" ? ("Unlock queued for Field B " + levelId) : ("Unlocked " + levelId + " for Field B"), 'success');
-                        if (res.data.progress) loadPlayers();
+                        if (res.data.progress) {
+                            applyServerProgressToPlayer(
+                                selectedPlayerBId, res.data.progress,
+                                selectedPlayerId === selectedPlayerBId, true
+                            );
+                        }
                     } else {
                         showToast(res.data.message || "Unlock failed", 'error');
+                        delete progressHoldUntilRef.current[selectedPlayerBId];
                         loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Unlock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    delete progressHoldUntilRef.current[selectedPlayerBId];
                     loadPlayers();
                 });
             };
@@ -4575,19 +5505,26 @@
                     return;
                 }
                 applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
+                progressHoldUntilRef.current[selectedPlayerId] = Date.now() + 8000;
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
                     if (st === "success" || st === "info" || st === "queued") {
                         showToast(st === "queued" ? ("Lock queued for " + levelId) : ("Locked " + levelId), 'info');
-                        // Do not loadPlayers on queued — that snapped locks back open.
-                        if (res.data.progress) loadPlayers();
+                        if (res.data.progress) {
+                            applyServerProgressToPlayer(
+                                selectedPlayerId, res.data.progress, true,
+                                selectedPlayerBId === selectedPlayerId
+                            );
+                        }
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
+                        delete progressHoldUntilRef.current[selectedPlayerId];
                         loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    delete progressHoldUntilRef.current[selectedPlayerId];
                     loadPlayers();
                 });
             };
@@ -4600,18 +5537,26 @@
                     return;
                 }
                 applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
+                progressHoldUntilRef.current[selectedPlayerBId] = Date.now() + 8000;
                 axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
                     if (st === "success" || st === "info" || st === "queued") {
                         showToast(st === "queued" ? ("Lock queued for Field B " + levelId) : ("Locked " + levelId + " for Field B"), 'info');
-                        if (res.data.progress) loadPlayers();
+                        if (res.data.progress) {
+                            applyServerProgressToPlayer(
+                                selectedPlayerBId, res.data.progress,
+                                selectedPlayerId === selectedPlayerBId, true
+                            );
+                        }
                     } else {
                         showToast(res.data.message || "Lock failed", 'error');
+                        delete progressHoldUntilRef.current[selectedPlayerBId];
                         loadPlayers();
                     }
                 }).catch(function(e) {
                     console.error(e);
                     showToast("Lock error: " + (e.response ? e.response.data.detail : e.message), 'error');
+                    delete progressHoldUntilRef.current[selectedPlayerBId];
                     loadPlayers();
                 });
             };
@@ -5054,6 +5999,9 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
+                // First click often looked dead: a second quick click was needed
+                // because status polling cleared running UI before the process spun up.
+                if (realtimeStartInFlightRef.current) return;
                 var playBoth = !!opts.both;
                 origin = String(origin || "A").toUpperCase().charAt(0) === "B" ? "B" : "A";
                 var playerA = getSelectedPlayer();
@@ -5181,6 +6129,7 @@
                 // Do not join into a leftover ready/idle player process.
 
                 setError("");
+                realtimeStartInFlightRef.current = true;
                 realtimeRunningRef.current = true;
                 setRealtimeRunning(true);
                 var together = (combinedA && !playerB) || (combinedB && !playerA);
@@ -5265,6 +6214,7 @@
                 }
 
                 axios.post("/start-realtime-playback", payload).then(function() {
+                    realtimeStartInFlightRef.current = false;
                     var dualMsg;
                     if ((combinedA && !playerB) || (combinedB && !playerA)) {
                         var lead = origin === "B" ? playerB : playerA;
@@ -5315,7 +6265,10 @@
 
                     var sawActivePlayback = false;
                     var waitStartedAt = Date.now();
+                    // Keep Pause/Stop lit until process reports playing (startup ready/idle is normal).
+                    var startupGraceUntil = waitStartedAt + 12000;
                     var continueWatchUntil = 0;
+                    var expectedFields = Object.assign({}, runningNow);
                     var finishFromStatus = function(opts) {
                         opts = opts || {};
                         if (sessionAbortedRef.current || realtimePausedRef.current) return;
@@ -5509,10 +6462,19 @@
                                     B: fieldMap.B === "playing"
                                 };
                                 var prevRunning = runningFieldsRef.current || { A: false, B: false };
+                                var inStartupGrace = Date.now() < startupGraceUntil && !sawActivePlayback;
                                 if (!!nextRunning.A !== !!prevRunning.A || !!nextRunning.B !== !!prevRunning.B) {
                                     if (nextRunning.A || nextRunning.B) {
                                         runningFieldsRef.current = nextRunning;
                                         setRunningFields(nextRunning);
+                                        realtimeRunningRef.current = true;
+                                        setRealtimeRunning(true);
+                                    } else if (inStartupGrace || state === "starting" || state === "loading" ||
+                                               state === "idle" || state === "ready") {
+                                        // Do not clear optimistic Play UI while the lab is still spinning up.
+                                        var keepStart = Object.assign({}, expectedFields || prevRunning);
+                                        runningFieldsRef.current = keepStart;
+                                        setRunningFields(keepStart);
                                         realtimeRunningRef.current = true;
                                         setRealtimeRunning(true);
                                     } else {
@@ -5520,11 +6482,15 @@
                                         setRunningFields(nextRunning);
                                     }
                                     var nextPaused = Object.assign({}, pausedFieldsRef.current || { A: false, B: false });
-                                    if (!nextRunning.A) nextPaused.A = false;
-                                    if (!nextRunning.B) nextPaused.B = false;
+                                    if (!nextRunning.A && !(inStartupGrace || state === "starting" || state === "loading" ||
+                                            state === "idle" || state === "ready")) nextPaused.A = false;
+                                    if (!nextRunning.B && !(inStartupGrace || state === "starting" || state === "loading" ||
+                                            state === "idle" || state === "ready")) nextPaused.B = false;
                                     pausedFieldsRef.current = nextPaused;
                                     setPausedFields(nextPaused);
-                                    if (!nextRunning.A && !nextRunning.B) {
+                                    if (!nextRunning.A && !nextRunning.B &&
+                                        !(inStartupGrace || state === "starting" || state === "loading" ||
+                                          state === "idle" || state === "ready")) {
                                         realtimePausedRef.current = false;
                                         setRealtimePaused(false);
                                         if (state === "completed" || state === "closed") {
@@ -5574,8 +6540,18 @@
                                 return;
                             }
                             if (state === "ready") {
-                                sawActivePlayback = true;
+                                // Startup often reports ready before cameras spawn — do not end Play.
+                                if (!sawActivePlayback && Date.now() < startupGraceUntil) {
+                                    var keepReady = Object.assign({}, expectedFields || runningFieldsRef.current || { A: true, B: false });
+                                    runningFieldsRef.current = keepReady;
+                                    setRunningFields(keepReady);
+                                    realtimeRunningRef.current = true;
+                                    setRealtimeRunning(true);
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
                                 if (processesAlive) {
+                                    sawActivePlayback = true;
                                     finishFromStatus({ soft: true });
                                     continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
                                     realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
@@ -5583,6 +6559,11 @@
                                 }
                                 if (Date.now() < continueWatchUntil) {
                                     // Waiting for Mode 2 continue to spawn the next set.
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
+                                if (!sawActivePlayback) {
+                                    // Still waiting for first active frame after grace.
                                     realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
                                     return;
                                 }
@@ -5624,6 +6605,7 @@
                     };
                     realtimeMonitorInterval.current = setTimeout(checkStatus, 800);
                 }).catch(function(e) {
+                    realtimeStartInFlightRef.current = false;
                     var detail = (e.response && e.response.data && e.response.data.detail)
                         ? e.response.data.detail
                         : (e.message || "Failed to start");
@@ -5711,6 +6693,64 @@
                 });
             };
 
+            var saveFieldSessionOnStop = function(fid) {
+                // Persist whatever actions exist for this field (completed set or mid-test).
+                var isB = fid === "B";
+                var player = isB ? getSelectedPlayerB() : getSelectedPlayer();
+                var report = isB ? reportDataB : reportData;
+                var results = isB ? analysisResultsB : analysisResults;
+                var levelId = isB ? selectedLevelB : selectedLevel;
+                var subId = isB ? selectedSubdirectoryB : selectedSubdirectory;
+                if (!player || !report || !report.actions || !report.actions.length) {
+                    return Promise.resolve(null);
+                }
+                var goalsByScreen = {};
+                (results || []).forEach(function(a) {
+                    if (a.result === 'Correct' && a.winning_screen && a.winning_screen !== 'N/A') {
+                        var s = a.winning_screen;
+                        goalsByScreen[s] = (goalsByScreen[s] || 0) + 1;
+                    }
+                });
+                var sessionData = {
+                    level: levelId || 'Unknown',
+                    subdirectory: subId || '',
+                    total_duration_minutes: 0,
+                    video_count: 0,
+                    directory: (report && report.directory) || currentDirectory || '',
+                    report_path: '',
+                    statistics: {
+                        correct: (report.statistics && report.statistics.correct) || 0,
+                        late: (report.statistics && report.statistics.late) || 0,
+                        wrong: (report.statistics && report.statistics.wrong) || 0,
+                        miss: (report.statistics && report.statistics.miss) || 0,
+                        avg_ae: (report.statistics && report.statistics.avg_ae) || 0
+                    },
+                    goals_by_screen: goalsByScreen,
+                    actions: (results || []).map(function(r) {
+                        return {
+                            block_id: r.id || '',
+                            action: r.action || '',
+                            screens: r.screens ? r.screens.split(', ') : [],
+                            finishing_type: r.result === 'Correct' ? 'CORRECT' : r.result === 'Late' ?
+                                'LATE' : r.result === 'Wrong' ? 'WRONG' : r.result === 'Miss' ?
+                                'MISS' : 'WRONG',
+                            goal_screen: r.winning_screen || 'N/A',
+                            action_time: r.session_duration !== null ? r.session_duration : null,
+                            aep: r.aep || '-',
+                            ae: r.ae || 0,
+                            video_index: r.video_index || 0
+                        };
+                    }),
+                    total_actions: (report && report.total_actions) || 0,
+                    avg_finishing_time: (report.statistics && report.statistics.avg_finishing_time) || 0,
+                    simulation: !!simulationEnabledRef.current,
+                    stopped_mid_test: true
+                };
+                return saveSessionToPlayerFolder(
+                    player.id, player.name, player.surname, player.playerId, sessionData
+                );
+            };
+
             var stopField = function(fid) {
                 var together = !!sessionTogetherRef.current;
                 var running = runningFieldsRef.current || { A: false, B: false };
@@ -5719,11 +6759,18 @@
                     runningFieldsRef.current = { A: false, B: false };
                     setRunningFields({ A: false, B: false });
                     sessionTogetherRef.current = false;
-                    stopPlayback({ abort: true });
+                    // Always save mid-test / completed actions + keep video.
+                    stopPlayback({ abort: false });
                     return;
                 }
-                axios.post("/stop-realtime", { field: fid, field_only: true }).then(function() {
-                    showToast("Field " + fid + " stopped. The other field keeps playing.", 'info');
+                // One field stops; the other keeps playing (and video keeps recording).
+                showToast("Saving Field " + fid + " before stop…", "info");
+                fetchRealtimeResults(false, true).catch(function() { return null; }).then(function() {
+                    return saveFieldSessionOnStop(fid);
+                }).catch(function() { return null; }).then(function() {
+                    return axios.post("/stop-realtime", { field: fid, field_only: true });
+                }).then(function() {
+                    showToast("Field " + fid + " stopped and saved. The other field keeps playing.", 'success');
                 }).catch(function() {
                     showToast("Could not stop Field " + fid, 'error');
                 });
@@ -5739,76 +6786,102 @@
 
             var stopPlayback = function(opts) {
                 opts = opts || {};
-                var abort = opts.abort !== false;
-                if (abort) {
+                // Default Stop = save. Only explicit discard/abort deletes the session.
+                var discard = !!(opts.abort || opts.discard);
+                setInstagramOff();
+
+                var finishUiStop = function() {
+                    realtimeRunningRef.current = false;
+                    setRealtimeRunning(false);
+                    realtimePausedRef.current = false;
+                    setRealtimePaused(false);
+                    pausedFieldsRef.current = { A: false, B: false };
+                    setPausedFields({ A: false, B: false });
+                    runningFieldsRef.current = { A: false, B: false };
+                    setRunningFields({ A: false, B: false });
+                    sessionTogetherRef.current = false;
+                    if (realtimeMonitorInterval.current) {
+                        clearTimeout(realtimeMonitorInterval.current);
+                        realtimeMonitorInterval.current = null;
+                    }
+                    if (liveIntervalRef.current) {
+                        clearInterval(liveIntervalRef.current);
+                        liveIntervalRef.current = null;
+                    }
+                    clearAutoStopTimeout();
+                    autoStopDeadlineRef.current = 0;
+                };
+
+                var sendStop = function() {
+                    var stopPayload = discard
+                        ? { abort: true, discard: true, operator_stop: true }
+                        : { operator_stop: true, save: true };
+                    axios.post("/stop-realtime", stopPayload).then(function() {
+                        if (!window.SIMUST_PUBLIC) return;
+                        var tries = 0;
+                        var verify = function() {
+                            tries += 1;
+                            axios.get('/remote/status').then(function(st) {
+                                var pb = st.data && st.data['playback-status'];
+                                var state = (pb && pb.state) || '';
+                                var alive = !!(pb && pb.processes_alive);
+                                var err = st.data && st.data.last_remote_error;
+                                var act = st.data && st.data.last_remote_action;
+                                if ((!alive && (state === 'idle' || state === 'aborted' || state === 'completed' || state === '')) || tries >= 12) {
+                                    showToast(discard
+                                        ? "Stop sent to lab. Session discarded."
+                                        : "Realtime stopped — session and video kept.",
+                                        alive ? 'info' : 'success');
+                                    return;
+                                }
+                                if (err && act === 'stop-realtime') {
+                                    showToast("Lab did not stop: " + err, 'error');
+                                    return;
+                                }
+                                setTimeout(verify, 400);
+                            }).catch(function() {
+                                if (tries < 12) setTimeout(verify, 400);
+                            });
+                        };
+                        setTimeout(verify, 400);
+                    }).catch(function(e) {
+                        console.error(e);
+                        showToast("Could not send Stop to the lab", 'error');
+                    });
+                    finishUiStop();
+                    showToast(discard
+                        ? (window.SIMUST_PUBLIC
+                            ? "Discarding on the lab…"
+                            : "Test discarded. Nothing was saved.")
+                        : (window.SIMUST_PUBLIC
+                            ? "Stopping on the lab — saving session…"
+                            : "Realtime stopped. Session and video saved."),
+                        discard ? 'info' : 'success');
+                };
+
+                if (discard) {
                     sessionAbortedRef.current = true;
                     sessionSavedRef.current = true;
                     clearResultsDisplay();
-                } else if (realtimeRunningRef.current && !sessionSavedRef.current && reportData && reportData.actions && reportData
-                    .actions.length) {
-                    showToast("Saving session before stopping…", 'info');
-                    handlePlaybackComplete().then(function() {
-                        sessionSavedRef.current = true;
-                        showToast("Session saved", 'success');
-                    });
+                    sendStop();
+                    return;
                 }
-                setInstagramOff();
-                // Always send Stop — Mode 2 can leave UI "not running" while
-                // smart_simust_player / simust_realtime orphans are still alive.
-                var stopPayload = abort
-                    ? { abort: true, discard: true, operator_stop: true }
-                    : { operator_stop: true };
-                axios.post("/stop-realtime", stopPayload).then(function() {
-                    if (!window.SIMUST_PUBLIC) return;
-                    var tries = 0;
-                    var verify = function() {
-                        tries += 1;
-                        axios.get('/remote/status').then(function(st) {
-                            var pb = st.data && st.data['playback-status'];
-                            var state = (pb && pb.state) || '';
-                            var alive = !!(pb && pb.processes_alive);
-                            var err = st.data && st.data.last_remote_error;
-                            var act = st.data && st.data.last_remote_action;
-                            if ((!alive && (state === 'idle' || state === 'aborted' || state === '')) || tries >= 12) {
-                                showToast(abort
-                                    ? "Stop sent to lab. Session discarded."
-                                    : "Realtime stopped", alive ? 'info' : 'success');
-                                return;
-                            }
-                            if (err && act === 'stop-realtime') {
-                                showToast("Lab did not stop: " + err, 'error');
-                                return;
-                            }
-                            setTimeout(verify, 400);
-                        }).catch(function() {
-                            if (tries < 12) setTimeout(verify, 400);
-                        });
-                    };
-                    setTimeout(verify, 400);
-                }).catch(function(e) {
-                    console.error(e);
-                    showToast("Could not send Stop to the lab", 'error');
-                });
-                realtimeRunningRef.current = false;
-                setRealtimeRunning(false);
-                realtimePausedRef.current = false;
-                setRealtimePaused(false);
-                pausedFieldsRef.current = { A: false, B: false };
-                setPausedFields({ A: false, B: false });
-                runningFieldsRef.current = { A: false, B: false };
-                setRunningFields({ A: false, B: false });
-                sessionTogetherRef.current = false;
-                if (realtimeMonitorInterval.current) { clearTimeout(realtimeMonitorInterval.current);
-                    realtimeMonitorInterval.current = null; }
-                if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current);
-                    liveIntervalRef.current = null; }
-                clearAutoStopTimeout();
-                autoStopDeadlineRef.current = 0;
-                showToast(abort
-                    ? (window.SIMUST_PUBLIC
-                        ? "Stopping on the lab…"
-                        : "Test stopped. Nothing was saved. Ready for the next test.")
-                    : "Realtime stopped", 'info');
+
+                // Graceful Stop: pull latest rings, save mid-test/completed actions, keep video.
+                if (!sessionSavedRef.current) {
+                    showToast("Saving session before stop…", 'info');
+                    fetchRealtimeResults(false, true).catch(function() { return null; }).then(function() {
+                        return handlePlaybackComplete();
+                    }).then(function() {
+                        sessionSavedRef.current = true;
+                    }).catch(function() {
+                        sessionSavedRef.current = true;
+                    }).then(function() {
+                        sendStop();
+                    });
+                    return;
+                }
+                sendStop();
             };
 
             var displayResultsOnScreen2 = function() {
@@ -6531,7 +7604,11 @@
                         setSearchQuery: setSearchQuery
                     }) :
                     activeTab === 'settings' && isOperatorStaff ?
-                    React.createElement(HomographyCalibration, null) :
+                    React.createElement(React.Fragment, null,
+                        React.createElement(HomographyCalibration, null),
+                        React.createElement(GoalAreaCalibration, null),
+                        React.createElement(HipZoneCalibration, null)
+                    ) :
                     activeTab === 'results' && isAdmin ?
                     React.createElement(React.Fragment, null,
                         React.createElement('div', { className: "flex justify-between items-center mb-4 flex-wrap gap-2" },

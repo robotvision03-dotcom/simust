@@ -142,10 +142,11 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
             "L02-Activated/S2.T1",
         )
         simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
-        self.assertIn("L02-Activated/S2.T1", progress["unlocked_levels"])
-        self.assertNotIn("L02-Activated/S2.T1", progress["manually_locked_levels"])
+        # Admin sticky lock must survive heal (lock/unlock UI was snapping back).
+        self.assertNotIn("L02-Activated/S2.T1", progress["unlocked_levels"])
+        self.assertIn("L02-Activated/S2.T1", progress["manually_locked_levels"])
 
-    def test_heal_unlock_gaps_fills_hp_elite_holes_not_wc_wall(self):
+    def test_heal_unlock_gaps_fills_unlocked_holes_keeps_admin_locks(self):
         progress = simust_progress.default_progress()
         progress["unlocked_levels"] = [
             "L00-Foundation",
@@ -166,12 +167,38 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
             "L03-HighPerformance/S2.T5",
             "L03-HighPerformance/S3.T1",
             "L04-Elite/S1.T3",
-            "L04-Elite/S3.T5",
         ):
-            self.assertIn(lid, progress["unlocked_levels"], lid)
-            self.assertNotIn(lid, progress["manually_locked_levels"], lid)
+            self.assertIn(lid, progress["manually_locked_levels"], lid)
+            self.assertNotIn(lid, progress["unlocked_levels"], lid)
+        # Accidental gap with no admin lock still fills.
+        self.assertIn("L04-Elite/S3.T5", progress["unlocked_levels"])
         self.assertIn("L05-WorldClass/S1.T1", progress["manually_locked_levels"])
         self.assertNotIn("L05-WorldClass/S1.T1", progress["unlocked_levels"])
+
+    def test_heal_fills_missing_middle_without_lock(self):
+        progress = simust_progress.default_progress()
+        progress["unlocked_levels"] = [
+            "L00-Foundation",
+            "L02-Activated/S1.T5",
+            "L02-Activated/S2.T2",
+        ]
+        progress["manually_locked_levels"] = []
+        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
+        self.assertIn("L02-Activated/S2.T1", progress["unlocked_levels"])
+        self.assertNotIn("L02-Activated/S2.T1", progress["manually_locked_levels"])
+
+    def test_sync_keeps_admin_lock_after_mark(self):
+        progress = simust_progress.default_progress()
+        progress["unlocked_levels"] = [
+            "L00-Foundation",
+            "L02-Activated/S1.T5",
+            "L02-Activated/S2.T1",
+            "L02-Activated/S2.T2",
+        ]
+        simust_progress.mark_manual_lock(progress, level_id="L02-Activated/S2.T1")
+        simust_progress.sync_current_development_level(progress, ALL_LEVELS)
+        self.assertIn("L02-Activated/S2.T1", progress["manually_locked_levels"])
+        self.assertNotIn("L02-Activated/S2.T1", progress["unlocked_levels"])
 
     def test_open_level_skips_manually_locked(self):
         from app import _open_level

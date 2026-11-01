@@ -1,4 +1,4 @@
-"""Operator Stop discards the in-progress test and does not keep results."""
+"""Abort/discard deletes in-progress folders; graceful operator Stop keeps them."""
 
 import os
 import sys
@@ -117,6 +117,7 @@ class StaleRemoteStopTests(unittest.TestCase):
     def test_local_operator_stop_is_not_ignored(self):
         simust_app._realtime_session_active = True
         self.assertFalse(simust_app.should_ignore_remote_stop({"abort": True}))
+        self.assertFalse(simust_app.should_ignore_remote_stop({"operator_stop": True, "save": True}))
 
     def test_active_remote_stop_is_honored_even_if_queued_string_is_old(self):
         """Clock-skewed created_at strings must not drop a live Stop."""
@@ -127,6 +128,65 @@ class StaleRemoteStopTests(unittest.TestCase):
             "abort": True,
             "_queued_at": "2020-01-01T00:00:00",
         }))
+
+
+class GracefulStopKeepsSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="simust-stop-save-")
+        self.prev_dir = simust_app.REALTIME_RECORDINGS_DIR
+        self.prev_start = list(simust_app._realtime_dirs_at_start or ())
+        self.prev_results = simust_app.current_results_dir
+        self.prev_active = simust_app._realtime_session_active
+        self.prev_abort = simust_app.realtime_aborted
+        simust_app.REALTIME_RECORDINGS_DIR = self.tmp
+        simust_app._realtime_dirs_at_start = set()
+        os.makedirs(os.path.join(self.tmp, "live_session"), exist_ok=True)
+        with open(os.path.join(self.tmp, "live_session", "results.json"), "w", encoding="utf-8") as f:
+            f.write("[]")
+        simust_app.current_results_dir = os.path.join(self.tmp, "live_session")
+        simust_app._realtime_session_active = True
+        simust_app.realtime_aborted = False
+        simust_app._realtime_dirs_at_start = set()
+
+    def tearDown(self):
+        simust_app.REALTIME_RECORDINGS_DIR = self.prev_dir
+        simust_app._realtime_dirs_at_start = set(self.prev_start)
+        simust_app.current_results_dir = self.prev_results
+        simust_app._realtime_session_active = self.prev_active
+        simust_app.realtime_aborted = self.prev_abort
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_operator_stop_without_abort_does_not_discard_folders(self):
+        """Graceful Stop keeps the video/results folder for mid-test save."""
+        from unittest.mock import patch
+
+        with patch.object(simust_app, "force_kill_smart_player"), \
+             patch.object(simust_app, "stop_realtime_camera_process"), \
+             patch.object(simust_app, "clear_image_action_cue"), \
+             patch.object(simust_app, "write_playback_status"), \
+             patch.object(simust_app, "write_pause_setting"), \
+             patch.object(simust_app, "_realtime_is_running", return_value=True):
+            result = simust_app.apply_stop_realtime({"operator_stop": True, "save": True})
+        self.assertFalse(result.get("aborted"))
+        self.assertEqual(result.get("discarded"), [])
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "live_session")))
+        self.assertFalse(simust_app.realtime_aborted)
+
+    def test_explicit_abort_still_discards_folders(self):
+        from unittest.mock import patch
+
+        with patch.object(simust_app, "force_kill_smart_player"), \
+             patch.object(simust_app, "stop_realtime_camera_process"), \
+             patch.object(simust_app, "clear_image_action_cue"), \
+             patch.object(simust_app, "write_playback_status"), \
+             patch.object(simust_app, "write_pause_setting"), \
+             patch.object(simust_app, "clear_live_snapshot"), \
+             patch.object(simust_app, "_realtime_is_running", return_value=True):
+            result = simust_app.apply_stop_realtime({"abort": True, "discard": True, "operator_stop": True})
+        self.assertTrue(result.get("aborted"))
+        self.assertIn("live_session", result.get("discarded") or [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "live_session")))
 
 
 class Screen2DisplayTests(unittest.TestCase):

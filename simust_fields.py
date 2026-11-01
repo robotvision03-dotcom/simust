@@ -16,6 +16,7 @@ STITCHED_HEIGHT = 1080
 HALF_WIDTH = STITCHED_WIDTH // 2
 
 # Player polygon for Field A (left half of ~1280-wide processing frame / stitch scale)
+# 17 closed points — HIP person tracking zone (Settings can recalibrate).
 POLYGON_POINTS_A: List[Tuple[int, int]] = [
     (12, 297),
     (10, 254),
@@ -57,8 +58,29 @@ POLYGON_POINTS_B: List[Tuple[int, int]] = [
     (654, 285),
 ]
 
+_BUILTIN_POLYGON_POINTS_A: List[Tuple[int, int]] = list(POLYGON_POINTS_A)
+_BUILTIN_POLYGON_POINTS_B: List[Tuple[int, int]] = list(POLYGON_POINTS_B)
+
 # Back-compat alias used by existing code
 POLYGON_POINTS = POLYGON_POINTS_A
+
+
+def reload_hip_zone_calibration() -> None:
+    """Restore built-in HIP polygons, then apply Settings calibration overrides."""
+    POLYGON_POINTS_A[:] = list(_BUILTIN_POLYGON_POINTS_A)
+    POLYGON_POINTS_B[:] = list(_BUILTIN_POLYGON_POINTS_B)
+    try:
+        import simust_hip_calibrate
+
+        simust_hip_calibrate.apply_overrides_to_polygons(POLYGON_POINTS_A, POLYGON_POINTS_B)
+    except Exception:
+        pass
+
+
+try:
+    reload_hip_zone_calibration()
+except Exception:
+    pass
 
 # Each field uses screens 1–6. A1 is the old cabinet 12, B1 the old cabinet 5.
 FIELD_A_SCREENS: Set[str] = {"A1", "A2", "A3", "A4", "A5", "A6"}

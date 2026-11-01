@@ -115,9 +115,91 @@ def sanitize_session(session_report: Dict[str, Any]) -> Dict[str, Any]:
     return clean
 
 
+PROFILE_FIELDS = (
+    "name",
+    "surname",
+    "role",
+    "club",
+    "team",
+    "age",
+    "gender",
+    "email",
+    "birthday",
+)
+
+
+def profile_updated_at(account: Optional[Dict[str, Any]]) -> float:
+    """Unix seconds for last profile edit (0 when never stamped)."""
+    try:
+        return float((account or {}).get("profile_updated_at") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def stamp_profile(account: Dict[str, Any], when: Optional[float] = None) -> Dict[str, Any]:
+    """Mark profile fields as freshly edited so lab↔host merge keeps the new values."""
+    account = account if isinstance(account, dict) else {}
+    account["profile_updated_at"] = float(when if when is not None else time.time())
+    return account
+
+
+def apply_newer_profile(
+    dst: Dict[str, Any],
+    src: Dict[str, Any],
+    *,
+    fields: tuple = PROFILE_FIELDS,
+) -> bool:
+    """Copy profile fields from ``src`` into ``dst`` when ``src`` is newer.
+
+    Used both directions (host→lab pull and lab→host ingest) so a name change on
+    My SIMUST / remote operator reaches local 127.0.0.1:8000 and is not wiped by
+    an older lab push.
+    """
+    dst = dst if isinstance(dst, dict) else {}
+    src = src if isinstance(src, dict) else {}
+    src_ts = profile_updated_at(src)
+    dst_ts = profile_updated_at(dst)
+    if src_ts < dst_ts:
+        return False
+
+    changed = False
+    if src_ts > dst_ts:
+        for field in fields:
+            if field not in src:
+                continue
+            value = src.get(field)
+            if value is None:
+                value = ""
+            if dst.get(field) != value:
+                dst[field] = value
+                changed = True
+        dst["profile_updated_at"] = src_ts
+        return True
+
+    # Equal stamps (including both 0 / legacy): fill only EMPTY destination fields.
+    # Never overwrite a non-empty local name/club with a different peer value when
+    # stamps tie — that was wiping Manage Players renames on the 15s host pull.
+    for field in fields:
+        if field == "role":
+            if not src.get(field):
+                continue
+        value = src.get(field)
+        if value is None or value == "":
+            continue
+        if dst.get(field) in (None, ""):
+            dst[field] = value
+            changed = True
+    # Only adopt src's stamp when it is real. Never mint time.time() here —
+    # that previously advanced lab stamps while keeping old names, then lab
+    # push wiped a newer remote-operator rename on My SIMUST.
+    if changed and src_ts > 0 and src_ts >= dst_ts:
+        dst["profile_updated_at"] = src_ts
+    return changed
+
+
 def public_account_payload(username: str, user: Dict[str, Any]) -> Dict[str, Any]:
     """Account fields the host needs to show a dashboard. Never send raw passwords."""
-    return {
+    payload = {
         "username": username,
         "name": user.get("name", ""),
         "surname": user.get("surname", ""),
@@ -127,9 +209,14 @@ def public_account_payload(username: str, user: Dict[str, Any]) -> Dict[str, Any
         "age": user.get("age", ""),
         "gender": user.get("gender", ""),
         "email": user.get("email", ""),
+        "birthday": user.get("birthday", ""),
         "progress": user.get("progress") or {},
         "password_hash": user.get("password") or "",
     }
+    ts = profile_updated_at(user)
+    if ts > 0:
+        payload["profile_updated_at"] = ts
+    return payload
 
 
 def _sign(body: bytes, ts: str, nonce: str = "") -> str:
@@ -293,14 +380,58 @@ def push_accounts(users: Dict[str, Any]) -> None:
         enqueue(payload)
 
 
-def push_accounts_async(users: Dict[str, Any]) -> None:
-    global _users_push_at
-    now = time.time()
+_pending_users_push: Optional[Dict[str, Any]] = None
+_users_push_timer: Optional[threading.Timer] = None
+
+
+def push_accounts_async(users: Dict[str, Any], *, force: bool = False) -> None:
+    """Push accounts to My SIMUST. ``force`` always sends the latest snapshot.
+
+    Without force, updates within 2s are coalesced so a rename is never dropped
+    by the debounce (previous code returned early and lost the new names).
+    """
+    global _users_push_at, _pending_users_push, _users_push_timer
+    snapshot = dict(users or {})
+
+    def _launch(payload: Dict[str, Any]) -> None:
+        threading.Thread(
+            target=push_accounts, args=(payload,), daemon=True, name="simust-push-users"
+        ).start()
+
     with _users_push_lock:
-        if now - _users_push_at < 2:
+        _pending_users_push = snapshot
+        now = time.time()
+        if force or now - _users_push_at >= 2:
+            _users_push_at = now
+            pending = _pending_users_push
+            _pending_users_push = None
+            if _users_push_timer is not None:
+                try:
+                    _users_push_timer.cancel()
+                except Exception:
+                    pass
+                _users_push_timer = None
+            _launch(pending)
             return
-        _users_push_at = now
-    threading.Thread(target=push_accounts, args=(users,), daemon=True, name="simust-push-users").start()
+        # Coalesce: schedule one flush of the latest pending dict.
+        if _users_push_timer is not None:
+            return
+        delay = max(0.05, 2.0 - (now - _users_push_at))
+
+        def _flush_pending() -> None:
+            global _users_push_at, _pending_users_push, _users_push_timer
+            with _users_push_lock:
+                _users_push_timer = None
+                pending = _pending_users_push
+                _pending_users_push = None
+                if pending is None:
+                    return
+                _users_push_at = time.time()
+            _launch(pending)
+
+        _users_push_timer = threading.Timer(delay, _flush_pending)
+        _users_push_timer.daemon = True
+        _users_push_timer.start()
 
 
 def push_reports_dir(reports_dir: str, users: Optional[Dict[str, Any]] = None) -> int:
@@ -437,7 +568,7 @@ def merge_remote_reservations(local: list, remote: list, prune_source: str = "",
 
 
 def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list:
-    """Add VPS-only users to the lab list. Does not overwrite existing lab passwords."""
+    """Import VPS accounts into the lab. Newer profile stamps win for name/club/etc."""
     added = []
     for username, account in (remote or {}).items():
         username = (username or "").strip()
@@ -445,7 +576,7 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
             continue
         account = account or {}
         if username not in local:
-            local[username] = {
+            row = {
                 "password": account.get("password_hash") or "",
                 "name": account.get("name", ""),
                 "surname": account.get("surname", ""),
@@ -455,6 +586,7 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
                 "age": account.get("age", ""),
                 "gender": account.get("gender", ""),
                 "email": account.get("email", ""),
+                "birthday": account.get("birthday", ""),
                 "progress": account.get("progress") or {
                     "current_level": "L00-Foundation",
                     "unlocked_levels": [],
@@ -465,12 +597,13 @@ def merge_remote_accounts(local: Dict[str, Any], remote: Dict[str, Any]) -> list
                     "challenge_results": {},
                 },
             }
+            if profile_updated_at(account) > 0:
+                row["profile_updated_at"] = profile_updated_at(account)
+            local[username] = row
             added.append(username)
             continue
         existing = local[username]
-        for field in ("name", "surname", "role", "club", "team", "age", "gender", "email"):
-            if not existing.get(field) and account.get(field):
-                existing[field] = account[field]
+        apply_newer_profile(existing, account)
         if account.get("progress"):
             try:
                 import simust_progress
@@ -495,6 +628,7 @@ def pull_and_merge_accounts(
     load_reservations_fn=None,
     save_reservations_fn=None,
     apply_reservation_unlocks_fn=None,
+    mutate_lock=None,
 ) -> list:
     global _users_pull_at
     now = time.time()
@@ -512,9 +646,26 @@ def pull_and_merge_accounts(
     remote_accounts = remote.get("accounts") if isinstance(remote.get("accounts"), dict) else {}
     added = []
     if remote_accounts:
-        local = load_users_fn()
-        added = merge_remote_accounts(local, remote_accounts)
-        save_users_fn(local)
+        lock = mutate_lock if mutate_lock is not None else threading.Lock()
+        with lock:
+            local = load_users_fn()
+            added = merge_remote_accounts(local, remote_accounts)
+            # Re-check disk so a concurrent Manage Players save is not clobbered.
+            fresh = load_users_fn()
+            for username, row in list(local.items()):
+                disk = fresh.get(username)
+                if disk is None:
+                    fresh[username] = row
+                    continue
+                if profile_updated_at(disk) > profile_updated_at(row):
+                    # Staff edit landed while we merged — keep disk profile, still
+                    # allow a strictly newer remote stamp to apply.
+                    apply_newer_profile(disk, (remote_accounts or {}).get(username) or {})
+                    fresh[username] = disk
+                else:
+                    fresh[username] = row
+            save_users_fn(fresh)
+            local = fresh
         if added:
             if reports_dir:
                 for username in added:

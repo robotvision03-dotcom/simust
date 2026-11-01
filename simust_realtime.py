@@ -312,9 +312,16 @@ except Exception:
     ALL_FIELDS = {"A": field_config("A"), "B": field_config("B")}
 
 # ============================================================================
-# POLYGON ROI – Field A (left) and Field B (right)
+# POLYGON ROI – Field A (left) and Field B (right) — HIP person tracking zones
 # ============================================================================
 # POLYGON_POINTS kept as Field A alias for older call sites.
+# Settings → HIP Zone Calibration can override the 17 closed points.
+
+
+def reload_hip_zone_calibration() -> None:
+    """Re-read Settings HIP-zone polygons into POLYGON_POINTS_* (live process)."""
+    if simust_fields is not None and hasattr(simust_fields, "reload_hip_zone_calibration"):
+        simust_fields.reload_hip_zone_calibration()
 
 # ============================================================================
 # UPDATED ANALYSIS CONSTANTS (from Code A)
@@ -389,7 +396,7 @@ GOAL_SCREEN_THRESHOLDS = {
     '7': 73,  # Field B right-edge goal / keypoint area
 }
 
-# Goal lines for 1280x360
+# Goal lines for 1280x360 (defaults; Settings calibration can override A1–A6 / B1–B6)
 GOAL_LINES = {
     "1": {"p0": (629, 293), "p1":  (12, 285)},
     "2": {"p0": (2, 298), "p1": (3, 253)},
@@ -408,6 +415,28 @@ GOAL_LINES = {
     "9L": {"p0": (642, 241), "p1": (647, 191)},
     "6L": {"p0": (1262, 181), "p1": (1273, 222)},
 }
+
+_BUILTIN_GOAL_LINES = {k: dict(v) for k, v in GOAL_LINES.items()}
+
+try:
+    import simust_goal_calibrate
+
+    simust_goal_calibrate.apply_overrides_to(GOAL_LINES)
+except Exception:
+    simust_goal_calibrate = None  # type: ignore
+
+
+def reload_goal_line_calibration() -> None:
+    """Re-read Settings goal-area calibration into GOAL_LINES (live process)."""
+    GOAL_LINES.clear()
+    for key, line in _BUILTIN_GOAL_LINES.items():
+        GOAL_LINES[key] = dict(line)
+    if simust_goal_calibrate is None:
+        return
+    try:
+        simust_goal_calibrate.apply_overrides_to(GOAL_LINES)
+    except Exception:
+        pass
 
 # Probe markers only. Scoring uses GOAL_LINES + proj_t + GOAL_SCREEN_THRESHOLDS.
 SUGGESTED_GOAL_HEIGHT_PX = 90
@@ -899,7 +928,10 @@ class DetectionTracker:
         except Exception:
             pass
 
-        # Filter players into Field A / Field B play zones (active only)
+        # Filter players into Field A / Field B HIP zones (Settings may recalibrate)
+        reload_hip_zone_calibration()
+        self.polygon = POLYGON_POINTS_A
+        self.polygons = {"A": POLYGON_POINTS_A, "B": POLYGON_POINTS_B}
         poly_a = (self.polygons or {}).get("A") or self.polygon
         poly_b = (self.polygons or {}).get("B")
         filtered = []
@@ -4050,6 +4082,10 @@ class SimustRealtimeCamera:
 
         self.window_name = "SIMUST REALTIME - Camera Feed"
         self.window_created = False
+        # OpenCV on Windows often reports WND_PROP_VISIBLE < 1 for a few pumps
+        # after namedWindow — do not treat that as the user hitting X.
+        self._viz_seen_visible = False
+        self._viz_open_grace_until = 0.0
 
         lab = {}
         if simust_homography is not None:
@@ -4514,6 +4550,8 @@ class SimustRealtimeCamera:
         self.destroy_window()
 
     def get_goal_lines(self, screens, action, keypoints):
+        # Pick up Settings saves without restarting the camera process.
+        reload_goal_line_calibration()
         lines = {}
         action_u = (action or "").upper()
         # Union screens + keypoints so area 7 still gets a mouth line when the
@@ -5987,12 +6025,14 @@ class SimustRealtimeCamera:
 
         frame = self.draw_goal_lines(frame)
 
+        reload_hip_zone_calibration()
         for fid, poly in (("A", POLYGON_POINTS_A), ("B", POLYGON_POINTS_B)):
             if fid not in active:
                 continue
             if poly:
                 pts = np.array(poly, dtype=np.int32)
-                color = COLOR_POLYGON if fid == "A" else (0, 200, 255)
+                # Red outline = HIP person zone (17-point calibrated polygon)
+                color = (0, 0, 255) if fid == "A" else (0, 80, 255)
                 cv2.polylines(frame, [pts], True, color, 2)
 
         any_active = any(
@@ -6768,14 +6808,21 @@ class SimustRealtimeCamera:
         """True when the user closed the feed with the window X (or it is gone)."""
         if not self.window_created:
             return False
+        # Fresh namedWindow / imshow often reports not-visible for a few frames.
+        if time.time() < float(getattr(self, "_viz_open_grace_until", 0.0) or 0.0):
+            return False
         try:
             visible = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
             # OpenCV: <1 means hidden/closed; some builds return -1 after destroy.
-            if visible < 1:
-                return True
-        except Exception:
+            if visible >= 1:
+                self._viz_seen_visible = True
+                return False
+            # Only trust "closed" after we have seen the window visible once.
+            if not getattr(self, "_viz_seen_visible", False):
+                return False
             return True
-        return False
+        except Exception:
+            return bool(getattr(self, "_viz_seen_visible", False))
 
     def _persist_visualization_off(self):
         """Keep the feed closed after the user hits X (do not reopen next frame)."""
@@ -6793,6 +6840,8 @@ class SimustRealtimeCamera:
     def _on_viz_window_closed_by_user(self):
         self.visualization_enabled = False
         self.window_created = False
+        self._viz_seen_visible = False
+        self._viz_open_grace_until = 0.0
         self._persist_visualization_off()
         self._close_viz_window()
         print("Camera feed closed (X) — visualization off")
@@ -6811,6 +6860,8 @@ class SimustRealtimeCamera:
                 cv2.resizeWindow(self.window_name, DISPLAY_WIDTH, DISPLAY_HEIGHT)
                 cv2.moveWindow(self.window_name, 100, 100)
                 self.window_created = True
+                self._viz_seen_visible = False
+                self._viz_open_grace_until = time.time() + 2.0
             except Exception as exc:
                 print(f"Could not open camera feed window: {exc}")
                 return
@@ -6854,6 +6905,8 @@ class SimustRealtimeCamera:
         except Exception:
             pass
         self.window_created = False
+        self._viz_seen_visible = False
+        self._viz_open_grace_until = 0.0
 
     def destroy_window(self):
         self._close_viz_window()
@@ -6879,6 +6932,11 @@ class SimustRealtimeCamera:
         print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
         if not self.visualization_enabled:
             self._close_viz_window()
+        else:
+            # Toggle ON while already running — force a fresh pop-up next frame.
+            self.window_created = False
+            self._viz_seen_visible = False
+            self._viz_open_grace_until = 0.0
 
     def _freeze_for_pause(self):
         with self._pause_lock:
