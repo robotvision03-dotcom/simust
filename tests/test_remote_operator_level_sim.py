@@ -38,10 +38,10 @@ REPORT_PATH = os.path.join(ROOT, "remote_operator_level_sim_report.txt")
 ISSUES_PATH = os.path.join(ROOT, "remote_operator_level_sim_issues.txt")
 
 # Default gates used by the product.
-PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}  # 75%, 70
-FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}  # 50%
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}  # AE-only gate
-FAIL_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}  # under AE 75
+PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 65.0}  # AE ≥65
+FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 64.0}  # under AE 65
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 70.0}  # AE-only ≥70
+FAIL_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 69.0}  # under AE 70
 
 
 def _accuracy(stats: dict) -> float:
@@ -138,20 +138,10 @@ class RemoteOperatorLevelSim(unittest.TestCase):
         if "L01-Entry/S1.T1" not in progress["unlocked_levels"]:
             issues.append("Passing Foundation set 4 (SF-180N) did not unlock Entry A-T1.")
 
-        # Entry skips S1.T5. Later bands keep S1.T5 then S2; S2.T5 skipped.
-        # HP / Elite / WC add S3.T1..S3.T4 (S3.T5 only kept as World Class end).
+        # Every listed sub-level is in the unlock chain (including all S*.T5).
         series = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
-            and not level.endswith("/S2.T5")
-            and (
-                not level.endswith("/S3.T5")
-                or level.startswith("L05-")
-            )
-            and (
-                not level.endswith("/S1.T5")
-                or not level.startswith("L01-Entry")
-            )
         ]
         for level in series:
             progress = users[PLAYER_ID]["progress"]
@@ -163,7 +153,7 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             ok, reason = simust_progress.can_play(progress, level, "")
             self.assertTrue(ok, f"{level}: {reason}")
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (0, 75), level)
+            self.assertEqual((th_acc, th_ae), (0, 70), level)
 
             nxt = get_next_level(level)
             # Fail must not unlock next.
@@ -185,51 +175,66 @@ class RemoteOperatorLevelSim(unittest.TestCase):
             )
 
             if set_name == "S1.T4":
-                next_band = {
-                    "L01-Entry": "L02-Activated/S1.T1",
-                    "L02-Activated": "L02-Activated/S1.T5",
-                    "L03-HighPerformance": "L03-HighPerformance/S1.T5",
-                    "L04-Elite": "L04-Elite/S1.T5",
-                    "L05-WorldClass": "L05-WorldClass/S1.T5",
-                }.get(band)
-                if next_band and next_band not in progress["unlocked_levels"]:
+                next_set = f"{band}/S1.T5"
+                if next_set not in progress["unlocked_levels"]:
                     issues.append(
-                        f"After passing {level} (set 4), {next_band} is not unlocked."
+                        f"After passing {level} (set 4), {next_set} is not unlocked."
+                    )
+                else:
+                    report.append(f"  Set-4 check ({level}): opened {next_set}.")
+            if set_name == "S1.T5":
+                next_after_t5 = {
+                    "L01-Entry": "L02-Activated/S1.T1",
+                    "L02-Activated": "L02-Activated/S2.T1",
+                    "L03-HighPerformance": "L03-HighPerformance/S2.T1",
+                    "L04-Elite": "L04-Elite/S2.T1",
+                    "L05-WorldClass": "L05-WorldClass/S2.T1",
+                }.get(band)
+                if next_after_t5 and next_after_t5 not in progress["unlocked_levels"]:
+                    issues.append(
+                        f"After passing {level}, {next_after_t5} is not unlocked."
                     )
                 else:
                     report.append(
-                        f"  Set-4 check ({level}): opened {next_band}."
+                        f"  Set-5 check ({level}): opened {next_after_t5}."
                     )
             if set_name == "S2.T4":
-                next_band = {
+                next_set = f"{band}/S2.T5"
+                if next_set not in progress["unlocked_levels"]:
+                    issues.append(
+                        f"After passing {level}, {next_set} is not unlocked. "
+                        "S2.T4 must open S2.T5."
+                    )
+            if set_name == "S2.T5":
+                next_after_s2 = {
                     "L02-Activated": "L03-HighPerformance/S1.T1",
                     "L03-HighPerformance": "L03-HighPerformance/S3.T1",
                     "L04-Elite": "L04-Elite/S3.T1",
                     "L05-WorldClass": "L05-WorldClass/S3.T1",
                 }.get(band)
-                if next_band and next_band not in progress["unlocked_levels"]:
+                if next_after_s2 and next_after_s2 not in progress["unlocked_levels"]:
                     issues.append(
-                        f"After passing {level}, {next_band} is not unlocked. "
-                        "S2.T4 must open the next band / that band's S3.T1."
-                    )
-                else:
-                    report.append(
-                        f"  Set-4 check ({level}): opened {next_band} (S2.T4 unlocks next)."
+                        f"After passing {level}, {next_after_s2} is not unlocked."
                     )
             if set_name == "S3.T4":
-                next_band = {
+                next_set = f"{band}/S3.T5"
+                if next_set not in progress["unlocked_levels"]:
+                    issues.append(
+                        f"After passing {level}, {next_set} is not unlocked. "
+                        "S3.T4 must open S3.T5."
+                    )
+            if set_name == "S3.T5":
+                next_after_s3 = {
                     "L03-HighPerformance": "L04-Elite/S1.T1",
                     "L04-Elite": "L05-WorldClass/S1.T1",
-                    "L05-WorldClass": "L05-WorldClass/S3.T5",
                 }.get(band)
-                if next_band and next_band not in progress["unlocked_levels"]:
+                if next_after_s3 and next_after_s3 not in progress["unlocked_levels"]:
                     issues.append(
-                        f"After passing {level}, {next_band} is not unlocked. "
-                        "S3.T4 must open the next band (or World Class S3.T5)."
+                        f"After passing {level}, {next_after_s3} is not unlocked."
                     )
-                else:
+                elif next_after_s3:
                     report.append(
-                        f"  Set-4 check ({level}): opened {next_band} (S3.T4 unlocks next)."
+                        f"  Set-5 check ({level}): opened {next_after_s3}."
                     )
 
             if nxt:

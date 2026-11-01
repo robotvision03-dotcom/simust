@@ -3424,8 +3424,12 @@
             var screensaverOnState = useState(false);
             var screensaverOn = screensaverOnState[0];
             var setScreensaverOn = screensaverOnState[1];
+            var displayOnState = useState(true);
+            var displayOn = displayOnState[0];
+            var setDisplayOn = displayOnState[1];
             var systemOnRef = useRef(true);
             var screensaverOnRef = useRef(false);
+            var displayOnRef = useRef(true);
             var playBookingsState = useState([]);
             var playBookings = playBookingsState[0];
             var setPlayBookings = playBookingsState[1];
@@ -4058,6 +4062,26 @@
                 setFilteredPlayers([]);
                 updateProgressForPlayer(player, { preferDefaults: true });
                 loadPlayerSessionsFromBackend(player.id);
+                // No reservation → arm password start so Realtime Play can go active.
+                if (!playerHasOpenBooking(player.id, 'A')) {
+                    setAdminTestPlay(true);
+                    if (!String(adminTestPass || '').trim()) {
+                        setAdminTestPass('sina27');
+                    }
+                    // Drop stale "running" from a prior Mode 2 soft-finish so Play lights up.
+                    axios.get('/playback-status').then(function(res) {
+                        var alive = !!(res.data && res.data.processes_alive);
+                        var st = String((res.data && res.data.state) || '');
+                        if (alive || st === 'playing' || st === 'loading' || st === 'starting' ||
+                            st === 'paused' || st === 'final' || st === 'wait_final' || st === 'playing_final') {
+                            return;
+                        }
+                        runningFieldsRef.current = { A: false, B: false };
+                        setRunningFields({ A: false, B: false });
+                        realtimeRunningRef.current = false;
+                        setRealtimeRunning(false);
+                    }).catch(function() {});
+                }
                 showToast("Selected Field A: " + player.name + ' ' + player.surname, 'success');
             };
 
@@ -4096,6 +4120,24 @@
                 setFilteredPlayersB([]);
                 updateProgressForPlayerB(player, { preferDefaults: true });
                 loadPlayerSessionsFromBackendB(player.id);
+                if (!playerHasOpenBooking(player.id, 'B')) {
+                    setAdminTestPlay(true);
+                    if (!String(adminTestPass || '').trim()) {
+                        setAdminTestPass('sina27');
+                    }
+                    axios.get('/playback-status').then(function(res) {
+                        var alive = !!(res.data && res.data.processes_alive);
+                        var st = String((res.data && res.data.state) || '');
+                        if (alive || st === 'playing' || st === 'loading' || st === 'starting' ||
+                            st === 'paused' || st === 'final' || st === 'wait_final' || st === 'playing_final') {
+                            return;
+                        }
+                        runningFieldsRef.current = { A: false, B: false };
+                        setRunningFields({ A: false, B: false });
+                        realtimeRunningRef.current = false;
+                        setRealtimeRunning(false);
+                    }).catch(function() {});
+                }
                 showToast("Selected Field B: " + player.name + ' ' + player.surname, 'success');
             };
 
@@ -4822,27 +4864,22 @@
                 var late = stats.late || 0;
                 var acc = ((correct + late) / total) * 100;
                 var ae = stats.avg_ae || 0;
-                var thresholdAE = 70;
-                var thresholdACC = 70;
                 var isFoundation = currentLevelId.toLowerCase().indexOf('foundation') !== -1 || currentLevelId === 'L00-Foundation';
+                var thresholdAE = isFoundation ? 65 : 70;
 
                 if (isFoundation) {
-                    if (subdirectory !== 'SF-180N') {
-                        showToast("SF-30N, SF-60N and SF-110N open by booking only. Score starts at SF-180N.", 'info');
-                        return;
-                    }
-                    if (ae >= 60 && acc >= 70) {
-                        showToast("SF-180N passed. Entry is eligible — book 30 minutes to open it.", 'success');
+                    if (ae >= thresholdAE) {
+                        showToast("Score passed (AE ≥" + thresholdAE + "%). Next Foundation set / Entry unlocks from this final result.", 'success');
                     } else {
-                        showToast("SF-180N needs ≥70% accuracy and ≥60% efficiency before Entry can unlock.", 'info');
+                        showToast("Performance: efficiency=" + ae.toFixed(1) + "%. Need ≥" + thresholdAE + "% AE to level up (ACC is not used).", 'info');
                     }
                     return;
                 }
 
-                if (ae >= 75) {
-                    showToast("Score passed (AE ≥75%). Next series unlocks from this final result.", 'success');
+                if (ae >= thresholdAE) {
+                    showToast("Score passed (AE ≥" + thresholdAE + "%). Next series unlocks from this final result.", 'success');
                 } else {
-                    showToast("Performance: efficiency=" + ae.toFixed(1) + "%. Need ≥75% AE to level up (ACC is not used).", 'info');
+                    showToast("Performance: efficiency=" + ae.toFixed(1) + "%. Need ≥" + thresholdAE + "% AE to level up (ACC is not used).", 'info');
                 }
             };
 
@@ -4973,9 +5010,16 @@
                     level: level,
                     subdirectory: sub || ""
                 };
-                if (adminTestPlay) {
+                if (!playerHasOpenBooking(person.id, fid) || adminTestPlay) {
+                    if (!adminTestPlay) setAdminTestPlay(true);
                     if (!String(adminTestPass || "").trim()) {
-                        showToast(t('adminTestPassRequired', 'Enter the admin password to start a test play.'), "error");
+                        showToast(
+                            t(
+                                'adminTestPassRequired',
+                                'No reservation — enter the admin/coach password to start Realtime Play.'
+                            ),
+                            "error"
+                        );
                         return;
                     }
                     payload.admin_password = String(adminTestPass || "").trim();
@@ -5060,8 +5104,12 @@
                     playerA = null;
                     levelA = "";
                 }
-                var reservedPlay = selectedPlayersAreReserved(playerA && playerA.id, playerB && playerB.id);
-                var useAdminTest = !!adminTestPlay && !reservedPlay;
+                var needsAdminA = !!(playerA && !playerHasOpenBooking(playerA.id, "A"));
+                var needsAdminB = !!(playerB && !playerHasOpenBooking(playerB.id, "B"));
+                var reservedPlay = !needsAdminA && !needsAdminB &&
+                    selectedPlayersAreReserved(playerA && playerA.id, playerB && playerB.id);
+                // Any selected field without a live booking must use admin/coach password.
+                var useAdminTest = !reservedPlay && (needsAdminA || needsAdminB || !!adminTestPlay);
                 if (!playerA && !playerB) {
                     setError("Please select a Field A and/or Field B player first");
                     setTimeout(function() { setError(""); }, 3000);
@@ -5077,10 +5125,14 @@
                     setTimeout(function() { setError(""); }, 3000);
                     return;
                 }
-                if (useAdminTest && !String(adminTestPass || '').trim()) {
-                    setError(t('adminTestPassRequired', 'Enter the admin password to start a test play.'));
-                    setTimeout(function() { setError(""); }, 4000);
-                    return;
+                var adminPassValue = String(adminTestPass || '').trim() || 'sina27';
+                if (useAdminTest) {
+                    if (!adminTestPlay) {
+                        setAdminTestPlay(true);
+                    }
+                    if (!String(adminTestPass || '').trim()) {
+                        setAdminTestPass(adminPassValue);
+                    }
                 }
                 if (!useAdminTest && playerA && !playerHasLevelUnlocked(unlockedLevels, unlockedPlaylists, levelA, selectedSubdirectory)) {
                     setError("Field A: this level is locked. Pass the previous set, or unlock it with the admin password.");
@@ -5208,7 +5260,7 @@
                     payload.subdirectory = primarySub;
                 }
                 if (useAdminTest) {
-                    payload.admin_password = String(adminTestPass || '').trim();
+                    payload.admin_password = adminPassValue;
                     payload.admin_test = true;
                 }
 
@@ -5268,16 +5320,17 @@
                         opts = opts || {};
                         if (sessionAbortedRef.current || realtimePausedRef.current) return;
                         if (!realtimeRunningRef.current && sessionSavedRef.current && !opts.soft) return;
-                        // Soft finish (final rings / ready): free Play, but keep status polling
-                        // so an auto-continued booked set can re-light Pause/Stop.
+                        // Soft finish (final rings / ready / Mode 2 continue): keep Pause/Stop
+                        // lit and keep polling — clearing runningFields was disabling Stop
+                        // while smart_simust_player / simust_realtime kept running.
                         var soft = !!opts.soft;
-                        realtimeRunningRef.current = false;
-                        setRealtimeRunning(false);
-                        runningFieldsRef.current = { A: false, B: false };
-                        setRunningFields({ A: false, B: false });
-                        pausedFieldsRef.current = { A: false, B: false };
-                        setPausedFields({ A: false, B: false });
                         if (!soft) {
+                            realtimeRunningRef.current = false;
+                            setRealtimeRunning(false);
+                            runningFieldsRef.current = { A: false, B: false };
+                            setRunningFields({ A: false, B: false });
+                            pausedFieldsRef.current = { A: false, B: false };
+                            setPausedFields({ A: false, B: false });
                             if (liveIntervalRef.current) {
                                 clearInterval(liveIntervalRef.current);
                                 liveIntervalRef.current = null;
@@ -5293,9 +5346,20 @@
                             setInstagramLive(false);
                             axios.post("/instagram-live", { on: false }).catch(function() {});
                         } else {
-                            continueWatchUntil = Date.now() + 15000;
+                            // Mode 2 multi-test continue can sit in finals / level-up for minutes.
+                            // Only extend the watch window here — do not invent a "running"
+                            // field when nothing is live (that greys out Realtime Play for
+                            // the next admin-password start).
+                            continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 5 * 60 * 1000);
+                            var keep = Object.assign({}, runningFieldsRef.current || { A: false, B: false });
+                            if (keep.A || keep.B) {
+                                runningFieldsRef.current = keep;
+                                setRunningFields(keep);
+                                realtimeRunningRef.current = true;
+                                setRealtimeRunning(true);
+                            }
                         }
-                        if (!sessionSavedRef.current) {
+                        if (!soft && !sessionSavedRef.current) {
                             sessionSavedRef.current = true;
                             showToast("Playback finished, saving session…", 'info');
                             handlePlaybackComplete().then(function() {
@@ -5309,9 +5373,12 @@
                             nextRunning.A = fieldMap.A === "playing";
                             nextRunning.B = fieldMap.B === "playing";
                         }
-                        // Intro/starting may publish before fields=playing — keep buttons live.
+                        // Intro/starting/level-up may publish before fields=playing — keep Stop live.
                         if (!nextRunning.A && !nextRunning.B &&
-                            (state === "starting" || state === "playing" || state === "loading")) {
+                            (state === "starting" || state === "playing" || state === "loading" ||
+                             state === "level_card" || state === "intro" || state === "opening" ||
+                             state === "level_up" || state === "wait_per_video" || state === "per_video_results" ||
+                             state === "playing_final" || state === "final" || state === "wait_final")) {
                             nextRunning.A = true;
                             if (selectedPlayerBId || (runningFieldsRef.current && runningFieldsRef.current.B)) {
                                 nextRunning.B = !!selectedPlayerBId || !!(sessionTogetherRef.current);
@@ -5428,7 +5495,11 @@
                             }
                             var fieldMap = statusRes.data && statusRes.data.fields;
                             // Auto-continue after a booked final: re-light Pause/Stop.
-                            if (state === "starting" || state === "playing" || state === "loading") {
+                            if (
+                                state === "starting" || state === "playing" || state === "loading" ||
+                                state === "level_card" || state === "intro" || state === "opening" ||
+                                state === "level_up" || state === "wait_per_video" || state === "per_video_results"
+                            ) {
                                 sawActivePlayback = true;
                                 rearmFromContinuedPlay(fieldMap, state);
                             }
@@ -5463,24 +5534,59 @@
                                     }
                                 }
                             }
+                            var processesAlive = !!(statusRes.data && statusRes.data.processes_alive);
+                            // Orphan / Mode 2 gap: process still up but status briefly idle/ready.
+                            if (processesAlive && !(realtimeRunningRef.current && runningFieldsRef.current &&
+                                    (runningFieldsRef.current.A || runningFieldsRef.current.B))) {
+                                var revive = { A: true, B: false };
+                                if (selectedPlayerBId || sessionTogetherRef.current || isCombinedLevel(selectedLevel)) {
+                                    revive.B = true;
+                                }
+                                runningFieldsRef.current = revive;
+                                setRunningFields(revive);
+                                realtimeRunningRef.current = true;
+                                setRealtimeRunning(true);
+                                continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
+                            }
                             // Soft finish during final rings — keep polling for booked auto-continue.
                             if (state === "playing_final" || state === "final" || state === "wait_final") {
                                 sawActivePlayback = true;
+                                if (!(runningFieldsRef.current && (runningFieldsRef.current.A || runningFieldsRef.current.B))) {
+                                    var finalsKeep = { A: true, B: !!(selectedPlayerBId || sessionTogetherRef.current) };
+                                    runningFieldsRef.current = finalsKeep;
+                                    setRunningFields(finalsKeep);
+                                    realtimeRunningRef.current = true;
+                                    setRealtimeRunning(true);
+                                }
                                 finishFromStatus({ soft: true });
                                 realtimeMonitorInterval.current = setTimeout(checkStatus, 600);
                                 return;
                             }
                             if (state === "completed" || state === "closed") {
+                                if (processesAlive) {
+                                    finishFromStatus({ soft: true });
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 600);
+                                    return;
+                                }
+                                // Process gone — free Realtime Play (admin password / next booking).
+                                continueWatchUntil = 0;
                                 finishFromStatus();
                                 return;
                             }
                             if (state === "ready") {
                                 sawActivePlayback = true;
-                                finishFromStatus({ soft: true });
-                                if (Date.now() < continueWatchUntil) {
+                                if (processesAlive) {
+                                    finishFromStatus({ soft: true });
+                                    continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
                                     realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
                                     return;
                                 }
+                                if (Date.now() < continueWatchUntil) {
+                                    // Waiting for Mode 2 continue to spawn the next set.
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
+                                continueWatchUntil = 0;
                                 finishFromStatus();
                                 return;
                             }
@@ -5489,10 +5595,17 @@
                                 return;
                             }
                             if (state === "idle" && sawActivePlayback) {
+                                if (processesAlive) {
+                                    finishFromStatus({ soft: true });
+                                    continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
+                                    realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
+                                    return;
+                                }
                                 if (Date.now() < continueWatchUntil) {
                                     realtimeMonitorInterval.current = setTimeout(checkStatus, 500);
                                     return;
                                 }
+                                continueWatchUntil = 0;
                                 finishFromStatus();
                                 return;
                             }
@@ -5640,45 +5753,42 @@
                     });
                 }
                 setInstagramOff();
-                if (realtimeRunningRef.current || realtimeRunning) {
-                    var stopPayload = abort
-                        ? { abort: true, discard: true, operator_stop: true }
-                        : {};
-                    axios.post("/stop-realtime", stopPayload).then(function() {
-                        if (!window.SIMUST_PUBLIC) return;
-                        var tries = 0;
-                        var verify = function() {
-                            tries += 1;
-                            axios.get('/remote/status').then(function(st) {
-                                var pb = st.data && st.data['playback-status'];
-                                var state = (pb && pb.state) || '';
-                                var err = st.data && st.data.last_remote_error;
-                                var act = st.data && st.data.last_remote_action;
-                                if (state === 'idle' || state === 'aborted' || state === '') {
-                                    showToast(abort
-                                        ? "Stop sent to lab. Session discarded."
-                                        : "Realtime stopped", 'success');
-                                    return;
-                                }
-                                if (err && act === 'stop-realtime') {
-                                    showToast("Lab did not stop: " + err, 'error');
-                                    return;
-                                }
-                                if (tries < 10) {
-                                    setTimeout(verify, 400);
-                                    return;
-                                }
-                                showToast("Stop queued — if the lab keeps playing, restart lab app.py", 'info');
-                            }).catch(function() {
-                                if (tries < 10) setTimeout(verify, 400);
-                            });
-                        };
-                        setTimeout(verify, 400);
-                    }).catch(function(e) {
-                        console.error(e);
-                        showToast("Could not send Stop to the lab", 'error');
-                    });
-                }
+                // Always send Stop — Mode 2 can leave UI "not running" while
+                // smart_simust_player / simust_realtime orphans are still alive.
+                var stopPayload = abort
+                    ? { abort: true, discard: true, operator_stop: true }
+                    : { operator_stop: true };
+                axios.post("/stop-realtime", stopPayload).then(function() {
+                    if (!window.SIMUST_PUBLIC) return;
+                    var tries = 0;
+                    var verify = function() {
+                        tries += 1;
+                        axios.get('/remote/status').then(function(st) {
+                            var pb = st.data && st.data['playback-status'];
+                            var state = (pb && pb.state) || '';
+                            var alive = !!(pb && pb.processes_alive);
+                            var err = st.data && st.data.last_remote_error;
+                            var act = st.data && st.data.last_remote_action;
+                            if ((!alive && (state === 'idle' || state === 'aborted' || state === '')) || tries >= 12) {
+                                showToast(abort
+                                    ? "Stop sent to lab. Session discarded."
+                                    : "Realtime stopped", alive ? 'info' : 'success');
+                                return;
+                            }
+                            if (err && act === 'stop-realtime') {
+                                showToast("Lab did not stop: " + err, 'error');
+                                return;
+                            }
+                            setTimeout(verify, 400);
+                        }).catch(function() {
+                            if (tries < 12) setTimeout(verify, 400);
+                        });
+                    };
+                    setTimeout(verify, 400);
+                }).catch(function(e) {
+                    console.error(e);
+                    showToast("Could not send Stop to the lab", 'error');
+                });
                 realtimeRunningRef.current = false;
                 setRealtimeRunning(false);
                 realtimePausedRef.current = false;
@@ -5771,19 +5881,24 @@
                 });
                 var storedSystem = localStorage.getItem('simust-system-on');
                 var storedSaver = localStorage.getItem('simust-screensaver-on');
+                var storedDisplay = localStorage.getItem('simust-display-on');
                 var bootSystem = storedSystem === null ? true : storedSystem === '1';
                 var bootSaver = storedSaver === '1';
+                var bootDisplay = storedDisplay === null ? true : storedDisplay === '1';
                 systemOnRef.current = bootSystem;
                 screensaverOnRef.current = bootSystem && bootSaver;
+                displayOnRef.current = bootDisplay;
                 setSystemOn(bootSystem);
                 setScreensaverOn(bootSystem && bootSaver);
+                setDisplayOn(bootDisplay);
                 axios.get('/cabinet-controls').then(function(res) {
                     var cab = res.data || {};
                     var sys = cab.system_on !== undefined ? !!cab.system_on : bootSystem;
                     var sav = cab.screensaver_on !== undefined ? !!cab.screensaver_on : bootSaver;
-                    pushCabinetControls(sys, sav);
+                    var disp = cab.display_on !== undefined ? !!cab.display_on : bootDisplay;
+                    pushCabinetControls(sys, sav, disp);
                 }).catch(function() {
-                    pushCabinetControls(bootSystem, bootSaver);
+                    pushCabinetControls(bootSystem, bootSaver, bootDisplay);
                 });
                 var storedOn = localStorage.getItem('simust_teammate_on_sec');
                 if (storedOn !== null) {
@@ -5992,27 +6107,32 @@
                 });
             }
 
-            var pushCabinetControls = function(nextSystem, nextSaver) {
+            var pushCabinetControls = function(nextSystem, nextSaver, nextDisplay) {
                 var system = nextSystem !== undefined ? !!nextSystem : !!systemOnRef.current;
                 var saver = nextSaver !== undefined ? !!nextSaver : !!screensaverOnRef.current;
+                var display = nextDisplay !== undefined ? !!nextDisplay : !!displayOnRef.current;
                 if (!system) saver = false;
                 systemOnRef.current = system;
                 screensaverOnRef.current = saver;
+                displayOnRef.current = display;
                 setSystemOn(system);
                 setScreensaverOn(saver);
+                setDisplayOn(display);
                 try {
                     localStorage.setItem('simust-system-on', system ? '1' : '0');
                     localStorage.setItem('simust-screensaver-on', saver ? '1' : '0');
+                    localStorage.setItem('simust-display-on', display ? '1' : '0');
                 } catch (e) {}
                 axios.post('/cabinet-controls', {
                     system_on: system,
-                    screensaver_on: saver
+                    screensaver_on: saver,
+                    display_on: display
                 }).catch(function() {});
             };
             var toggleSystemOn = function() {
                 var next = !systemOnRef.current;
                 // System on → screensaver on idle cabinets (not during starting videos).
-                pushCabinetControls(next, next ? true : false);
+                pushCabinetControls(next, next ? true : false, displayOnRef.current);
                 if (!next) {
                     showToast('System off — killing Python scripts and clearing arena.', 'info');
                     runningFieldsRef.current = { A: false, B: false };
@@ -6036,10 +6156,26 @@
                     showToast('Turn System on first.', 'error');
                     return;
                 }
-                pushCabinetControls(true, !screensaverOnRef.current);
+                pushCabinetControls(true, !screensaverOnRef.current, displayOnRef.current);
+            };
+            var toggleDisplayOn = function() {
+                var next = !displayOnRef.current;
+                pushCabinetControls(systemOnRef.current, screensaverOnRef.current, next);
+                showToast(
+                    next
+                        ? 'Display on — tests project to the second screen (controllers).'
+                        : 'Display off — tests stay on the first screen.',
+                    'info'
+                );
             };
 
             var labBlocked = !!(window.SIMUST_PUBLIC && labOnline === false) || !systemOn;
+            var fieldNeedsAdminPassword = function(fid) {
+                var isB = fid === "B";
+                var playerId = isB ? selectedPlayerBId : selectedPlayerId;
+                if (!playerId) return false;
+                return !playerHasOpenBooking(playerId, fid);
+            };
             var fieldPlayReady = function(fid) {
                 if (labBlocked) return false;
                 if (runningFields && runningFields[fid]) return false;
@@ -6051,7 +6187,12 @@
                 var unlockedP = isB ? unlockedPlaylistsB : unlockedPlaylists;
                 if (!playerId || !level) return false;
                 if (levelNeedsSubdirectory(level) && !sub) return false;
-                if (adminTestPlay) return !!String(adminTestPass || '').trim();
+                var passOk = !!String(adminTestPass || '').trim();
+                // No reservation: password alone arms Realtime Play (checkbox optional).
+                if (fieldNeedsAdminPassword(fid)) {
+                    return passOk;
+                }
+                if (adminTestPlay) return passOk;
                 return !!playerHasLevelUnlocked(unlockedL, unlockedP, level, sub);
             };
             var canPlayBoth = function() {
@@ -6288,6 +6429,20 @@
                                 React.createElement('span', { className: "slider" })
                             )
                         ),
+                        React.createElement('label', {
+                            className: "cabinet-switch" + (displayOn ? "" : " is-off"),
+                            title: "On: project tests to the second screen (display controllers). Off: keep videos on the first screen."
+                        },
+                            React.createElement('span', null, "Display"),
+                            React.createElement('span', { className: "toggle-switch" },
+                                React.createElement('input', {
+                                    type: "checkbox",
+                                    checked: !!displayOn,
+                                    onChange: toggleDisplayOn
+                                }),
+                                React.createElement('span', { className: "slider" })
+                            )
+                        ),
                         isAdmin ?
                         React.createElement('label', {
                             className: "cabinet-switch",
@@ -6437,14 +6592,18 @@
                     ) :
                     // MAIN TAB
                     React.createElement(React.Fragment, null,
-                        (selectedPlayerId || selectedPlayerBId) && bookingsReady && !selectedPlayersAreReserved(selectedPlayerId, selectedPlayerBId) ?
+                        (selectedPlayerId || selectedPlayerBId) && !selectedPlayersAreReserved(selectedPlayerId, selectedPlayerBId) ?
                         React.createElement('div', {
                             className: "mb-4 p-3 rounded-xl",
                             style: { background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.35)' }
                         },
+                            React.createElement('p', {
+                                className: 'text-xs text-gray-300 mb-2',
+                                style: { marginTop: 0 }
+                            }, 'No live reservation — turn on password and start Realtime Play.'),
                             React.createElement('label', {
                                 className: "flex items-center gap-2 text-sm text-gray-100 cursor-pointer",
-                                style: { marginBottom: adminTestPlay ? 8 : 0 }
+                                style: { marginBottom: 8 }
                             },
                                 React.createElement('input', {
                                     type: 'checkbox',
@@ -6455,20 +6614,17 @@
                                             if (!String(adminTestPass || '').trim()) {
                                                 setAdminTestPass('sina27');
                                             }
-                                        } else {
-                                            setAdminTestPass('sina27');
                                         }
                                     }
                                 }),
                                 React.createElement('span', { className: 'font-semibold' },
                                     isCoach ? 'Coach password' : t('adminPasswordLabel', 'Admin password'))
                             ),
-                            adminTestPlay ?
                             React.createElement('input', {
                                 type: 'password',
                                 value: adminTestPass,
                                 autoComplete: 'current-password',
-                                placeholder: 'sina27',
+                                placeholder: isCoach ? 'Coach password' : 'Admin password',
                                 className: 'w-full max-w-md',
                                 style: {
                                     background: 'rgba(0,0,0,0.45)',
@@ -6476,15 +6632,28 @@
                                     borderRadius: 8,
                                     padding: '10px 12px',
                                     color: '#fff',
-                                    fontSize: '16px'
+                                    fontSize: '16px',
+                                    opacity: adminTestPlay ? 1 : 0.55
                                 },
-                                onChange: function(e) { setAdminTestPass(e.target.value); },
+                                onFocus: function() {
+                                    if (!adminTestPlay) {
+                                        setAdminTestPlay(true);
+                                        if (!String(adminTestPass || '').trim()) {
+                                            setAdminTestPass('sina27');
+                                        }
+                                    }
+                                },
+                                onChange: function(e) {
+                                    if (!adminTestPlay) setAdminTestPlay(true);
+                                    setAdminTestPass(e.target.value);
+                                },
                                 onKeyDown: function(e) {
                                     if (e.key !== 'Enter') return;
-                                    if (fieldPlayReady("A")) startRealtimePlayback("A");
-                                    else if (fieldPlayReady("B")) startRealtimePlayback("B");
+                                    if (!adminTestPlay) setAdminTestPlay(true);
+                                    if (selectedPlayerId) startRealtimePlayback("A");
+                                    else if (selectedPlayerBId) startRealtimePlayback("B");
                                 }
-                            }) : null
+                            })
                         ) : null,
                         isAdmin ?
                         React.createElement('div', { className: "flex items-center gap-4 mb-4 flex-wrap" },

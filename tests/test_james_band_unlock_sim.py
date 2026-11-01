@@ -1,8 +1,8 @@
 """James Band unlock simulator: Foundation → Entry for Field A, B, and A+B.
 
 Creates a full player profile, books 30-minute credits through SF-30N/60N/110N/180N,
-passes each Foundation set at 75% accuracy and 70% efficiency, then walks
-Entry A-T1..A-T4 at AE ≥75% (ACC ignored). Passing S1.T4 opens the
+passes each Foundation set at AE ≥65%, then walks
+Entry S1.T1..S1.T5 at AE ≥70% (ACC ignored). Passing S1.T5 opens the
 next set and it stays open. Booking does not open levels.
 
 There is no SF-90N in the product; Foundation playlists are SF-30N, SF-60N, SF-110N, SF-180N.
@@ -29,12 +29,12 @@ from app import ALL_LEVELS, apply_session_progress, get_level_thresholds, get_ne
 
 PLAYER_ID = "james_band"
 FOUNDATION_SFS = list(simust_progress.FOUNDATION_PLAYLISTS)  # SF-30N, SF-60N, SF-110N, SF-180N
-ENTRY_SERIES = [f"L01-Entry/S1.T{n}" for n in range(1, 5)]
+ENTRY_SERIES = [f"L01-Entry/S1.T{n}" for n in range(1, 6)]
 
-# Foundation gate: 75% accuracy, 70% efficiency → 3 correct + 1 wrong of 4.
-STATS_SF180_MIN = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
-# Entry and later: AE ≥75% unlocks (ACC is not part of the gate).
-STATS_ENTRY_MIN = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}
+# Foundation gate: AE ≥65% (ACC ignored).
+STATS_SF180_MIN = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 65.0}
+# Entry and later: AE ≥70% unlocks (ACC is not part of the gate).
+STATS_ENTRY_MIN = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 70.0}
 # Non-gating Foundation sessions (30/60/110): payment unlocks next SF.
 STATS_FOUNDATION_PLAY = {"correct": 9, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 85.0}
 
@@ -144,7 +144,7 @@ def run_pipeline(fields: List[str]) -> Tuple[dict, List[dict]]:
         # Dual A+B: same session score applies once (progress is per player).
         log.append(play(users, "L00-Foundation", sf, stats, field_tag))
 
-    # After SF-180 pass, Entry S1.T1 is open — walk A-T1..A-T4; S1.T4 opens Activated.
+    # After SF-180 pass, Entry S1.T1 is open — walk S1.T1..S1.T5; S1.T5 opens Activated.
     for series in ENTRY_SERIES:
         grant = book(users, 30, f"{field_tag}-book-{series.replace('/', '_')}")
         log.append({
@@ -200,8 +200,8 @@ def format_report(summaries: List[dict]) -> str:
     lines.append("JAMES BAND - FOUNDATION TO ENTRY UNLOCK REPORT")
     lines.append("=" * 60)
     lines.append("Note: Foundation has SF-30N, SF-60N, SF-110N, SF-180N (no SF-90N).")
-    lines.append("Gates: each Foundation set opens the next at >=75% accuracy and >=70% efficiency.")
-    lines.append("       Entry and later sets open the next at AE >=75% (ACC ignored).")
+    lines.append("Gates: each Foundation set opens the next at AE >=65% (ACC ignored).")
+    lines.append("       Entry and later sets open the next at AE >=70% (ACC ignored).")
     lines.append("       A passed set stays unlocked. Booking does not open the next set.")
     lines.append("")
     p0 = summaries[0]["player"]
@@ -281,16 +281,15 @@ class JamesBandUnlockSimTests(unittest.TestCase):
             self.assertTrue(summary["entry_complete"])
             for series in ENTRY_SERIES:
                 self.assertIn(series, summary["completed_levels"])
-            # After Entry S1.T4 pass, Activated S1.T1 should unlock.
+            # After Entry S1.T5 pass, Activated S1.T1 should unlock.
             self.assertIn("L02-Activated/S1.T1", summary["unlocked_levels"])
             self.assertEqual(summary["next_after_entry"], "L02-Activated/S1.T1")
             results = summary["challenge_results"]
             self.assertTrue(results["L00-Foundation"]["passed"])
-            self.assertGreaterEqual(results["L00-Foundation"]["aac"], 75.0)
-            self.assertGreaterEqual(results["L00-Foundation"]["ae"], 70.0)
+            self.assertGreaterEqual(results["L00-Foundation"]["ae"], 65.0)
             for series in ENTRY_SERIES:
                 self.assertTrue(results[series]["passed"], msg=series)
-                self.assertGreaterEqual(results[series]["ae"], 75.0)
+                self.assertGreaterEqual(results[series]["ae"], 70.0)
 
         report = format_report(summaries)
         out_path = os.path.join(ROOT, "james_band_unlock_report.txt")

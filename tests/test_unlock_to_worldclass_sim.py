@@ -30,12 +30,12 @@ PLAYER_ID = "nova_start"
 REPORT_PATH = os.path.join(ROOT, "unlock_to_worldclass_report.txt")
 ISSUES_PATH = os.path.join(ROOT, "unlock_to_worldclass_issues.txt")
 
-PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 70.0}
-FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 70.0}
-PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0}
-# Low ACC still unlocks when AE meets 75% (ACC is not part of the gate).
-PASS_SERIES_LOW_ACC = {"correct": 10, "late": 0, "wrong": 10, "miss": 0, "avg_ae": 75.0}
-FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 74.0}
+PASS_FOUNDATION = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 65.0}
+FAIL_FOUNDATION = {"correct": 2, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 64.0}
+PASS_SERIES = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 70.0}
+# Low ACC still unlocks when AE meets 70% (ACC is not part of the gate).
+PASS_SERIES_LOW_ACC = {"correct": 10, "late": 0, "wrong": 10, "miss": 0, "avg_ae": 70.0}
+FAIL_SERIES_AE = {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 69.0}
 
 
 def _accuracy(stats: dict) -> float:
@@ -99,16 +99,16 @@ class UnlockToWorldClassSim(unittest.TestCase):
         )
         self.assertNotIn("SF-60N", users[PLAYER_ID]["progress"]["unlocked_playlists"])
         report.append(
-            "SF-30N at %.0f%% accuracy and 70 efficiency stays on SF-30N."
-            % _accuracy(FAIL_FOUNDATION)
+            "SF-30N at AE %.0f stays on SF-30N (need AE ≥65)."
+            % FAIL_FOUNDATION["avg_ae"]
         )
 
-        short_ae = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 69.0}
+        short_ae = {"correct": 3, "late": 0, "wrong": 1, "miss": 0, "avg_ae": 64.0}
         apply_session_progress(
             users, PLAYER_ID, "L00-Foundation", "SF-30N", short_ae, from_final=True
         )
         self.assertNotIn("SF-60N", users[PLAYER_ID]["progress"]["unlocked_playlists"])
-        report.append("SF-30N at 75% accuracy and 69 efficiency does not open SF-60N.")
+        report.append("SF-30N at AE 64 does not open SF-60N (need AE ≥65).")
 
         chain = ["SF-30N", "SF-60N", "SF-110N", "SF-180N"]
         for name in chain:
@@ -120,8 +120,8 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 users, PLAYER_ID, "L00-Foundation", name, PASS_FOUNDATION, from_final=True
             )
             report.append(
-                "Passed %s at %.0f%% accuracy and 70 efficiency."
-                % (name, _accuracy(PASS_FOUNDATION))
+                "Passed %s at AE %.0f."
+                % (name, PASS_FOUNDATION["avg_ae"])
             )
         progress = users[PLAYER_ID]["progress"]
         self.assertEqual(progress["unlocked_playlists"], chain)
@@ -139,43 +139,40 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 "passed_playlists still lists every Foundation set that was passed."
             )
 
-        # Entry skips S1.T5. Later bands keep S1.T5 then S2 then S3 (S2.T5 skipped;
-        # S3.T5 kept only as World Class end).
+        # Every S*.T5 is in the unlock chain; last set of a band opens the next band.
         series_levels = [
             level for level in ALL_LEVELS
             if level != "L00-Foundation"
-            and not level.endswith("/S2.T5")
-            and (
-                not level.endswith("/S3.T5")
-                or level.startswith("L05-")
-            )
-            and (
-                not level.endswith("/S1.T5")
-                or not level.startswith("L01-Entry")
-            )
         ]
         self.assertEqual(series_levels[0], "L01-Entry/S1.T1")
         self.assertEqual(series_levels[-1], "L05-WorldClass/S3.T5")
-        self.assertNotIn("L01-Entry/S1.T5", series_levels)
+        self.assertIn("L01-Entry/S1.T5", series_levels)
         self.assertIn("L02-Activated/S1.T5", series_levels)
         self.assertIn("L02-Activated/S2.T1", series_levels)
-        self.assertNotIn("L02-Activated/S2.T5", series_levels)
-        self.assertIn("L03-HighPerformance/S2.T1", series_levels)
+        self.assertIn("L02-Activated/S2.T5", series_levels)
+        self.assertIn("L03-HighPerformance/S2.T5", series_levels)
         self.assertIn("L03-HighPerformance/S3.T1", series_levels)
-        self.assertNotIn("L03-HighPerformance/S3.T5", series_levels)
-        self.assertIn("L04-Elite/S2.T1", series_levels)
-        self.assertIn("L04-Elite/S3.T1", series_levels)
-        self.assertNotIn("L04-Elite/S3.T5", series_levels)
+        self.assertIn("L03-HighPerformance/S3.T5", series_levels)
+        self.assertIn("L04-Elite/S2.T5", series_levels)
+        self.assertIn("L04-Elite/S3.T5", series_levels)
+        self.assertIn("L05-WorldClass/S2.T5", series_levels)
         self.assertIn("L05-WorldClass/S3.T1", series_levels)
-        self.assertEqual(get_next_level("L01-Entry/S1.T4"), "L02-Activated/S1.T1")
+        self.assertEqual(get_next_level("L01-Entry/S1.T4"), "L01-Entry/S1.T5")
+        self.assertEqual(get_next_level("L01-Entry/S1.T5"), "L02-Activated/S1.T1")
         self.assertEqual(get_next_level("L02-Activated/S1.T4"), "L02-Activated/S1.T5")
         self.assertEqual(get_next_level("L02-Activated/S1.T5"), "L02-Activated/S2.T1")
-        self.assertEqual(get_next_level("L02-Activated/S2.T4"), "L03-HighPerformance/S1.T1")
-        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L03-HighPerformance/S3.T1")
-        self.assertEqual(get_next_level("L03-HighPerformance/S3.T4"), "L04-Elite/S1.T1")
-        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L04-Elite/S3.T1")
-        self.assertEqual(get_next_level("L04-Elite/S3.T4"), "L05-WorldClass/S1.T1")
-        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S3.T1")
+        self.assertEqual(get_next_level("L02-Activated/S2.T4"), "L02-Activated/S2.T5")
+        self.assertEqual(get_next_level("L02-Activated/S2.T5"), "L03-HighPerformance/S1.T1")
+        self.assertEqual(get_next_level("L03-HighPerformance/S2.T4"), "L03-HighPerformance/S2.T5")
+        self.assertEqual(get_next_level("L03-HighPerformance/S2.T5"), "L03-HighPerformance/S3.T1")
+        self.assertEqual(get_next_level("L03-HighPerformance/S3.T4"), "L03-HighPerformance/S3.T5")
+        self.assertEqual(get_next_level("L03-HighPerformance/S3.T5"), "L04-Elite/S1.T1")
+        self.assertEqual(get_next_level("L04-Elite/S2.T4"), "L04-Elite/S2.T5")
+        self.assertEqual(get_next_level("L04-Elite/S2.T5"), "L04-Elite/S3.T1")
+        self.assertEqual(get_next_level("L04-Elite/S3.T4"), "L04-Elite/S3.T5")
+        self.assertEqual(get_next_level("L04-Elite/S3.T5"), "L05-WorldClass/S1.T1")
+        self.assertEqual(get_next_level("L05-WorldClass/S2.T4"), "L05-WorldClass/S2.T5")
+        self.assertEqual(get_next_level("L05-WorldClass/S2.T5"), "L05-WorldClass/S3.T1")
         self.assertEqual(get_next_level("L05-WorldClass/S3.T4"), "L05-WorldClass/S3.T5")
 
         for level in series_levels:
@@ -193,7 +190,7 @@ class UnlockToWorldClassSim(unittest.TestCase):
                 )
                 self.assertNotIn(nxt, users[PLAYER_ID]["progress"]["unlocked_levels"])
             th_acc, th_ae = get_level_thresholds(level)
-            self.assertEqual((th_acc, th_ae), (0, 75))
+            self.assertEqual((th_acc, th_ae), (0, 70))
             apply_session_progress(
                 users, PLAYER_ID, level, "", PASS_SERIES, from_final=True
             )
@@ -257,7 +254,7 @@ class UnlockToWorldClassSim(unittest.TestCase):
         )
         if "L01-Entry/S1.T2" not in low_acc_probe[PLAYER_ID]["progress"]["unlocked_levels"]:
             issues.append(
-                "Entry unlock should use AE only. 50%% ACC with AE 75 did not open S1.T2."
+                "Entry unlock should use AE only. 50%% ACC with AE 70 did not open S1.T2."
             )
 
         aac_overrides = {"correct": 20, "late": 0, "wrong": 0, "miss": 0, "avg_ae": 90.0, "aac": 10}

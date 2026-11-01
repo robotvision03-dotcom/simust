@@ -146,19 +146,38 @@ def save_users(users):
     """Atomically write accounts so concurrent lock/unlock cannot corrupt the file."""
     payload = users if isinstance(users, dict) else {}
     with _USERS_IO_LOCK:
-        tmp = USERS_FILE + ".tmp"
+        tmp = (
+            f"{USERS_FILE}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+        )
         bak = USERS_FILE + ".bak"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        if os.path.exists(USERS_FILE):
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            if os.path.exists(USERS_FILE):
+                try:
+                    shutil.copy2(USERS_FILE, bak)
+                except OSError:
+                    pass
+            last_err = None
+            for attempt in range(16):
+                try:
+                    os.replace(tmp, USERS_FILE)
+                    last_err = None
+                    break
+                except OSError as exc:
+                    last_err = exc
+                    time.sleep(0.04 * (attempt + 1))
+            if last_err is not None:
+                raise last_err
+        finally:
             try:
-                shutil.copy2(USERS_FILE, bak)
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
             except OSError:
                 pass
-        os.replace(tmp, USERS_FILE)
     if not PUBLIC_MODE:
         try:
             simust_push.push_accounts_async(payload)
@@ -323,27 +342,124 @@ RESERVATION_MAX_MINUTES = 180
 RESERVATION_STAFF_ROLES = {"coach", "manager", "admin"}
 
 
+_JSON_PATH_LOCKS: Dict[str, threading.Lock] = {}
+_JSON_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _json_path_lock(path: str) -> threading.Lock:
+    """One lock per absolute path so Windows writers cannot collide on replace."""
+    key = os.path.abspath(str(path or ""))
+    with _JSON_PATH_LOCKS_GUARD:
+        lock = _JSON_PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _JSON_PATH_LOCKS[key] = lock
+        return lock
+
+
+def _atomic_write_json_unlocked(path: str, payload, *, indent: int = 2) -> None:
+    """Caller must already hold ``_json_path_lock(path)``."""
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=indent, ensure_ascii=False)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        last_err: Optional[BaseException] = None
+        for attempt in range(16):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as exc:
+                last_err = exc
+                # 5 = access denied, 32 = sharing violation on Windows.
+                time.sleep(0.04 * (attempt + 1))
+        if last_err is not None:
+            raise last_err
+    finally:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def atomic_write_json(path: str, payload, *, indent: int = 2) -> None:
+    """Write JSON via a unique temp file + replace, with Windows lock retries.
+
+    Concurrent writers must not share the same ``.tmp`` name, and ``os.replace``
+    must retry when the destination is briefly held open (WinError 5 / 32).
+    """
+    path = os.path.abspath(str(path or ""))
+    if not path:
+        raise ValueError("atomic_write_json: empty path")
+    with _json_path_lock(path):
+        _atomic_write_json_unlocked(path, payload, indent=indent)
+
+
+def _read_json_unlocked(path: str, default=None):
+    """Caller must already hold ``_json_path_lock(path)``."""
+    if not os.path.isfile(path):
+        return default
+    last_err: Optional[BaseException] = None
+    for attempt in range(8):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            last_err = exc
+            time.sleep(0.03 * (attempt + 1))
+    if last_err is not None:
+        logging.getLogger(__name__).warning(
+            "Could not read JSON %s: %s", path, last_err
+        )
+    return default
+
+
+def load_json_file(path: str, default=None):
+    """Read JSON under the same path lock used by writers."""
+    path = os.path.abspath(str(path or ""))
+    if not path:
+        return default
+    with _json_path_lock(path):
+        return _read_json_unlocked(path, default)
+
+
+def atomic_update_json(path: str, mutator, *, indent: int = 2, default=None):
+    """Read-modify-write under one path lock so append/stamp cannot race."""
+    path = os.path.abspath(str(path or ""))
+    if not path:
+        raise ValueError("atomic_update_json: empty path")
+    with _json_path_lock(path):
+        current = _read_json_unlocked(path, default)
+        updated = mutator(current)
+        if updated is not None:
+            _atomic_write_json_unlocked(path, updated, indent=indent)
+        return updated
+
+
 def load_reservations():
     if not os.path.exists(RESERVATIONS_FILE):
         return []
     try:
-        with open(RESERVATIONS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json_file(RESERVATIONS_FILE, default=[])
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             items = data.get("reservations", [])
             return items if isinstance(items, list) else []
-    except (json.JSONDecodeError, OSError) as e:
+    except Exception as e:
         logging.getLogger(__name__).error("Failed to load reservations.json: %s", e)
     return []
 
 
 def save_reservations(items):
-    tmp = RESERVATIONS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(items, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, RESERVATIONS_FILE)
+    atomic_write_json(RESERVATIONS_FILE, items, indent=2)
 
 
 def _parse_iso_dt(value: str, field: str = "datetime") -> datetime:
@@ -1041,16 +1157,16 @@ def require_active_booking_for_play(player_id: str, field: str = "A", now: Optio
 PROGRESSION = {
     "L00-Foundation": {
         "display": "Foundation",
-        # SF-30N through SF-180N: 75% accuracy and 70% efficiency open the next set.
-        "threshold_acc": 75,
-        "threshold_ae": 70,
+        # SF-30N through SF-180N: AE-only unlock at 65%.
+        "threshold_acc": 0,
+        "threshold_ae": 65,
         "themes": {"Foundation": ["Foundation"]}
     },
     "L01-Entry": {
         "display": "Entry",
         # Unlock / level-up: AE only (ACC threshold unused).
         "threshold_acc": 0,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1062,7 +1178,7 @@ PROGRESSION = {
     "L02-Activated": {
         "display": "Activated",
         "threshold_acc": 0,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1079,7 +1195,7 @@ PROGRESSION = {
     "L03-HighPerformance": {
         "display": "High Performance",
         "threshold_acc": 0,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1101,7 +1217,7 @@ PROGRESSION = {
     "L04-Elite": {
         "display": "Elite",
         "threshold_acc": 0,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1123,7 +1239,7 @@ PROGRESSION = {
     "L05-WorldClass": {
         "display": "World Class",
         "threshold_acc": 0,
-        "threshold_ae": 75,
+        "threshold_ae": 70,
         "themes": {
             "S1.T1": [],
             "S1.T2": [],
@@ -1212,42 +1328,13 @@ def get_main_level(level_id: str) -> str:
 def get_next_level(current_level_id: str) -> Optional[str]:
     """Return the next level to open after a pass.
 
-    Entry S1.T4 opens Activated S1.T1.
-    Activated / Elite / World Class keep S1.T5 then S2.T*, and S2.T4 opens
-    that band's S3.T1 (Activated still opens High Performance).
-    High Performance S3.T4 opens Elite S1.T1; Elite S3.T4 opens World Class
-    S1.T1; World Class S3.T4 opens World Class S3.T5 (end).
+    Every listed sub-level is played in order (S1.T1…T5, then S2.T1…T5,
+    then S3.T1…T5 where the band has them). Passing the last set of a band
+    opens the next band's S1.T1 (Entry S1.T5 → Activated S1.T1, Activated
+    S2.T5 → High Performance S1.T1, High Performance S3.T5 → Elite S1.T1,
+    Elite S3.T5 → World Class S1.T1). World Class S3.T5 is the end.
     """
     cid = simust_progress.normalize_level_id(current_level_id)
-    if cid.endswith("/S3.T4"):
-        main = cid.split("/")[0]
-        s3_gate = {
-            "L03-HighPerformance": "L04-Elite/S1.T1",
-            "L04-Elite": "L05-WorldClass/S1.T1",
-            "L05-WorldClass": "L05-WorldClass/S3.T5",
-        }
-        if main in s3_gate:
-            return s3_gate[main]
-    if cid.endswith("/S2.T4"):
-        main = cid.split("/")[0]
-        s2_gate = {
-            "L02-Activated": "L03-HighPerformance/S1.T1",
-            "L03-HighPerformance": "L03-HighPerformance/S3.T1",
-            "L04-Elite": "L04-Elite/S3.T1",
-            "L05-WorldClass": "L05-WorldClass/S3.T1",
-        }
-        return s2_gate.get(main)
-    if cid.endswith("/S1.T4"):
-        main = cid.split("/")[0]
-        if main == "L01-Entry":
-            return "L02-Activated/S1.T1"
-        if main in (
-            "L02-Activated",
-            "L03-HighPerformance",
-            "L04-Elite",
-            "L05-WorldClass",
-        ):
-            return f"{main}/S1.T5"
     try:
         idx = ALL_LEVELS.index(cid)
         if idx + 1 < len(ALL_LEVELS):
@@ -1284,39 +1371,45 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
         aac = (correct + late) / total * 100 if total > 0 else 0.0
     ae = float(statistics.get("avg_ae", 0.0) or 0.0)
     progress = simust_progress.ensure_progress(users[player_id])
+    force_pass = bool(statistics.get("force_pass"))
     ok, _reason = simust_progress.can_play(progress, level_played, subdirectory)
     if not ok:
         # Admin test / Mode 2 can finish a set that was not yet marked open.
-        # Still record the final and allow a pass to unlock the next set —
-        # but never reopen an operator manual lock.
+        # Still record the final and allow a pass to unlock the next set.
+        # A sticky manual lock on the set just played must clear on finals —
+        # otherwise S2.T1 stays locked, S2.T2 opens, and continue jumps ahead.
         if not from_final:
             return False
-        manually_locked = simust_progress.is_manually_locked(
+        if simust_progress.is_manually_locked(
             progress, level_played, subdirectory or ""
-        )
-        if not manually_locked:
-            if level_played == simust_progress.FOUNDATION_LEVEL:
-                sub = str(subdirectory or "").strip()
-                if sub:
-                    playlists = list(progress.get("unlocked_playlists") or [])
-                    simust_progress._unique_append(playlists, sub)
-                    progress["unlocked_playlists"] = playlists
-                levels = list(progress.get("unlocked_levels") or [])
-                simust_progress._unique_append(levels, simust_progress.FOUNDATION_LEVEL)
-                progress["unlocked_levels"] = levels
+        ):
+            if level_played == simust_progress.FOUNDATION_LEVEL and subdirectory:
+                simust_progress.clear_manual_lock(
+                    progress, playlist=str(subdirectory).strip()
+                )
             else:
-                levels = list(progress.get("unlocked_levels") or [])
-                simust_progress._unique_append(levels, level_played)
-                progress["unlocked_levels"] = levels
+                simust_progress.clear_manual_lock(progress, level_id=level_played)
+        if level_played == simust_progress.FOUNDATION_LEVEL:
+            sub = str(subdirectory or "").strip()
+            if sub:
+                playlists = list(progress.get("unlocked_playlists") or [])
+                simust_progress._unique_append(playlists, sub)
+                progress["unlocked_playlists"] = playlists
+            levels = list(progress.get("unlocked_levels") or [])
+            simust_progress._unique_append(levels, simust_progress.FOUNDATION_LEVEL)
+            progress["unlocked_levels"] = levels
+        else:
+            levels = list(progress.get("unlocked_levels") or [])
+            simust_progress._unique_append(levels, level_played)
+            progress["unlocked_levels"] = levels
     completed_levels = progress.setdefault("completed_levels", [])
     challenge_results = progress.setdefault("challenge_results", {})
     th_acc, th_ae = get_level_thresholds(level_played)
     # Match rings (1 decimal). Final ACC/AE are series averages.
-    # Foundation: ACC + AE. Entry and later: AE only (75%) — ACC does not gate.
+    # All bands: AE-only unlock (Foundation 65%, Entry+ 70%) — ACC does not gate.
     aac_gate = round(float(aac), 1)
     ae_gate = round(float(ae), 1)
-    force_pass = bool(statistics.get("force_pass"))
-    if level_played == simust_progress.FOUNDATION_LEVEL:
+    if float(th_acc) > 0:
         meets_gate = aac_gate >= float(th_acc) and ae_gate >= float(th_ae)
     else:
         meets_gate = ae_gate >= float(th_ae)
@@ -1368,6 +1461,12 @@ def apply_session_progress(users: dict, player_id: str, level_played: str, subdi
                 next_level = get_next_level(level_played)
                 _open_level(progress, next_level, from_score_pass=True)
         else:
+            # Keep the set just cleared in the open chain (manual lock / host pull
+            # must not leave S2.T2 open while S2.T1 is missing).
+            simust_progress.clear_manual_lock(progress, level_id=level_played)
+            levels = list(progress.get("unlocked_levels") or [])
+            simust_progress._unique_append(levels, level_played)
+            progress["unlocked_levels"] = levels
             if level_played not in completed_levels:
                 completed_levels.append(level_played)
             progress["completed_levels"] = completed_levels
@@ -1386,6 +1485,8 @@ def _open_level(progress: dict, next_level: Optional[str], *, from_score_pass: b
     Manual Lock blocks casual re-open (host pull / UI). An earned score pass on
     the previous set clears the lock on this next set and opens it — Foundation
     SF-180N → Entry, and every later band, level up the same way.
+    Score-pass also fills every prior hole so Mode 2 cannot leave S2.T4 locked
+    while S2.T5 / S3.T* are already open.
     """
     if not next_level:
         return
@@ -1396,6 +1497,10 @@ def _open_level(progress: dict, next_level: Optional[str], *, from_score_pass: b
     levels = list(progress.get("unlocked_levels") or [])
     simust_progress._unique_append(levels, next_level)
     progress["unlocked_levels"] = levels
+    if from_score_pass:
+        # Fill only holes inside the already-reached span (not Entry→… from a
+        # sparse World Class unlock in tests / admin jumps).
+        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
     simust_progress.sync_current_development_level(progress, ALL_LEVELS)
     eligible = [item for item in (progress.get("eligible_levels") or []) if item != next_level]
     progress["eligible_levels"] = eligible
@@ -1477,11 +1582,15 @@ def _has_open_next_set(progress: dict, level_id: str, subdirectory: str = "") ->
 
 
 def _continue_target(progress: dict) -> dict:
-    """Highest unlocked set — where the player continues while booking time remains."""
+    """Next set to play while booking time remains (first incomplete open set)."""
     progress = simust_progress.sync_current_development_level(
         dict(progress or {}), ALL_LEVELS
     )
-    level = progress.get("current_level") or simust_progress.FOUNDATION_LEVEL
+    level = (
+        simust_progress.next_playable_level(progress, ALL_LEVELS)
+        or progress.get("current_level")
+        or simust_progress.FOUNDATION_LEVEL
+    )
     subdirectory = ""
     if level == simust_progress.FOUNDATION_LEVEL:
         subdirectory = progress.get("current_playlist") or simust_progress.highest_foundation_playlist(progress)
@@ -2077,6 +2186,66 @@ def write_visualization_setting(enabled):
     os.replace(tmp_file, viz_file)
 
 
+def _stop_camera_flag_path() -> str:
+    return os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_camera.txt")
+
+
+def clear_realtime_camera_stop_request() -> None:
+    path = _stop_camera_flag_path()
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def request_realtime_camera_stop() -> None:
+    """Ask simust_realtime to close the OpenCV feed and exit before force-kill."""
+    try:
+        write_visualization_setting(False)
+    except Exception:
+        pass
+    path = _stop_camera_flag_path()
+    try:
+        os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("1")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        logger.exception("Could not write stop_camera request")
+
+
+def stop_realtime_camera_process(grace_sec: float = 1.8) -> int:
+    """Graceful stop (close feed) then kill leftovers. Returns orphan kill count."""
+    global realtime_camera_process
+    request_realtime_camera_stop()
+    proc = realtime_camera_process
+    if proc is not None and proc.poll() is None:
+        deadline = time.time() + max(0.2, float(grace_sec))
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        if proc.poll() is None:
+            try:
+                kill_process_tree(proc)
+            except Exception:
+                logger.exception("Could not kill realtime camera process tree")
+        realtime_camera_process = None
+    else:
+        realtime_camera_process = None
+    killed = 0
+    try:
+        killed = int(kill_python_scripts_matching("simust_realtime.py") or 0)
+    except Exception:
+        logger.exception("Could not sweep orphan simust_realtime processes")
+    clear_realtime_camera_stop_request()
+    return killed
+
+
 def write_simulation_fields(fields):
     """Atomically write per-field arena simulation flags for the realtime process."""
     sim_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "arena_simulation.txt")
@@ -2185,9 +2354,7 @@ def apply_simulator_score_mode_to_metrics(metrics, field_id, level_id="", score_
     """Adjust finals for admin Sim Mode.
 
     Mode 1: cap ACC/AE just under unlock gates (cannot level up).
-    Mode 2: keep the true series average (mean of every test AE). Unlock is
-    force_pass — Mode 2 play itself must stamp each test AE above the gate.
-    Never rewrite the displayed final AE to a fake 75%.
+    Mode 2: always show AE > 75% and unlock via force_pass.
     """
     fid = str(field_id or "").upper()[:1]
     if fid not in ("A", "B"):
@@ -2213,7 +2380,13 @@ def apply_simulator_score_mode_to_metrics(metrics, field_id, level_id="", score_
             out["aac"] = min(aac, max(0.0, float(th_acc) - 1.0))
         out["avg_ae"] = min(ae, max(0.0, float(th_ae) - 1.0))
     else:
-        # Mode 2: do not rewrite the average — unlock via force_pass.
+        # Mode 2: AE must always clear >75% on the rings / finals.
+        try:
+            from simust_realtime import MODE2_MIN_AE
+            floor = float(MODE2_MIN_AE)
+        except Exception:
+            floor = 76.0
+        out["avg_ae"] = max(ae, floor)
         out["force_pass"] = True
     avg_ae = float(out.get("avg_ae") or 0.0)
     out["ae_display"] = f"{avg_ae:.0f}%" if avg_ae > 0 else "-"
@@ -2586,16 +2759,31 @@ def force_kill_smart_player():
     global smart_player_process, realtime_camera_process
     kill_process_tree(smart_player_process)
     smart_player_process = None
-    kill_process_tree(realtime_camera_process)
-    realtime_camera_process = None
+    # Prefer graceful camera stop so the OpenCV feed window is destroyed first.
+    try:
+        stop_realtime_camera_process(1.2)
+    except Exception:
+        kill_process_tree(realtime_camera_process)
+        realtime_camera_process = None
     # Windows CMDLine taskkill filters often miss orphans — scan by command line.
     kill_orphaned_realtime_processes()
+    _ORPHAN_ALIVE_CACHE["at"] = 0.0
+    _ORPHAN_ALIVE_CACHE["alive"] = False
     if sys.platform == "win32":
         try:
             subprocess.run(
                 ["taskkill", "/F", "/FI", "WINDOWTITLE eq Smart Player*"],
                 capture_output=True,
                 timeout=8,
+            )
+        except Exception:
+            pass
+        # Last-resort: close a leftover HighGUI title if the process already died.
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/FI", "WINDOWTITLE eq SIMUST REALTIME*"],
+                capture_output=True,
+                timeout=5,
             )
         except Exception:
             pass
@@ -2612,8 +2800,11 @@ def kill_arena_python_scripts() -> None:
     except Exception:
         pass
     force_kill_smart_player()
-    kill_process_tree(realtime_camera_process)
-    realtime_camera_process = None
+    try:
+        stop_realtime_camera_process(0.6)
+    except Exception:
+        kill_process_tree(realtime_camera_process)
+        realtime_camera_process = None
     _realtime_session_active = False
     kill_screen2_result_helpers()
     if sys.platform != "win32":
@@ -2682,7 +2873,28 @@ def clear_live_snapshot(player_id: str) -> None:
         logger.warning("Could not discard live snapshot on host: %s", exc)
 
 
+_ORPHAN_ALIVE_CACHE = {"at": 0.0, "alive": False}
+
+
+def _orphan_realtime_processes_alive(max_age_sec: float = 2.5) -> bool:
+    """Cached scan — playback-status polls must not spawn PowerShell every tick."""
+    now = time.time()
+    if now - float(_ORPHAN_ALIVE_CACHE.get("at") or 0) < float(max_age_sec):
+        return bool(_ORPHAN_ALIVE_CACHE.get("alive"))
+    alive = False
+    try:
+        alive = bool(
+            _python_pids_matching("smart_simust_player.py", "simust_realtime.py")
+        )
+    except Exception:
+        alive = bool(_ORPHAN_ALIVE_CACHE.get("alive"))
+    _ORPHAN_ALIVE_CACHE["at"] = now
+    _ORPHAN_ALIVE_CACHE["alive"] = alive
+    return alive
+
+
 def _realtime_is_running() -> bool:
+    """True when a tracked session or orphan player/camera process is still alive."""
     if _realtime_session_active:
         return True
     try:
@@ -2695,7 +2907,8 @@ def _realtime_is_running() -> bool:
             return True
     except Exception:
         pass
-    return False
+    # Lost handles after Mode 2 multi-continue — still treat as running for Stop.
+    return _orphan_realtime_processes_alive()
 
 
 def _parse_queued_at(value) -> Optional[float]:
@@ -2710,11 +2923,12 @@ def _parse_queued_at(value) -> Optional[float]:
 
 
 def should_ignore_remote_stop(data: Optional[dict]) -> bool:
-    """Ignore Stop only when nothing is running.
+    """Ignore Stop only when nothing is running (including orphan processes).
 
     Do not use VPS vs lab wall-clock comparisons: clock skew was causing live
     remote Stop commands to be dropped while the lab kept playing.
     Command TTL on the host already expires ancient queued stops.
+    Operator Stop always runs a sweep when orphans exist.
     """
     payload = data or {}
     abort = bool(payload.get("abort") or payload.get("discard") or payload.get("operator_stop"))
@@ -2729,17 +2943,26 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     global _realtime_session_active
     data = data or {}
     if should_ignore_remote_stop(data):
-        # Still sweep stray player/camera processes from a lost session handle.
-        if data.get("_remote") and bool(data.get("abort") or data.get("discard") or data.get("operator_stop")):
-            logger.info("Remote stop with no tracked session — sweeping stray realtime processes")
+        # Always sweep on operator Stop — Mode 2 can leave orphans with no handle.
+        if bool(data.get("abort") or data.get("discard") or data.get("operator_stop")):
+            logger.info("Stop with no tracked session — sweeping stray realtime processes")
             force_kill_smart_player()
+            try:
+                kill_orphaned_realtime_processes()
+            except Exception:
+                pass
             kill_process_tree(realtime_camera_process)
             realtime_camera_process = None
             write_pause_setting(False)
             write_playback_status("idle", "Ready for the next test")
-        else:
-            logger.info("Ignoring remote stop-realtime; no current test to abort")
-            write_pause_setting(False)
+            return {
+                "status": "success",
+                "aborted": True,
+                "discarded": [],
+                "message": "No tracked session — swept leftover player/camera processes",
+            }
+        logger.info("Ignoring remote stop-realtime; no current test to abort")
+        write_pause_setting(False)
         return {"status": "ignored", "aborted": False, "discarded": [], "message": "No active test"}
     stop_field = str(data.get("field") or "").upper()[:1]
     if data.get("field_only") and stop_field in ("A", "B"):
@@ -2771,8 +2994,11 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     except Exception:
         logger.info("Instagram live was not running")
     force_kill_smart_player()
-    kill_process_tree(realtime_camera_process)
-    realtime_camera_process = None
+    try:
+        stop_realtime_camera_process(0.8)
+    except Exception:
+        kill_process_tree(realtime_camera_process)
+        realtime_camera_process = None
     clear_image_action_cue(force_end=True)
     try:
         simust_manual_coach.clear_command_files()
@@ -2825,8 +3051,16 @@ def _atexit_stop_owned_realtime() -> None:
     global smart_player_process, realtime_camera_process
     kill_process_tree(smart_player_process)
     smart_player_process = None
+    try:
+        request_realtime_camera_stop()
+    except Exception:
+        pass
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
 
 
 atexit.register(_atexit_stop_owned_realtime)
@@ -3196,7 +3430,13 @@ async def get_levels():
         
 def playback_status_snapshot() -> dict:
     if realtime_aborted and _realtime_session_active:
-        return {"state": "aborted", "message": "Operator stopped. Session discarded.", "paused": False}
+        return {
+            "state": "aborted",
+            "message": "Operator stopped. Session discarded.",
+            "paused": False,
+            "processes_alive": _realtime_is_running(),
+            "session_active": bool(_realtime_session_active),
+        }
     status_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
     status = {"state": "idle", "message": "No active playback"}
     if os.path.exists(status_file):
@@ -3207,6 +3447,52 @@ def playback_status_snapshot() -> dict:
             status = {"state": "unknown", "message": "Could not read status"}
     paused = read_pause_setting()
     status["paused"] = paused
+    alive = _realtime_is_running()
+    status["processes_alive"] = alive
+    status["session_active"] = bool(_realtime_session_active)
+    # Stale finals/ready after Mode 2 / Stop left Play greyed out with no process.
+    stale_busy = str(status.get("state") or "").strip().lower() in {
+        "playing",
+        "loading",
+        "starting",
+        "paused",
+        "final",
+        "wait_final",
+        "playing_final",
+        "wait_per_video",
+        "per_video_results",
+        "level_up",
+        "level_card",
+        "intro",
+        "opening",
+        "ready",
+    }
+    fields_map = status.get("fields") if isinstance(status.get("fields"), dict) else {}
+    fields_playing = any(
+        str(fields_map.get(fid) or "").strip().lower() == "playing" for fid in ("A", "B")
+    )
+    if (stale_busy or fields_playing) and not alive and not _realtime_session_active:
+        try:
+            status_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "playback_status.json")
+            cleaned = {
+                "state": "idle",
+                "message": "Ready for the next test",
+                "timestamp": time.time(),
+                "current_video": 0,
+                "total_videos": 0,
+                "progress": 0,
+                "fields": {"A": "idle", "B": "idle"},
+                "paused": False,
+            }
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            with open(status_path, "w", encoding="utf-8") as handle:
+                json.dump(cleaned, handle)
+            status.update(cleaned)
+        except Exception:
+            write_playback_status("idle", "Ready for the next test")
+            status["state"] = "idle"
+            status["message"] = "Ready for the next test"
+            status["fields"] = {"A": "idle", "B": "idle"}
     try:
         import simust_instagram_live
         status["instagram_live"] = simust_instagram_live.status()
@@ -3218,7 +3504,7 @@ def playback_status_snapshot() -> dict:
     try:
         status["cabinet"] = read_cabinet_controls()
     except Exception:
-        status["cabinet"] = {"system_on": True, "screensaver_on": False}
+        status["cabinet"] = {"system_on": True, "screensaver_on": False, "display_on": True}
     return status
 
 
@@ -3592,6 +3878,7 @@ async def start_realtime_playback(req: Request):
         if not os.path.exists(realtime_script):
             logger.warning(f"simust_realtime.py not found - only video player will run")
         else:
+            clear_realtime_camera_stop_request()
             realtime_camera_process = _popen_no_console(
                 [python_exe, realtime_script, level_path, str(player_speed)],
             )
@@ -3605,10 +3892,17 @@ async def start_realtime_playback(req: Request):
         if not os.path.exists(smart_script):
             raise HTTPException(500, f"smart_simust_player.py not found")
 
+        screen_idx = player_screen_index()
         smart_player_process = _popen_no_console(
-            [python_exe, smart_script, level_path, str(player_speed), "1"],
+            [python_exe, smart_script, level_path, str(player_speed), str(screen_idx)],
         )
-        logger.info(f"Smart player launched with level: {level_id}, subdir: {subdirectory or 'None'}, speed: {player_speed}x on Screen 2")
+        logger.info(
+            "Smart player launched with level: %s, subdir: %s, speed: %sx on Screen %s",
+            level_id,
+            subdirectory or "None",
+            player_speed,
+            screen_idx + 1,
+        )
 
         # Also store the current level for the player (level intro video selection)
         try:
@@ -3629,7 +3923,12 @@ async def start_realtime_playback(req: Request):
         return {
             "status": "success",
             "level": level_id,
-            "screen": "Screen 2 (Video Player + Camera Feed)",
+            "screen": (
+                "Screen 2 (display controllers)"
+                if screen_idx == 1
+                else "Screen 1 (first monitor)"
+            ),
+            "display_on": bool(screen_idx == 1),
             "player_id": player_id,
             "player_name": player_name,
             "message": "Realtime started."
@@ -3760,6 +4059,7 @@ async def manual_coach_start(request: Request):
         if not os.path.exists(realtime_script):
             realtime_script = os.path.join(os.getcwd(), "simust_realtime.py")
         if os.path.exists(realtime_script):
+            clear_realtime_camera_stop_request()
             realtime_camera_process = _popen_no_console(
                 [python_exe, realtime_script, foundation_path, "1"],
             )
@@ -3772,8 +4072,15 @@ async def manual_coach_start(request: Request):
             smart_script = os.path.join(os.getcwd(), "smart_simust_player.py")
         if not os.path.exists(smart_script):
             raise HTTPException(500, "smart_simust_player.py not found")
+        screen_idx = player_screen_index()
         smart_player_process = _popen_no_console(
-            [python_exe, smart_script, simust_manual_coach.MANUAL_COACH_ARG, "1", "1"],
+            [
+                python_exe,
+                smart_script,
+                simust_manual_coach.MANUAL_COACH_ARG,
+                "1",
+                str(screen_idx),
+            ],
             cwd=script_dir,
         )
         _realtime_session_active = True
@@ -3966,6 +4273,7 @@ async def join_realtime_field(req: Request):
         ok, reason = simust_progress.can_play(progress, level_id, sub)
         if not ok:
             raise HTTPException(403, f"{player_id}: {reason}")
+        require_active_booking_for_play(player_id, fid)
     directory = _join_field_directory(level_id, sub)
     path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
     try:
@@ -4035,7 +4343,7 @@ def _cabinet_controls_path() -> str:
 
 def read_cabinet_controls() -> dict:
     path = _cabinet_controls_path()
-    defaults = {"system_on": True, "screensaver_on": False}
+    defaults = {"system_on": True, "screensaver_on": False, "display_on": True}
     if not os.path.isfile(path):
         return dict(defaults)
     try:
@@ -4046,17 +4354,24 @@ def read_cabinet_controls() -> dict:
         return {
             "system_on": bool(data.get("system_on", True)),
             "screensaver_on": bool(data.get("screensaver_on", False)),
+            # ON → second screen (display controllers); OFF → first/operator screen.
+            "display_on": bool(data.get("display_on", True)),
         }
     except Exception:
         return dict(defaults)
 
 
-def write_cabinet_controls(system_on: bool, screensaver_on: bool) -> dict:
+def write_cabinet_controls(
+    system_on: bool,
+    screensaver_on: bool,
+    display_on: bool = True,
+) -> dict:
     path = _cabinet_controls_path()
     os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
     payload = {
         "system_on": bool(system_on),
         "screensaver_on": bool(screensaver_on) if system_on else False,
+        "display_on": bool(display_on),
         "timestamp": time.time(),
     }
     tmp = path + ".tmp"
@@ -4066,6 +4381,16 @@ def write_cabinet_controls(system_on: bool, screensaver_on: bool) -> dict:
         os.fsync(handle.fileno())
     os.replace(tmp, path)
     return payload
+
+
+def player_screen_index(controls: dict = None) -> int:
+    """Qt screen index for the smart player / tests wall.
+
+    Display ON  → screen 1 (second monitor / display controllers).
+    Display OFF → screen 0 (keep videos on the first screen).
+    """
+    cab = controls if isinstance(controls, dict) else read_cabinet_controls()
+    return 1 if cab.get("display_on", True) else 0
 
 
 def _smart_player_cmdline_running() -> bool:
@@ -4136,7 +4461,13 @@ def ensure_idle_screensaver_player() -> bool:
         logger.error("Cannot start idle screensaver — smart_simust_player.py missing")
         return False
     python_exe = sys.executable
-    args = [python_exe, smart_script, "__screensaver__", "1", "1"]
+    args = [
+        python_exe,
+        smart_script,
+        "__screensaver__",
+        "1",
+        str(player_screen_index(controls)),
+    ]
     try:
         # Same launch style as realtime — Qt screens still show; no console window.
         smart_player_process = _popen_no_console(args, cwd=script_dir)
@@ -4164,7 +4495,7 @@ async def get_cabinet_controls():
 
 @app.post("/cabinet-controls")
 async def set_cabinet_controls(req: Request):
-    """System + Screensaver switches for the arena cabinets."""
+    """System + Screensaver + Display switches for the arena cabinets."""
     try:
         data = await req.json()
     except Exception:
@@ -4175,20 +4506,32 @@ async def set_cabinet_controls(req: Request):
     screensaver_on = (
         bool(data["screensaver_on"]) if "screensaver_on" in data else current["screensaver_on"]
     )
+    display_on = (
+        bool(data["display_on"]) if "display_on" in data else current.get("display_on", True)
+    )
     if not system_on:
         screensaver_on = False
     # Write first so a still-running player can flash black before we kill it.
-    saved = write_cabinet_controls(system_on, screensaver_on)
+    saved = write_cabinet_controls(system_on, screensaver_on, display_on)
     if not system_on:
         try:
             await asyncio.sleep(0.35)
         except Exception:
             time.sleep(0.35)
         try:
+            # Same path as operator Stop — kills tracked + orphan player/camera trees.
+            apply_stop_realtime({"abort": True, "operator_stop": True})
+        except Exception:
+            logger.exception("System off stop-realtime failed")
+        try:
             kill_arena_python_scripts()
         except Exception:
             logger.exception("System off could not kill arena Python scripts")
-        saved = write_cabinet_controls(False, False)
+        try:
+            kill_orphaned_realtime_processes()
+        except Exception:
+            logger.exception("System off orphan sweep failed")
+        saved = write_cabinet_controls(False, False, display_on)
         saved["killed"] = True
     elif screensaver_on:
         try:
@@ -4300,23 +4643,9 @@ async def sync_reports_to_host():
 
 @app.post("/stop-realtime-camera")
 async def stop_realtime_camera():
-    global realtime_camera_process
     try:
-        if realtime_camera_process and realtime_camera_process.poll() is None:
-            realtime_camera_process.terminate()
-            for _ in range(20):
-                if realtime_camera_process.poll() is not None:
-                    break
-                await asyncio.sleep(0.1)
-            if realtime_camera_process.poll() is None:
-                realtime_camera_process.kill()
-                try:
-                    realtime_camera_process.wait(timeout=1)
-                except Exception:
-                    pass
-            realtime_camera_process = None
-        # Always sweep orphans — handle can be lost while the console stays open.
-        killed = kill_python_scripts_matching("simust_realtime.py")
+        # Close the OpenCV feed first so the window cannot stick after kill.
+        killed = await asyncio.to_thread(stop_realtime_camera_process, 1.8)
         logger.info("Realtime camera process stopped (orphans killed=%s).", killed)
         return {"status": "success", "message": "Camera stopped", "orphans_killed": killed}
     except Exception as e:
@@ -4715,14 +5044,20 @@ async def save_results_to_json(req: Request):
         if not session_folder or not os.path.exists(session_folder):
             return {"status": "error", "message": "Session folder not found"}
         results_json_path = os.path.join(session_folder, "results.json")
-        results = []
-        if os.path.exists(results_json_path):
-            with open(results_json_path, 'r', encoding='utf-8') as f:
-                results = json.load(f)
-        results.append(action_result)
-        with open(results_json_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        return {"status": "success", "total_results": len(results)}
+
+        def _append():
+            def _mutate(rows):
+                out = list(rows) if isinstance(rows, list) else []
+                out.append(action_result)
+                return out
+
+            updated = atomic_update_json(
+                results_json_path, _mutate, indent=2, default=[]
+            )
+            return len(updated or [])
+
+        total = await asyncio.to_thread(_append)
+        return {"status": "success", "total_results": total}
     except Exception as e:
         logger.error(f"save-results-to-json error: {e}")
         return {"status": "error", "message": str(e)}
@@ -5835,7 +6170,16 @@ def finish_balls_efficiency(results_list, aet_percent, mode=None):
     scores = [finish_balls_action_ae(row, aet_percent) for row in rows]
     if not scores:
         return 0.0
-    return sum(scores) / len(scores)
+    avg = sum(scores) / len(scores)
+    # Floor only Mode 2 *sim* rows — never rewrite a real player's AE.
+    if int(mode) == 2 and any(bool(r.get("mode2_sim")) for r in rows):
+        try:
+            from simust_realtime import MODE2_MIN_AE
+            floor = float(MODE2_MIN_AE)
+        except Exception:
+            floor = 76.0
+        return max(avg, floor)
+    return avg
 
 
 def apply_finish_balls_efficiency(metrics):
@@ -5935,7 +6279,7 @@ def summarize_results_section_metrics(results_list):
         aet_session_display = clock["aet_session_display"]
         # Always recompute AE from shared-clock AET% (finish-balls formula).
         # Do not reuse per-row stamped AE — that pinned real S3 rings at ~88%.
-        # Mode 2 unlock still uses force_pass; display must follow the formula.
+        # Mode 2 floors AE above 75% inside finish_balls_efficiency.
         avg_ae = finish_balls_efficiency(
             results_list, aet_percent, mode=score_mode_for_clock
         )
@@ -7077,8 +7421,7 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         fdir = os.path.join(session_root, f"field_{fid}")
         fresults = os.path.join(fdir, "results.json")
         if os.path.exists(fresults):
-            with open(fresults, "r", encoding="utf-8") as f:
-                rows = json.load(f)
+            rows = load_json_file(fresults, default=[])
             if rows:
                 field_jobs.append((fid, fdir, rows, fresults))
 
@@ -7086,8 +7429,7 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         results_json_path = os.path.join(session_root, "results.json")
         if not os.path.exists(results_json_path):
             return {"status": "error", "message": "results.json not found"}
-        with open(results_json_path, "r", encoding="utf-8") as f:
-            rows = json.load(f)
+        rows = load_json_file(results_json_path, default=[])
         legacy_fid = "A" if "A" in active else ("B" if "B" in active else "A")
         field_jobs.append((legacy_fid, session_root, rows, results_json_path))
 
@@ -7111,26 +7453,27 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
                         time.sleep(0.05)
                 if blocks is not None:
                     by_video = _rt.compute_distances_by_video(blocks, all_results)
-                    changed = False
-                    for row in all_results:
-                        try:
-                            vid = int(row.get("video_index") or 1)
-                        except (TypeError, ValueError):
-                            vid = 1
-                        metres = float(by_video.get(vid, 0.0))
-                        if metres > 0 and abs(float(row.get("total_distance") or 0) - metres) > 0.05:
-                            row["total_distance"] = metres
-                            changed = True
-                    if changed:
-                        tmp = results_json_path + ".tmp"
-                        with open(tmp, "w", encoding="utf-8") as f:
-                            json.dump(all_results, f, indent=2, ensure_ascii=False)
-                            f.flush()
+
+                    def _stamp(rows, distances=by_video):
+                        out = list(rows) if isinstance(rows, list) else []
+                        for row in out:
                             try:
-                                os.fsync(f.fileno())
-                            except OSError:
-                                pass
-                        os.replace(tmp, results_json_path)
+                                vid = int(row.get("video_index") or 1)
+                            except (TypeError, ValueError):
+                                vid = 1
+                            metres = float(distances.get(vid, 0.0))
+                            if metres > 0 and abs(
+                                float(row.get("total_distance") or 0) - metres
+                            ) > 0.05:
+                                row["total_distance"] = metres
+                        return out
+
+                    # Same path lock as /save-results-to-json — avoids WinError 5/32.
+                    stamped = atomic_update_json(
+                        results_json_path, _stamp, indent=2, default=[]
+                    )
+                    if isinstance(stamped, list) and stamped:
+                        all_results = stamped
             except Exception as exc:
                 logger.warning("Could not stamp per-video distances (%s): %s", fid, exc)
 
@@ -8747,7 +9090,11 @@ def _publish_lab_status() -> None:
     try:
         status["cabinet-controls"] = read_cabinet_controls()
     except Exception:
-        status["cabinet-controls"] = {"system_on": True, "screensaver_on": False}
+        status["cabinet-controls"] = {
+            "system_on": True,
+            "screensaver_on": False,
+            "display_on": True,
+        }
     try:
         manual = simust_manual_coach.read_status()
         manual["session_running"] = bool(_realtime_is_running())

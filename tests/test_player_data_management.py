@@ -32,13 +32,14 @@ from app import (  # noqa: E402
 
 
 class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
-    def test_unlock_sets_current_to_highest_unlocked(self):
+    def test_unlock_sets_current_to_next_playable(self):
         progress = simust_progress.default_progress()
         progress["unlocked_levels"] = [
             "L00-Foundation",
             "L01-Entry/S1.T1",
             "L01-Entry/S1.T2",
         ]
+        progress["completed_levels"] = ["L01-Entry/S1.T1"]
         progress["current_level"] = "L01-Entry/S1.T1"
         simust_progress.sync_current_development_level(progress, ALL_LEVELS)
         self.assertEqual(progress["current_level"], "L01-Entry/S1.T2")
@@ -93,6 +94,85 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
         self.assertIn("L02-Activated/S2.T2", merged["manually_locked_levels"])
         self.assertNotIn("L02-Activated/S2.T2", merged["unlocked_levels"])
 
+    def test_merge_progress_keeps_lab_score_unlock_over_stale_host_lock(self):
+        """Host must not re-lock a set the lab just opened by passing the prior set."""
+        lab = simust_progress.default_progress()
+        lab["unlocked_levels"] = [
+            "L00-Foundation",
+            "L02-Activated/S1.T5",
+            "L02-Activated/S2.T1",
+        ]
+        lab["manually_locked_levels"] = []
+        lab["current_level"] = "L02-Activated/S2.T1"
+        host = simust_progress.default_progress()
+        host["unlocked_levels"] = ["L00-Foundation", "L02-Activated/S1.T5"]
+        host["manually_locked_levels"] = ["L02-Activated/S2.T1"]
+        host["current_level"] = "L02-Activated/S1.T5"
+        merged = simust_progress.merge_progress(lab, host)
+        self.assertIn("L02-Activated/S2.T1", merged["unlocked_levels"])
+        self.assertNotIn("L02-Activated/S2.T1", merged["manually_locked_levels"])
+
+    def test_next_playable_does_not_skip_incomplete_s2t1(self):
+        progress = simust_progress.default_progress()
+        progress["unlocked_levels"] = [
+            "L00-Foundation",
+            "L02-Activated/S1.T5",
+            "L02-Activated/S2.T1",
+            "L02-Activated/S2.T2",
+        ]
+        progress["completed_levels"] = ["L02-Activated/S1.T5"]
+        progress["manually_locked_levels"] = []
+        self.assertEqual(
+            simust_progress.next_playable_level(progress, ALL_LEVELS),
+            "L02-Activated/S2.T1",
+        )
+        # Hole at S2.T1 (locked/stripped): resume S2.T1, not jump to S2.T2.
+        progress["unlocked_levels"] = [
+            "L00-Foundation",
+            "L02-Activated/S1.T5",
+            "L02-Activated/S2.T2",
+        ]
+        progress["manually_locked_levels"] = ["L02-Activated/S2.T1"]
+        self.assertEqual(
+            simust_progress.highest_unlocked_level(progress, ALL_LEVELS),
+            "L02-Activated/S1.T5",
+        )
+        self.assertEqual(
+            simust_progress.next_playable_level(progress, ALL_LEVELS),
+            "L02-Activated/S2.T1",
+        )
+        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
+        self.assertIn("L02-Activated/S2.T1", progress["unlocked_levels"])
+        self.assertNotIn("L02-Activated/S2.T1", progress["manually_locked_levels"])
+
+    def test_heal_unlock_gaps_fills_hp_elite_holes_not_wc_wall(self):
+        progress = simust_progress.default_progress()
+        progress["unlocked_levels"] = [
+            "L00-Foundation",
+            "L03-HighPerformance/S2.T3",
+            "L03-HighPerformance/S3.T2",
+            "L04-Elite/S3.T5",
+        ]
+        progress["manually_locked_levels"] = [
+            "L03-HighPerformance/S2.T4",
+            "L03-HighPerformance/S2.T5",
+            "L03-HighPerformance/S3.T1",
+            "L04-Elite/S1.T3",
+            "L05-WorldClass/S1.T1",
+        ]
+        simust_progress.heal_unlock_gaps(progress, ALL_LEVELS)
+        for lid in (
+            "L03-HighPerformance/S2.T4",
+            "L03-HighPerformance/S2.T5",
+            "L03-HighPerformance/S3.T1",
+            "L04-Elite/S1.T3",
+            "L04-Elite/S3.T5",
+        ):
+            self.assertIn(lid, progress["unlocked_levels"], lid)
+            self.assertNotIn(lid, progress["manually_locked_levels"], lid)
+        self.assertIn("L05-WorldClass/S1.T1", progress["manually_locked_levels"])
+        self.assertNotIn("L05-WorldClass/S1.T1", progress["unlocked_levels"])
+
     def test_open_level_skips_manually_locked(self):
         from app import _open_level
 
@@ -112,6 +192,7 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
             "L05-WorldClass/S2.T3",
         ]
         progress["manually_locked_levels"] = ["L05-WorldClass/S2.T4"]
+        progress["completed_levels"] = ["L05-WorldClass/S2.T3"]
         _open_level(progress, "L05-WorldClass/S2.T4", from_score_pass=True)
         self.assertIn("L05-WorldClass/S2.T4", progress["unlocked_levels"])
         self.assertNotIn("L05-WorldClass/S2.T4", progress["manually_locked_levels"])
@@ -129,6 +210,10 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
             "L05-WorldClass/S2.T1",
             "L05-WorldClass/S2.T2",
             "L05-WorldClass/S2.T3",
+        ]
+        users["jj"]["progress"]["completed_levels"] = [
+            "L05-WorldClass/S2.T1",
+            "L05-WorldClass/S2.T2",
         ]
         users["jj"]["progress"]["unlocked_playlists"] = list(
             simust_progress.FOUNDATION_PLAYLISTS
@@ -268,10 +353,10 @@ class Mode2S1T3UnlockTests(unittest.TestCase):
                     "subdirectory": "",
                 },
                 "B": {
-                    "player_id": "__sim_B__",
+                    "player_id": "",
                     "level": "L05-WorldClass/S1.T3",
                     "subdirectory": "",
-                    "simulated": True,
+                    "simulated": False,
                 },
             },
         }
@@ -298,7 +383,8 @@ class Mode2S1T3UnlockTests(unittest.TestCase):
             ), patch("app._booking_seconds_left", return_value=600), patch(
                 "app.simust_push.push_session_async"
             ):
-                write_simulation_fields({"A": False, "B": True})
+                # Neither half simulated — Mode 2 must not invent a pass from raw AE.
+                write_simulation_fields({"A": False, "B": False})
                 write_simulator_score_mode(2)
                 info = apply_final_results_progress(
                     metrics, score_field="A", save_reports=False
@@ -323,24 +409,27 @@ class Mode2S1T3UnlockTests(unittest.TestCase):
         }
         users["jj"]["progress"]["unlocked_levels"] = [
             "L00-Foundation",
-            "L05-WorldClass/S2.T5",
+            "L05-WorldClass/S3.T5",
+        ]
+        users["jj"]["progress"]["completed_levels"] = [
+            "L05-WorldClass/S3.T4",
         ]
         users["jj"]["progress"]["unlocked_playlists"] = list(
             simust_progress.FOUNDATION_PLAYLISTS
         )
-        users["jj"]["progress"]["current_level"] = "L05-WorldClass/S2.T5"
+        users["jj"]["progress"]["current_level"] = "L05-WorldClass/S3.T5"
         fields_payload = {
             "score_field": "A",
-            "level": "L05-WorldClass/S2.T5",
+            "level": "L05-WorldClass/S3.T5",
             "fields": {
                 "A": {
                     "player_id": "jj",
-                    "level": "L05-WorldClass/S2.T5",
+                    "level": "L05-WorldClass/S3.T5",
                     "subdirectory": "",
                 },
                 "B": {
                     "player_id": "__sim_B__",
-                    "level": "L05-WorldClass/S2.T5",
+                    "level": "L05-WorldClass/S3.T5",
                     "subdirectory": "",
                     "simulated": True,
                 },
@@ -377,10 +466,10 @@ class Mode2S1T3UnlockTests(unittest.TestCase):
                 )
         self.assertTrue(info.get("passed"))
         self.assertAlmostEqual(
-            users["jj"]["progress"]["challenge_results"]["L05-WorldClass/S2.T5"]["ae"],
+            users["jj"]["progress"]["challenge_results"]["L05-WorldClass/S3.T5"]["ae"],
             84.0,
         )
-        # Last set: pass and do not loop forever.
+        # Terminal World Class S3.T5: pass and do not loop forever.
         self.assertFalse(info.get("continue_play"))
 
     def test_final_unlocks_even_if_admin_test_skipped_can_play(self):
@@ -421,13 +510,14 @@ class Mode2S1T3UnlockTests(unittest.TestCase):
 
 
 class CurrentDevelopmentLevelTests(unittest.TestCase):
-    def test_sync_uses_highest_unlocked(self):
+    def test_sync_uses_next_playable_unlocked(self):
         progress = simust_progress.default_progress()
         progress["unlocked_levels"] = [
             "L00-Foundation",
             "L01-Entry/S1.T1",
             "L01-Entry/S1.T2",
         ]
+        progress["completed_levels"] = ["L01-Entry/S1.T1"]
         progress["current_level"] = "L01-Entry/S1.T1"
         simust_progress.sync_current_development_level(progress, ALL_LEVELS)
         self.assertEqual(progress["current_level"], "L01-Entry/S1.T2")
@@ -587,6 +677,10 @@ class DualFieldFinalSaveTests(unittest.TestCase):
             "L05-WorldClass/S2.T1",
             "L05-WorldClass/S2.T2",
             "L05-WorldClass/S2.T3",
+        ]
+        users["hero"]["progress"]["completed_levels"] = [
+            "L05-WorldClass/S2.T1",
+            "L05-WorldClass/S2.T2",
         ]
         users["hero"]["progress"]["unlocked_playlists"] = list(
             simust_progress.FOUNDATION_PLAYLISTS
@@ -751,6 +845,7 @@ class DualFieldFinalSaveTests(unittest.TestCase):
             "L01-Entry/S1.T1",
             "L01-Entry/S1.T2",
         ]
+        progress["completed_levels"] = ["L01-Entry/S1.T1"]
         progress["current_level"] = "L01-Entry/S1.T1"
         simust_progress.sync_current_development_level(progress, ALL_LEVELS)
         fields_payload = {

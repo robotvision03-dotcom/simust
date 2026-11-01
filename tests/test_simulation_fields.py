@@ -92,8 +92,8 @@ class SimulatorScoreModeTests(unittest.TestCase):
         self.assertEqual(rt.parse_simulator_score_mode("2"), rt.SIM_SCORE_MODE_PASS)
         self.assertEqual(rt.parse_simulator_score_mode("x"), rt.SIM_SCORE_MODE_PASS)
 
-    def test_mode2_keeps_true_average_and_force_pass(self):
-        """Final AE stays the mean of tests; Mode 2 unlocks via force_pass."""
+    def test_mode2_floors_ae_above_75_and_force_pass(self):
+        """Mode 2 sim always shows AE > 75% and unlocks via force_pass."""
         app_mod.write_simulation_fields({"A": True, "B": False})
         app_mod.write_simulator_score_mode(2)
         metrics = {"aac": 100.0, "avg_ae": 63.6, "ae_display": "64%"}
@@ -101,7 +101,7 @@ class SimulatorScoreModeTests(unittest.TestCase):
             metrics, "A", "L05-WorldClass/S2.T5"
         )
         self.assertEqual(out["aac"], 100.0)
-        self.assertAlmostEqual(out["avg_ae"], 63.6)
+        self.assertGreater(out["avg_ae"], 75.0)
         self.assertTrue(out.get("force_pass"))
         # Real field B (not simulated) is unchanged
         real = app_mod.apply_simulator_score_mode_to_metrics(
@@ -109,14 +109,14 @@ class SimulatorScoreModeTests(unittest.TestCase):
         )
         self.assertEqual(real["avg_ae"], 62.0)
 
-    def test_mode2_foundation_keeps_true_average(self):
+    def test_mode2_foundation_floors_ae_above_75(self):
         app_mod.write_simulation_fields({"A": True, "B": False})
         app_mod.write_simulator_score_mode(2)
         out = app_mod.apply_simulator_score_mode_to_metrics(
             {"aac": 60.0, "avg_ae": 62.0}, "A", "L00-Foundation"
         )
         self.assertEqual(out["aac"], 60.0)
-        self.assertEqual(out["avg_ae"], 62.0)
+        self.assertGreater(out["avg_ae"], 75.0)
         self.assertTrue(out.get("force_pass"))
 
     def test_mode1_caps_below_unlock_gate(self):
@@ -129,8 +129,8 @@ class SimulatorScoreModeTests(unittest.TestCase):
         self.assertEqual(out["aac"], 100.0)
         self.assertLess(out["avg_ae"], 75.0)
 
-    def test_mode2_partner_sim_force_pass_keeps_average(self):
-        """WC partner-sim: Mode 2 force-unlocks without faking the AE average."""
+    def test_mode2_partner_sim_force_pass_floors_ae(self):
+        """WC partner-sim score field: Mode 2 floors AE >75% and force-unlocks."""
         app_mod.write_simulation_fields({"A": False, "B": True})
         app_mod.write_simulator_score_mode(2)
         out = app_mod.apply_simulator_score_mode_to_metrics(
@@ -139,7 +139,7 @@ class SimulatorScoreModeTests(unittest.TestCase):
             "L05-WorldClass/S2.T5",
             score_field="A",
         )
-        self.assertEqual(out["avg_ae"], 62.0)
+        self.assertGreater(out["avg_ae"], 75.0)
         self.assertTrue(out.get("force_pass"))
         self.assertTrue(app_mod._simulator_mode2_force_pass("A", score_field="A"))
 

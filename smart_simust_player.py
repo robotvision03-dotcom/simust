@@ -262,16 +262,16 @@ LEVEL_INTRO_HOLD_MS = 1000
 LEVEL_CARD_MS = 5000
 LEVEL_INTRO_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SCREEN_SAVER_VIDEO = "screen_saver.mp4"
-# After Foundation SF-180N finals pass → play before Entry S1.T1 opens.
-FOUNDATION_LEVEL_UP_VIDEO_NAMES = (
-    "level_UP_Foundation.mp4",
-    "level_up_Foundation.mp4",
-    "level_UP_foundation.mp4",
-    "level_up_foundation.mp4",
-    "Level_UP_Foundation.mp4",
-    "level-UP-Foundation.mp4",
-    "level-up-foundation.mp4",
-)
+# Band promotions after finals (when unlock score is met) — Field A/B walls.
+LEVEL_UP_VIDEOS_DIR = os.path.join(LEVEL_INTRO_STATIC_DIR, "level_up_videos")
+# (from_main_band, to_main_band) → filename under static/level_up_videos/
+LEVEL_UP_VIDEO_FILES = {
+    ("L00-Foundation", "L01-Entry"): "foundation_to_entry.mp4",
+    ("L01-Entry", "L02-Activated"): "entry_to_activated.mp4",
+    ("L02-Activated", "L03-HighPerformance"): "activated_to_high_performance.mp4",
+    ("L03-HighPerformance", "L04-Elite"): "high_Performance_to_elite.mp4",
+    ("L04-Elite", "L05-WorldClass"): "elite_to_world_class.mp4",
+}
 CABINET_CONTROLS_FILE = "cabinet_controls.json"
 # Launch token from app.py when System + Screen saver are on and no realtime is running.
 IDLE_SCREENSAVER_ARG = "__screensaver__"
@@ -3533,9 +3533,9 @@ def _cabinet_controls_path(directory: str = None) -> str:
 
 
 def _read_cabinet_controls(directory: str = None) -> dict:
-    """Operator System / Screensaver switches written by the frontend."""
+    """Operator System / Screensaver / Display switches written by the frontend."""
     path = _cabinet_controls_path(directory)
-    defaults = {"system_on": True, "screensaver_on": False}
+    defaults = {"system_on": True, "screensaver_on": False, "display_on": True}
     if not os.path.isfile(path):
         return dict(defaults)
     try:
@@ -3546,9 +3546,15 @@ def _read_cabinet_controls(directory: str = None) -> dict:
         return {
             "system_on": bool(data.get("system_on", True)),
             "screensaver_on": bool(data.get("screensaver_on", False)),
+            "display_on": bool(data.get("display_on", True)),
         }
     except Exception:
         return dict(defaults)
+
+
+def _screen_index_for_display(display_on: bool) -> int:
+    """Display ON → second screen (controllers); OFF → first screen."""
+    return 1 if display_on else 0
 
 
 def _opening_logo_video_for_level(level_id: str = "", subdirectory: str = "") -> Optional[str]:
@@ -3569,28 +3575,99 @@ def _opening_logo_video_for_level(level_id: str = "", subdirectory: str = "") ->
     return None
 
 
-def _resolve_foundation_level_up_video() -> Optional[str]:
-    """static/level_UP_Foundation — celebration after SF-180N pass, before Entry."""
-    root = LEVEL_INTRO_STATIC_DIR
+# Development band order for continue / level-up detection (L00 → L05).
+_MAIN_BAND_ORDER = (
+    "L00-Foundation",
+    "L01-Entry",
+    "L02-Activated",
+    "L03-HighPerformance",
+    "L04-Elite",
+    "L05-WorldClass",
+)
+
+
+def _main_band_id(value) -> Optional[str]:
+    """Map a level id / path / label to L00–L05 main band, or None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    # Prefer explicit L0x- ids before loose name matches.
+    ordered = (
+        (r"L05[-_]?WorldClass|WorldClass|World[\s_-]*Class", "L05-WorldClass"),
+        (r"L04[-_]?Elite|(?<![A-Za-z])Elite(?![A-Za-z])", "L04-Elite"),
+        (
+            r"L03[-_]?HighPerformance|HighPerformance|High[\s_-]*Performance",
+            "L03-HighPerformance",
+        ),
+        (r"L02[-_]?Activated|(?<![A-Za-z])Activated(?![A-Za-z])", "L02-Activated"),
+        (r"L01[-_]?Entry|(?<![A-Za-z])Entry(?![A-Za-z])", "L01-Entry"),
+        (
+            r"L00[-_]?Foundation|(?<![A-Za-z])Foundation(?![A-Za-z])|"
+            r"SF-?(?:30|60|110|180)N",
+            "L00-Foundation",
+        ),
+    )
+    for pattern, band in ordered:
+        if re.search(pattern, text, re.I):
+            return band
+    if "/" in text:
+        head = text.split("/", 1)[0].strip()
+        if head.startswith("L0") and "-" in head:
+            return head
+    return None
+
+
+def _main_band_rank(band) -> int:
+    """0–5 for L00–L05, or -1 when unknown."""
+    try:
+        return _MAIN_BAND_ORDER.index(str(band or "").strip())
+    except ValueError:
+        return -1
+
+
+def _prefer_further_level(*candidates) -> str:
+    """Pick the furthest development set among level-id candidates (band, then text)."""
+    best = ""
+    best_rank = -1
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        rank = _main_band_rank(_main_band_id(text))
+        if rank > best_rank or (rank == best_rank and text > best):
+            best = text
+            best_rank = rank
+    return best
+
+
+def _resolve_level_up_video(from_band: str, to_band: str) -> Optional[str]:
+    """Absolute path under static/level_up_videos for a band promotion, or None."""
+    key = (str(from_band or "").strip(), str(to_band or "").strip())
+    name = LEVEL_UP_VIDEO_FILES.get(key)
+    if not name:
+        return None
+    root = LEVEL_UP_VIDEOS_DIR
+    hit = os.path.join(root, name)
+    if os.path.isfile(hit):
+        return hit
+    # Case-insensitive fallback (Windows is usually fine; Linux deploy may differ).
     if not os.path.isdir(root):
         return None
-    for name in FOUNDATION_LEVEL_UP_VIDEO_NAMES:
-        hit = os.path.join(root, name)
-        if os.path.isfile(hit):
-            return hit
-    # Loose match: any file whose name has level + up + foundation.
+    want = name.lower()
     try:
         for entry in os.listdir(root):
-            low = str(entry or "").lower()
-            if not low.endswith((".mp4", ".mov", ".webm", ".avi", ".mkv")):
-                continue
-            if "level" in low and "up" in low and "foundation" in low:
-                hit = os.path.join(root, entry)
-                if os.path.isfile(hit):
-                    return hit
+            if str(entry).lower() == want:
+                path = os.path.join(root, entry)
+                if os.path.isfile(path):
+                    return path
     except Exception:
         pass
     return None
+
+
+def _resolve_foundation_level_up_video() -> Optional[str]:
+    """Compatibility: Foundation → Entry clip in static/level_up_videos/."""
+    return _resolve_level_up_video("L00-Foundation", "L01-Entry")
 
 
 def _activated_logo_video() -> Optional[str]:
@@ -7164,6 +7241,15 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 cap = group["cap"]
                 ok, frame = cap.read()
                 if not ok or frame is None:
+                    # One retry from the start — first OpenCV read after open is
+                    # flaky for large celebration mp4s; loop=False used to drop
+                    # the whole clip and leave Field A/B walls blank.
+                    try:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ok, frame = cap.read()
+                    except Exception:
+                        ok, frame = False, None
+                if not ok or frame is None:
                     if group.get("full_band") or group.get("loop") is False:
                         # One-shot coach/clip finished — drop it so the logo
                         # layer underneath keeps painting on screens 3/4.
@@ -7185,9 +7271,6 @@ class ImageActionCanvas(QtWidgets.QWidget):
                         except Exception:
                             pass
                         continue
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    ok, frame = cap.read()
-                if not ok or frame is None:
                     kept.append(group)
                     continue
                 kept.append(group)
@@ -8196,7 +8279,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._screensaver_fields = set()
         self._screensaver_hold_until = {}
         self._coach_audio_field = None
-        self._cabinet_controls = {"system_on": True, "screensaver_on": False}
+        self._cabinet_controls = {
+            "system_on": True,
+            "screensaver_on": False,
+            "display_on": True,
+        }
         try:
             os.makedirs(self.speed_file_dir, exist_ok=True)
             with open(self.speed_file_path, 'w') as f:
@@ -8316,18 +8403,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
-        # Position on screen
-        app = QtWidgets.QApplication.instance()
-        screens = app.screens()
-        if screens:
-            if self.screen_index >= len(screens):
-                self.screen_index = 0
-            screen = screens[self.screen_index]
-            geometry = screen.geometry()
-            self.setGeometry(geometry)
-            self.move(geometry.topLeft())
-
-        self.showFullScreen()
+        # Position on screen (Display ON → screen 2 / controllers; OFF → screen 1).
+        try:
+            boot = _read_cabinet_controls(getattr(self, "speed_file_dir", None))
+            self._cabinet_controls = dict(boot)
+            self.screen_index = _screen_index_for_display(bool(boot.get("display_on", True)))
+        except Exception:
+            pass
+        self._place_on_display_screen(force=True)
 
         # Force video to top 512px
         for delay in [20, 60, 120, 250, 400, 600, 800, 1000]:
@@ -8942,7 +9025,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "intro",
         )
         if self._player_attr("playlist_finished", False) and phase not in hold_phases:
-            return []
+            # Not a terminal idle/ready (already returned above). Mode 2 continue
+            # gaps must keep Stop held so the operator can abort the farm.
+            return [
+                str(fid).upper()[:1]
+                for fid in (getattr(self, "_phase_active", None) or ["A"])
+                if str(fid).upper()[:1] in ("A", "B")
+            ] or ["A"]
         parts = getattr(self, "_field_opening_playlists", None) or {}
         if parts:
             playing = []
@@ -8959,11 +9048,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     playing.append(key)
             if playing:
                 return playing
-        return [
+            # Playlists emptied between Mode 2 continues — still hold Stop.
+            if phase in hold_phases or self._player_attr("_independent_close_started", False):
+                return [
+                    str(fid).upper()[:1]
+                    for fid in parts.keys()
+                    if str(fid).upper()[:1] in ("A", "B")
+                ] or ["A"]
+        active = [
             str(fid).upper()[:1]
             for fid in (getattr(self, "_phase_active", None) or [])
             if str(fid).upper()[:1] in ("A", "B")
         ]
+        if active:
+            return active
+        # Last resort during hold phases with empty phase_active (continue rebuild).
+        if phase in hold_phases or self._player_attr("_independent_close_started", False):
+            return ["A"]
+        return []
 
 
     def _publish_field_controls(self):
@@ -12942,6 +13044,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return
         queued[fid] = True
         self._field_final_queued = queued
+        # Capture played band before unlock rewrites players_fields mid-finals.
+        if not getattr(self, "_finals_from_band", None):
+            try:
+                self._snapshot_finals_from_band()
+            except Exception:
+                self._finals_from_band = None
         state = dict(getattr(self, "_field_result_state", None) or {})
         state[fid] = {
             "phase": "final_wait",
@@ -13305,6 +13413,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self._should_continue_booked_play(info):
             # Keep field playlists / phase until restart rebuilds them.
             try:
+                self._clear_all_result_overlays()
                 if self._continue_booked_after_finals(info):
                     logger.info(
                         "Independent series complete — continuing with %.0fs booking left (Pause/Stop stay live)",
@@ -13448,9 +13557,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not parts and self.video_files and not self._player_attr("playlist_finished", False):
             active = {str(x).upper()[:1] for x in (self._player_attr("_phase_active") or [])}
             if fid in active and phase in (
-                "level_card", "level_intro", "intro", "starting", "opening", "action",
-                "wait_per_video", "per_video_results", "wait_final", "final",
+                "level_card", "level_intro", "level_up", "intro", "starting", "opening",
+                "action", "wait_per_video", "per_video_results", "wait_final", "final",
             ):
+                return True
+        # Band-promotion / continue clips keep the wall busy after series finals.
+        if phase in ("level_up", "level_card", "level_intro"):
+            active = {str(x).upper()[:1] for x in (self._player_attr("_phase_active") or [])}
+            if fid in active or not active:
                 return True
         return False
 
@@ -13472,6 +13586,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 pass
         if getattr(self, "_fields_opening", None):
             return True
+        phase = str(self._player_attr("display_phase") or "")
+        # Independent finals mark both halves done before continue — still block
+        # saver while the band level-up / level card / intro plays on the walls.
+        if phase in ("level_up", "level_card", "level_intro", "intro", "opening", "starting"):
+            return True
         parts = getattr(self, "_field_opening_playlists", None) or {}
         if parts:
             finals_done = getattr(self, "_field_final_done", None) or {}
@@ -13489,7 +13608,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if not finals_done.get(key):
                     return True
             return False
-        phase = str(self._player_attr("display_phase") or "")
         if self.video_files and not self._player_attr("playlist_finished", False):
             if phase not in ("idle", "ready", "completed", "closed", ""):
                 return True
@@ -13766,6 +13884,37 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             keep_other_fields=False,
         )
 
+    def _place_on_display_screen(self, force: bool = False):
+        """Move the player window to screen 2 (Display on) or screen 1 (off)."""
+        controls = dict(self._player_attr("_cabinet_controls") or {})
+        want = _screen_index_for_display(bool(controls.get("display_on", True)))
+        app = QtWidgets.QApplication.instance()
+        screens = app.screens() if app else []
+        if not screens:
+            return
+        if want >= len(screens):
+            want = 0
+        if not force and int(self._player_attr("screen_index", -1)) == int(want):
+            return
+        self.screen_index = int(want)
+        try:
+            screen = screens[self.screen_index]
+            geometry = screen.geometry()
+            self.setGeometry(geometry)
+            self.move(geometry.topLeft())
+            self.showFullScreen()
+            for delay in (20, 60, 120, 250):
+                QtCore.QTimer.singleShot(delay, self._force_top_512)
+            logger.info(
+                "Player display %s → Qt screen index %s (%sx%s)",
+                "ON" if controls.get("display_on", True) else "OFF",
+                self.screen_index,
+                geometry.width(),
+                geometry.height(),
+            )
+        except Exception:
+            logger.exception("Could not place player on display screen %s", want)
+
     def _sync_screensaver(self):
         """Coded .ssav saver only when BOTH fields are free (no realtime play).
 
@@ -13775,6 +13924,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         controls = _read_cabinet_controls(self._player_attr("speed_file_dir"))
         prev = dict(self._player_attr("_cabinet_controls") or {})
         self._cabinet_controls = controls
+        try:
+            if bool(prev.get("display_on", True)) != bool(controls.get("display_on", True)):
+                self._place_on_display_screen(force=True)
+            else:
+                self._place_on_display_screen(force=False)
+        except Exception:
+            pass
         system_on = bool(controls.get("system_on", True))
         saver_on = bool(controls.get("screensaver_on", False))
         if not system_on:
@@ -14219,6 +14375,63 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.waiting_overlay.deleteLater()
             self.waiting_overlay = None
 
+    def _clear_all_result_overlays(self):
+        """Hide every results/wait chrome that can cover Field A/B wall videos."""
+        try:
+            self._hide_waiting_overlay()
+        except Exception:
+            pass
+        try:
+            self._hide_projected_results()
+        except Exception:
+            pass
+        for fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(fid)
+            except Exception:
+                pass
+            overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+            if overlay is not None:
+                try:
+                    overlay.hide()
+                except Exception:
+                    pass
+
+    def _prepare_canvas_for_wall_video(self):
+        """Show image_canvas full-bleed and strip leftover summary/logo/saver state."""
+        self._clear_all_result_overlays()
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is None:
+            return None
+        try:
+            canvas._stop_screen_video(clear_screensaver=True)
+        except Exception:
+            pass
+        for attr, value in (
+            ("_summary_lines", []),
+            ("_summary_screens", None),
+            ("_summary_by_screen", {}),
+            ("_summary_logo", False),
+            ("_logo_scale_screens", set()),
+            ("_band_screens", set()),
+            ("_still_pixmaps", {}),
+            ("_screensaver_scale_screens", set()),
+            ("_video_fill_screens", set()),
+            ("_text_overlays", {}),
+            ("_image_overlays", {}),
+        ):
+            try:
+                setattr(canvas, attr, value)
+            except Exception:
+                pass
+        try:
+            canvas.setGeometry(0, 0, self.video_width, self.video_height)
+            canvas.show()
+            canvas.raise_()
+        except Exception:
+            logger.exception("Could not raise image_canvas for wall video")
+        return canvas
+
     def eventFilter(self, obj, event):
         if obj == self.videoframe and event.type() == QtCore.QEvent.Resize:
             if self.waiting_overlay:
@@ -14239,9 +14452,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._phase_field_levels = dict(phase.get("field_levels") or {})
         self._phase_dual_independent = bool(phase.get("dual_independent"))
         self.video_directory = phase.get("directory") or self._level_root
-        # Allow the Foundation→Entry celebration once per SF-180N finish.
-        if str(self._phase_subdirectory or self._phase_mode_id or "").upper().startswith("SF-180"):
-            self._foundation_level_up_played = False
+        # Allow one band-promotion clip after this set's finals (if unlocked).
+        self._level_up_video_played = False
+        self._foundation_level_up_played = False  # legacy alias
+        self._finals_from_band = None
         _reset_live_action_results()
         self._held_result_badges = {}
         self._result_released_screens = set()
@@ -14444,9 +14658,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _is_terminal_training_level(level: str) -> bool:
-        """World Class S2.T5 is the last set — do not loop it for the rest of the booking."""
+        """World Class S3.T5 is the last set — do not loop it for the rest of the booking."""
         text = str(level or "").replace("\\", "/")
-        return bool(re.search(r"L05-WorldClass(?:/|\\)?S2\.T5\b", text, re.I))
+        return bool(re.search(r"L05-WorldClass(?:/|\\)?S3\.T5\b", text, re.I))
 
     def _is_admin_test_session(self) -> bool:
         """Operator admin-password play with no reservation clock."""
@@ -14480,11 +14694,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """True while booking remains (or admin test) AND another set should run.
 
         Mode 2 keeps farming unlocked sets during a reservation, but after the
-        final World Class S2.T5 pass — or a Foundation pass whose next SF is
+        final World Class S3.T5 pass — or a Foundation pass whose next SF is
         admin-locked — continue_play=False so we show finals and stop (no loop).
 
         Admin/manual password play has no booking_end: still continue so Mode 2
-        level-up and Foundation→Entry (level_UP_Foundation) can run.
+        level-up and band-promotion videos (static/level_up_videos) can run.
         """
         info = self._live_continue_info(info if isinstance(info, dict) else {})
         admin_test = bool(info.get("admin_test")) or self._is_admin_test_session()
@@ -14526,23 +14740,45 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not isinstance(fields, dict):
             fields = {}
         slot = fields.get(score) if isinstance(fields.get(score), dict) else {}
-        level = str(
-            merged.get("level")
-            or (slot or {}).get("level")
-            or (payload or {}).get("level")
-            or ""
-        ).strip()
+        file_level = ""
+        try:
+            with open(CURRENT_LEVEL_FILE, "r", encoding="utf-8") as handle:
+                file_level = str(handle.read() or "").strip()
+        except Exception:
+            file_level = ""
+        # Prefer the furthest unlocked set: timed-out / stale finals often still
+        # stamp the set just played while players_fields already has the next band
+        # (Activated S2.T5 → High Performance S1.T1).
+        level = _prefer_further_level(
+            merged.get("level"),
+            (slot or {}).get("level"),
+            (payload or {}).get("level"),
+            file_level,
+        )
         if not level:
-            try:
-                with open(CURRENT_LEVEL_FILE, "r", encoding="utf-8") as handle:
-                    level = str(handle.read() or "").strip()
-            except Exception:
-                level = ""
+            level = str(
+                merged.get("level")
+                or (slot or {}).get("level")
+                or (payload or {}).get("level")
+                or file_level
+                or ""
+            ).strip()
         directory = str(
             merged.get("directory")
             or (slot or {}).get("directory")
             or ""
         ).strip()
+        # When disk advanced to a new band, take its directory too.
+        slot_level = str((slot or {}).get("level") or "").strip()
+        if (
+            slot_level
+            and level == slot_level
+            and _main_band_rank(_main_band_id(slot_level))
+            > _main_band_rank(_main_band_id(merged.get("level")))
+        ):
+            directory = str(
+                (slot or {}).get("directory") or directory or ""
+            ).strip()
         # Prefer a real subdirectory stamp. Empty string from a timed-out final
         # must not wipe the live unlock (SF-30N → SF-60N) already on disk.
         merged_sub = str(merged.get("subdirectory") or "").strip()
@@ -14592,7 +14828,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             merged["admin_test"] = True
         # Refresh seconds_left from the live booking. Do not force continue_play
         # True over an explicit False (last set / stop), and never invent a
-        # continue on World Class S2.T5 — that loops the final set forever.
+        # continue on World Class S3.T5 — that loops the final set forever.
         try:
             live_left = self._booking_seconds_left_for_field(score)
             if live_left is not None:
@@ -14618,71 +14854,154 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             pass
         return merged
 
-    def _phase_was_foundation_sf180(self) -> bool:
-        """True when the set that just finished finals was Foundation SF-180N."""
+    def _phase_context_bits(self) -> List[str]:
+        """Labels / paths for the set that just ran (or is current)."""
         phase = {}
         try:
             if 0 <= int(self._phase_index) < len(self._run_phases or []):
                 phase = self._run_phases[self._phase_index] or {}
         except (TypeError, ValueError, IndexError):
             phase = {}
-        # Prefer the live mode/subdirectory stamps over free-text labels.
-        primary = [
+        bits = [
+            phase.get("label"),
             phase.get("subdirectory"),
             phase.get("mode_id"),
+            phase.get("directory"),
             getattr(self, "_phase_subdirectory", None),
             getattr(self, "mode_id", None),
-        ]
-        modes = phase.get("field_modes") if isinstance(phase.get("field_modes"), dict) else {}
-        primary.extend(modes.values())
-        primary_text = " ".join(str(b or "") for b in primary)
-        if re.search(r"SF-?180N", primary_text, re.I):
-            return True
-        # Fallback: directory / opening playlist path still names SF-180N.
-        secondary = [
-            phase.get("directory"),
             getattr(self, "video_directory", None),
         ]
+        modes = phase.get("field_modes") if isinstance(phase.get("field_modes"), dict) else {}
+        bits.extend(modes.values())
         levels = phase.get("field_levels") if isinstance(phase.get("field_levels"), dict) else {}
-        secondary.extend(levels.values())
+        bits.extend(levels.values())
+        levels2 = getattr(self, "_phase_field_levels", None) or {}
+        if isinstance(levels2, dict):
+            bits.extend(levels2.values())
         parts = getattr(self, "_field_opening_playlists", None) or {}
         for rows in parts.values() if isinstance(parts, dict) else ():
             if not rows:
                 continue
             first = rows[0] if isinstance(rows, (list, tuple)) else None
             if isinstance(first, dict):
-                secondary.extend(
-                    [first.get("subdirectory"), first.get("path"), first.get("mode_id")]
+                bits.extend(
+                    [
+                        first.get("subdirectory"),
+                        first.get("path"),
+                        first.get("mode_id"),
+                        first.get("level"),
+                    ]
                 )
-        secondary_text = " ".join(str(b or "") for b in secondary)
-        return bool(re.search(r"SF-?180N", secondary_text, re.I))
+        return [str(b) for b in bits if b]
 
-    def _should_play_foundation_level_up(self, info) -> bool:
-        """After SF-180N finals with unlock score — show level_UP_Foundation before Entry."""
-        if getattr(self, "_foundation_level_up_played", False):
-            return False
-        if not _resolve_foundation_level_up_video():
-            return False
-        if not self._phase_was_foundation_sf180():
-            return False
+    def _phase_was_foundation_sf180(self) -> bool:
+        """True when the set that just finished finals was Foundation SF-180N."""
+        text = " ".join(self._phase_context_bits())
+        return bool(re.search(r"SF-?180N", text, re.I))
+
+    def _phase_main_band(self) -> Optional[str]:
+        """Main band (L00–L05) of the set that just finished finals."""
+        snap = str(getattr(self, "_finals_from_band", None) or "").strip()
+        if snap in _MAIN_BAND_ORDER:
+            return snap
+        for bit in self._phase_context_bits():
+            band = _main_band_id(bit)
+            if band:
+                return band
+        return None
+
+    def _snapshot_finals_from_band(self) -> None:
+        """Remember the band of the set entering finals (before unlock stamps disk)."""
+        band = None
+        for bit in self._phase_context_bits():
+            band = _main_band_id(bit)
+            if band:
+                break
+        self._finals_from_band = band
+
+    def _continue_main_band(self, info) -> Optional[str]:
+        """Main band stamped for continue after finals (next unlocked set)."""
         raw = getattr(self, "_after_final", None) or {}
         if not isinstance(raw, dict):
             raw = {}
         info = info if isinstance(info, dict) else {}
-        level = str(info.get("level") or raw.get("level") or "")
-        next_is_entry = bool(re.search(r"L01-Entry|(?:^|[/\\])Entry\b", level, re.I))
-        passed = bool(raw.get("passed"))
-        # Timed-out finals may omit passed but already stamped Entry on disk.
-        return bool(passed or next_is_entry)
+        level = _prefer_further_level(
+            info.get("level"),
+            raw.get("level"),
+            info.get("directory"),
+            raw.get("directory"),
+        )
+        band = _main_band_id(level)
+        if band:
+            return band
+        for key in ("level", "directory", "subdirectory"):
+            band = _main_band_id(info.get(key) or raw.get(key))
+            if band:
+                return band
+        return None
 
-    def _play_foundation_level_up_then(self, on_done):
-        """Full-bleed level-up on the live field wall only (A1–A6 or B1–B6), then Entry."""
-        path = _resolve_foundation_level_up_video()
+    def _level_up_transition(self, info) -> Optional[Tuple[str, str, str]]:
+        """(from_band, to_band, video_path) when finals unlocked the next band."""
+        if getattr(self, "_level_up_video_played", False) or getattr(
+            self, "_foundation_level_up_played", False
+        ):
+            return None
+        from_band = self._phase_main_band()
+        to_band = self._continue_main_band(info)
+        if not from_band or not to_band:
+            return None
+        # Only forward band promotions (Activated → High Performance, etc.).
+        if _main_band_rank(to_band) <= _main_band_rank(from_band):
+            return None
+        # Foundation→Entry only after SF-180N (not SF-30/60/110).
+        if from_band == "L00-Foundation" and to_band == "L01-Entry":
+            if not self._phase_was_foundation_sf180():
+                return None
+        path = _resolve_level_up_video(from_band, to_band)
+        if not path:
+            # Non-adjacent jump (admin): still try the immediate next-band clip.
+            try:
+                nxt = _MAIN_BAND_ORDER[_main_band_rank(from_band) + 1]
+            except (IndexError, ValueError):
+                nxt = ""
+            if nxt:
+                path = _resolve_level_up_video(from_band, nxt)
+                if path:
+                    to_band = nxt
+        if not path:
+            return None
+        raw = getattr(self, "_after_final", None) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        info = info if isinstance(info, dict) else {}
+        passed = bool(raw.get("passed") or info.get("passed"))
+        # Timed-out finals may omit passed but already stamp the next band.
+        if not passed and to_band == from_band:
+            return None
+        return (from_band, to_band, path)
+
+    def _should_play_foundation_level_up(self, info) -> bool:
+        """Compatibility: True only for Foundation → Entry celebration."""
+        hit = self._level_up_transition(info)
+        return bool(hit and hit[0] == "L00-Foundation" and hit[1] == "L01-Entry")
+
+    def _should_play_level_up_video(self, info) -> bool:
+        """True after finals when unlock opens the next development band."""
+        return self._level_up_transition(info) is not None
+
+    def _play_level_up_then(self, on_done, path: Optional[str] = None):
+        """Full-bleed band-promotion on live Field A/B walls, then next set."""
         callback = on_done if callable(on_done) else (lambda: None)
         if not path:
-            logger.warning("Foundation level-up video missing under static/ — continuing")
+            hit = self._level_up_transition(
+                getattr(self, "_after_final", None) or {}
+            )
+            path = hit[2] if hit else None
+        if not path:
+            logger.warning("Level-up video missing under static/level_up_videos — continuing")
             callback()
             return
+        self._level_up_video_played = True
         self._foundation_level_up_played = True
         self.display_phase = "level_up"
         # Only the live field wall(s): A1–A6 and/or B1–B6 — never the idle half.
@@ -14696,6 +15015,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 (getattr(self, "_after_final", None) or {}).get("score_field") or ""
             ).upper()[:1]
             active = [score] if score in ("A", "B") else ["A"]
+        # Match level intro: hold/stop coded saver so it cannot cover the clip
+        # after independent finals mark both halves "done".
+        hold = dict(getattr(self, "_screensaver_hold_until", None) or {})
+        until = time.time() + 90.0
+        for fid in active:
+            hold[fid] = until
+            try:
+                self._stop_field_screensaver(fid)
+            except Exception:
+                pass
+        self._screensaver_hold_until = hold
+        try:
+            self._sync_screensaver()
+        except Exception:
+            pass
         screen_to_video = {}
         for fid in active:
             for sid in _field_all_screens(fid):
@@ -14710,34 +15044,97 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             f"Level up — {os.path.basename(path)}",
         )
         logger.info(
-            "Playing Foundation level-up %s for %sms on Field %s screens %s before Entry",
+            "Playing level-up %s for %sms on Field %s screens %s",
             path, intro_ms, "+".join(active), ",".join(sorted(screen_to_video)),
         )
         try:
             self.player.stop()
         except Exception:
             pass
-        self._hide_projected_results()
-        self.completion_label.hide()
+        try:
+            self.completion_label.hide()
+        except Exception:
+            pass
+        # Timed-out Entry/Activated/HP finals hide the canvas under the wait
+        # overlay and never show Foundation-style panels — restore walls first.
+        canvas = self._prepare_canvas_for_wall_video()
         played = False
-        if self.image_canvas and screen_to_video:
+        play_mode = "none"
+        if canvas is not None and screen_to_video:
             try:
-                self.image_canvas.setGeometry(0, 0, self.video_width, self.video_height)
-                self.image_canvas.show()
-                self.image_canvas.raise_()
-                self.image_canvas.set_screen_videos(screen_to_video, fill=True, loop=False)
-                played = bool(getattr(self.image_canvas, "active_screens", None))
+                # loop=True: a flaky first OpenCV read must not drop the one-shot
+                # group (loop=False drops on first miss → silent VLC-only fallback).
+                canvas.set_screen_videos(screen_to_video, fill=True, loop=True)
+                # Mark every tile full-bleed so leftover logo-scale cannot shrink it.
+                try:
+                    fill = set(getattr(canvas, "_video_fill_screens", None) or set())
+                    fill |= {_sid(sid) for sid in screen_to_video if _sid(sid)}
+                    canvas._video_fill_screens = fill
+                    canvas._video_fill = True
+                    canvas._logo_scale_screens = set()
+                except Exception:
+                    pass
+                played = bool(getattr(canvas, "active_screens", None))
+                if not played:
+                    # One retry after a short decode settle (large celebration mp4s).
+                    QtCore.QThread.msleep(50)
+                    canvas.set_screen_videos(screen_to_video, fill=True, loop=True)
+                    played = bool(getattr(canvas, "active_screens", None))
+                if played:
+                    play_mode = "canvas"
+                    canvas.show()
+                    canvas.raise_()
+                    canvas.update()
             except Exception:
-                logger.exception("Could not paint Foundation level-up on screens")
+                logger.exception("Could not paint level-up on screens")
                 played = False
+        if not played:
+            # Last resort: still put something on the walls (not VLC-only — that
+            # only hits the operator monitor while Field A/B stay black).
+            try:
+                import cv2
+                cap = cv2.VideoCapture(path)
+                ok, frame = (cap.read() if cap.isOpened() else (False, None))
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                if ok and frame is not None and canvas is not None:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w = rgb.shape[:2]
+                    qimg = QtGui.QImage(
+                        rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format_RGB888
+                    ).copy()
+                    pix = QtGui.QPixmap.fromImage(qimg)
+                    if not pix.isNull():
+                        canvas._screen_pixmaps = {
+                            _sid(sid): pix for sid in screen_to_video if _sid(sid)
+                        }
+                        canvas._video_fill = True
+                        canvas.active_screens = set(canvas._screen_pixmaps)
+                        canvas.show()
+                        canvas.raise_()
+                        canvas.update()
+                        played = True
+                        play_mode = "still"
+            except Exception:
+                logger.exception("Level-up still-frame fallback failed")
         if not played:
             try:
                 self._play_local_clip(path, rate=1.0)
                 played = True
+                play_mode = "vlc"
+                logger.warning(
+                    "Level-up fell back to VLC local clip — walls may stay blank"
+                )
             except Exception as exc:
-                logger.error("Foundation level-up playback failed: %s", exc)
+                logger.error("Level-up playback failed: %s", exc)
                 callback()
                 return
+        logger.info(
+            "Level-up visible via %s on Field %s (%s)",
+            play_mode, "+".join(active), os.path.basename(path),
+        )
 
         def _finish():
             try:
@@ -14758,6 +15155,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     canvas.set_screen_images({}, keep_videos=False)
                 except Exception:
                     pass
+            self._finals_from_band = None
             callback()
 
         if self.play_delay_timer:
@@ -14769,8 +15167,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.play_delay_timer.timeout.connect(_finish)
         self.play_delay_timer.start(max(1500, int(intro_ms)))
 
+    def _play_foundation_level_up_then(self, on_done):
+        """Compatibility wrapper — Foundation → Entry clip then continue."""
+        path = _resolve_foundation_level_up_video()
+        self._play_level_up_then(on_done, path=path)
+
     def _continue_booked_after_finals(self, info) -> bool:
-        """Shared continue path: optional Foundation level-up, then next set."""
+        """Shared continue path: optional band level-up video, then next set."""
         info = self._live_continue_info(info if isinstance(info, dict) else {})
         if not self._should_continue_booked_play(info):
             return False
@@ -14781,12 +15184,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.display_phase = "level_card"
                 self._publish_field_controls()
                 return
-            logger.warning("Foundation level-up finished but continue restart failed")
+            logger.warning("Level-up finished but continue restart failed")
 
-        if self._should_play_foundation_level_up(info):
+        hit = self._level_up_transition(info)
+        if hit:
+            _from, _to, path = hit
             self.playlist_finished = False
+            # Mark level_up before paint so the 250ms saver tick cannot reclaim walls.
+            self.display_phase = "level_up"
             self._publish_field_controls()
-            self._play_foundation_level_up_then(_do_restart)
+            logger.info(
+                "Band level-up after finals: %s → %s (%s)",
+                _from,
+                _to,
+                os.path.basename(path or ""),
+            )
+            self._play_level_up_then(_do_restart, path=path)
             return True
         if self._restart_highest_level(info):
             self.playlist_finished = False
@@ -15276,6 +15689,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.display_phase = "action"
             return
         logger.info("All action sets done; showing the same wait animation then final results")
+        try:
+            self._snapshot_finals_from_band()
+        except Exception:
+            self._finals_from_band = None
         self.display_phase = "wait_final"
         self.waiting_for_results = True
         self._wait_started = time.time()
@@ -15443,7 +15860,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self._force_close_timer = None
-        self._hide_projected_results()
+        self._clear_all_result_overlays()
         try:
             self.player.stop()
         except Exception:
@@ -15451,6 +15868,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.completion_label.hide()
         self.waiting_for_results = False
         more = self._phase_index + 1 < len(self._run_phases)
+        # Mode 2 create-results often times out after unlock already wrote the
+        # next band to disk — refresh once more before deciding level-up.
         info = self._live_continue_info(getattr(self, "_after_final", None) or {})
         try:
             seconds_left = float(info.get("seconds_left") or 0)
@@ -15920,6 +16339,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _check_operator_pause(self):
         try:
             self._publish_field_controls()
+        except Exception:
+            pass
+        # Live Display switch: move tests wall between screen 1 and screen 2.
+        try:
+            controls = _read_cabinet_controls(self._player_attr("speed_file_dir"))
+            prev = dict(self._player_attr("_cabinet_controls") or {})
+            self._cabinet_controls = controls
+            if bool(prev.get("display_on", True)) != bool(controls.get("display_on", True)):
+                self._place_on_display_screen(force=True)
         except Exception:
             pass
         if self._is_closing or self.playlist_finished:

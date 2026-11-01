@@ -43,6 +43,39 @@ import requests
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
+
+def _atomic_replace_json(path: str, payload, *, indent: int = 2) -> None:
+    """Unique-temp + replace with Windows sharing-violation retries."""
+    path = os.path.abspath(str(path or ""))
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=indent, ensure_ascii=False)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        last_err = None
+        for attempt in range(16):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as exc:
+                last_err = exc
+                time.sleep(0.04 * (attempt + 1))
+        if last_err is not None:
+            raise last_err
+    finally:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
 # ============================================================================
 # CONSTANTS - OPTIMIZED
 # ============================================================================
@@ -212,6 +245,8 @@ SIM_SCORE_MODE_FAIL = 1
 SIM_SCORE_MODE_PASS = 2
 PAUSE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "pause.txt")
 STOP_SAVE_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_save.txt")
+# Written by app.py before killing the process so the OpenCV feed can close cleanly.
+STOP_CAMERA_FILE = os.path.join(SIMUST_PLAYER_DIRECTORY, "stop_camera.txt")
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
 SIM_FRAME_WIDTH = 1280
@@ -305,8 +340,17 @@ ENTRY_MARGIN = 1.0             # not used in simplified check
 
 # Maximum distance to consider a PASS as a valid finish attempt
 FINISH_DIST = 100   # px – increased from 100 to capture all correct actions
-# Score early so display can clear before light/camera/YOLO lag catches up.
+# Score a little early so display can clear before light/camera/YOLO lag.
+# End screens 1/6 (A1/A6, B1/B6) do NOT get this — nearby balls past those
+# cabinets were false-Correct without entering the cylinder.
 APPROACH_FINISH_EXTRA_PX = 95.0
+# Field numbers / cabinets that require a real cylinder hit (no approach band).
+STRICT_CYLINDER_FIELD_NUMS = frozenset({"1", "6"})
+STRICT_CYLINDER_CABINETS = frozenset({
+    "12", "4",  # A1, A6
+    "5", "11",  # B1, B6
+    "1", "6",   # bare cabinet ids if used
+})
 GOAL_POST_SLACK = 0.10  # posts of screens 1 / 7 / 8 count as the goal mouth
 GOAL_POST_RADIUS = 30.0  # GOAL mouth endpoints
 PASS_POST_RADIUS = 45.0  # PASS/TARGET graze near left/right keypoints
@@ -1681,6 +1725,32 @@ def arrival_depth_for(screen, action_type, session_duration=None):
     return float(max(finish, threshold))
 
 
+def requires_strict_cylinder_hit(screen) -> bool:
+    """True for end screens 1/6 — do not expand with APPROACH_FINISH_EXTRA_PX."""
+    raw = str(screen or "").strip().upper()
+    body, _ = _split_side_suffix(raw)
+    if body in ("A1", "A6", "B1", "B6"):
+        return True
+    match = re.fullmatch(r"[AB]([1-6])", body)
+    if match and match.group(1) in STRICT_CYLINDER_FIELD_NUMS:
+        return True
+    cabinet = screen_base_id(screen)
+    return cabinet in STRICT_CYLINDER_CABINETS
+
+
+def approach_finish_depth(screen, action_type, session_duration=None) -> float:
+    """Depth used for live cylinder Correct (finish_balls / Manual / S3).
+
+    Mid-field screens keep a small early-accept band. Screens 1 and 6 require
+    the ball inside the drawn cylinder so a pass that only moves nearby cannot
+    score Correct.
+    """
+    depth = float(arrival_depth_for(screen, action_type, session_duration))
+    if requires_strict_cylinder_hit(screen):
+        return depth
+    return depth + float(APPROACH_FINISH_EXTRA_PX)
+
+
 def _segment_length(p0, p1):
     return math.hypot(float(p1[0]) - float(p0[0]), float(p1[1]) - float(p0[1]))
 
@@ -2089,8 +2159,15 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
 # ================================================================
 # Mode 2 finish-balls shared clock
 # ================================================================
+# Mode 2 sim must always clear the displayed unlock bar (>75% AE).
+MODE2_MIN_AE = 76.0
+
+
 def mode2_pass_finish_ae(aet_percent: float, movement: float = 100.0) -> float:
-    """PASS Correct finish-balls AE used to stamp Mode 2 action rows."""
+    """PASS Correct finish-balls AE used to stamp Mode 2 action rows.
+
+    Always returns more than 75% so every Mode 2 test / final clears the bar.
+    """
     try:
         aet = max(0.0, min(100.0, float(aet_percent or 0.0)))
     except (TypeError, ValueError):
@@ -2109,7 +2186,7 @@ def mode2_pass_finish_ae(aet_percent: float, movement: float = 100.0) -> float:
         + (0.20 * aet)
         + (0.10 * (100.0 - displacement))
     )
-    return max(0.0, min(100.0, ae))
+    return max(float(MODE2_MIN_AE), min(100.0, ae))
 
 
 def mode2_finish_balls_clock_sec(
@@ -4354,15 +4431,7 @@ class SimustRealtimeCamera:
             vid = int(row.get("video_index") or 1)
             row["total_distance"] = float(by_video.get(vid, 0.0))
             row["field"] = ch.field_id
-        tmp = results_json_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, indent=2, ensure_ascii=False)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp, results_json_path)
+        _atomic_replace_json(results_json_path, all_results)
         ch.stats["results"] = all_results
         for vid, metres in sorted(by_video.items()):
             print(f"[DEBUG] [{ch.label}] Video {vid} hip distance: {metres:.2f} m")
@@ -4405,15 +4474,7 @@ class SimustRealtimeCamera:
         try:
             # Atomic replace so create-video-results never reads a truncated file
             # (empty recognition → Displacement shows "-" on the rings).
-            tmp = json_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            os.replace(tmp, json_path)
+            _atomic_replace_json(json_path, output_data)
             # Keep root recognition.json current so smart player can find a report mid-session
             if self.recording_dir and ch.recording_subdir:
                 try:
@@ -6161,10 +6222,9 @@ class SimustRealtimeCamera:
             p0, p1 = line_data.get("p0"), line_data.get("p1")
             if p0 is None or p1 is None:
                 continue
-            depth = arrival_depth_for(sid, action)
-            # Accept a ball that is already close to the green finish zone so the
-            # pass image can clear and the next screen can start without a lag.
-            approach = float(depth) + float(APPROACH_FINISH_EXTRA_PX)
+            # Screens 1/6: require real cylinder entry. Other screens keep a
+            # small approach band so display can clear ahead of camera lag.
+            approach = approach_finish_depth(sid, action)
             for ball in field_balls or []:
                 center = ball.get("center") if isinstance(ball, dict) else None
                 if center is None:
@@ -6704,15 +6764,56 @@ class SimustRealtimeCamera:
                 right = cv2.resize(right, (int(w_r * scale), target_h))
         return np.hstack([left, right])
 
+    def _viz_window_closed(self) -> bool:
+        """True when the user closed the feed with the window X (or it is gone)."""
+        if not self.window_created:
+            return False
+        try:
+            visible = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
+            # OpenCV: <1 means hidden/closed; some builds return -1 after destroy.
+            if visible < 1:
+                return True
+        except Exception:
+            return True
+        return False
+
+    def _persist_visualization_off(self):
+        """Keep the feed closed after the user hits X (do not reopen next frame)."""
+        try:
+            os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+            tmp = VIZ_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write("false")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, VIZ_FILE)
+        except Exception:
+            pass
+
+    def _on_viz_window_closed_by_user(self):
+        self.visualization_enabled = False
+        self.window_created = False
+        self._persist_visualization_off()
+        self._close_viz_window()
+        print("Camera feed closed (X) — visualization off")
+
     def show_frame(self, frame):
         if not self.visualization_enabled:
             return
 
+        if self.window_created and self._viz_window_closed():
+            self._on_viz_window_closed_by_user()
+            return
+
         if not self.window_created:
-            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(self.window_name, DISPLAY_WIDTH, DISPLAY_HEIGHT)
-            cv2.moveWindow(self.window_name, 100, 100)
-            self.window_created = True
+            try:
+                cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(self.window_name, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+                cv2.moveWindow(self.window_name, 100, 100)
+                self.window_created = True
+            except Exception as exc:
+                print(f"Could not open camera feed window: {exc}")
+                return
 
         h, w = frame.shape[:2]
         scale = min(DISPLAY_WIDTH / w, DISPLAY_HEIGHT / h)
@@ -6724,21 +6825,51 @@ class SimustRealtimeCamera:
         y_offset = (DISPLAY_HEIGHT - new_h) // 2
         canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = display_frame
 
-        cv2.imshow(self.window_name, canvas)
-        cv2.waitKey(1)
+        try:
+            cv2.imshow(self.window_name, canvas)
+            cv2.waitKey(1)
+        except Exception:
+            self._on_viz_window_closed_by_user()
+            return
+        if self._viz_window_closed():
+            self._on_viz_window_closed_by_user()
 
     def _close_viz_window(self):
-        if not self.window_created:
-            return
+        """Force-close the OpenCV feed so it cannot stick on screen after stop."""
         try:
-            cv2.destroyWindow(self.window_name)
-            cv2.waitKey(1)
+            try:
+                cv2.destroyWindow(self.window_name)
+            except Exception:
+                pass
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+            # HighGUI needs several pump cycles on Windows before the HWND dies.
+            for _ in range(8):
+                try:
+                    cv2.waitKey(1)
+                except Exception:
+                    break
         except Exception:
             pass
         self.window_created = False
 
     def destroy_window(self):
         self._close_viz_window()
+
+    def _stop_requested(self) -> bool:
+        """True when app.py asked this process to exit (before force-kill)."""
+        try:
+            if os.path.isfile(STOP_CAMERA_FILE):
+                try:
+                    os.remove(STOP_CAMERA_FILE)
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+        return False
 
     def _apply_visualization_setting(self):
         new_viz = read_visualization_setting()
@@ -6897,6 +7028,11 @@ class SimustRealtimeCamera:
 
         try:
             while self.camera_running:
+                if self._stop_requested():
+                    print("Stop camera requested — closing feed and exiting")
+                    self.camera_running = False
+                    self.screen_capture_running = False
+                    break
                 current_timestamp = time.time()
                 current_time_str = get_current_time_ms()
 
@@ -6920,6 +7056,9 @@ class SimustRealtimeCamera:
                     self._apply_visualization_setting()
                     self._apply_simulation_setting()
                     last_viz_check = current_timestamp
+                    # Re-check X-close even when paused / between frames.
+                    if self.window_created and self._viz_window_closed():
+                        self._on_viz_window_closed_by_user()
                 if current_timestamp - getattr(self, "_last_analysis_status_at", 0.0) >= 0.2:
                     self._write_analysis_status()
                     self._last_analysis_status_at = current_timestamp
@@ -7017,9 +7156,18 @@ class SimustRealtimeCamera:
         except KeyboardInterrupt:
             pass
         finally:
+            self.camera_running = False
+            self.screen_capture_running = False
             if self.recording_active:
                 self.stop_recording()
             self.destroy_window()
+            # Extra HighGUI pump after teardown so a stuck HWND cannot linger.
+            try:
+                cv2.destroyAllWindows()
+                for _ in range(5):
+                    cv2.waitKey(1)
+            except Exception:
+                pass
             print(f"\nSaved: {self.recording_dir}")
 
 def _boot_clear_image_action_cue():

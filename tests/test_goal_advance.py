@@ -97,6 +97,7 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.assertEqual(self.ch.active_goal_lines, {})
 
     def test_ball_near_cylinder_clears_and_scores(self):
+        """Mid-field (A2/cabinet 13) still accepts the approach band."""
         self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": self.near}])
         with open(self.tmp.name, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -109,6 +110,45 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.assertFalse(os.path.getsize(self.tmp.name))
         self.assertEqual(self.ended, [])
         self.assertTrue(self.ch.session_active)
+
+    def test_screen1_and_6_near_ball_does_not_score(self):
+        """A1/A6 (and B1/B6): nearby motion must not Correct without cylinder entry."""
+        for sid, cabinet in (("A1", "12"), ("A6", "4"), ("B1", "5"), ("B6", "11")):
+            with self.subTest(sid=sid):
+                line = rt.GOAL_LINES[cabinet]
+                fid = "B" if sid.startswith("B") else "A"
+                self.ch.field_id = fid
+                self.ch.label = fid
+                self.ch.session_active = True
+                self.ch.active_goal_lines = {sid: {"p0": line["p0"], "p1": line["p1"]}}
+                self.ch.current_screens = [sid]
+                self.ch._cylinder_scored_screens = set()
+                self.ch.current_qr_block = {"finish_balls": True}
+                self.ended.clear()
+                open(self.tmp.name, "w", encoding="utf-8").close()
+                cx, cy = rt.goal_circle_center(line["p0"], line["p1"])
+                depth = rt.arrival_depth_for(sid, "PASS")
+                radius = rt.goal_circle_radius(depth, line["p0"], line["p1"])
+                # Just outside the drawn cylinder — used to score via +95px approach.
+                near = (cx + radius + 40.0, cy)
+                self.assertFalse(
+                    rt.in_goal_area(near, line["p0"], line["p1"], depth),
+                    msg=f"{sid} near should be outside drawn cylinder",
+                )
+                self.assertTrue(rt.requires_strict_cylinder_hit(sid))
+                self.assertEqual(
+                    rt.approach_finish_depth(sid, "PASS"),
+                    depth,
+                    msg=f"{sid} must not expand approach depth",
+                )
+                self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": near}])
+                self.assertEqual(os.path.getsize(self.tmp.name), 0, sid)
+                self.assertTrue(self.ch.session_active, sid)
+                # Inside the cylinder still scores.
+                self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": (cx, cy)}])
+                with open(self.tmp.name, encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                self.assertEqual(payload["fields"][fid]["result"], "Correct", sid)
 
 
 class EliteGoalAdvancePollTests(unittest.TestCase):

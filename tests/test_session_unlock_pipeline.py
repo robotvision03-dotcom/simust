@@ -87,7 +87,7 @@ class SessionUnlockPipelineTests(unittest.TestCase):
             "cristiano",
             "L01-Entry/S1.T1",
             "",
-            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 74.0},
+            {"correct": 8, "late": 0, "wrong": 2, "miss": 0, "avg_ae": 69.0},
         )
         progress = users["cristiano"]["progress"]
         self.assertFalse(progress["challenge_results"]["L01-Entry/S1.T1"]["passed"])
@@ -97,7 +97,7 @@ class SessionUnlockPipelineTests(unittest.TestCase):
             "cristiano",
             "L01-Entry/S1.T1",
             "",
-            {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 75.0},
+            {"correct": 17, "late": 0, "wrong": 3, "miss": 0, "avg_ae": 70.0},
         )
         progress = users["cristiano"]["progress"]
         self.assertTrue(progress["challenge_results"]["L01-Entry/S1.T1"]["passed"])

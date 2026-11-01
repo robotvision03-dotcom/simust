@@ -3,13 +3,14 @@
 Rules:
 - A new player starts with Foundation SF-30N unlocked. Everything else stays locked.
 - An admin password can unlock a locked level. A passed level stays unlocked.
-- Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry:
-  75% accuracy and 70% efficiency on the final results (ACC + AE).
-- Entry and every later set: unlock / level-up uses AE only at 75%.
-  Accuracy is recorded but does not gate the next set.
-- Passing S1.T4 opens the next band (Entry S1.T4 → Activated S1.T1, and so on).
-  World Class S1.T4 opens World Class S1.T5. Booking does not open levels.
-  Sub-level names: A-T# / A.T# → S1.T#, A1.T# → S2.T#.
+- All unlocks are AE-only (accuracy is recorded but does not gate).
+- Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry: AE ≥ 65%.
+- Entry and every later set: AE ≥ 70%.
+- Every sub-level is played in order (S1.T1…T5, S2.T1…T5, S3.T1…T5).
+  Passing the last set of a band opens the next band (Entry S1.T5 → Activated
+  S1.T1, Activated S2.T5 → High Performance, High Performance S3.T5 → Elite,
+  Elite S3.T5 → World Class). World Class S3.T5 is the end.
+  Booking does not open levels. Sub-level names: A-T# → S1.T#, A1.T# → S2.T#.
 """
 
 from __future__ import annotations
@@ -63,11 +64,11 @@ FOUNDATION_EXTRA_PLAYLISTS = (
 FOUNDATION_ALL_PLAYLISTS = FOUNDATION_PLAYLISTS + FOUNDATION_EXTRA_PLAYLISTS
 FOUNDATION_LEVEL = "L00-Foundation"
 SESSION_MINUTES = 30
-FOUNDATION_SCORE_ACC = 75.0
-FOUNDATION_SCORE_AE = 70.0
-# Non-Foundation unlock is AE-only; ACC threshold is unused (0).
+# Unlock / level-up is AE-only everywhere (ACC threshold unused = 0).
+FOUNDATION_SCORE_ACC = 0.0
+FOUNDATION_SCORE_AE = 65.0
 SERIES_SCORE_ACC = 0.0
-SERIES_SCORE_AE = 75.0
+SERIES_SCORE_AE = 70.0
 
 
 def slots_from_minutes(duration_minutes: int) -> int:
@@ -265,7 +266,8 @@ def next_foundation_playlist_after(subdirectory: str) -> Optional[str]:
 def score_gate(level_id: str) -> Tuple[float, float]:
     """Return (accuracy, efficiency) thresholds for the level.
 
-    Foundation requires both. Entry and later use AE only (ACC threshold is 0).
+    Unlock is AE-only for every band (ACC threshold is 0).
+    Foundation AE 65%; Entry and later AE 70%.
     """
     main = str(level_id or "").split("/")[0]
     if main == FOUNDATION_LEVEL:
@@ -284,26 +286,189 @@ def passes_score_gate(level_id: str, aac: float, ae: float) -> bool:
         ae_v = float(ae or 0.0)
     except (TypeError, ValueError):
         ae_v = 0.0
-    main = str(level_id or "").split("/")[0]
-    if main == FOUNDATION_LEVEL:
+    # AE-only when ACC threshold is 0 (all current bands).
+    if float(th_acc) > 0:
         return aac_v >= float(th_acc) and ae_v >= float(th_ae)
-    # Entry / Activated / High Performance / Elite / World Class: AE only.
     return ae_v >= float(th_ae)
 
 
 def highest_unlocked_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
-    """Furthest open level. Foundation while only SF sets are open."""
+    """Furthest open level in order — stop at the first hole in the chain.
+
+    Foundation while only SF sets are open. If S2.T1 was stripped (manual lock /
+    stale host lock) but S2.T2 is still listed, continue stays on S1.T5 rather
+    than jumping over the locked set.
+    """
     unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
+    locked = {
+        normalize_level_id(x)
+        for x in (progress.get("manually_locked_levels") or [])
+        if normalize_level_id(x)
+    }
     best = ""
+    started = False
     for level_id in all_levels or []:
         nid = normalize_level_id(level_id)
-        if nid in unlocked and nid != FOUNDATION_LEVEL:
+        if not nid or nid == FOUNDATION_LEVEL:
+            continue
+        open_here = nid in unlocked and nid not in locked
+        if open_here:
+            best = nid
+            started = True
+            continue
+        if started:
+            break
+    return best or FOUNDATION_LEVEL
+
+
+def fill_unlocked_through(
+    progress: Dict[str, Any],
+    target_level: str,
+    all_levels: List[str],
+    *,
+    clear_locks: bool = False,
+) -> None:
+    """Ensure every series set up to ``target_level`` is unlocked (no holes).
+
+    Score-pass / Mode 2 use ``clear_locks=True`` so a sticky admin lock on
+    S2.T4 cannot leave S2.T5 open while S2.T4 stays locked.
+    """
+    progress = progress or {}
+    target = normalize_level_id(str(target_level or "").strip())
+    if not target or target == FOUNDATION_LEVEL:
+        levels = list(progress.get("unlocked_levels") or [])
+        _unique_append(levels, FOUNDATION_LEVEL)
+        progress["unlocked_levels"] = levels
+        return
+    levels = list(progress.get("unlocked_levels") or [])
+    _unique_append(levels, FOUNDATION_LEVEL)
+    for level_id in all_levels or []:
+        nid = normalize_level_id(level_id)
+        if not nid or nid == FOUNDATION_LEVEL:
+            continue
+        if clear_locks and is_manually_locked(progress, nid):
+            clear_manual_lock(progress, level_id=nid)
+        if not is_manually_locked(progress, nid):
+            _unique_append(levels, nid)
+        if nid == target:
+            break
+    progress["unlocked_levels"] = levels
+
+
+def _series_level_ids(all_levels: List[str]) -> List[str]:
+    return [
+        nid
+        for nid in (normalize_level_id(x) for x in (all_levels or []))
+        if nid and nid != FOUNDATION_LEVEL
+    ]
+
+
+def furthest_reached_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
+    """Furthest series set that is unlocked or completed (may sit past a hole)."""
+    progress = progress or {}
+    unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
+    completed = {
+        normalize_level_id(x)
+        for x in (progress.get("completed_levels") or [])
+        if normalize_level_id(x)
+    }
+    best = ""
+    for nid in _series_level_ids(all_levels or []):
+        if nid in unlocked or nid in completed:
             best = nid
     return best or FOUNDATION_LEVEL
 
 
+def heal_unlock_gaps(progress: Dict[str, Any], all_levels: List[str]) -> List[str]:
+    """Fill holes between already-reached sets; return the healed level ids.
+
+    Sticky locks / missing middles between two reached sets (HP S2.T4 locked
+    while Elite S3.T5 is open) are cleared. A World Class wall beyond the
+    furthest reached set is left alone. Does not unlock Entry→… when only a
+    sparse later band was opened for a test.
+    """
+    progress = progress or {}
+    series = _series_level_ids(all_levels or [])
+    if not series:
+        return []
+    unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
+    completed = {
+        normalize_level_id(x)
+        for x in (progress.get("completed_levels") or [])
+        if normalize_level_id(x)
+    }
+    locked = {
+        normalize_level_id(x)
+        for x in (progress.get("manually_locked_levels") or [])
+        if normalize_level_id(x)
+    }
+    reached_idxs = [
+        idx for idx, nid in enumerate(series) if nid in unlocked or nid in completed
+    ]
+    if not reached_idxs:
+        return []
+    lo, hi = min(reached_idxs), max(reached_idxs)
+    levels = list(progress.get("unlocked_levels") or [])
+    _unique_append(levels, FOUNDATION_LEVEL)
+    healed: List[str] = []
+    for idx in range(lo, hi + 1):
+        nid = series[idx]
+        was_hole = nid in locked or nid not in unlocked
+        if nid in locked:
+            clear_manual_lock(progress, level_id=nid)
+        if nid not in {normalize_level_id(x) for x in levels}:
+            levels.append(nid)
+        if was_hole:
+            healed.append(nid)
+    progress["unlocked_levels"] = levels
+    return healed
+
+
+def next_playable_level(progress: Dict[str, Any], all_levels: List[str]) -> str:
+    """Where booked/Mode 2 play should resume.
+
+    Among the reached unlock span, play the first set not yet completed. After
+    ``heal_unlock_gaps``, that is the first jumped hole (e.g. HP S2.T4).
+    """
+    progress = progress or {}
+    unlocked = {normalize_level_id(x) for x in (progress.get("unlocked_levels") or [])}
+    locked = {
+        normalize_level_id(x)
+        for x in (progress.get("manually_locked_levels") or [])
+        if normalize_level_id(x)
+    }
+    completed = {
+        normalize_level_id(x)
+        for x in (progress.get("completed_levels") or [])
+        if normalize_level_id(x)
+    }
+    series = _series_level_ids(all_levels or [])
+    if not series:
+        return FOUNDATION_LEVEL
+
+    reached_idxs = [
+        idx
+        for idx, nid in enumerate(series)
+        if (nid in unlocked and nid not in locked) or nid in completed
+    ]
+    if not reached_idxs:
+        for nid in series:
+            if nid in unlocked and nid not in locked:
+                return nid
+        # Foundation-only accounts stay on Foundation (SF playlist stamp).
+        return FOUNDATION_LEVEL
+
+    lo, hi = min(reached_idxs), max(reached_idxs)
+    for idx in range(lo, hi + 1):
+        nid = series[idx]
+        # Include locked holes — sync heals them before continue stamps this.
+        if nid not in completed:
+            return nid
+    return series[hi]
+
+
 def sync_current_development_level(progress: Dict[str, Any], all_levels: List[str]) -> Dict[str, Any]:
-    """CURRENT DEVELOPMENT LEVEL = latest unlocked set (and Foundation playlist).
+    """CURRENT DEVELOPMENT LEVEL = next set to play (and Foundation playlist).
 
     Call after every unlock / final save so My SIMUST and operator always show
     where the player continues next time (like a game save checkpoint).
@@ -312,7 +477,9 @@ def sync_current_development_level(progress: Dict[str, Any], all_levels: List[st
     progress.setdefault("manually_locked_levels", [])
     progress.setdefault("manually_locked_playlists", [])
     apply_manual_locks(progress)
-    level = highest_unlocked_level(progress, all_levels or [])
+    # Close holes created by sticky locks + jumped continues before choosing next.
+    heal_unlock_gaps(progress, all_levels or [])
+    level = next_playable_level(progress, all_levels or [])
     progress["current_level"] = level
     if level == FOUNDATION_LEVEL:
         playlist = highest_foundation_playlist(progress)
@@ -518,6 +685,43 @@ def merge_progress(local_progress: Optional[Dict[str, Any]], remote_progress: Op
     results = dict(dst.get("challenge_results") or {})
     results.update(src.get("challenge_results") or {})
     dst["challenge_results"] = results
+    # Lab earned opens beat a stale host lock: if the lab has a set unlocked and
+    # did not lock it, do not re-lock it from the host (that stripped S2.T1 and
+    # made continue jump to S2.T2).
+    local_unlocked = {
+        normalize_level_id(x) for x in (local_progress or {}).get("unlocked_levels") or []
+    }
+    local_locked = {
+        normalize_level_id(x)
+        for x in (local_progress or {}).get("manually_locked_levels") or []
+        if normalize_level_id(x)
+    }
+    dst["manually_locked_levels"] = [
+        lvl
+        for lvl in (dst.get("manually_locked_levels") or [])
+        if not (
+            normalize_level_id(lvl) in local_unlocked
+            and normalize_level_id(lvl) not in local_locked
+        )
+    ]
+    local_playlists = {
+        str(name).strip()
+        for name in (local_progress or {}).get("unlocked_playlists") or []
+        if str(name).strip()
+    }
+    local_locked_playlists = {
+        str(name).strip()
+        for name in (local_progress or {}).get("manually_locked_playlists") or []
+        if str(name).strip()
+    }
+    dst["manually_locked_playlists"] = [
+        name
+        for name in (dst.get("manually_locked_playlists") or [])
+        if not (
+            str(name).strip() in local_playlists
+            and str(name).strip() not in local_locked_playlists
+        )
+    ]
     apply_manual_locks(dst)
     # Prefer lab current when locks removed a remote "highest" set.
     if src.get("current_level") and not is_manually_locked(dst, str(src.get("current_level") or "")):
