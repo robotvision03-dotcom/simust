@@ -5089,7 +5089,9 @@
                 var current = editingPlayerRef.current;
                 var form = editFormRef.current || {};
                 if (!current) return;
-                var playerId = String(form.playerId || current.playerId || current.id || "").trim();
+                // Keep the original SIMUST ID — changing it used to upsert a second
+                // account while leaving the old one (looked like "rename made a new player").
+                var playerId = String(current.playerId || current.id || "").trim();
                 var payload = {
                     player_id: playerId,
                     username: playerId,
@@ -7810,10 +7812,13 @@
                                         .value })); } })
                         ),
                         React.createElement('div', { className: "form-group" },
-                            React.createElement('label', null, "SIMUST ID"),
-                            React.createElement('input', { value: editForm.playerId || '', onChange: function(
-                                    e) { setEditForm(Object.assign({}, editForm, { playerId: e.target
-                                        .value })); } })
+                            React.createElement('label', null, "SIMUST ID (My SIMUST login username — cannot change)"),
+                            React.createElement('input', {
+                                value: editForm.playerId || '',
+                                readOnly: true,
+                                title: "Login username for My SIMUST Sign in. Create a new player to use a different ID.",
+                                style: { opacity: 0.85, cursor: 'not-allowed' }
+                            })
                         ),
                         React.createElement('div', { className: "form-group" },
                             React.createElement('label', null, "Club"),
