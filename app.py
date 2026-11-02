@@ -1951,6 +1951,7 @@ def apply_final_results_progress(
     field_metrics: dict,
     score_field: str = "",
     save_reports: bool = True,
+    played_by_field: dict = None,
 ) -> dict:
     """Save score, unlock when thresholds are met, update trend, continue if time left.
 
@@ -1962,6 +1963,9 @@ def apply_final_results_progress(
 
     save_reports=False skips PERFORMANCE TREND writes (used when both fields already
     saved on their own finals and only unlock/continue sync is needed).
+
+    played_by_field: optional { "A"|"B": {level, subdirectory, directory} } for the
+    set that was actually on screen (dual Entry on B must not unlock Foundation).
     """
     info = _continue_target({})
     try:
@@ -1982,13 +1986,40 @@ def apply_final_results_progress(
     changed = False
     primary_info = None
     combined = _session_is_combined_fields(fields, payload)
+    played_map = played_by_field if isinstance(played_by_field, dict) else {}
     for fid in target_fields:
         slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
         player_id = str((slot or {}).get("player_id") or "").strip()
         if player_id.startswith("__sim_"):
             player_id = ""
-        level = str((slot or {}).get("level") or payload.get("level") or "").strip()
-        subdirectory = str((slot or {}).get("subdirectory") or "").strip()
+        played = played_map.get(fid) if isinstance(played_map.get(fid), dict) else {}
+        if not played:
+            played = played_map.get(str(fid).upper()[:1]) if isinstance(
+                played_map.get(str(fid).upper()[:1]), dict
+            ) else {}
+        level = str(
+            (played or {}).get("level")
+            or (slot or {}).get("level")
+            or payload.get("level")
+            or ""
+        ).strip()
+        subdirectory = str(
+            (played or {}).get("subdirectory")
+            or (slot or {}).get("subdirectory")
+            or ""
+        ).strip()
+        # Keep the live slot honest before unlock/propagate rewrites it.
+        if player_id and (played or {}).get("level"):
+            slot = dict(slot or {})
+            slot["level"] = level
+            if subdirectory:
+                slot["subdirectory"] = subdirectory
+            played_dir = str((played or {}).get("directory") or "").strip()
+            if played_dir:
+                slot["directory"] = played_dir
+            fields[fid] = slot
+            payload["fields"] = fields
+            changed = True
         metrics = (field_metrics or {}).get(fid) or {}
         # Elite/WC: never substitute partner/Field B rings for the booked field.
         if (not metrics) and (not combined) and len(target_fields) == 1 and field_metrics:
@@ -5512,6 +5543,63 @@ async def hip_zone_reset(req: Request):
 # HELPER: Compute total distance from recognition.json
 # ============================================================
 
+def compute_distances_by_video(blocks, results, fallback_m_per_px=None):
+    """Hip path length (metres) per video_index — no simust_realtime import.
+
+    Wall rings used to `import simust_realtime` here, which pulled torch/YOLO into
+    the uvicorn process and hung :8000 so every level skipped per-test results.
+    """
+    if fallback_m_per_px is None:
+        fallback_m_per_px = PIXEL_TO_METER_SCALE
+    action_vid = {}
+    for row in results or []:
+        sid = row.get("id")
+        if not sid:
+            continue
+        try:
+            action_vid[sid] = int(row.get("video_index") or 1)
+        except (TypeError, ValueError):
+            action_vid[sid] = 1
+
+    by_v = {}
+    for block in blocks or []:
+        sid = block.get("id")
+        if not sid or sid not in action_vid:
+            continue
+        if str(block.get("action") or "").upper() in ("BETWEEN_SESSIONS", "BETWEEN", ""):
+            continue
+        cur_v = action_vid[sid]
+        st = block.get("start_time")
+        if not st:
+            continue
+        try:
+            block_start = datetime.strptime(st, "%H:%M:%S.%f")
+        except Exception:
+            continue
+        bucket = by_v.setdefault(cur_v, [])
+        for entry in block.get("data") or []:
+            hp = entry.get("hp")
+            if hp is None or not isinstance(hp, list) or len(hp) != 2:
+                continue
+            bucket.append(
+                (block_start + timedelta(seconds=float(entry.get("t", 0.0) or 0.0)), hp[0], hp[1])
+            )
+    out = {}
+    for vid, pts in by_v.items():
+        pts = sorted(pts, key=lambda p: p[0])
+        step = 4 if len(pts) >= 8 else 1
+        sampled = pts[::step]
+        if len(sampled) < 2:
+            out[vid] = 0.0
+            continue
+        out[vid] = float(
+            simust_homography.path_distance_meters(
+                sampled, fallback_m_per_px=fallback_m_per_px
+            )
+        )
+    return out
+
+
 def compute_total_distance_from_recognition(session_folder: str, video_index: Optional[int] = None) -> float:
     json_path = os.path.join(session_folder, "recognition.json")
     results_path = os.path.join(session_folder, "results.json")
@@ -5531,8 +5619,7 @@ def compute_total_distance_from_recognition(session_folder: str, video_index: Op
             results = []
         if video_index is not None and results:
             try:
-                import simust_realtime as _rt
-                by_video = _rt.compute_distances_by_video(
+                by_video = compute_distances_by_video(
                     blocks, results, fallback_m_per_px=PIXEL_TO_METER_SCALE
                 )
                 return float(by_video.get(int(video_index), 0.0))
@@ -6752,12 +6839,16 @@ def build_results_ring_panel(metrics, field="A"):
     }
 
 
-def prepare_field_section_metrics(results_rows, fdir, video_index=None, is_final=False):
+def prepare_field_section_metrics(
+    results_rows, fdir, video_index=None, is_final=False, recompute_distance=True,
+):
     if is_final:
         metrics = aggregate_final_section_metrics(results_rows, session_folder=fdir)
     else:
         metrics = summarize_results_section_metrics(results_rows)
-        if fdir and video_index is not None:
+        # Per-test Displacement needs recognition hips when results.json still
+        # has total_distance=0 (common mid-session / sim). Scoped to video_index.
+        if recompute_distance and fdir and video_index is not None:
             recomputed = compute_total_distance_from_recognition(fdir, video_index=video_index)
             if recomputed > 0:
                 metrics["total_distance"] = recomputed
@@ -7634,16 +7725,28 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         session_root = os.path.dirname(session_root)
 
     active = _active_realtime_fields(data.get("fields") or data.get("active_fields"))
+    # Last action may still be flushing — brief poll so wall rings (all levels)
+    # do not return empty while Processing is still on screen.
+    wall_fast = data.get("make_video") is False
+    poll_deadline = time.time() + (1.2 if wall_fast else 0.0)
     field_jobs = []
-    for fid in ("A", "B"):
-        if fid not in active:
-            continue
-        fdir = os.path.join(session_root, f"field_{fid}")
-        fresults = os.path.join(fdir, "results.json")
-        if os.path.exists(fresults):
+    while True:
+        field_jobs = []
+        for fid in ("A", "B"):
+            if fid not in active:
+                continue
+            fdir = os.path.join(session_root, f"field_{fid}")
+            fresults = os.path.join(fdir, "results.json")
+            if not os.path.exists(fresults):
+                continue
             rows = load_json_file(fresults, default=[])
             if rows:
                 field_jobs.append((fid, fdir, rows, fresults))
+        if field_jobs:
+            break
+        if time.time() >= poll_deadline:
+            break
+        time.sleep(0.12)
 
     if not field_jobs:
         results_json_path = os.path.join(session_root, "results.json")
@@ -7657,11 +7760,19 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
     primary_rows = None
     primary_fid = "A" if "A" in active else "B"
     primary_dir = session_root
+    # Wall-ring path (make_video falsy) must stay fast. Re-reading 10–20MB
+    # recognition.json + compute_distances on every dual-field retry wedges :8000
+    # and the player skips per-test rings. Live scoring already wrote distances.
+    # Opt-in only when make_video is explicitly true (never treat missing/None as stamp).
+    _mv = data.get("make_video")
+    if isinstance(_mv, str):
+        stamp_distances = _mv.strip().lower() in ("1", "true", "yes")
+    else:
+        stamp_distances = bool(_mv)
     for fid, fdir, all_results, results_json_path in field_jobs:
         recognition_path = os.path.join(fdir, "recognition.json")
-        if os.path.exists(recognition_path):
+        if stamp_distances and os.path.exists(recognition_path):
             try:
-                import simust_realtime as _rt
                 blocks = None
                 # Brief retry: recognition may still be flushing atomically.
                 for _attempt in range(4):
@@ -7672,7 +7783,8 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
                     except (OSError, json.JSONDecodeError, ValueError):
                         time.sleep(0.05)
                 if blocks is not None:
-                    by_video = _rt.compute_distances_by_video(blocks, all_results)
+                    # Local helper — never import simust_realtime (torch/YOLO) here.
+                    by_video = compute_distances_by_video(blocks, all_results)
 
                     def _stamp(rows, distances=by_video):
                         out = list(rows) if isinstance(rows, list) else []
@@ -7705,8 +7817,19 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
             logger.warning("No results for video_index %s on Field %s", video_index, fid)
             continue
 
+        # Recompute hips only when this test still has 0 m (session-end stamp
+        # hasn't run). Lightweight local math — never pulls torch into uvicorn.
+        need_dist = True
+        try:
+            need_dist = max(float(r.get("total_distance") or 0) for r in video_results) <= 0
+        except (TypeError, ValueError):
+            need_dist = True
         section = prepare_field_section_metrics(
-            video_results, fdir, video_index=video_index, is_final=False
+            video_results,
+            fdir,
+            video_index=video_index,
+            is_final=False,
+            recompute_distance=need_dist,
         )
         save_section_metrics_entry(fdir, video_index, section)
         panels[fid] = build_results_ring_panel(section, field=fid)
@@ -7793,6 +7916,18 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
 async def create_video_results(req: Request):
     try:
         data = await req.json()
+        try:
+            with open(
+                os.path.join(SIMUST_PLAYER_DIRECTORY, "create_video_trace.txt"),
+                "a",
+                encoding="utf-8",
+            ) as _tr:
+                _tr.write(
+                    f"{time.time():.3f} enter make_video={data.get('make_video')!r} "
+                    f"fields={data.get('fields')!r}\n"
+                )
+        except Exception:
+            pass
         if _playback_aborted_for_results():
             logger.info("Skipping create-video-results — session already released")
             return {"status": "ignored", "message": "Session already released"}
@@ -7823,29 +7958,57 @@ async def create_video_results(req: Request):
             else:
                 return {"status": "error", "message": "No session folder found"}
 
-        # Mode 2 / fast rings: do not burn 12s+ waiting — player only waits ~4s.
+        # Mode 2 / wall rings: keep score-wait tiny. A long wait here blocked
+        # :8000 under dual-field retries so per-test rings never painted.
         score_wait = 12.0
         try:
             if read_simulator_score_mode() == 2:
                 score_wait = 0.8
         except Exception:
             score_wait = 12.0
+        if data.get("make_video") is False:
+            # Player wall projection — results.json is already flushed; don't stall.
+            score_wait = min(float(score_wait), 0.35)
         await _wait_until_actions_are_scored(
             timeout=score_wait,
             fields=data.get("fields") or data.get("active_fields"),
         )
+        try:
+            with open(
+                os.path.join(SIMUST_PLAYER_DIRECTORY, "create_video_trace.txt"),
+                "a",
+                encoding="utf-8",
+            ) as _tr:
+                _tr.write(f"{time.time():.3f} after_wait score_wait={score_wait}\n")
+        except Exception:
+            pass
         if _playback_aborted_for_results():
             logger.info("Skipping create-video-results after score wait — session released")
             return {"status": "ignored", "message": "Session already released"}
 
         # Offload sync CPU/IO so concurrent polls (/playback-status) stay alive.
-        return await asyncio.to_thread(
+        # Wall rings (make_video=False) skip multi‑MB recognition recompute inside.
+        _t_build = time.time()
+        result = await asyncio.to_thread(
             _build_create_video_results_sync,
             data,
             directory,
             video_index,
             spawn_display,
         )
+        try:
+            with open(
+                os.path.join(SIMUST_PLAYER_DIRECTORY, "create_video_trace.txt"),
+                "a",
+                encoding="utf-8",
+            ) as _tr:
+                _tr.write(
+                    f"{time.time():.3f} done status={(result or {}).get('status')!r} "
+                    f"build_ms={int((time.time() - _t_build) * 1000)}\n"
+                )
+        except Exception:
+            pass
+        return result
 
     except Exception as e:
         logger.error(f"create-video-results error: {e}", exc_info=True)
@@ -7983,10 +8146,26 @@ def _build_create_results_video_sync(data, session_root, directory, field_id, sp
             progress_info = {}
             if data.get("update_progress") is not False:
                 try:
+                    played_by_field = data.get("played_by_field")
+                    if not isinstance(played_by_field, dict):
+                        played_by_field = {}
+                        pl = str(data.get("played_level") or "").strip()
+                        ps = str(data.get("played_subdirectory") or "").strip()
+                        pd = str(data.get("played_directory") or "").strip()
+                        only = str(
+                            data.get("score_field") or field_id or ""
+                        ).upper()[:1]
+                        if only in ("A", "B") and (pl or ps):
+                            played_by_field[only] = {
+                                "level": pl,
+                                "subdirectory": ps,
+                                "directory": pd,
+                            }
                     progress_info = apply_final_results_progress(
                         field_metrics,
                         score_field=str(data.get("score_field") or field_id or ""),
                         save_reports=data.get("save_reports") is not False,
+                        played_by_field=played_by_field,
                     )
                 except Exception:
                     logger.exception("Final results could not update the player's level")
@@ -8063,10 +8242,24 @@ def _build_create_results_video_sync(data, session_root, directory, field_id, sp
     video_path = primary_video
     progress_info = {}
     try:
+        played_by_field = data.get("played_by_field")
+        if not isinstance(played_by_field, dict):
+            played_by_field = {}
+            pl = str(data.get("played_level") or "").strip()
+            ps = str(data.get("played_subdirectory") or "").strip()
+            pd = str(data.get("played_directory") or "").strip()
+            only = str(data.get("score_field") or field_id or "").upper()[:1]
+            if only in ("A", "B") and (pl or ps):
+                played_by_field[only] = {
+                    "level": pl,
+                    "subdirectory": ps,
+                    "directory": pd,
+                }
         progress_info = apply_final_results_progress(
             field_metrics,
             score_field=str(data.get("score_field") or field_id or ""),
             save_reports=data.get("save_reports") is not False,
+            played_by_field=played_by_field,
         )
     except Exception:
         logger.exception("Final results could not update the player's level")

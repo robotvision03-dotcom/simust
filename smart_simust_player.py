@@ -226,6 +226,7 @@ class _NullVlcInstance:
 LOG_DIR = "C:/Users/siama/Documents/simust_player"
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "smart_player.log")
+DUAL_FIELD_EVENTS_FILE = os.path.join(LOG_DIR, "dual_field_events.jsonl")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -239,6 +240,27 @@ logger = logging.getLogger(__name__)
 logger.info("===== SMART PLAYER STARTED (with integrated final video) =====")
 
 
+def _dual_field_event(event, **detail):
+    """Append one dual-field procedure event (JSONL) for later diagnosis."""
+    row = {
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "event": str(event or ""),
+    }
+    for key, value in (detail or {}).items():
+        if value is None:
+            continue
+        row[str(key)] = value
+    try:
+        with open(DUAL_FIELD_EVENTS_FILE, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, default=str) + "\n")
+    except Exception:
+        pass
+    try:
+        logger.info("DUAL_EVENT %s %s", event, json.dumps(detail or {}, default=str)[:600])
+    except Exception:
+        logger.info("DUAL_EVENT %s", event)
+
+
 def _reset_live_action_results():
     """A new play starts cue numbers again at 1. Drop the previous play's scores."""
     try:
@@ -248,13 +270,16 @@ def _reset_live_action_results():
     except Exception as exc:
         logger.warning("Could not reset live action results: %s", exc)
 
-# Processing rings only — keep short. Rings show for PER/FINAL below.
-WAIT_ANIMATION_MS = 1200
-PER_VIDEO_RESULTS_MS = 30000
+# Processing overlay — show this long for every level (Entry through World Class).
+# After WAIT the overlay hides; rings may still arrive until RESULTS_FETCH_BUDGET.
+WAIT_ANIMATION_MS = 4000
+# Per-test wall rings display (Mode 2). Keep short on every band — Elite/WC
+# used to keep 30s and looked broken when rings never arrived.
+PER_VIDEO_RESULTS_MS = 4000
 FINAL_RESULTS_MS = 40000
-# Max time on processing if create-video-results is slow/empty (then retry / skip).
-# Elite/WC dual-field rings need more headroom than single-field Entry/Activated.
-RESULTS_FETCH_BUDGET_MS = 14000
+# How long to keep waiting for create-video-results after a test ends.
+# Processing animation itself stops at WAIT_ANIMATION_MS (does not stretch).
+RESULTS_FETCH_BUDGET_MS = 10000
 # Fallback if the starting video length cannot be read.
 LEVEL_INTRO_MS = 4000
 # Keep the last frame of the starting video on screen this long after it ends.
@@ -734,6 +759,63 @@ def _write_players_fields_active(active_fields):
             json.dump(payload, f, indent=2)
     except Exception as exc:
         logger.warning("Could not write players_fields active: %s", exc)
+
+
+def _stamp_players_fields_slot(fid, level="", subdirectory="", directory=""):
+    """Write the level this field is actually playing into players_fields.
+
+    Dual independent play can put Entry on B while the slot still holds an old
+    Foundation SF. Finals/unlock must score the live set, not that stale stamp.
+    """
+    fid = str(fid or "").upper()[:1]
+    if fid not in ("A", "B"):
+        return
+    level = str(level or "").strip()
+    subdirectory = str(subdirectory or "").strip()
+    directory = str(directory or "").strip()
+    if not (level or subdirectory or directory):
+        return
+    try:
+        payload = _read_players_fields_payload() or {}
+        fields = dict(payload.get("fields") or {}) if isinstance(payload, dict) else {}
+        slot = dict(fields.get(fid) or {}) if isinstance(fields.get(fid), dict) else {}
+        if not str(slot.get("player_id") or "").strip():
+            return
+        changed = False
+        if level and str(slot.get("level") or "").strip() != level:
+            slot["level"] = level
+            changed = True
+        if subdirectory and str(slot.get("subdirectory") or "").strip() != subdirectory:
+            slot["subdirectory"] = subdirectory
+            changed = True
+        if directory and str(slot.get("directory") or "").strip() != directory:
+            slot["directory"] = directory
+            changed = True
+        if not changed:
+            return
+        fields[fid] = slot
+        payload["fields"] = fields
+        # Top-level level is only meaningful for single-band sessions.
+        levels_map = dict(payload.get("levels") or {})
+        if level:
+            levels_map[fid] = level
+            payload["levels"] = levels_map
+        os.makedirs(os.path.dirname(PLAYERS_FIELDS_FILE), exist_ok=True)
+        tmp = PLAYERS_FIELDS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, PLAYERS_FIELDS_FILE)
+        logger.info(
+            "Stamped players_fields %s → %s %s",
+            fid, level or "(level)", subdirectory or "",
+        )
+    except Exception as exc:
+        logger.warning("Could not stamp players_fields for %s: %s", fid, exc)
 
 
 def _build_separate_field_phases(level_root: str) -> List[dict]:
@@ -5863,8 +5945,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
 
     # Pass pictures are 30% smaller than the previous 0.81 scale (~57% of the content box).
     # Digits and equations stay full size.
-    # Foundation / SF pass still — 10% larger than the previous 0.57 scale.
-    PASS_IMAGE_SCALE = 0.627
+    # Both fields: −10% from the prior 0.627 scale.
+    PASS_IMAGE_SCALE = 0.564
 
     def __init__(self, parent=None, image_path=TEAMATE_IMAGE):
         super().__init__(parent)
@@ -8925,6 +9007,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._independent_done = {}
         self._field_final_queued = {}
         self._field_final_done = {}
+        self._field_final_progress = {}
         self._field_result_state = {}
         self._phase_active = []
         self._fields_opening = set()
@@ -8980,6 +9063,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         phase = str(self._player_attr("display_phase") or "")
         if phase in ("idle", "ready", "completed", "closed"):
             return []
+        stopped = self._player_attr("_field_operator_stopped") or {}
         # Finals / processing still count as playing when a continue may follow.
         hold_phases = (
             "wait_per_video",
@@ -8997,20 +9081,23 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return [
                 str(fid).upper()[:1]
                 for fid in (getattr(self, "_phase_active", None) or ["A"])
-                if str(fid).upper()[:1] in ("A", "B")
+                if str(fid).upper()[:1] in ("A", "B") and not stopped.get(str(fid).upper()[:1])
             ] or ["A"]
         parts = getattr(self, "_field_opening_playlists", None) or {}
         if parts:
             playing = []
             for fid, rows in parts.items():
                 key = str(fid).upper()[:1]
+                if stopped.get(key):
+                    continue
                 # During this field's own final wait/rings, keep its Stop down.
                 state = (getattr(self, "_field_result_state", None) or {}).get(key) or {}
                 field_phase = str(state.get("phase") or "")
+                # Cabinet-wide hold_phases (sibling opening) must NOT keep a
+                # stopped field's Stop lit / status=playing.
                 if rows and (
                     not self._field_series_finished(key)
                     or field_phase in ("final_wait", "final", "playing", "wait")
-                    or phase in hold_phases
                 ):
                     playing.append(key)
             if playing:
@@ -9020,18 +9107,20 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 return [
                     str(fid).upper()[:1]
                     for fid in parts.keys()
-                    if str(fid).upper()[:1] in ("A", "B")
+                    if str(fid).upper()[:1] in ("A", "B") and not stopped.get(str(fid).upper()[:1])
                 ] or ["A"]
         active = [
             str(fid).upper()[:1]
             for fid in (getattr(self, "_phase_active", None) or [])
-            if str(fid).upper()[:1] in ("A", "B")
+            if str(fid).upper()[:1] in ("A", "B") and not stopped.get(str(fid).upper()[:1])
         ]
         if active:
             return active
         # Last resort during hold phases with empty phase_active (continue rebuild).
         if phase in hold_phases or self._player_attr("_independent_close_started", False):
-            return ["A"]
+            return ["A"] if not stopped.get("A") else (
+                ["B"] if not stopped.get("B") else []
+            )
         return []
 
 
@@ -10801,6 +10890,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             str(name).upper()[:1]
             for name in (entry.get("field_screens") or {})
         }
+        blocked = set()
+        try:
+            blocked = self._fields_blocked_from_action()
+        except Exception:
+            blocked = set()
         try:
             paused_fields = self._pause_fields()
         except Exception:
@@ -10809,9 +10903,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         require_all = bool(entry.get("require_all_goals"))
         hits_by_field = dict(self._player_attr("_goal_hits_by_field") or {})
         for fid in self._active_fields():
-            if wanted and str(fid).upper()[:1] not in wanted:
+            fid_key = str(fid).upper()[:1]
+            if wanted and fid_key not in wanted:
                 continue
-            item = fields.get(fid) or {}
+            # Results / opening / stopped: ignore leftover sim hits so a cylinder
+            # cannot reappear and advance while rings are still on screen.
+            if fid_key in blocked:
+                continue
+            item = fields.get(fid) or fields.get(fid_key) or {}
             if not isinstance(item, dict):
                 continue
             fid_key = str(fid).upper()[:1]
@@ -11150,7 +11249,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         pass_scale = 1.0
         if not (entry.get("entry_digits") or entry.get("math_op") or entry.get("motion_fill")):
             pass_scale = (
-                self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.627
+                self.image_canvas.PASS_IMAGE_SCALE if self.image_canvas else 0.564
             )
         if self._result_hold_mode(entry) == "screen":
             self._release_results_on(lit_screens)
@@ -11625,6 +11724,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _advance_independent_field(self, fid, reload=True):
         """Move one field to its next action. A finished test does not stop the other field."""
         fid = str(fid or "").upper()[:1]
+        if (self._player_attr("_field_operator_stopped") or {}).get(fid):
+            return
         parts = getattr(self, "_field_opening_playlists", None) or {}
         playlist = parts.get(fid) or []
         if not isinstance(getattr(self, "_independent_index", None), dict):
@@ -11661,74 +11762,94 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
     def _stop_independent_field(self, fid):
         """End this field only. The other field keeps its current screen and clock."""
         fid = str(fid or "").upper()[:1]
-        parts = getattr(self, "_field_opening_playlists", None) or {}
+        parts = dict(getattr(self, "_field_opening_playlists", None) or {})
         playlist = parts.get(fid) or []
-        if not playlist:
-            return
         if not isinstance(getattr(self, "_independent_done", None), dict):
             self._independent_done = {}
         if not isinstance(getattr(self, "_independent_index", None), dict):
             self._independent_index = {name: 0 for name in parts}
-        if self._independent_done.get(fid) and self._field_series_finished(fid):
+        # Allow Stop mid-test and during per-test results. Only refuse when this
+        # field already finished its whole series and finals are done.
+        finals_done = bool((self._player_attr("_field_final_done") or {}).get(fid))
+        already = bool((self._player_attr("_field_operator_stopped") or {}).get(fid))
+        if already and playlist and self._independent_done.get(fid) and self._field_series_finished(fid) and finals_done:
             self._publish_field_controls()
             return
+        if not playlist:
+            # Still clear walls / cue if operator Stop arrives with empty rows.
+            logger.info("Operator stop: field %s (no playlist rows — clearing half)", fid)
+        # Mark stopped FIRST so in-flight goal/timer advances cannot revive this half.
+        stopped = dict(self._player_attr("_field_operator_stopped") or {})
+        stopped[fid] = True
+        self._field_operator_stopped = stopped
         self._bump_field_epoch(fid)
-        try:
-            opening = set(object.__getattribute__(self, "_fields_opening") or set())
-        except Exception:
-            opening = set()
+        opening = set(self._player_attr("_fields_opening") or set())
         opening.discard(fid)
         self._fields_opening = opening
-        self._independent_index[fid] = max(0, len(playlist) - 1)
+        if playlist:
+            self._independent_index[fid] = max(0, len(playlist) - 1)
         self._independent_done[fid] = True
-        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        holds = dict(self._player_attr("_field_hold_until") or {})
         holds.pop(fid, None)
         self._field_hold_until = holds
         try:
-            canvas = object.__getattribute__(self, "image_canvas")
+            _silence_image_action_cue_for_fields([fid])
         except Exception:
-            canvas = None
+            pass
+        canvas = self._player_attr("image_canvas")
         if canvas is not None:
             try:
                 canvas.set_screen_images({}, keep_videos=True, replace_fields={fid})
             except Exception:
                 pass
-        logger.info("Operator stop: field %s only", fid)
-        try:
-            stopped = dict(object.__getattribute__(self, "_field_operator_stopped") or {})
-        except Exception:
-            stopped = {}
-        stopped[fid] = True
-        self._field_operator_stopped = stopped
-        for name in ("_field_result_state", "_field_final_queued", "_field_final_done"):
             try:
-                bucket = dict(object.__getattribute__(self, name) or {})
+                if hasattr(canvas, "_release_field_videos"):
+                    canvas._release_field_videos({fid})
             except Exception:
-                bucket = {}
+                pass
+            try:
+                if hasattr(canvas, "_clear_field_summary"):
+                    canvas._clear_field_summary({fid})
+            except Exception:
+                pass
+        logger.info("Operator stop: field %s only", fid)
+        for name in ("_field_result_state", "_field_final_queued", "_field_final_done"):
+            bucket = dict(self._player_attr(name) or {})
             bucket.pop(fid, None)
             setattr(self, name, bucket)
         try:
             self._hide_field_result_rings(fid)
         except Exception:
             pass
-        overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+        overlay = (self._player_attr("_field_wait_overlays") or {}).get(fid)
         if overlay is not None:
             try:
                 overlay.hide()
             except Exception:
                 pass
+        # Drop this field's playlist so goal/timer compose cannot re-arm it.
+        # Keep done/index markers for diagnostics; join clears them on restart.
+        parts.pop(fid, None)
+        self._field_opening_playlists = parts
         live = []
         for name, rows in parts.items():
             key = str(name).upper()[:1]
-            if not rows or key == fid:
+            if not rows:
                 continue
             if self._field_series_finished(key):
                 continue
+            if (self._player_attr("_field_operator_stopped") or {}).get(key):
+                continue
             live.append(key)
-        if live:
-            self._phase_active = list(live)
-            _write_players_fields_active(live)
+        self._phase_active = list(live)
+        _write_players_fields_active(live)
         logger.info("Field %s stopped and cleared. Ready for the next start.", fid)
+        _dual_field_event(
+            "field_stop_applied",
+            field=fid,
+            live=list(live),
+            active=list(self._phase_active or []),
+        )
         try:
             threading.Thread(
                 target=self._request_field_final,
@@ -11738,6 +11859,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             ).start()
         except Exception:
             logger.exception("Field %s progress save after stop failed", fid)
+        # Publish idle for this field immediately — before sibling reload.
+        self._publish_field_controls()
         self._reload_independent_entry(restart_fields=set())
         self._publish_field_controls()
         hold = dict(self._player_attr("_screensaver_hold_until") or {})
@@ -11867,6 +11990,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         modes = dict(getattr(self, "_phase_field_modes", None) or {})
         modes[fid] = str(info.get("subdirectory") or info.get("mode_id") or "")
         self._phase_field_modes = modes
+        # Arena slot must match the live set before finals unlock.
+        try:
+            _stamp_players_fields_slot(
+                fid,
+                level=level,
+                subdirectory=str(modes.get(fid) or ""),
+                directory=str(dirs.get(fid) or directory or ""),
+            )
+        except Exception:
+            logger.exception("Could not stamp Field %s assignment on join", fid)
         self._cancel_independent_session_close()
         self._bump_field_epoch(fid)
         # Leaving full-cabinet idle saver — this field is now in realtime play.
@@ -11876,16 +12009,39 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._stop_all_screensaver()
         except Exception:
             pass
-        # Capture the live field's remaining steps before clearing single-field
-        # wait/final state (that clear drops _post_results_index).
+        # Capture the sibling before rebuilding. A field mid-final has no
+        # remaining steps — dropping it here used to wipe dual and restart A-only.
+        old_parts = dict(self._player_attr("_field_opening_playlists") or {})
+        old_index = dict(self._player_attr("_independent_index") or {})
+        previous_done = dict(self._player_attr("_independent_done") or {})
+        finals_done = dict(self._player_attr("_field_final_done") or {})
         parts = {}
+        indices = {}
+        done_flags = {}
         for other in ("A", "B"):
             if other == fid:
                 continue
             remaining = self._remaining_field_steps(other)
             if remaining:
                 parts[other] = remaining
-        self._abort_single_field_results_pipeline()
+                indices[other] = 0
+                done_flags[other] = False
+                continue
+            # Sibling finished its actions but finals/results still own the half.
+            if old_parts.get(other) and not finals_done.get(other):
+                parts[other] = list(old_parts[other])
+                try:
+                    idx = int(old_index.get(other) or 0)
+                except (TypeError, ValueError):
+                    idx = 0
+                indices[other] = max(0, min(idx, len(parts[other]) - 1))
+                done_flags[other] = True
+                # Keep the phase level/mode this sibling actually played.
+                # Never pull a different band from players_fields (Entry final
+                # must not be rewritten to Foundation SF-180N).
+        had_independent = bool(old_parts)
+        if not had_independent:
+            self._abort_single_field_results_pipeline()
         if str(self._player_attr("display_phase") or "") in ("idle", "ready"):
             self.display_phase = "action"
         # Hold saver off through opening + first action paint.
@@ -11897,11 +12053,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.error("No playlist to start Field %s", fid)
             return False
         parts[fid] = fresh
+        indices[fid] = 0
+        done_flags[fid] = False
         self._field_opening_playlists = parts
-        self._independent_index = {name: 0 for name in parts}
-        previous_done = dict(self._player_attr("_independent_done") or {})
+        self._independent_index = indices
         self._independent_done = {
-            name: bool(previous_done.get(name)) and name != fid
+            name: bool(done_flags.get(name)) or (bool(previous_done.get(name)) and name != fid)
             for name in parts
         }
         try:
@@ -11910,14 +12067,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             stopped = {}
         stopped.pop(fid, None)
         self._field_operator_stopped = stopped
-        abort_done = set(getattr(self, "_booking_abort_done", None) or set())
+        abort_done = set(self._player_attr("_booking_abort_done") or set())
         abort_done.discard(fid)
         self._booking_abort_done = abort_done
         for name in ("_field_final_queued", "_field_final_done", "_field_result_state"):
-            try:
-                bucket = dict(object.__getattribute__(self, name) or {})
-            except Exception:
-                bucket = {}
+            bucket = dict(self._player_attr(name) or {})
             bucket.pop(fid, None)
             setattr(self, name, bucket)
         try:
@@ -11925,7 +12079,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         now = time.perf_counter()
-        holds = dict(getattr(self, "_field_hold_until", None) or {})
+        holds = dict(self._player_attr("_field_hold_until") or {})
         holds.pop(fid, None)
         for name, steps in parts.items():
             if name == fid or holds.get(name) is not None or not steps:
@@ -11939,6 +12093,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             holds[name] = now + max(80, on_ms) / 1000.0
         self._field_hold_until = holds
         self._phase_active = [name for name in ("A", "B") if parts.get(name)]
+        self._phase_dual_independent = len(parts) >= 2
         _write_players_fields_active(self._phase_active)
         self._label_mode = True
         self.playlist_finished = False
@@ -11947,7 +12102,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.display_phase = "action"
         self._action_phase = "label"
         self._label_phase = "action"
-        entry = _compose_independent_entry(parts, self._independent_index)
+        # Never re-arm a finished sibling's cylinder while its final rings play.
+        skip = {
+            name for name, flag in (self._independent_done or {}).items() if flag
+        }
+        entry = _compose_independent_entry(parts, self._independent_index, skip=skip)
+        if not entry:
+            entry = _compose_independent_entry({fid: fresh}, {fid: 0})
         if not entry:
             return False
         self.video_files = [entry]
@@ -11961,6 +12122,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "Field %s joined — playing" % fid,
         )
         logger.info("Field %s opening beside %s", fid, [name for name in parts if name != fid])
+        _dual_field_event(
+            "field_join_independent",
+            field=fid,
+            beside=[name for name in parts if name != fid],
+            active=list(getattr(self, "_phase_active", None) or []),
+            modes=dict(getattr(self, "_phase_field_modes", None) or {}),
+            levels=dict(getattr(self, "_phase_field_levels", None) or {}),
+            steps={name: len(rows or []) for name, rows in parts.items()},
+            done=dict(self._independent_done or {}),
+        )
         try:
             canvas = object.__getattribute__(self, "image_canvas")
         except Exception:
@@ -12021,7 +12192,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     bucket.pop(other, None)
                 setattr(self, name, bucket)
             self._reload_independent_entry(restart_fields=set(live_others))
-        held = _compose_independent_entry(parts, self._independent_index, skip=opening)
+        skip_held = set(opening) | {
+            name for name, flag in (self._independent_done or {}).items() if flag
+        }
+        held = _compose_independent_entry(parts, self._independent_index, skip=skip_held)
         if held:
             self.video_files = [held]
             self.current_video_index = 0
@@ -12177,10 +12351,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _finish_due_independent_fields(self):
         """Advance only the fields whose own action time, or own goal, is done."""
+        try:
+            self._consume_field_stops()
+        except Exception:
+            pass
         cur = self.video_files[self.current_video_index] if self.video_files else {}
         if not isinstance(cur, dict):
             return
         screens = [str(fid).upper()[:1] for fid in (cur.get("field_screens") or {})]
+        try:
+            blocked = self._fields_blocked_from_action()
+        except Exception:
+            blocked = set()
+        screens = [fid for fid in screens if fid not in blocked]
         now = time.perf_counter()
         holds = dict(getattr(self, "_field_hold_until", None) or {})
         meta = cur.get("field_meta") or {}
@@ -12202,6 +12385,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         due = []
         for fid in screens:
             if paused.get(fid):
+                continue
+            if fid in blocked:
                 continue
             deadline = holds.get(fid)
             if deadline is None:
@@ -12233,17 +12418,31 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._advance_independent_field(fid, reload=False)
         self._reload_independent_entry(restart_fields=set(fids))
 
-    def _reload_independent_entry(self, restart_fields=None):
-        parts = getattr(self, "_field_opening_playlists", None) or {}
-        indices = getattr(self, "_independent_index", None) or {}
-        skip = {
+    def _fields_blocked_from_action(self):
+        """Fields in results / final / opening must not keep a live cylinder cue."""
+        blocked = {
             fid for fid, done in (getattr(self, "_independent_done", None) or {}).items() if done
         }
         try:
             opening = set(object.__getattribute__(self, "_fields_opening") or set())
         except Exception:
             opening = set()
-        skip |= {str(name).upper()[:1] for name in opening}
+        blocked |= {str(name).upper()[:1] for name in opening}
+        states = getattr(self, "_field_result_state", None) or {}
+        for fid, state in (states.items() if isinstance(states, dict) else ()):
+            phase = str((state or {}).get("phase") or "")
+            if phase in ("wait", "playing", "final_wait", "final_playing"):
+                blocked.add(str(fid).upper()[:1])
+        stopped = self._player_attr("_field_operator_stopped") or {}
+        for fid, on in (stopped.items() if isinstance(stopped, dict) else ()):
+            if on:
+                blocked.add(str(fid).upper()[:1])
+        return {fid for fid in blocked if fid in ("A", "B")}
+
+    def _reload_independent_entry(self, restart_fields=None):
+        parts = getattr(self, "_field_opening_playlists", None) or {}
+        indices = getattr(self, "_independent_index", None) or {}
+        skip = self._fields_blocked_from_action()
         entry = _compose_independent_entry(parts, indices, skip=skip)
         if not entry:
             return None
@@ -12666,9 +12865,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "make_video": False,
                 "fields": [fid],
             }
-            # Mode 2: short attempts so processing stays ~1–2s when API is healthy.
+            # Mode 2: allow enough time for score wait + panel build. Processing
+            # overlay still stops at WAIT_ANIMATION_MS; a 4s HTTP timeout was
+            # emptying panels before rings arrived.
             _m = self._read_simulator_score_mode()
-            http_timeout = 4.0 if _m == 2 else 35
+            http_timeout = 12.0 if _m == 2 else 35
             attempts = 2 if _m == 2 else 1
             for attempt in range(1, attempts + 1):
                 try:
@@ -12941,7 +13142,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if not panel or not panel.get("slice_aet"):
             elapsed = time.time() - float(state.get("started") or 0)
             budget_s = float(RESULTS_FETCH_BUDGET_MS) / 1000.0
-            # Keep processing short: one HTTP retry, then give up (~6s total).
+            # Stop the processing animation at 4s even if rings are still loading.
+            if elapsed >= WAIT_ANIMATION_MS / 1000.0:
+                overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+                if overlay is not None:
+                    try:
+                        overlay.hide()
+                    except Exception:
+                        pass
             if elapsed < budget_s:
                 if elapsed >= max(1.5, WAIT_ANIMATION_MS / 1000.0) and not state.get("retried"):
                     state["retried"] = True
@@ -13089,6 +13297,26 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             if combined:
                 score_for_unlock = booked_score
                 update_progress = fid == booked_score
+            played_level = str(
+                (getattr(self, "_phase_field_levels", None) or {}).get(fid) or ""
+            ).strip()
+            played_sub = str(
+                (getattr(self, "_phase_field_modes", None) or {}).get(fid) or ""
+            ).strip()
+            played_dir = str(
+                (getattr(self, "_phase_field_directories", None) or {}).get(fid) or ""
+            ).strip()
+            # Keep arena slot aligned with the set that just finished.
+            try:
+                if played_level or played_sub:
+                    _stamp_players_fields_slot(
+                        fid,
+                        level=played_level,
+                        subdirectory=played_sub,
+                        directory=played_dir,
+                    )
+            except Exception:
+                logger.exception("Could not stamp Field %s before final unlock", fid)
             payload = {
                 "report_path": report_path,
                 "directory": session_dir,
@@ -13100,9 +13328,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 "save_reports": True,
                 "fields": [fid],
                 "score_field": score_for_unlock,
+                # Dual independent: unlock the set that was on screen, not a
+                # stale Foundation SF left in players_fields from an earlier run.
+                "played_level": played_level,
+                "played_subdirectory": played_sub,
+                "played_directory": played_dir,
+                "played_by_field": {
+                    fid: {
+                        "level": played_level,
+                        "subdirectory": played_sub,
+                        "directory": played_dir,
+                    }
+                },
             }
             # Mode 2 finals include unlock + panels; keep above FINAL_RESULTS budget.
             final_timeout = 60 if self._read_simulator_score_mode() == 2 else 90
+            data = {}
             try:
                 if HAS_REQUESTS:
                     response = requests.post(
@@ -13111,7 +13352,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         timeout=final_timeout,
                     )
                     if response.status_code == 200:
-                        data = response.json()
+                        data = response.json() or {}
                         panel = (data.get("panels") or {}).get(fid) or {}
                         if isinstance(panel, dict) and panel:
                             video_path = json.dumps(panel)
@@ -13127,6 +13368,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         panel = (data.get("panels") or {}).get(fid) or {}
                         if isinstance(panel, dict) and panel:
                             video_path = json.dumps(panel)
+                progress = data.get("progress") if isinstance(data, dict) else None
+                if isinstance(progress, dict) and progress:
+                    bucket = dict(getattr(self, "_field_final_progress", None) or {})
+                    bucket[fid] = dict(progress)
+                    # Prefer this field's stamps when API returns primary for score_field.
+                    bucket[fid]["score_field"] = fid
+                    self._field_final_progress = bucket
+                    _dual_field_event(
+                        "field_final_progress",
+                        field=fid,
+                        passed=bool(progress.get("passed")),
+                        continue_play=progress.get("continue_play"),
+                        subdirectory=str(progress.get("subdirectory") or ""),
+                        level=str(progress.get("level") or ""),
+                        update_progress=update_progress,
+                    )
             except Exception as exc:
                 logger.warning("Field %s final results request failed: %s", fid, exc)
         if not display:
@@ -13144,8 +13401,15 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         panel = state.get("panel") if isinstance(state.get("panel"), dict) else None
         if not panel or not panel.get("slice_aet"):
             elapsed = time.time() - float(state.get("started") or 0)
-            # Finals need unlock work — allow a bit longer than per-video, still capped.
+            # Finals may need unlock work — keep fetch budget; hide processing at WAIT.
             final_budget_s = max(8.0, float(RESULTS_FETCH_BUDGET_MS) / 1000.0)
+            if elapsed >= WAIT_ANIMATION_MS / 1000.0:
+                overlay = (getattr(self, "_field_wait_overlays", None) or {}).get(fid)
+                if overlay is not None:
+                    try:
+                        overlay.hide()
+                    except Exception:
+                        pass
             if elapsed < final_budget_s:
                 if elapsed >= max(1.5, WAIT_ANIMATION_MS / 1000.0) and not state.get("retried"):
                     state["retried"] = True
@@ -13214,8 +13478,23 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._sync_screensaver()
         except Exception:
             pass
+        _dual_field_event(
+            "field_final_done",
+            field=fid,
+            active=list(getattr(self, "_phase_active", None) or []),
+            final_done=dict(getattr(self, "_field_final_done", None) or {}),
+            modes=dict(getattr(self, "_phase_field_modes", None) or {}),
+        )
+        # Unlock/repeat THIS field only — never rebuild the sibling's phase.
+        if self._try_continue_independent_field(fid):
+            return
         if not self._independent_finals_complete():
             return
+        _dual_field_event(
+            "independent_session_close",
+            field=fid,
+            active=list(getattr(self, "_phase_active", None) or []),
+        )
         self._start_independent_session_close()
 
     def _cancel_independent_session_close(self):
@@ -13282,6 +13561,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if live:
             self._phase_active = list(live)
             _write_players_fields_active(live)
+        _dual_field_event(
+            "field_blank_retired",
+            field=fid,
+            live=list(live),
+            active=list(getattr(self, "_phase_active", None) or []),
+        )
         self._publish_field_controls()
 
     def _independent_finals_complete(self):
@@ -13394,6 +13679,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._independent_done = {}
         self._field_final_queued = {}
         self._field_final_done = {}
+        self._field_final_progress = {}
         self._field_result_state = {}
         self._phase_active = []
         self._fields_opening = set()
@@ -13984,7 +14270,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         ) + int(LEVEL_INTRO_HOLD_MS)
         holds[fid] = now + (LEVEL_CARD_MS + intro_ms) / 1000.0 + 2.0
         self._field_hold_until = holds
-        held = _compose_independent_entry(parts, self._independent_index, skip=opening)
+        skip_held = set(opening) | {
+            name for name, flag in (self._independent_done or {}).items() if flag
+        }
+        held = _compose_independent_entry(parts, self._independent_index, skip=skip_held)
         if held:
             self.video_files = [held]
             self.current_video_index = 0
@@ -14428,6 +14717,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._result_released_screens = set()
         self._finished_field_screens = {}
         _write_players_fields_active(self._phase_active)
+        for fid in list(self._phase_active or []):
+            try:
+                _stamp_players_fields_slot(
+                    fid,
+                    level=str((self._phase_field_levels or {}).get(fid) or ""),
+                    subdirectory=str(
+                        (self._phase_field_modes or {}).get(fid)
+                        or self._phase_subdirectory
+                        or ""
+                    ),
+                    directory=str(
+                        (self._phase_field_directories or {}).get(fid)
+                        or self.video_directory
+                        or ""
+                    ),
+                )
+            except Exception:
+                logger.exception("Could not stamp Field %s on phase start", fid)
         logger.info(
             "Starting phase %s/%s: %s → %s (active=%s mode=%s dual=%s)",
             phase_index + 1,
@@ -15109,6 +15416,266 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         path = _resolve_foundation_level_up_video()
         self._play_level_up_then(on_done, path=path)
 
+    def _booked_player_fields(self):
+        """Field letters that still have a real booked player on disk."""
+        try:
+            payload = _read_players_fields_payload() or {}
+        except Exception:
+            payload = {}
+        fields = (payload or {}).get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            return []
+        out = []
+        for fid in ("A", "B"):
+            slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+            pid = str((slot or {}).get("player_id") or "").strip()
+            if pid and not pid.startswith("__sim_"):
+                out.append(fid)
+        return out
+
+    def _restore_dual_phase_from_players_fields(self, phase, info=None):
+        """Keep both booked Foundation/separate fields when session-continue runs.
+
+        `_blank_retired_field` shrinks phase.active to the last live half. A
+        later continue must not rebuild A-only and kill the sibling forever.
+        """
+        phase = dict(phase or {})
+        booked = self._booked_player_fields()
+        if len(booked) < 2:
+            return phase
+        try:
+            payload = _read_players_fields_payload() or {}
+        except Exception:
+            payload = {}
+        fields = (payload or {}).get("fields") if isinstance(payload, dict) else {}
+        if not isinstance(fields, dict):
+            return phase
+        modes = dict(phase.get("field_modes") or {})
+        dirs = dict(phase.get("field_directories") or {})
+        levels = dict(phase.get("field_levels") or {})
+        for fid in booked:
+            slot = fields.get(fid) if isinstance(fields.get(fid), dict) else {}
+            phase_level = str(levels.get(fid) or "").strip()
+            slot_level = str((slot or {}).get("level") or "").strip()
+            # Prefer the phase band still on screen. A stale Foundation SF stamp
+            # must not replace Entry mid-final / mid-continue.
+            if (
+                phase_level
+                and slot_level
+                and _main_band_id(phase_level) != _main_band_id(slot_level)
+            ):
+                level = phase_level
+                sub = str(modes.get(fid) or "").strip()
+                directory = str(dirs.get(fid) or "").strip()
+            else:
+                level = slot_level or phase_level
+                sub = str(
+                    (slot or {}).get("subdirectory") or modes.get(fid) or ""
+                ).strip()
+                directory = str(
+                    (slot or {}).get("directory") or dirs.get(fid) or ""
+                ).strip()
+            if sub:
+                modes[fid] = sub
+            if directory:
+                dirs[fid] = directory
+            if level:
+                levels[fid] = level
+        if any(_combined_level_band(lv) for lv in levels.values()):
+            return self._ensure_combined_dual_phase(phase, info or {})
+        same_mode = len({str(m).strip().lower() for m in modes.values() if str(m).strip()}) == 1
+        same_level = len({str(lv).strip().lower() for lv in levels.values() if str(lv).strip()}) <= 1
+        dual = (not same_mode) or (not same_level)
+        phase["active"] = list(booked)
+        phase["field_modes"] = modes
+        phase["field_directories"] = dirs
+        phase["field_levels"] = levels
+        phase["dual_independent"] = dual
+        if dual:
+            phase["mode_id"] = "dual"
+            phase["subdirectory"] = ""
+            phase["directory"] = dirs.get("A") or dirs.get("B") or phase.get("directory") or ""
+            phase["label"] = " + ".join(
+                f"{fid}[{levels.get(fid) or modes.get(fid) or '?'}]" for fid in booked
+            )
+        else:
+            lead = booked[0]
+            sub = str(modes.get(lead) or "").strip()
+            phase["subdirectory"] = sub
+            phase["mode_id"] = sub or str(levels.get(lead) or phase.get("mode_id") or "")
+            phase["directory"] = dirs.get(lead) or phase.get("directory") or ""
+            level = str(levels.get(lead) or "")
+            phase["label"] = (
+                f"{level}/{sub}" if sub and "foundation" in level.lower() else (level or sub)
+            )
+        return phase
+
+    def _try_continue_independent_field(self, fid) -> bool:
+        """After one field's final: unlock/repeat that field only; sibling stays live."""
+        fid = str(fid or "").upper()[:1]
+        if fid not in ("A", "B"):
+            return False
+        played_level = str(
+            (getattr(self, "_phase_field_levels", None) or {}).get(fid) or ""
+        ).strip()
+        played_mode = str(
+            (getattr(self, "_phase_field_modes", None) or {}).get(fid)
+            or getattr(self, "_phase_subdirectory", "")
+            or ""
+        ).strip()
+        played_dir = str(
+            (getattr(self, "_phase_field_directories", None) or {}).get(fid) or ""
+        ).strip()
+        stamp = dict((getattr(self, "_field_final_progress", None) or {}).get(fid) or {})
+        seed = {"score_field": fid, "field": fid}
+        if stamp:
+            seed.update(stamp)
+            seed["score_field"] = fid
+            seed["field"] = fid
+        # Guard: never continue into a different main band than the set just
+        # finished (Entry S1.T1 must not jump to Foundation SF-180N).
+        stamp_level = str(stamp.get("level") or seed.get("level") or "").strip()
+        if (
+            played_level
+            and stamp_level
+            and _main_band_id(played_level) != _main_band_id(stamp_level)
+        ):
+            logger.warning(
+                "Field %s continue stamp band mismatch played=%s stamp=%s — using played set",
+                fid, played_level, stamp_level,
+            )
+            _dual_field_event(
+                "field_continue_band_guard",
+                field=fid,
+                played_level=played_level,
+                stamp_level=stamp_level,
+                stamp_subdirectory=str(stamp.get("subdirectory") or ""),
+            )
+            seed = {
+                "score_field": fid,
+                "field": fid,
+                "level": played_level,
+                "subdirectory": played_mode,
+                "directory": played_dir,
+                "passed": bool(stamp.get("passed")),
+                "continue_play": bool(stamp.get("continue_play", True)),
+                "admin_test": bool(stamp.get("admin_test")),
+                "seconds_left": stamp.get("seconds_left"),
+                "player_id": stamp.get("player_id"),
+            }
+        info = self._live_continue_info(seed)
+        # Prefer the field-final API continue flag over admin invent-True merge.
+        if "continue_play" in stamp:
+            info["continue_play"] = bool(stamp.get("continue_play"))
+        if "passed" in stamp:
+            info["passed"] = bool(stamp.get("passed"))
+        # After band guard, keep continue on the played band.
+        if played_level and _main_band_id(played_level) != _main_band_id(
+            str((info or {}).get("level") or "")
+        ):
+            info["level"] = played_level
+            if played_mode:
+                info["subdirectory"] = played_mode
+            if played_dir:
+                info["directory"] = played_dir
+        if not self._should_continue_booked_play(info):
+            _dual_field_event(
+                "field_continue_skip",
+                field=fid,
+                reason="booking_or_flag",
+                continue_play=bool((info or {}).get("continue_play")),
+                passed=bool((info or {}).get("passed")),
+                seconds_left=(info or {}).get("seconds_left"),
+                subdirectory=str((info or {}).get("subdirectory") or ""),
+            )
+            return False
+        prev_mode = played_mode
+        level = str((info or {}).get("level") or "").strip()
+        subdirectory = str((info or {}).get("subdirectory") or "").strip()
+        directory = str((info or {}).get("directory") or "").strip()
+        same_foundation = (
+            "foundation" in level.lower()
+            and prev_mode
+            and subdirectory
+            and prev_mode.upper() == subdirectory.upper()
+        )
+        if same_foundation and bool((info or {}).get("passed")):
+            _dual_field_event(
+                "field_continue_skip",
+                field=fid,
+                reason="passed_same_sf",
+                subdirectory=subdirectory,
+            )
+            logger.info(
+                "Field %s continue skipped — passed same Foundation SF %s",
+                fid, subdirectory,
+            )
+            return False
+        modes = dict(getattr(self, "_phase_field_modes", None) or {})
+        dirs = dict(getattr(self, "_phase_field_directories", None) or {})
+        levels = dict(getattr(self, "_phase_field_levels", None) or {})
+        if subdirectory:
+            modes[fid] = subdirectory
+        if directory:
+            dirs[fid] = directory
+        if level:
+            levels[fid] = level
+        self._phase_field_modes = modes
+        self._phase_field_directories = dirs
+        self._phase_field_levels = levels
+        booked = self._booked_player_fields()
+        if len(booked) >= 2:
+            self._phase_dual_independent = True
+        try:
+            if 0 <= int(self._phase_index) < len(self._run_phases or []):
+                phase = dict(self._run_phases[self._phase_index] or {})
+                phase = self._restore_dual_phase_from_players_fields(phase, info)
+                phase["field_modes"] = dict(modes)
+                phase["field_directories"] = dict(dirs)
+                phase["field_levels"] = dict(levels)
+                active = [str(x).upper()[:1] for x in (phase.get("active") or [])]
+                if fid not in active:
+                    active.append(fid)
+                for other in booked:
+                    if other not in active:
+                        active.append(other)
+                phase["active"] = [name for name in ("A", "B") if name in active]
+                self._run_phases[self._phase_index] = phase
+        except Exception:
+            logger.exception("Could not refresh dual phase before Field %s continue", fid)
+        _dual_field_event(
+            "field_continue_start",
+            field=fid,
+            level=level,
+            subdirectory=subdirectory,
+            directory=directory,
+            passed=bool((info or {}).get("passed")),
+            sibling_active=list(getattr(self, "_phase_active", None) or []),
+            modes=dict(modes),
+        )
+        ok = bool(self._join_independent_field(fid, info))
+        if ok:
+            try:
+                bucket = dict(getattr(self, "_field_final_progress", None) or {})
+                bucket.pop(fid, None)
+                self._field_final_progress = bucket
+            except Exception:
+                pass
+        _dual_field_event(
+            "field_continue_result",
+            field=fid,
+            ok=ok,
+            active=list(getattr(self, "_phase_active", None) or []),
+            dual=bool(getattr(self, "_phase_dual_independent", False)),
+            subdirectory=subdirectory,
+        )
+        if ok:
+            logger.info(
+                "Field %s continue beside sibling — %s %s (dual kept)",
+                fid, level or "level", subdirectory or "",
+            )
+        return ok
+
     def _continue_booked_after_finals(self, info) -> bool:
         """Shared continue path: optional band level-up video, then next set."""
         info = self._live_continue_info(info if isinstance(info, dict) else {})
@@ -15155,9 +15722,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         # look like a successful final and restart the same SF forever.
         raw_final = dict(getattr(self, "_after_final", None) or {})
         info = self._live_continue_info(info)
+        # Dual booked fields: rebuild both halves from players_fields so a
+        # finished sibling is not dropped when the other field's final closes.
+        phase = self._restore_dual_phase_from_players_fields(phase, info)
+        self._run_phases[self._phase_index] = phase
         level = str((info or {}).get("level") or "").strip()
         subdirectory = str((info or {}).get("subdirectory") or "").strip()
         directory = str((info or {}).get("directory") or phase.get("directory") or "").strip()
+        if bool(phase.get("dual_independent")):
+            # Per-field folders already on phase from players_fields restore.
+            level = str(
+                (phase.get("field_levels") or {}).get("A")
+                or (phase.get("field_levels") or {}).get("B")
+                or level
+            ).strip()
+            subdirectory = ""
+            directory = str(phase.get("directory") or directory).strip()
         # Foundation: never restart the same SF set after a pass when the next
         # SF is locked — that loops SF-30N forever with no final advance.
         prev_sub = str(
@@ -15169,7 +15749,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         ).strip()
         prev_dir = str(phase.get("directory") or getattr(self, "video_directory", "") or "").strip()
         same_foundation = (
-            "foundation" in f"{level} {prev_dir} {directory}".lower()
+            (not bool(phase.get("dual_independent")))
+            and "foundation" in f"{level} {prev_dir} {directory}".lower()
             and subdirectory
             and prev_sub
             and subdirectory.upper() == prev_sub.upper()
@@ -15190,6 +15771,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 return False
         if _combined_level_band(level):
             phase = self._ensure_combined_dual_phase(phase, info)
+            self._run_phases[self._phase_index] = phase
+        elif bool(phase.get("dual_independent")):
             self._run_phases[self._phase_index] = phase
         elif level:
             levels = dict(phase.get("field_levels") or {})
@@ -15222,11 +15805,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self._level_card_shown_for = None
         self._after_final = {}
         logger.info(
-            "Reservation time left — continuing %s %s (dir=%s mode=%s)",
+            "Reservation time left — continuing %s %s (dir=%s mode=%s active=%s dual=%s)",
             level or phase.get("label"),
-            subdirectory,
+            subdirectory or phase.get("subdirectory") or "",
             directory or phase.get("directory") or "",
             phase.get("mode_id"),
+            phase.get("active"),
+            bool(phase.get("dual_independent")),
+        )
+        _dual_field_event(
+            "session_continue_restart",
+            level=level,
+            subdirectory=subdirectory or phase.get("subdirectory"),
+            active=list(phase.get("active") or []),
+            dual=bool(phase.get("dual_independent")),
+            modes=dict(phase.get("field_modes") or {}),
         )
         if not self._apply_run_phase(self._phase_index, fatal=False):
             return False
@@ -15371,7 +15964,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             )
         )
         if mode == 2:
-            http_timeout = 8.0 if combined else 5.0
+            # Dual Elite/WC needs more headroom; Entry still needs > WAIT so rings
+            # can return after the 4s processing overlay hides.
+            http_timeout = 14.0 if combined else 12.0
         else:
             http_timeout = 35
         backend_url = "http://127.0.0.1:8000/create-video-results"
@@ -15513,19 +16108,22 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._play_local_clip(video_path, rate=1.0)
             self._arm_timer(PER_VIDEO_RESULTS_MS, self._finish_per_video_results)
             return
-        # Empty panels: keep "Processing" up, retry once, only then advance.
-        # Do not arm the skip timer on the first empty — that raced Elite dual
-        # create-video-results and jumped to the next test with no rings.
+        # Empty panels: stop Processing at WAIT (4s) on every level; keep
+        # fetching until budget. Stretching the overlay hid the fact that
+        # :8000 was down and Elite/WC looked stuck with no rings.
         elapsed_ms = (
             time.time() - float(getattr(self, "_wait_started", time.time()) or time.time())
         ) * 1000.0
+        if elapsed_ms >= WAIT_ANIMATION_MS:
+            self._hide_waiting_overlay()
         budget = float(RESULTS_FETCH_BUDGET_MS)
         retried = int(getattr(self, "_per_video_retried_epoch", -1) or -1) == current
         if not retried:
             self._per_video_retried_epoch = current
             logger.warning(
-                "Per-video rings missing after %.1fs — retrying (keep processing)",
+                "Per-video rings missing after %.1fs — retrying (processing capped at %.0fs)",
                 elapsed_ms / 1000.0,
+                WAIT_ANIMATION_MS / 1000.0,
             )
             video_num = self._current_test_num()
             start_time = self._set_start_time or self.video_start_time
@@ -16112,7 +16710,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._field_hold_until = holds
 
     def _consume_field_stops(self):
-        directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
+        directory = self._player_attr("speed_file_dir") or "C:/Users/siama/Documents/simust_player"
         path = os.path.join(directory, "field_stop.json")
         if not os.path.isfile(path):
             return
@@ -16128,9 +16726,26 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         fid = str((data or {}).get("field") or "").upper()[:1]
         if fid not in ("A", "B"):
             return
-        cur = self.video_files[self.current_video_index] if getattr(self, "video_files", None) else {}
-        if not isinstance(cur, dict) or not cur.get("independent_fields"):
-            return
+        parts = self._player_attr("_field_opening_playlists") or {}
+        files = self._player_attr("video_files")
+        idx = int(self._player_attr("current_video_index") or 0)
+        cur = files[idx] if files else {}
+        independent = isinstance(cur, dict) and bool(cur.get("independent_fields"))
+        # Always honor field-only Stop while this process is alive. Gatekeeping
+        # on independent/parts let Stop release in the UI while the wall kept
+        # advancing that half (especially mid-results / playlist_finished gaps).
+        logger.info(
+            "Field-only stop consumed for %s (independent=%s parts=%s)",
+            fid,
+            independent,
+            sorted(str(k) for k in parts.keys()),
+        )
+        _dual_field_event(
+            "field_stop_consumed",
+            field=fid,
+            independent=independent,
+            parts=sorted(str(k) for k in parts.keys()),
+        )
         self._stop_independent_field(fid)
 
     def _set_vlc_paused(self, paused):
@@ -16274,6 +16889,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return bool(live) and all(bool((paused or {}).get(fid)) for fid in live)
 
     def _check_operator_pause(self):
+        # Field-only Stop must run even during playlist_finished / closing gaps —
+        # otherwise the UI releases Stop while that half keeps scoring.
+        try:
+            self._consume_field_stops()
+        except Exception as exc:
+            logger.warning("Field stop consume failed: %s", exc)
         try:
             self._publish_field_controls()
         except Exception:
@@ -16292,7 +16913,6 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         try:
             fields = self._pause_fields()
             self._hold_paused_fields(fields)
-            self._consume_field_stops()
             self._consume_field_joins()
             self._apply_operator_pause(self._all_live_fields_paused(fields))
             self._check_booking_deadline_abort()

@@ -58,7 +58,7 @@ class SfNextScreenHintTests(unittest.TestCase):
     def test_hint_appears_with_pass_and_holds_one_second(self):
         self.assertEqual(player.SF_NEXT_HINT_DELAY_MS, 0)
         self.assertEqual(player.SF_NEXT_HINT_HOLD_MS, 1000)
-        self.assertAlmostEqual(player.ImageActionCanvas.PASS_IMAGE_SCALE, 0.57 * 1.1, places=3)
+        self.assertAlmostEqual(player.ImageActionCanvas.PASS_IMAGE_SCALE, 0.508, places=3)
 
 
 if __name__ == "__main__":

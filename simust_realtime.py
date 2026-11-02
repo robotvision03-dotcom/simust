@@ -1773,14 +1773,10 @@ def requires_strict_cylinder_hit(screen) -> bool:
 def approach_finish_depth(screen, action_type, session_duration=None) -> float:
     """Depth used for live cylinder Correct (finish_balls / Manual / S3).
 
-    Mid-field screens keep a small early-accept band. Screens 1 and 6 require
-    the ball inside the drawn cylinder so a pass that only moves nearby cannot
-    score Correct.
+    All screens use the same accept distance as end screens 1 and 6 (strict
+    cylinder hit). Nearby balls outside the drawn cylinder must not score.
     """
-    depth = float(arrival_depth_for(screen, action_type, session_duration))
-    if requires_strict_cylinder_hit(screen):
-        return depth
-    return depth + float(APPROACH_FINISH_EXTRA_PX)
+    return float(arrival_depth_for(screen, action_type, session_duration))
 
 
 def _segment_length(p0, p1):
@@ -1815,6 +1811,17 @@ def _cabinet_for_line(p0, p1):
 _FIELD_A_CABINETS = frozenset({"1", "2", "3", "4", "12", "13", "14"})
 _FIELD_B_CABINETS = frozenset({"5", "6", "7", "8", "9", "10", "11"})
 _SCREEN3_CABINET = {"A": "14", "B": "7"}
+# Field B cabinets → matching Field A cabinets (B1↔A1 … B6↔A6).
+# Cylinder size on B must match A; B line lengths alone made B5/B6 larger.
+_B_TO_A_CABINET = {
+    "5": "12",   # B1 → A1
+    "6": "13",   # B2 → A2
+    "7": "14",   # B3 → A3
+    "9": "2",    # B4 → A4
+    "10": "3",   # B5 → A5
+    "11": "4",   # B6 → A6
+    "8": "1",    # B goal mouth → A goal mouth when present
+}
 # Screens 2–5: extra size, then −10%, then another −10%.
 _SCREEN_2_AND_5_CABINETS = frozenset({"13", "3", "6", "10"})
 _SCREEN_2_TO_5_CABINETS = frozenset({"13", "14", "2", "3", "6", "7", "9", "10"})
@@ -1823,6 +1830,26 @@ _FINISH_CIRCLE_EXTRA = 1.15
 _FINISH_CIRCLE_MORE = 1.10
 _FINISH_CIRCLE_SHRINK = 0.90 * 0.90
 _FINISH_CYLINDER_SCREEN2 = 1.10
+
+
+def _sizing_endpoints(p0, p1):
+    """Endpoints used for cylinder size. Field B mirrors its Field A pair."""
+    if p0 is None or p1 is None:
+        return p0, p1
+    cabinet = _cabinet_for_line(p0, p1)
+    if not cabinet:
+        return p0, p1
+    base = str(cabinet).rstrip("LR")
+    pair = _B_TO_A_CABINET.get(base)
+    if not pair:
+        return p0, p1
+    line = GOAL_LINES.get(pair)
+    if not isinstance(line, dict):
+        return p0, p1
+    a0, a1 = line.get("p0"), line.get("p1")
+    if a0 is None or a1 is None:
+        return p0, p1
+    return a0, a1
 
 
 def _finish_circle_boost(p0, p1) -> float:
@@ -1869,11 +1896,15 @@ def finish_zone_scale(p0, p1):
 
 
 def goal_circle_radius(depth, p0=None, p1=None):
-    """Radius of the goal circle drawn on the goal-line midpoint."""
+    """Radius of the goal circle drawn on the goal-line midpoint.
+
+    Field B uses the matching Field A screen's scale so cylinder size matches A.
+    """
     radius = max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
     if p0 is not None and p1 is not None:
-        radius *= finish_zone_scale(p0, p1)
-        radius *= _finish_circle_boost(p0, p1)
+        sp0, sp1 = _sizing_endpoints(p0, p1)
+        radius *= finish_zone_scale(sp0, sp1)
+        radius *= _finish_circle_boost(sp0, sp1)
     return max(4.0, radius)
 
 
@@ -1904,11 +1935,15 @@ def draw_finish_cylinder(img, cx, cy, radius, height=FINISH_CYLINDER_HEIGHT_PX, 
 
 
 def finish_cylinder_height_sim(p0=None, p1=None):
-    """Cylinder height in SIM pixels (matches the 31px overlay on a 360p frame)."""
+    """Cylinder height in SIM pixels (matches the 31px overlay on a 360p frame).
+
+    Field B mirrors the matching Field A screen (same as goal_circle_radius).
+    """
     height = float(FINISH_CYLINDER_HEIGHT_PX)
     if p0 is None or p1 is None:
         return height
-    cabinet = _cabinet_for_line(p0, p1)
+    sp0, sp1 = _sizing_endpoints(p0, p1)
+    cabinet = _cabinet_for_line(sp0, sp1)
     if cabinet and str(cabinet).rstrip("LR") in _SCREEN_2_CABINETS:
         height *= _FINISH_CYLINDER_SCREEN2
     return height

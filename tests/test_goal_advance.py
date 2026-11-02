@@ -71,11 +71,9 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.inside = (cx, cy)
         depth = rt.arrival_depth_for("13", "PASS")
         radius = rt.goal_circle_radius(depth, line["p0"], line["p1"])
-        approach = rt.goal_circle_radius(
-            depth + float(rt.APPROACH_FINISH_EXTRA_PX), line["p0"], line["p1"],
-        )
-        # Halfway between the drawn cylinder and the approach band.
-        self.near = (cx + (radius + approach) * 0.5, cy)
+        # Just outside the drawn cylinder — all screens now use strict 1/6 depth.
+        self.near = (cx + radius + 40.0, cy)
+        self.assertEqual(rt.approach_finish_depth("13", "PASS"), depth)
 
     def tearDown(self):
         self.path_patch.stop()
@@ -96,14 +94,12 @@ class CylinderGoalPublishTests(unittest.TestCase):
         self.assertFalse(self.ch.session_active)
         self.assertEqual(self.ch.active_goal_lines, {})
 
-    def test_ball_near_cylinder_clears_and_scores(self):
-        """Mid-field (A2/cabinet 13) still accepts the approach band."""
+    def test_ball_near_cylinder_does_not_score(self):
+        """Mid-field (A2/cabinet 13) matches screens 1/6 — no approach band."""
         self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": self.near}])
-        with open(self.tmp.name, encoding="utf-8") as handle:
-            payload = json.load(handle)
-        self.assertEqual(payload["fields"]["A"]["result"], "Correct")
-        self.assertEqual(self.ended, [True])
-        self.assertFalse(self.ch.session_active)
+        self.assertFalse(os.path.getsize(self.tmp.name))
+        self.assertEqual(self.ended, [])
+        self.assertTrue(self.ch.session_active)
 
     def test_ball_outside_does_not_write(self):
         self.cam._publish_goal_if_in_cylinder(self.ch, [{"center": (0.0, 0.0)}])

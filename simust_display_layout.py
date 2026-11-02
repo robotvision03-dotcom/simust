@@ -36,6 +36,8 @@ COACH_BAND_HEIGHT = CABINET_HEIGHT
 CONTENT_WIDTH_RATIO = 0.92
 
 # Extra nudge after the 254px grid. Negative x moves left. Negative y moves up.
+# Field B uses the same nudge pattern as Field A so Foundation pass images
+# (and other scaled content) render at the same size on both halves.
 # BEGIN GENERATED OFFSETS
 SCREEN_CONTENT_OFFSET = {
     "A1": -10,
@@ -44,12 +46,12 @@ SCREEN_CONTENT_OFFSET = {
     "A4": -16,
     "A5": -34,
     "A6": -54,
-    "B1": -72,
-    "B2": -90,
-    "B3": -108,
-    "B4": -84,
-    "B5": -100,
-    "B6": -117,
+    "B1": -10,
+    "B2": -29,
+    "B3": -46,
+    "B4": -16,
+    "B5": -34,
+    "B6": -54,
 }
 SCREEN_CONTENT_OFFSET_Y = {
 }

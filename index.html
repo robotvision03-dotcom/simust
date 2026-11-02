@@ -4362,6 +4362,9 @@
             var realtimePausedRef = useRef(false);
             var pausedFieldsRef = useRef({ A: false, B: false });
             var runningFieldsRef = useRef({ A: false, B: false });
+            // Sticky after field-only Stop so status/revive polls cannot re-light
+            // a half the operator already cleared while the sibling keeps playing.
+            var fieldOperatorStoppedRef = useRef({ A: false, B: false });
             var sessionTogetherRef = useRef(false);
             var selectedPlayerIdRef = useRef(null);
             var selectedPlayerBIdRef = useRef(null);
@@ -5977,6 +5980,9 @@
                     running[fid] = true;
                     runningFieldsRef.current = running;
                     setRunningFields(running);
+                    var stickyJoin = Object.assign({}, fieldOperatorStoppedRef.current || { A: false, B: false });
+                    stickyJoin[fid] = false;
+                    fieldOperatorStoppedRef.current = stickyJoin;
                     realtimeRunningRef.current = true;
                     setRealtimeRunning(true);
                     sessionTogetherRef.current = false;
@@ -6139,6 +6145,10 @@
                 var runningNow = {
                     A: together || !!playerA,
                     B: together || !!playerB
+                };
+                fieldOperatorStoppedRef.current = {
+                    A: !runningNow.A,
+                    B: !runningNow.B
                 };
                 runningFieldsRef.current = runningNow;
                 setRunningFields(runningNow);
@@ -6342,6 +6352,9 @@
                                 nextRunning.B = true;
                             }
                         }
+                        var stickyStop = fieldOperatorStoppedRef.current || { A: false, B: false };
+                        if (stickyStop.A) nextRunning.A = false;
+                        if (stickyStop.B) nextRunning.B = false;
                         if (!nextRunning.A && !nextRunning.B) return;
                         runningFieldsRef.current = nextRunning;
                         setRunningFields(nextRunning);
@@ -6462,6 +6475,9 @@
                                     A: fieldMap.A === "playing",
                                     B: fieldMap.B === "playing"
                                 };
+                                var stickyMap = fieldOperatorStoppedRef.current || { A: false, B: false };
+                                if (stickyMap.A) nextRunning.A = false;
+                                if (stickyMap.B) nextRunning.B = false;
                                 var prevRunning = runningFieldsRef.current || { A: false, B: false };
                                 var inStartupGrace = Date.now() < startupGraceUntil && !sawActivePlayback;
                                 if (!!nextRunning.A !== !!prevRunning.A || !!nextRunning.B !== !!prevRunning.B) {
@@ -6474,6 +6490,8 @@
                                                state === "idle" || state === "ready") {
                                         // Do not clear optimistic Play UI while the lab is still spinning up.
                                         var keepStart = Object.assign({}, expectedFields || prevRunning);
+                                        if (stickyMap.A) keepStart.A = false;
+                                        if (stickyMap.B) keepStart.B = false;
                                         runningFieldsRef.current = keepStart;
                                         setRunningFields(keepStart);
                                         realtimeRunningRef.current = true;
@@ -6509,11 +6527,16 @@
                                 if (selectedPlayerBId || sessionTogetherRef.current || isCombinedLevel(selectedLevel)) {
                                     revive.B = true;
                                 }
-                                runningFieldsRef.current = revive;
-                                setRunningFields(revive);
-                                realtimeRunningRef.current = true;
-                                setRealtimeRunning(true);
-                                continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
+                                var stickyRevive = fieldOperatorStoppedRef.current || { A: false, B: false };
+                                if (stickyRevive.A) revive.A = false;
+                                if (stickyRevive.B) revive.B = false;
+                                if (revive.A || revive.B) {
+                                    runningFieldsRef.current = revive;
+                                    setRunningFields(revive);
+                                    realtimeRunningRef.current = true;
+                                    setRealtimeRunning(true);
+                                    continueWatchUntil = Math.max(continueWatchUntil, Date.now() + 60000);
+                                }
                             }
                             // Soft finish during final rings — keep polling for booked auto-continue.
                             if (state === "playing_final" || state === "final" || state === "wait_final") {
@@ -6753,10 +6776,13 @@
             };
 
             var stopField = function(fid) {
-                var together = !!sessionTogetherRef.current;
                 var running = runningFieldsRef.current || { A: false, B: false };
                 var other = fid === "A" ? "B" : "A";
-                if (together || !running[other]) {
+                // When the sibling is still live, always field-only — even if the
+                // session started "together". Full stopPlayback was clearing both
+                // Stop buttons while the wall kept both halves playing.
+                if (!running[other]) {
+                    fieldOperatorStoppedRef.current = { A: true, B: true };
                     runningFieldsRef.current = { A: false, B: false };
                     setRunningFields({ A: false, B: false });
                     sessionTogetherRef.current = false;
@@ -6764,24 +6790,29 @@
                     stopPlayback({ abort: false });
                     return;
                 }
-                // One field stops; the other keeps playing (and video keeps recording).
-                showToast("Saving Field " + fid + " before stop…", "info");
-                fetchRealtimeResults(false, true).catch(function() { return null; }).then(function() {
-                    return saveFieldSessionOnStop(fid);
-                }).catch(function() { return null; }).then(function() {
-                    return axios.post("/stop-realtime", { field: fid, field_only: true });
-                }).then(function() {
-                    showToast("Field " + fid + " stopped and saved. The other field keeps playing.", 'success');
-                }).catch(function() {
-                    showToast("Could not stop Field " + fid, 'error');
-                });
+                // Stop this field immediately so mid-test play clears now.
+                // Save runs in the background — waiting on results was leaving
+                // Field B live while the Stop button already looked released.
                 var nextRunning = Object.assign({}, running);
                 nextRunning[fid] = false;
                 runningFieldsRef.current = nextRunning;
                 setRunningFields(nextRunning);
+                var sticky = Object.assign({}, fieldOperatorStoppedRef.current || { A: false, B: false });
+                sticky[fid] = true;
+                fieldOperatorStoppedRef.current = sticky;
+                sessionTogetherRef.current = false;
                 var pauses = Object.assign({}, pausedFieldsRef.current || { A: false, B: false });
                 pauses[fid] = false;
                 pausedFieldsRef.current = pauses;
+                showToast("Stopping Field " + fid + "…", "info");
+                axios.post("/stop-realtime", { field: fid, field_only: true }).then(function() {
+                    showToast("Field " + fid + " stopped. The other field keeps playing.", 'success');
+                }).catch(function() {
+                    showToast("Could not stop Field " + fid, 'error');
+                });
+                fetchRealtimeResults(false, true).catch(function() { return null; }).then(function() {
+                    return saveFieldSessionOnStop(fid);
+                }).catch(function() { return null; });
                 setPausedFields(pauses);
             };
 
@@ -7049,6 +7080,9 @@
                                 A: map.A === 'playing',
                                 B: map.B === 'playing'
                             };
+                            var stickySync = fieldOperatorStoppedRef.current || { A: false, B: false };
+                            if (stickySync.A) synced.A = false;
+                            if (stickySync.B) synced.B = false;
                             var prev = runningFieldsRef.current || { A: false, B: false };
                             if (!!synced.A !== !!prev.A || !!synced.B !== !!prev.B) {
                                 runningFieldsRef.current = synced;
