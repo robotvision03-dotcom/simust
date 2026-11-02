@@ -6166,11 +6166,10 @@
                     player_player_id: primary.playerId,
                     visualization_enabled: (role === 'admin') && !!visualizationEnabledRef.current,
                     simulation_enabled: !!(simulationFieldsRef.current.A || simulationFieldsRef.current.B),
-                    // Only selected field(s) may start in sim. Elite/WC partner sim
-                    // is applied by the server — do not light the empty half for HP.
+                    // Exact Sim A/B toggles (default OFF). Server must not force ON.
                     simulation_fields: {
-                        A: !!(playerA || together) && !!simulationFieldsRef.current.A,
-                        B: !!(playerB || together) && !!simulationFieldsRef.current.B
+                        A: !!simulationFieldsRef.current.A,
+                        B: !!simulationFieldsRef.current.B
                     },
                     teammate_on_sec: teammateOnSecRef.current,
                     teammate_gap_sec: teammateGapSecRef.current,
@@ -6931,21 +6930,9 @@
                 setVisualizationEnabled(false);
                 localStorage.setItem('simust_visualization', JSON.stringify(false));
                 axios.post("/set-visualization", { enabled: false }).catch(function() {});
-                var storedFields = localStorage.getItem('simust_simulation_fields');
-                var storedSim = localStorage.getItem('simust_simulation');
-                var startFields = { A: false, B: false };
-                if (storedFields) {
-                    try {
-                        var parsedFields = JSON.parse(storedFields);
-                        startFields = { A: !!parsedFields.A, B: !!parsedFields.B };
-                    } catch (e) {}
-                } else if (storedSim !== null) {
-                    try {
-                        var simVal = JSON.parse(storedSim);
-                        startFields = { A: !!simVal, B: !!simVal };
-                    } catch (e) {}
-                }
-                applySimulationFields(startFields, false);
+                // Always boot Sim A/B OFF. Operator can turn either on at any time
+                // (including when both fields are running); never restore leftover ON.
+                applySimulationFields({ A: false, B: false }, false);
                 var storedSimMode = localStorage.getItem('simust_simulator_score_mode');
                 var bootSimMode = (storedSimMode === '1') ? 1 : 2;
                 axios.get('/simulator-score-mode').then(function(res) {

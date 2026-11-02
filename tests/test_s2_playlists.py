@@ -429,8 +429,9 @@ class Series2PlaylistTests(unittest.TestCase):
         # All WC S3 sets: 5 tests × 12 actions / 120s.
         self.assertEqual(len(t1), 60)
         first = t1[0]
-        self.assertEqual(first.get("motion_theme"), "flowers")
-        self.assertTrue(first.get("motion_bg"))
+        # S3.T1 answers use multi-color solids (same as T3) — no flower motion camo.
+        self.assertFalse(bool(first.get("motion_bg")))
+        self.assertFalse(bool(first.get("motion_theme")))
         self.assertEqual(first.get("encode_ms"), 3000)
         self.assertEqual(first.get("actions_in_set"), 12)
         self.assertEqual(first.get("on_ms"), 10000)
@@ -442,26 +443,30 @@ class Series2PlaylistTests(unittest.TestCase):
         }
         ref = next(iter(refs))
         self.assertTrue(51 <= ref <= 99)
-        # Red reference at S1 digit size; motion seed stable within a timed test.
+        # Red reference at S1 digit size.
         encode_fg = {
             path.split(":")[3] for path in first["encode_images"].values()
         }
         self.assertEqual(encode_fg, {str(player.S3_REFERENCE_FG)})
-        for test_num in range(1, 6):
-            seeds = {
-                step["motion_seed"] for step in t1 if step["test_num"] == test_num
-            }
-            self.assertEqual(len(seeds), 1, test_num)
+        t1_bg = {path.split(":")[2] for path in first["screen_images"].values()}
+        t1_fg = {path.split(":")[3] for path in first["screen_images"].values()}
+        self.assertGreaterEqual(len(t1_bg), 6)
+        self.assertGreaterEqual(len(t1_fg), 6)
         t2 = player._build_world_class_s3_playlist(2)[0]
-        self.assertEqual(t2.get("motion_theme"), "fruits")
+        # S3.T2 answers: multi-color solids — no fruit motion camo.
+        self.assertFalse(bool(t2.get("motion_bg")))
+        self.assertFalse(bool(t2.get("motion_theme")))
         self.assertEqual(t2.get("encode_ms"), 3000)
         self.assertEqual(t2.get("actions_in_set"), 12)
         self.assertEqual(t2.get("on_ms"), 10000)
         self.assertEqual(t2.get("budget_ms"), 120000)
+        t2_bg = {path.split(":")[2] for path in t2["screen_images"].values()}
+        t2_fg = {path.split(":")[3] for path in t2["screen_images"].values()}
+        self.assertGreaterEqual(len(t2_bg), 6)
+        self.assertGreaterEqual(len(t2_fg), 6)
         t3 = player._build_world_class_s3_playlist(3)
         self.assertEqual(len(t3), 60)
         step = t3[0]
-        # S3.T3 uses multi-color solid screens (no camo theme on answers).
         self.assertFalse(bool(step.get("motion_bg")))
         self.assertEqual(step.get("encode_ms"), 3000)
         self.assertEqual(step.get("actions_in_set"), 12)

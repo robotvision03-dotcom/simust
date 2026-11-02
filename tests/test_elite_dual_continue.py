@@ -1,4 +1,4 @@
-"""Elite/WC from High Performance: both fields + partner sim on continue."""
+"""Elite/WC from High Performance: both fields + partner slot on continue."""
 
 from __future__ import annotations
 
@@ -17,6 +17,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import app as app_mod  # noqa: E402
 import simust_progress  # noqa: E402
 import smart_simust_player as player  # noqa: E402
+
+
+def _progress_at_elite_s1t1():
+    """Progress whose continue target is Elite S1.T1 (prior sets completed)."""
+    progress = simust_progress.default_progress()
+    elite = "L04-Elite/S1.T1"
+    prior = []
+    for nid in app_mod.ALL_LEVELS:
+        if nid == elite:
+            break
+        prior.append(nid)
+    progress["unlocked_levels"] = prior + [elite]
+    progress["completed_levels"] = list(prior)
+    progress["current_level"] = elite
+    return progress
 
 
 class EliteDualContinueTests(unittest.TestCase):
@@ -67,9 +82,8 @@ class EliteDualContinueTests(unittest.TestCase):
             self.assertEqual(out["field_levels"]["A"], "L04-Elite/S1.T1")
             self.assertEqual(out["field_levels"]["B"], "L04-Elite/S1.T1")
             write_active.assert_called_with(["A", "B"])
-            post.assert_called()
-            body = post.call_args.kwargs.get("json") or post.call_args[1].get("json")
-            self.assertTrue((body.get("fields") or {}).get("B"))
+            # Arena Sim toggles stay untouched (default OFF) — no set-simulation force.
+            post.assert_not_called()
             stamped = json.load(open(path, encoding="utf-8"))
             self.assertEqual(stamped["active"], ["A", "B"])
             self.assertEqual(stamped["score_field"], "A")
@@ -98,13 +112,7 @@ class EliteDualContinueTests(unittest.TestCase):
                     },
                     handle,
                 )
-            progress = simust_progress.default_progress()
-            progress["unlocked_levels"] = [
-                "L00-Foundation",
-                "L03-HighPerformance/S2.T4",
-                "L04-Elite/S1.T1",
-            ]
-            progress["current_level"] = "L04-Elite/S1.T1"
+            progress = _progress_at_elite_s1t1()
             with patch.object(app_mod, "SIMUST_PLAYER_DIRECTORY", tmp), patch.object(
                 app_mod, "PLAYER_REPORTS_DIR", tmp
             ), patch.object(app_mod, "write_simulation_fields") as write_sim, patch.object(
@@ -115,12 +123,10 @@ class EliteDualContinueTests(unittest.TestCase):
             self.assertEqual(stamped["fields"]["A"]["level"], "L04-Elite/S1.T1")
             self.assertEqual(stamped["fields"]["B"]["player_id"], "__sim_B__")
             self.assertEqual(sorted(stamped["active"]), ["A", "B"])
-            write_sim.assert_called()
-            sim_arg = write_sim.call_args[0][0]
-            self.assertTrue(sim_arg.get("B"))
-            self.assertFalse(sim_arg.get("A"))
+            # Unlock stamps partner slot only — does not force arena Sim ON.
+            write_sim.assert_not_called()
 
-    def test_propagate_unlock_to_elite_both_sim_when_a_was_sim(self):
+    def test_propagate_unlock_to_elite_does_not_force_arena_sim(self):
         with tempfile.TemporaryDirectory() as tmp:
             pf = os.path.join(tmp, "players_fields.json")
             with open(pf, "w", encoding="utf-8") as handle:
@@ -143,25 +149,18 @@ class EliteDualContinueTests(unittest.TestCase):
                     },
                     handle,
                 )
-            progress = simust_progress.default_progress()
-            progress["unlocked_levels"] = [
-                "L00-Foundation",
-                "L03-HighPerformance/S2.T5",
-                "L04-Elite/S1.T1",
-            ]
-            progress["current_level"] = "L04-Elite/S1.T1"
+            progress = _progress_at_elite_s1t1()
             with patch.object(app_mod, "SIMUST_PLAYER_DIRECTORY", tmp), patch.object(
                 app_mod, "PLAYER_REPORTS_DIR", tmp
             ), patch.object(app_mod, "write_simulation_fields") as write_sim, patch.object(
                 app_mod, "_read_written_simulation_fields", return_value={"A": True, "B": False}
             ), patch.object(app_mod, "get_level_path", return_value="C:/tmp/elite"):
                 app_mod.propagate_level_status("jj", progress)
-            write_sim.assert_called()
-            sim_arg = write_sim.call_args[0][0]
-            self.assertTrue(sim_arg.get("A"))
-            self.assertTrue(sim_arg.get("B"))
+            write_sim.assert_not_called()
+            stamped = json.load(open(pf, encoding="utf-8"))
+            self.assertEqual(stamped["fields"]["B"]["player_id"], "__sim_B__")
 
-    def test_ensure_combined_dual_keeps_score_sim_when_a_was_sim(self):
+    def test_ensure_combined_dual_does_not_force_arena_sim(self):
         cam = player.SmartPlayerWindow.__new__(player.SmartPlayerWindow)
         phase = {"active": ["A"], "directory": "C:/tmp/elite"}
         info = {
@@ -173,7 +172,6 @@ class EliteDualContinueTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "players_fields.json")
-            sim_path = os.path.join(tmp, "arena_simulation.txt")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(
                     {
@@ -189,8 +187,6 @@ class EliteDualContinueTests(unittest.TestCase):
                     },
                     handle,
                 )
-            with open(sim_path, "w", encoding="utf-8") as handle:
-                json.dump({"A": True, "B": False}, handle)
             with patch.object(player, "PLAYERS_FIELDS_FILE", path), patch.object(
                 player, "_read_players_fields_payload",
                 side_effect=lambda: json.load(open(path, encoding="utf-8")),
@@ -198,10 +194,9 @@ class EliteDualContinueTests(unittest.TestCase):
                 player, "HAS_REQUESTS", True
             ), patch.object(player.requests, "post") as post:
                 cam._ensure_combined_dual_phase(phase, info)
-            body = post.call_args.kwargs.get("json") or post.call_args[1].get("json")
-            fields = body.get("fields") or {}
-            self.assertTrue(fields.get("A"))
-            self.assertTrue(fields.get("B"))
+            post.assert_not_called()
+            stamped = json.load(open(path, encoding="utf-8"))
+            self.assertEqual(stamped["fields"]["B"]["player_id"], "__sim_B__")
 
     def test_hp_start_does_not_activate_empty_half_from_sim_toggle(self):
         """High Performance on A only must not light Field B when Sim B is checked."""

@@ -2559,10 +2559,11 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     """World Class S3: encode ref (50<ref<100), then 12 numbers with exactly two summing to it.
 
     Combined 12-screen field. Goals always split: one on A, one on B.
-    S3.T1–T2: camo motion themes (flowers / fruits). S3.T3–T5: solid per-screen
-    fills + different digit colors (no camo). Reference is red at S1 digit size.
-    Encode is 3s on every set. Answer clock 120s (encode not counted).
-    Next action waits until both cylinders detect a ball or the 120s clock ends.
+    All sets (S3.T1–T5): solid multi-color per-screen fills + digit colors on the
+    answers section (same as S3.T3 — no motion flowers/fruits camo). Reference is
+    red at S1 digit size. Encode is 3s on every set. Answer clock 120s (encode not
+    counted). Next action waits until both cylinders detect a ball or the 120s
+    clock ends.
     """
     series = max(1, min(5, int(series_num or 1)))
     actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_TEST))
@@ -2570,12 +2571,9 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     on_ms = max(1, budget_ms // max(1, actions))
     gap_ms = 80
     encode_ms = int(WC_S3_ENCODE_MS.get(series, 3000))
-    theme = _wc_s2_theme_for_series(series)
     base_seed = WORLD_S2_FLOWER_SEEDS[(series - 1) % len(WORLD_S2_FLOWER_SEEDS)]
-    motion_bg = _ensure_wc_motion_bg_video(theme, int(base_seed))
     screens = _elite_screen_ids()
     playlist = []
-    multi_screen_colors = int(series) >= 3
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
         test_seed = (
             int(base_seed) * 1009
@@ -2583,7 +2581,6 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
             + int(test_num) * 57
             + random.randint(1, 997)
         )
-        start_frame = int(test_seed) % 180
         for action_in_set in range(1, actions + 1):
             ref = _wc_s3_reference()
             goal_idx = _s3_combined_goal_indexes(len(screens))
@@ -2604,29 +2601,12 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 for sid in screens
             }
             images = {}
-            motion_texts = {}
-            motion_positions = {}
             for idx, sid in enumerate(screens):
                 digit = str(nums[idx])
-                motion_texts[sid] = digit
-                motion_positions[sid] = _wc_text_anchor_frac(
-                    test_seed, f"{sid}:{digit}"
-                )
-                if multi_screen_colors:
-                    # S3.T3–T5: each screen fill + digit color differs (visibility).
-                    screen_bg = ELITE_S3_SCREEN_BG[idx % len(ELITE_S3_SCREEN_BG)]
-                    screen_fg = ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
-                    png = _render_band_digit_image(digit, screen_bg, screen_fg)
-                else:
-                    # S3.T1–T2: keep camouflage motion theme.
-                    png = _render_camouflage_text_image(
-                        digit,
-                        seed=test_seed,
-                        camouflage=True,
-                        theme=theme,
-                        phase=0.0,
-                        fast=True,
-                    )
+                # Each screen fill + digit color differs (visibility), same as S3.T3.
+                screen_bg = ELITE_S3_SCREEN_BG[idx % len(ELITE_S3_SCREEN_BG)]
+                screen_fg = ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
+                png = _render_band_digit_image(digit, screen_bg, screen_fg)
                 if not png:
                     images = {}
                     break
@@ -2671,7 +2651,7 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                     f"a{action_in_set}/{actions} "
                     f"ref={ref} goals={goal_sids[0]}+{goal_sids[1]} "
                     f"({nums[g0]}+{nums[g1]}={ref}) "
-                    f"{'colors' if multi_screen_colors else f'theme={theme}'} "
+                    f"colors "
                     f"encode={encode_ms}ms on={on_ms}ms"
                 ),
                 "path": (
@@ -2680,22 +2660,9 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 ),
                 "series_group": 3,
                 "series_num": int(series),
+                # Solid per-screen fills + digit colors (no camo / motion flowers).
+                "test_bg": tuple(ELITE_S3_SCREEN_BG[0 % len(ELITE_S3_SCREEN_BG)]),
             }
-            if multi_screen_colors:
-                # S3.T3–T5: solid per-screen fills + digit colors (no camo video).
-                entry["test_bg"] = tuple(
-                    ELITE_S3_SCREEN_BG[0 % len(ELITE_S3_SCREEN_BG)]
-                )
-            else:
-                entry["motion_theme"] = theme
-                entry["motion_seed"] = test_seed
-                entry["motion_start_frame"] = start_frame
-                entry["motion_texts"] = dict(motion_texts)
-                entry["motion_text_positions"] = dict(motion_positions)
-                entry["motion_fill"] = True
-                if motion_bg:
-                    entry["screen_video"] = motion_bg
-                    entry["motion_bg"] = motion_bg
             playlist.append(entry)
     stamped = _stamp_finish_balls(playlist)
     for entry in stamped:
@@ -14614,38 +14581,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             os.replace(tmp, path)
         except Exception:
             logger.exception("Could not stamp Elite/WC dual players_fields on continue")
-        try:
-            if HAS_REQUESTS:
-                # Keep score-field sim if it was already on (both halves sim);
-                # otherwise only the partner half is simulated.
-                score_was_sim = bool(
-                    (src or {}).get("simulated")
-                ) or str((src or {}).get("player_id") or "").startswith("__sim_")
-                if not score_was_sim:
-                    try:
-                        sim_path = os.path.join(
-                            os.path.dirname(PLAYERS_FIELDS_FILE) or ".",
-                            "arena_simulation.txt",
-                        )
-                        if os.path.exists(sim_path):
-                            with open(sim_path, "r", encoding="utf-8") as handle:
-                                sim_data = json.load(handle) or {}
-                            score_was_sim = bool(
-                                sim_data.get(score) or sim_data.get(score.lower())
-                            )
-                    except Exception:
-                        pass
-                fields_payload = {
-                    score: bool(score_was_sim),
-                    other: True,
-                }
-                requests.post(
-                    "http://127.0.0.1:8000/set-simulation",
-                    json={"fields": fields_payload},
-                    timeout=2.0,
-                )
-        except Exception:
-            logger.warning("Could not enable partner simulation for Elite/WC continue")
+        # Do not force arena Sim A/B ON on continue — operator toggles stay as-is
+        # (default OFF). Partner __sim_ slot still provides the 12-screen layout.
         try:
             _write_players_fields_active(["A", "B"])
         except Exception:

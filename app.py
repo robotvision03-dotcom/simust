@@ -1704,23 +1704,8 @@ def propagate_level_status(player_id: str, progress: dict) -> dict:
                 if existing != partner:
                     fields[other] = partner
                     touched = True
-                try:
-                    sim_now = _read_written_simulation_fields()
-                except Exception:
-                    sim_now = {"A": False, "B": False}
-                # Partner half always simulates; if the booked field was already
-                # in sim mode, both halves stay simulated.
-                score_was_sim = bool(sim_now.get(score_fid)) or bool(
-                    (src or {}).get("simulated")
-                )
-                desired = dict(sim_now)
-                desired[other] = True
-                if score_was_sim:
-                    desired["A"] = True
-                    desired["B"] = True
-                if desired != sim_now:
-                    write_simulation_fields(desired)
-                    touched = True
+                # Keep __sim_ partner slot for 12 screens, but never force arena
+                # Sim A/B ON — operator toggles stay as-is (default OFF).
             payload["score_field"] = score_fid
             active = []
             for fid in ("A", "B"):
@@ -3615,8 +3600,8 @@ async def start_realtime_playback(req: Request):
             raise HTTPException(400, "No player selected for Field A or Field B")
 
         score_field = str(data.get("score_field") or data.get("field") or "").strip().upper()[:1]
-        # Elite / World Class with one selected player: partner half is always
-        # the simulator so all 12 screens and both result lanes run together.
+        # Elite / World Class with one selected player: attach a partner slot so
+        # all 12 screens run. Arena Sim A/B stay under operator toggles (default OFF).
         combined_partner_sim = None
         if len(play_slots) == 1:
             pid, fid, entry = play_slots[0]
@@ -3627,7 +3612,8 @@ async def start_realtime_playback(req: Request):
                     score_field = fid
                 combined_partner_sim = other
                 logger.info(
-                    "Elite/World Class on %s: Field %s auto-simulated for all 12 screens. Score stays on Field %s.",
+                    "Elite/World Class on %s: Field %s partner slot for 12 screens "
+                    "(arena Sim stays as toggled). Score stays on Field %s.",
                     fid, other, score_field,
                 )
         if score_field not in ("A", "B"):
@@ -3755,22 +3741,15 @@ async def start_realtime_playback(req: Request):
             "A": bool(sim_fields.get("A")),
             "B": bool(sim_fields.get("B")),
         }
+        # Respect operator Sim A/B toggles as sent (default OFF). Never auto-force
+        # a partner half ON — including Elite/World Class. Only clear sim on a
+        # half that is not part of this start (empty HP/Entry field).
+        selected = {fid for _pid, fid, _entry in play_slots}
         if combined_partner_sim in ("A", "B"):
-            # Elite/WC partner half is always simulated.
-            sim_fields[combined_partner_sim] = True
-            # If the booked field is already in sim mode, both halves simulate.
-            score_sim = score_field if score_field in ("A", "B") else play_slots[0][1]
-            if bool(sim_fields.get(score_sim)):
-                sim_fields["A"] = True
-                sim_fields["B"] = True
-        else:
-            # Entry / Activated / High Performance: only the selected field(s)
-            # may simulate. Never light the empty half just because the global
-            # Sim toggle left the other checkbox on.
-            selected = {fid for _pid, fid, _entry in play_slots}
-            for fid in ("A", "B"):
-                if fid not in selected:
-                    sim_fields[fid] = False
+            selected = set(selected) | {combined_partner_sim}
+        for fid in ("A", "B"):
+            if fid not in selected:
+                sim_fields[fid] = False
         write_simulation_fields(sim_fields)
         flash_timing = write_teammate_flash_timing(
             data.get("teammate_on_sec", data.get("on_sec", 1.2)),
