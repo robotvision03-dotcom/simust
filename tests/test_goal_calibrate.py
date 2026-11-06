@@ -76,6 +76,34 @@ class GoalCalibrateTests(unittest.TestCase):
         gc.apply_overrides_to(restored)
         self.assertEqual(restored["12"]["p0"], (1, 1))
 
+    def test_side_goal_save_maps_to_cabinet_suffix(self):
+        goal_lines = {
+            "14": {"p0": (637, 262), "p1": (636, 303)},
+            "4": {"p0": (101, 140), "p1": (128, 129)},
+        }
+        gc.save_screens(
+            {
+                "A3R": {"p0": [640, 270], "p1": [636, 300]},
+                "A6R": {"p0": [101, 140], "p1": [128, 129]},
+            },
+            goal_lines,
+        )
+        self.assertEqual(goal_lines["14R"]["p0"], (640.0, 270.0))
+        self.assertEqual(goal_lines["4R"]["p1"], (128.0, 129.0))
+        status = gc.public_status(goal_lines)
+        self.assertIn("A1L", status["order"]["A"])
+        self.assertIn("A6R", status["order"]["A"])
+        self.assertNotIn("A1R", status["order"]["A"])
+        self.assertNotIn("A6L", status["order"]["A"])
+        self.assertIn("B1L", status["order"]["B"])
+        self.assertIn("B6R", status["order"]["B"])
+        self.assertNotIn("B1R", status["order"]["B"])
+        self.assertNotIn("B6L", status["order"]["B"])
+        self.assertTrue(status["screens"]["A3R"]["calibrated"])
+        self.assertEqual(status["screens"]["A3R"]["cabinet"], "14R")
+        self.assertEqual(len([s for s in status["order"]["A"] if s.endswith(("L", "R"))]), 10)
+        self.assertEqual(len([s for s in status["order"]["B"] if s.endswith(("L", "R"))]), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

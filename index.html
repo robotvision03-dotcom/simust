@@ -76,12 +76,19 @@
         .level-main-btn { width: 100%; height: 52px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; padding: 4px; font-weight: 800; font-size: 12px; letter-spacing: 0.02em; cursor: pointer; white-space: normal; line-height: 1.15; display: flex; align-items: center; justify-content: center; text-align: center; }
         .level-main-btn.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.45); }
         .level-sub-list { width: 100%; margin-top: 10px; background: #07111f; color: #f5f8fb; border: 1px solid var(--line); border-radius: 8px; padding: 4px; font-size: 14px; }
-        .level-sub-rows { position: absolute; top: calc(100% + 4px); inset-inline-start: 0; min-width: 100%; width: max(100%, 168px); margin-top: 0; border: 1px solid rgba(0,0,0,0.28); border-radius: 8px; overflow: hidden; max-height: min(320px, 55vh); overflow-y: auto; box-shadow: 0 12px 28px rgba(0,0,0,0.38); z-index: 90; }
+        .level-sub-rows { position: absolute; top: calc(100% + 4px); inset-inline-start: 0; min-width: 100%; width: max(100%, 220px); margin-top: 0; border: 1px solid rgba(0,0,0,0.28); border-radius: 8px; overflow: hidden; max-height: min(360px, 60vh); overflow-y: auto; box-shadow: 0 12px 28px rgba(0,0,0,0.38); z-index: 90; }
         .level-main-wrap:nth-child(n+4) .level-sub-rows { inset-inline-start: auto; inset-inline-end: 0; }
         .level-sub-row { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(0,0,0,0.18); }
         .level-sub-row:last-child { border-bottom: none; }
         .level-sub-row.active { background: rgba(0,0,0,0.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35); }
         .level-sub-pick { flex: 1; text-align: start; background: transparent; color: inherit; border: none; font-weight: 700; cursor: pointer; padding: 10px 12px; font-size: 14px; }
+        .level-sub-pick.set-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px; }
+        .level-sub-pick .set-title { font-size: 14px; font-weight: 800; line-height: 1.2; }
+        .level-sub-pick .set-meta { font-size: 11px; font-weight: 700; opacity: 0.85; }
+        .level-sub-pick .set-blurb { font-size: 11px; font-weight: 500; opacity: 0.78; line-height: 1.3; }
+        .level-sub-back { width: 100%; text-align: start; background: rgba(0,0,0,0.14); color: inherit; border: none; border-bottom: 1px solid rgba(0,0,0,0.18); font-weight: 800; cursor: pointer; padding: 10px 12px; font-size: 13px; }
+        .level-sub-back:hover { background: rgba(0,0,0,0.22); }
+        .level-sub-heading { padding: 8px 12px 4px; font-size: 11px; font-weight: 700; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.04em; }
         .level-sub-lock, .level-sub-unlock { flex: 0 0 auto; min-width: 76px; margin-inline-end: 8px; border-radius: 6px; border: none; font-weight: 800; cursor: pointer; padding: 8px 10px; }
         .level-sub-unlock { background: #2ecc71; color: #07111f; }
         .level-sub-lock { background: #1a2d4a; color: #ead48f; }
@@ -1018,7 +1025,7 @@
             return 0;
         };
 
-        // Series within a band: S1.T* before S2.T* (legacy A-T = S1, A1.T = S2).
+        // Series within a band: S0/S1/S2/S3 (legacy A-T = S1, A1.T = S2).
         var getSeriesNumber = function(id) {
             var text = String(id || '');
             var match = text.match(/\/S(\d+)\.T/i) || text.match(/(?:^|[^A-Z0-9])S(\d+)\.T/i);
@@ -1026,6 +1033,26 @@
             if (/A1\.T\d+/i.test(text)) return 2;
             if (/A-T\d+/i.test(text) || /A\.T\d+/i.test(text)) return 1;
             return 0;
+        };
+
+        // Operator display: Session → Component (S→C).
+        // Entry / Activated: S0→C1, S1→C2, S2→C3. Other bands: S#→C#.
+        var formatComponentLabel = function(levelId, themeOrDisplay) {
+            var id = String(levelId || '');
+            var theme = String(themeOrDisplay || '');
+            if (!theme && id.indexOf('/') >= 0) {
+                theme = id.split('/')[1] || '';
+            }
+            theme = theme.replace(/^(Foundation|Entry|Activated|High Performance|Elite|World Class)\s+/i, '').trim();
+            var match = theme.match(/^S(\d+)\.T(\d+)$/i);
+            if (!match) return theme || id;
+            var series = parseInt(match[1], 10);
+            var testNum = match[2];
+            var component = series;
+            if (/L01-Entry|L02-Activated/i.test(id)) {
+                component = series + 1;
+            }
+            return 'C' + component + '.T' + testNum;
         };
 
         var getCNumber = function(id) {
@@ -1138,30 +1165,104 @@
             { id: 'L04-Elite', label: 'Elite', bg: '#4B1F78', fg: '#ffffff' },
             { id: 'L05-WorldClass', label: 'World Class', bg: '#C9A227', fg: '#1c1404' }
         ];
+        // Operator content folders: click set → reveal that component's 5 tests.
+        // series = internal S# (Entry S0/S1; other bands S1/S2/S3).
+        var BAND_CONTENT_SETS = {
+            'L01-Entry': [
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass among player pictures' },
+                { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Finish on the correct digit' }
+            ],
+            'L02-Activated': [
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass among teammate and opponents' },
+                { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Number targets on the screens' },
+                { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out on each field' }
+            ],
+            'L03-HighPerformance': [
+                { key: 'numbers', series: 1, component: 1, label: 'Numbers', blurb: 'Number targets, faster timing' },
+                { key: 'divergent', series: 2, component: 2, label: 'Divergent', blurb: 'Odd-one-out shapes and letters' },
+                { key: 'sum', series: 3, component: 3, label: 'Sum', blurb: 'Hit both numbers that add to the reference' }
+            ],
+            'L04-Elite': [
+                { key: 'numbers', series: 1, component: 1, label: 'Numbers', blurb: 'Combined-field number targets' },
+                { key: 'divergent', series: 2, component: 2, label: 'Divergent', blurb: 'Odd-one-out across the cabinet' },
+                { key: 'sum', series: 3, component: 3, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
+            ],
+            'L05-WorldClass': [
+                { key: 'numbers', series: 1, component: 1, label: 'Numbers', blurb: 'World Class number targets' },
+                { key: 'divergent', series: 2, component: 2, label: 'Divergent', blurb: 'Odd-one-out under World Class timing' },
+                { key: 'sum', series: 3, component: 3, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
+            ]
+        };
         var mainLevelIdOf = function(levelId) {
             var id = String(levelId || '');
             if (!id) return '';
             if (id.indexOf('Foundation') !== -1) return 'L00-Foundation';
             return id.split('/')[0];
         };
-        var subLevelsForMain = function(mainId, levels, unlockedLvls, unlockedPls) {
+        var contentSetsForMain = function(mainId) {
+            return BAND_CONTENT_SETS[mainId] || [];
+        };
+        var contentSetForLevel = function(levelId) {
+            var mainId = mainLevelIdOf(levelId);
+            var sets = contentSetsForMain(mainId);
+            if (!sets.length) return null;
+            var series = getSeriesNumber(levelId);
+            for (var i = 0; i < sets.length; i++) {
+                if (sets[i].series === series) return sets[i];
+            }
+            return null;
+        };
+        var formatContentSetLabel = function(setInfo) {
+            if (!setInfo) return '';
+            return setInfo.label + ' · C' + setInfo.component;
+        };
+        var subLevelsForMain = function(mainId, levels, unlockedLvls, unlockedPls, seriesFilter) {
             if (mainId === 'L00-Foundation') {
                 return (LEVEL_SUBDIRS['L00-Foundation'] || []).map(function(sub) {
                     var locked = FOUNDATION_EXTRA_PLAYLISTS.indexOf(sub) !== -1
                         ? (unlockedPls || []).length === 0
                         : (unlockedPls || []).indexOf(sub) === -1;
-                    return { value: sub, label: sub, locked: locked };
+                    return { value: sub, label: sub, locked: locked, kind: 'playlist' };
                 });
             }
+            var wantSeries = (seriesFilter === 0 || seriesFilter) ? Number(seriesFilter) : null;
             return sortLevels(levels || []).filter(function(lvl) {
-                return String(lvl.id || '').indexOf(mainId + '/') === 0;
+                if (String(lvl.id || '').indexOf(mainId + '/') !== 0) return false;
+                if (wantSeries === null || isNaN(wantSeries)) return true;
+                return getSeriesNumber(lvl.id) === wantSeries;
             }).map(function(lvl) {
                 var unlocked = (unlockedLvls || []).indexOf(lvl.id) !== -1;
                 var idParts = String(lvl.id || '').split('/');
                 var shortLabel = idParts.length > 1 ? idParts[1] : String(lvl.display || lvl.id || '');
-                shortLabel = String(shortLabel).replace(/^(Entry|Activated|High Performance|Elite|World Class)\s+/, '');
-                return { value: lvl.id, label: shortLabel, locked: !unlocked };
+                shortLabel = formatComponentLabel(lvl.id, shortLabel || lvl.display);
+                var tNum = getTNumber(lvl.id);
+                return {
+                    value: lvl.id,
+                    label: shortLabel,
+                    testLabel: tNum ? ('Test ' + tNum) : shortLabel,
+                    locked: !unlocked,
+                    kind: 'test',
+                    series: getSeriesNumber(lvl.id)
+                };
             });
+        };
+        var contentSetItemsForMain = function(mainId, levels, unlockedLvls) {
+            return contentSetsForMain(mainId).map(function(setInfo) {
+                var tests = subLevelsForMain(mainId, levels, unlockedLvls, [], setInfo.series);
+                var unlockedCount = tests.filter(function(item) { return !item.locked; }).length;
+                return {
+                    value: setInfo.key,
+                    label: formatContentSetLabel(setInfo),
+                    title: setInfo.label,
+                    meta: 'C' + setInfo.component + ' · 5 tests',
+                    blurb: setInfo.blurb,
+                    locked: tests.length > 0 && unlockedCount === 0,
+                    kind: 'set',
+                    series: setInfo.series,
+                    component: setInfo.component,
+                    tests: tests
+                };
+            }).filter(function(item) { return item.tests && item.tests.length > 0; });
         };
 
         // =====================================================================
@@ -1851,8 +1952,11 @@
 
                                     var idParts = String(lvl.id || '').split('/');
                                     var shortLabel = (idParts.length > 1 ? idParts[1] : (lvl.display || lvl.id || ''));
-                                    shortLabel = String(shortLabel).replace(/^(Foundation|Entry|Activated|High Performance|Elite|World Class)\s+/, '').trim() || shortLabel;
-                                    shortLabel = shortLabel.replace(/^L\d{2}-/, '');
+                                    if (lvl.isFoundationPlaylist) {
+                                        shortLabel = String(shortLabel).replace(/^L\d{2}-/, '');
+                                    } else {
+                                        shortLabel = formatComponentLabel(lvl.id, shortLabel);
+                                    }
                                     var icon = '⬜';
                                     if (lvl.isCompleted) icon = '✅';
                                     else if (lvl.isCurrent) icon = '▶️';
@@ -1962,8 +2066,30 @@
             var listExpandedState = useState(false);
             var listExpanded = listExpandedState[0];
             var setListExpanded = listExpandedState[1];
+            var openContentSetState = useState('');
+            var openContentSet = openContentSetState[0];
+            var setOpenContentSet = openContentSetState[1];
             var shownMain = openMain;
-            var subItems = shownMain ? subLevelsForMain(shownMain, allLevels, unlockedLevels, unlockedPlaylists) : [];
+            var contentSets = shownMain ? contentSetItemsForMain(shownMain, allLevels, unlockedLevels) : [];
+            var activeContentSet = null;
+            if (openContentSet && contentSets.length) {
+                for (var ci = 0; ci < contentSets.length; ci++) {
+                    if (contentSets[ci].value === openContentSet) {
+                        activeContentSet = contentSets[ci];
+                        break;
+                    }
+                }
+            }
+            var subItems = [];
+            if (shownMain === 'L00-Foundation') {
+                subItems = subLevelsForMain(shownMain, allLevels, unlockedLevels, unlockedPlaylists);
+            } else if (activeContentSet) {
+                subItems = activeContentSet.tests || [];
+            } else if (contentSets.length) {
+                subItems = contentSets;
+            } else if (shownMain) {
+                subItems = subLevelsForMain(shownMain, allLevels, unlockedLevels, unlockedPlaylists);
+            }
             var selectedSubValue = '';
             if (shownMain === 'L00-Foundation' && mainLevelIdOf(selectedLevel) === 'L00-Foundation') {
                 selectedSubValue = selectedSubdirectory || '';
@@ -1975,10 +2101,13 @@
                 if (mainId === 'L00-Foundation') {
                     onLevelChange('L00-Foundation');
                     onSubdirectoryChange(value);
-                } else {
-                    onLevelChange(value);
-                    onSubdirectoryChange('');
+                    setOpenContentSet('');
+                    setListExpanded(false);
+                    setOpenMain('');
+                    return;
                 }
+                onLevelChange(value);
+                onSubdirectoryChange('');
                 setListExpanded(false);
                 setOpenMain('');
             };
@@ -1987,10 +2116,13 @@
                 if (mainId === 'L00-Foundation') return selectedSubdirectory || '';
                 var id = String(selectedLevel || '');
                 if (id.indexOf(mainId + '/') !== 0) return '';
-                return id.split('/').slice(1).join('/');
+                var setInfo = contentSetForLevel(id);
+                var testLabel = formatComponentLabel(id, id.split('/').slice(1).join('/'));
+                if (setInfo) return setInfo.label + ' · ' + testLabel;
+                return testLabel;
             };
             var visibleSubItems = subItems;
-            if (!listExpanded && selectedSubValue) {
+            if (!listExpanded && selectedSubValue && (!contentSets.length || activeContentSet)) {
                 var chosen = subItems.filter(function(item) { return item.value === selectedSubValue; });
                 if (chosen.length) visibleSubItems = chosen;
             }
@@ -2128,6 +2260,8 @@
                         LEVEL_MAIN_BUTTONS.map(function(btn) {
                             var active = (openMain || mainLevelIdOf(selectedLevel)) === btn.id;
                             var isOpen = shownMain === btn.id && visibleSubItems.length > 0;
+                            var showingSets = isOpen && contentSets.length > 0 && !activeContentSet && shownMain === btn.id;
+                            var showingTests = isOpen && !!activeContentSet && shownMain === btn.id;
                             return React.createElement('div', {
                                 key: btn.id,
                                 className: "level-main-wrap" + (isOpen ? " open" : "")
@@ -2139,11 +2273,18 @@
                                     onClick: function() {
                                         if (openMain === btn.id) {
                                             setOpenMain('');
+                                            setOpenContentSet('');
                                             setListExpanded(false);
                                             return;
                                         }
                                         setOpenMain(btn.id);
                                         setListExpanded(true);
+                                        var selectedSet = contentSetForLevel(selectedLevel);
+                                        if (mainLevelIdOf(selectedLevel) === btn.id && selectedSet) {
+                                            setOpenContentSet(selectedSet.key);
+                                        } else {
+                                            setOpenContentSet('');
+                                        }
                                     }
                                 }, btn.label + (chosenSubLabel(btn.id) ? (' · ' + chosenSubLabel(btn.id)) : '')),
                                 isOpen ?
@@ -2155,7 +2296,37 @@
                                         borderColor: btn.fg
                                     }
                                 },
+                                    showingTests ?
+                                    React.createElement('button', {
+                                        type: "button",
+                                        className: "level-sub-back",
+                                        onClick: function() { setOpenContentSet(''); }
+                                    }, '← Content sets') : null,
+                                    showingSets ?
+                                    React.createElement('div', { className: "level-sub-heading" }, 'Choose content') : null,
+                                    showingTests ?
+                                    React.createElement('div', { className: "level-sub-heading" },
+                                        activeContentSet.title + ' · C' + activeContentSet.component + ' · 5 tests') : null,
                                     visibleSubItems.map(function(item) {
+                                        if (item.kind === 'set') {
+                                            return React.createElement('div', {
+                                                key: item.value + '-set',
+                                                className: "level-sub-row" + (item.locked ? " locked" : "")
+                                            },
+                                                React.createElement('button', {
+                                                    type: "button",
+                                                    className: "level-sub-pick set-pick",
+                                                    onClick: function() {
+                                                        setOpenContentSet(item.value);
+                                                        setListExpanded(true);
+                                                    }
+                                                },
+                                                    React.createElement('span', { className: "set-title" }, item.title),
+                                                    React.createElement('span', { className: "set-meta" }, item.meta),
+                                                    React.createElement('span', { className: "set-blurb" }, item.blurb)
+                                                )
+                                            );
+                                        }
                                         var levelKey = shownMain === 'L00-Foundation'
                                             ? ('L00-Foundation/' + item.value)
                                             : item.value;
@@ -2170,7 +2341,9 @@
                                                     if (!listExpanded && item.value === selectedSubValue) return;
                                                     pickSubLevel(shownMain, item.value);
                                                 }
-                                            }, item.label),
+                                            }, item.testLabel
+                                                ? (item.testLabel + ' · ' + item.label)
+                                                : item.label),
                                             canManageLevels ?
                                             React.createElement('button', {
                                                 type: "button",
@@ -2537,8 +2710,6 @@
             var toggleSimulationField = props.toggleSimulationField;
             var simulatorScoreMode = props.simulatorScoreMode || 2;
             var applySimulatorScoreMode = props.applySimulatorScoreMode;
-            var visualizationEnabled = !!props.visualizationEnabled;
-            var toggleVisualization = props.toggleVisualization;
             var layoutState = useState(DEFAULT_MANUAL_LAYOUT);
             var layout = layoutState[0];
             var setLayout = layoutState[1];
@@ -2551,6 +2722,11 @@
             var busyState = useState(false);
             var busy = busyState[0];
             var setBusy = busyState[1];
+            // Per-area camera vis — not the global Visualization toggle (that was
+            // slow/flaky on Manual). Press Area A and/or Area B after Start.
+            var visFieldsState = useState({ A: false, B: false });
+            var visFields = visFieldsState[0];
+            var setVisFields = visFieldsState[1];
             var running = !!status.session_running || !!status.active;
             var litSet = {};
             (status.lit_screens || []).forEach(function(sid) { litSet[sid] = true; });
@@ -2585,12 +2761,42 @@
                 return function() { clearInterval(timer); };
             }, [running]);
 
+            var applyVisFields = function(next, toastOn) {
+                var fields = { A: !!next.A, B: !!next.B };
+                setVisFields(fields);
+                axios.post('/set-visualization', { fields: fields }).then(function() {
+                    if (!toastOn) return;
+                    if (fields.A && fields.B) showToast && showToast('Vis Area A + B ON', 'info');
+                    else if (fields.A) showToast && showToast('Vis Area A ON', 'info');
+                    else if (fields.B) showToast && showToast('Vis Area B ON', 'info');
+                    else showToast && showToast('Visualization OFF', 'info');
+                }).catch(function(err) {
+                    showToast && showToast(
+                        (err && err.response && err.response.data && err.response.data.detail) ||
+                        (err && err.message) || 'Visualization failed',
+                        'error'
+                    );
+                });
+            };
+
+            var toggleVisArea = function(fid, enabled) {
+                if (!running) {
+                    showToast && showToast('Start Manual first, then press Area A or B', 'info');
+                    return;
+                }
+                var next = Object.assign({}, visFields, {});
+                next[fid] = !!enabled;
+                applyVisFields(next, true);
+            };
+
             var startSession = function() {
                 setBusy(true);
+                // Always start with camera vis off; Area A/B buttons turn halves on.
+                setVisFields({ A: false, B: false });
                 axios.post('/manual-coach/start', {}).then(function(res) {
                     var next = res && res.data && res.data.layout;
                     if (next && next.A && next.B) setLayout(next);
-                    showToast && showToast('Manual coach ready');
+                    showToast && showToast('Manual coach ready — press Area A / B for camera');
                     refreshStatus();
                 }).catch(function(err) {
                     var msg = (err && err.response && err.response.data && err.response.data.detail) ||
@@ -2602,6 +2808,7 @@
             var stopSession = function() {
                 setBusy(true);
                 axios.post('/manual-coach/stop', {}).then(function() {
+                    setVisFields({ A: false, B: false });
                     showToast && showToast('Manual coach stopped');
                     refreshStatus();
                 }).catch(function(err) {
@@ -2671,8 +2878,8 @@
             return React.createElement('div', { className: 'manual-coach-wrap' },
                 React.createElement('h2', { className: 'text-2xl font-black gold-accent' }, 'Manual Coach'),
                 React.createElement('p', { className: 'manual-help' },
-                    'Tap one or more goal areas — each shows the pass image and cylinder and stays lit until the ball arrives. ' +
-                    'Only that screen clears on a hit; other lit screens keep waiting. Tap again to light the next screen.'
+                    'Start Manual, then press Area A and/or Area B to open that field\'s camera view. ' +
+                    'Tap one or more goal spots — each shows the pass image and cylinder until the ball arrives.'
                 ),
                 React.createElement('div', { className: 'manual-coach-toolbar' },
                     React.createElement('button', {
@@ -2740,20 +2947,20 @@
                         }),
                         React.createElement('span', { className: 'slider' })
                     ),
-                    isAdmin ?
-                    React.createElement(React.Fragment, null,
-                        React.createElement('span', { className: 'text-white font-bold' }, 'Visualization'),
-                        React.createElement('label', { className: 'toggle-switch' },
-                            React.createElement('input', {
-                                type: 'checkbox',
-                                checked: visualizationEnabled,
-                                onChange: function(e) {
-                                    toggleVisualization && toggleVisualization(e.target.checked);
-                                }
-                            }),
-                            React.createElement('span', { className: 'slider' })
-                        )
-                    ) : null
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'btn-primary px-4 py-2 font-bold' + (visFields.A ? '' : ' opacity-60'),
+                        disabled: !running,
+                        title: 'Show Field A camera visualization',
+                        onClick: function() { toggleVisArea('A', !visFields.A); }
+                    }, visFields.A ? 'Area A vis ON' : 'Area A'),
+                    React.createElement('button', {
+                        type: 'button',
+                        className: 'btn-primary px-4 py-2 font-bold' + (visFields.B ? '' : ' opacity-60'),
+                        disabled: !running,
+                        title: 'Show Field B camera visualization',
+                        onClick: function() { toggleVisArea('B', !visFields.B); }
+                    }, visFields.B ? 'Area B vis ON' : 'Area B')
                 ),
                 React.createElement('div', { className: 'manual-pitch' },
                     renderField('A', layout.A),
@@ -3206,7 +3413,7 @@
         };
 
         // =====================================================================
-        // GOAL AREA CALIBRATION (stitched frame → A1–A6 / B1–B6 cylinders)
+        // GOAL AREA CALIBRATION (stitched frame → A1–A6 / B1–B6 + L/R side goals)
         // =====================================================================
         var GoalAreaCalibration = function() {
             var fieldState = useState('A');
@@ -3218,7 +3425,11 @@
             var screensState = useState({});
             var screens = screensState[0];
             var setScreens = screensState[1];
-            var orderState = useState({ A: ['A1','A2','A3','A4','A5','A6'], B: ['B1','B2','B3','B4','B5','B6'] });
+            // Center mouths + Activated Players side targets (1=L only, 6=R only, 2–5 both).
+            var orderState = useState({
+                A: ['A1','A1L','A2','A2L','A2R','A3','A3L','A3R','A4','A4L','A4R','A5','A5L','A5R','A6','A6R'],
+                B: ['B1','B1L','B2','B2L','B2R','B3','B3L','B3R','B4','B4L','B4R','B5','B5L','B5R','B6','B6R']
+            });
             var order = orderState[0];
             var setOrder = orderState[1];
             var frameUrlState = useState('');
@@ -3355,9 +3566,10 @@
                     ctx.font = 'bold 11px sans-serif';
                     ctx.fillText(sid, mx + 9, my - 6);
                 };
-                ((order && order[field]) || []).forEach(function(sid) {
-                    drawGoal(sid, sid === selectedScreen);
-                });
+                // Only the selected goal (A1, A1R, …) — avoid cluttering every mouth at once.
+                if (selectedScreen) {
+                    drawGoal(selectedScreen, true);
+                }
                 if (pendingP0) {
                     ctx.fillStyle = '#276ce5';
                     ctx.beginPath();
@@ -3473,7 +3685,7 @@
                         return;
                     }
                     applyStatus(res.data || {});
-                    setMessage('Goal areas saved. Cylinder scoring/display uses these lines for A1–A6 and B1–B6.');
+                    setMessage('Goal areas saved. Cylinder scoring uses these lines for center mouths and L/R side targets.');
                     setBusy(false);
                 }).catch(function(e) {
                     setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
@@ -3501,7 +3713,7 @@
             return React.createElement('div', { className: 'panel p-5 mt-8' },
                 React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Goal Area Calibration'),
                 React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
-                    'Uses the same stitched 1280×360 image Realtime Play draws the green goal cylinder on (camera-1 + camera-8). Overlay shows those cylinders. Click two posts per goal (A1–A6 / B1–B6), then Save.'),
+                    'Uses the same stitched 1280×360 image Realtime Play draws the green goal cylinder on (camera-1 + camera-8). Calibrate center mouths (A1–A6 / B1–B6) and left/right side targets (A1L, A2L/A2R … A6R; same on Field B). Screen 1 has left only, screen 6 right only, screens 2–5 both. Click two posts per goal, then Save.'),
                 React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
                     React.createElement('button', {
                         className: 'btn-primary',
@@ -7614,9 +7826,7 @@
                         simulationFields: simulationFields,
                         toggleSimulationField: toggleSimulationField,
                         simulatorScoreMode: simulatorScoreMode,
-                        applySimulatorScoreMode: applySimulatorScoreMode,
-                        visualizationEnabled: visualizationEnabled,
-                        toggleVisualization: toggleVisualization
+                        applySimulatorScoreMode: applySimulatorScoreMode
                     }) :
                     activeTab === 'manage' && isAdmin ?
                     React.createElement(PlayerManagement, {
@@ -7628,6 +7838,41 @@
                     }) :
                     activeTab === 'settings' && isOperatorStaff ?
                     React.createElement(React.Fragment, null,
+                        React.createElement('div', { className: 'panel p-5 mb-6' },
+                            React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Lab tools'),
+                            React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
+                                'Open screen offset calibration or the RTSP camera viewer on this training PC.'),
+                            React.createElement('div', { className: 'flex flex-wrap gap-3' },
+                                React.createElement('button', {
+                                    type: 'button',
+                                    className: 'btn-primary px-5 py-2 font-bold',
+                                    onClick: function() {
+                                        axios.post('/lab-tools/run', { tool: 'screen_offset_gui' }).then(function(res) {
+                                            var msg = (res && res.data && res.data.message) || 'Screen offset GUI started';
+                                            showToast(msg, res && res.data && res.data.already_running ? 'info' : 'success');
+                                        }).catch(function(err) {
+                                            var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                                                (err && err.message) || 'Could not start screen_offset_gui';
+                                            showToast(String(msg), 'error');
+                                        });
+                                    }
+                                }, 'Screen offset GUI'),
+                                React.createElement('button', {
+                                    type: 'button',
+                                    className: 'btn-realtime px-5 py-2 font-bold',
+                                    onClick: function() {
+                                        axios.post('/lab-tools/run', { tool: 'rtsp' }).then(function(res) {
+                                            var msg = (res && res.data && res.data.message) || 'RTSP viewer started';
+                                            showToast(msg, res && res.data && res.data.already_running ? 'info' : 'success');
+                                        }).catch(function(err) {
+                                            var msg = (err && err.response && err.response.data && err.response.data.detail) ||
+                                                (err && err.message) || 'Could not start rtsp.py';
+                                            showToast(String(msg), 'error');
+                                        });
+                                    }
+                                }, 'RTSP viewer')
+                            )
+                        ),
                         React.createElement(HomographyCalibration, null),
                         React.createElement(GoalAreaCalibration, null),
                         React.createElement(HipZoneCalibration, null)

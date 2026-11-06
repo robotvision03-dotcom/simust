@@ -120,6 +120,114 @@ class RealtimeBootCueClearTests(unittest.TestCase):
         self.assertEqual(cleared, ["A"])
         self.assertFalse(ch.active_goal_lines)
 
+    def test_field_removed_from_cue_clears_live_finish_balls_session(self):
+        """Results / starting video silence one half — cylinder must drop even if session was live."""
+        import simust_realtime as rt
+
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.operator_paused = False
+        cam.session_lock = __import__("threading").Lock()
+        cam.active_fields = {"A", "B"}
+        cam._field_is_active = lambda fid: fid in ("A", "B")
+        cam._paused_fields = set()
+        cam._shared_cue_raw = None
+        cam.shared_action_index = 0
+        cleared = []
+
+        ch_a = types.SimpleNamespace(
+            field_id="A",
+            label="A",
+            session_active=True,
+            active_goal_lines={"A3": {"p0": (1, 1), "p1": (2, 2)}},
+            current_qr_block={"finish_balls": True},
+            pending_start=None,
+            kp_appear_frames_left=None,
+            _pending_cue_info=None,
+            _frame_sync_cue_raw="IMAGE|1|PASS|A3",
+            _image_cue_was_off=False,
+            kp_clear_frames_left=None,
+        )
+        ch_b = types.SimpleNamespace(
+            field_id="B",
+            label="B",
+            session_active=True,
+            active_goal_lines={"B2": {"p0": (3, 3), "p1": (4, 4)}},
+            current_qr_block={"finish_balls": True},
+            pending_start=None,
+            kp_appear_frames_left=None,
+            _pending_cue_info=None,
+            _frame_sync_cue_raw="IMAGE|2|PASS|B2|t1|a1",
+            _image_cue_was_off=False,
+            kp_clear_frames_left=None,
+            current_screens=["B2"],
+            current_action="PASS",
+            _cylinder_scored_screens=set(),
+            _display_seq=2,
+        )
+        cam.channels = {"A": ch_a, "B": ch_b}
+        # Field A silenced (results/opening); Field B still mid-action.
+        cam._read_image_action_cue = lambda: {
+            "active": True,
+            "force_end": False,
+            "finish_balls": True,
+            "seq": 2,
+            "fields": {
+                "B": {
+                    "action": "PASS",
+                    "screens": ["B2"],
+                    "seq": 2,
+                    "test_num": 1,
+                    "action_in_set": 1,
+                }
+            },
+            "timestamp": time.time(),
+        }
+
+        def clear_goal(channel, _ts):
+            cleared.append(channel.field_id)
+            channel.active_goal_lines = {}
+            channel.session_active = False
+            channel.current_qr_block = None
+
+        cam._clear_goal_area_now = clear_goal
+        cam.get_goal_lines = lambda *a, **k: {}
+        rt.SimustRealtimeCamera._tick_image_cue_frame_sync(cam, "00:00:00.000", 1000.0)
+        self.assertIn("A", cleared)
+        self.assertFalse(ch_a.session_active)
+        self.assertFalse(ch_a.active_goal_lines)
+        # Sibling still listed in the cue must not be force-cleared by A's silence.
+        self.assertNotIn("B", cleared)
+        self.assertTrue(ch_b.session_active)
+
+
+class PlayerOpeningCueSilenceTests(unittest.TestCase):
+    def test_silence_drops_field_without_reviving_stale_half(self):
+        import smart_simust_player as player
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cue_path = os.path.join(tmp, "image_action_cue.json")
+            with open(cue_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "active": True,
+                        "finish_balls": True,
+                        "seq": 4,
+                        "timestamp": time.time(),
+                        "fields": {
+                            "A": {"action": "PASS", "screens": ["A3"], "seq": 4},
+                            "B": {"action": "PASS", "screens": ["B1"], "seq": 4},
+                        },
+                    },
+                    handle,
+                )
+            with patch.object(player, "IMAGE_ACTION_CUE_FILE", cue_path):
+                player._silence_image_action_cue_for_fields(["A"])
+            with open(cue_path, "r", encoding="utf-8") as handle:
+                cue = json.load(handle)
+            self.assertTrue(cue.get("active"))
+            self.assertNotIn("A", cue.get("fields") or {})
+            self.assertIn("B", cue.get("fields") or {})
+
 
 if __name__ == "__main__":
     unittest.main()

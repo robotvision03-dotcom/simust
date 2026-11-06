@@ -1,6 +1,7 @@
 """Goal-area line calibration on the stitched 1280×360 processing frame.
 
-Operator clicks p0/p1 for A1–A6 and B1–B6. Saved lines override GOAL_LINES
+Operator clicks p0/p1 for center goals (A1–A6 / B1–B6) and left/right side
+goals (A1L, A2L/A2R, … A6R / B1L … B6R). Saved lines override GOAL_LINES
 cabinets used for green cylinder scoring/display in simust_realtime.
 """
 
@@ -47,9 +48,49 @@ SCREEN_TO_CABINET = {
     "B5": "10",
     "B6": "11",
 }
-FIELD_A_ORDER = ["A1", "A2", "A3", "A4", "A5", "A6"]
-FIELD_B_ORDER = ["B1", "B2", "B3", "B4", "B5", "B6"]
+
+# Activated Players T3–T5: screen 1 = left only, screen 6 = right only,
+# screens 2–5 = both left and right (10 side goals per field).
+SIDE_GOAL_IDS = (
+    "A1L",
+    "A2L", "A2R",
+    "A3L", "A3R",
+    "A4L", "A4R",
+    "A5L", "A5R",
+    "A6R",
+    "B1L",
+    "B2L", "B2R",
+    "B3L", "B3R",
+    "B4L", "B4R",
+    "B5L", "B5R",
+    "B6R",
+)
+
+for _sid in SIDE_GOAL_IDS:
+    _body, _side = _sid[:-1], _sid[-1]
+    SCREEN_TO_CABINET[_sid] = SCREEN_TO_CABINET[_body] + _side
+
+FIELD_A_ORDER = [
+    "A1", "A1L",
+    "A2", "A2L", "A2R",
+    "A3", "A3L", "A3R",
+    "A4", "A4L", "A4R",
+    "A5", "A5L", "A5R",
+    "A6", "A6R",
+]
+FIELD_B_ORDER = [
+    "B1", "B1L",
+    "B2", "B2L", "B2R",
+    "B3", "B3L", "B3R",
+    "B4", "B4L", "B4R",
+    "B5", "B5L", "B5R",
+    "B6", "B6R",
+]
 ALL_SCREENS = FIELD_A_ORDER + FIELD_B_ORDER
+CENTER_SCREENS = [
+    "A1", "A2", "A3", "A4", "A5", "A6",
+    "B1", "B2", "B3", "B4", "B5", "B6",
+]
 
 _lock = threading.Lock()
 _cache: Optional[dict] = None
@@ -150,15 +191,55 @@ def _line_looks_valid(line) -> bool:
     return (dx * dx + dy * dy) ** 0.5 >= 18.0
 
 
+def _half_line(p0, p1, side: str) -> Tuple[List[float], List[float]]:
+    """Split a goal mouth into left / right half (software default until calibrated)."""
+    x0, y0 = float(p0[0]), float(p0[1])
+    x1, y1 = float(p1[0]), float(p1[1])
+    mx, my = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+    if str(side or "").upper() == "L":
+        a, b = [x0, y0], [mx, my]
+    else:
+        a, b = [mx, my], [x1, y1]
+    # Keep halves long enough to pass the calibration length gate.
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 20.0 and length > 1e-6:
+        scale = 20.0 / length
+        cx, cy = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
+        hx, hy = dx * 0.5 * scale, dy * 0.5 * scale
+        a = [cx - hx, cy - hy]
+        b = [cx + hx, cy + hy]
+    return a, b
+
+
 def default_screens_from_goal_lines(goal_lines: dict) -> Dict[str, dict]:
-    """Build A1–A6 / B1–B6 lines from current GOAL_LINES cabinets."""
+    """Build A1–A6 / B1–B6 (+ L/R side goals) from current GOAL_LINES cabinets."""
     out = {}
-    for sid, cab in SCREEN_TO_CABINET.items():
+    for sid in CENTER_SCREENS:
+        cab = SCREEN_TO_CABINET[sid]
         line = (goal_lines or {}).get(cab) or {}
         pts = _line_points(line)
         if not pts:
             continue
         p0, p1 = pts
+        out[sid] = {"p0": p0, "p1": p1}
+    for sid in SIDE_GOAL_IDS:
+        cab = SCREEN_TO_CABINET[sid]
+        line = (goal_lines or {}).get(cab) or {}
+        pts = _line_points(line)
+        if pts:
+            p0, p1 = pts
+            out[sid] = {"p0": p0, "p1": p1}
+            continue
+        parent = sid[:-1]
+        parent_line = out.get(parent) or {}
+        parent_pts = _line_points(parent_line)
+        if not parent_pts:
+            parent_cab = SCREEN_TO_CABINET.get(parent)
+            parent_pts = _line_points((goal_lines or {}).get(parent_cab) or {})
+        if not parent_pts:
+            continue
+        p0, p1 = _half_line(parent_pts[0], parent_pts[1], sid[-1])
         out[sid] = {"p0": p0, "p1": p1}
     return out
 
@@ -215,6 +296,7 @@ def public_status(goal_lines: Optional[dict] = None) -> dict:
             "calibrated": bool(saved),
             "field": "A" if sid.startswith("A") else "B",
             "source": "adjusted" if saved else "software",
+            "side": sid[-1] if len(sid) >= 3 and sid[-1] in ("L", "R") else "",
         }
     if dirty:
         store["screens"] = cleaned
@@ -245,7 +327,7 @@ def public_status(goal_lines: Optional[dict] = None) -> dict:
 
 def _encode_preview(img) -> dict:
     h, w = img.shape[:2]
-    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not ok:
         raise RuntimeError("Could not encode stitched preview")
     jpeg = buf.tobytes()
@@ -395,7 +477,7 @@ def capture_stitched_preview(
 
 
 def save_screens(screens_payload: dict, goal_lines: Optional[dict] = None) -> dict:
-    """Persist operator-edited A1–A6 / B1–B6 lines and apply to GOAL_LINES."""
+    """Persist operator-edited goal lines (center + L/R) and apply to GOAL_LINES."""
     store = load_store()
     merged = default_screens_from_goal_lines(goal_lines or {})
     merged.update(store.get("screens") or {})

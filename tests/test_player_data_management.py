@@ -319,14 +319,14 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
         )
         self.assertEqual(users["jj"]["progress"]["unlocked_playlists"], before)
         self.assertNotIn(
-            "L01-Entry/S1.T1", users["jj"]["progress"]["unlocked_levels"]
+            "L01-Entry/S0.T1", users["jj"]["progress"]["unlocked_levels"]
         )
 
         users["jj"]["progress"]["unlocked_playlists"] = list(
             simust_progress.FOUNDATION_PLAYLISTS
         )
         # Manual Lock on Entry must not block an earned SF-180N pass.
-        users["jj"]["progress"]["manually_locked_levels"] = ["L01-Entry/S1.T1"]
+        users["jj"]["progress"]["manually_locked_levels"] = ["L01-Entry/S0.T1"]
         apply_session_progress(
             users,
             "jj",
@@ -342,12 +342,12 @@ class ManualLockUnlockCurrentLevelTests(unittest.TestCase):
             },
             from_final=True,
         )
-        self.assertIn("L01-Entry/S1.T1", users["jj"]["progress"]["unlocked_levels"])
+        self.assertIn("L01-Entry/S0.T1", users["jj"]["progress"]["unlocked_levels"])
         self.assertNotIn(
-            "L01-Entry/S1.T1",
+            "L01-Entry/S0.T1",
             users["jj"]["progress"].get("manually_locked_levels") or [],
         )
-        self.assertEqual(users["jj"]["progress"]["current_level"], "L01-Entry/S1.T1")
+        self.assertEqual(users["jj"]["progress"]["current_level"], "L01-Entry/S0.T1")
 
 
 class Mode2S1T3UnlockTests(unittest.TestCase):

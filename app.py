@@ -1170,6 +1170,11 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
@@ -1182,6 +1187,11 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
@@ -1287,6 +1297,7 @@ ALL_LEVELS = get_all_level_ids()
 # Activated+ bands only ship A-T1..A-T5; S2.T* maps to A1.T* when present,
 # otherwise falls back to the matching A-T* content folder.
 _LEGACY_THEME_FOLDERS = {
+    **{f"S0.T{n}": f"S0-T{n}" for n in range(1, 6)},
     **{f"S1.T{n}": f"A-T{n}" for n in range(1, 6)},
     **{f"S2.T{n}": f"A1.T{n}" for n in range(1, 6)},
     **{f"S3.T{n}": f"A2.T{n}" for n in range(1, 6)},
@@ -2192,13 +2203,25 @@ os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
 os.makedirs(REALTIME_RECORDINGS_DIR, exist_ok=True)
 os.makedirs(ANIMATIONS_DIR, exist_ok=True)
 
-def write_visualization_setting(enabled):
-    """Atomically write visualization on/off so the realtime process can pick it up."""
+def write_visualization_setting(enabled=None, fields=None):
+    """Atomically write visualization so realtime can pick it up.
+
+    Legacy ``enabled`` true/false means both fields. Prefer ``fields={A,B}``
+    for Manual Area A/B buttons (one half or both).
+    """
     viz_file = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
     os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    if isinstance(fields, dict):
+        payload = {
+            "A": bool(fields.get("A") or fields.get("a")),
+            "B": bool(fields.get("B") or fields.get("b")),
+        }
+        text = json.dumps(payload, separators=(",", ":"))
+    else:
+        text = "true" if enabled else "false"
     tmp_file = viz_file + ".tmp"
     with open(tmp_file, "w", encoding="utf-8") as f:
-        f.write("true" if enabled else "false")
+        f.write(text)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_file, viz_file)
@@ -3381,6 +3404,29 @@ def _foundation_subdirs_for_operator():
     return ordered, extras
 
 
+def format_operator_component_label(level_id: str) -> str:
+    """Operator display: Session → Component (S→C). Keep internal ids as S*.
+
+    Entry / Activated: S0→C1, S1→C2, S2→C3.
+    Other bands: S1/S2/S3.Tn → C1/C2/C3.Tn.
+    """
+    cid = simust_progress.normalize_level_id(level_id)
+    parts = str(cid or "").split("/")
+    if len(parts) < 2:
+        return str(cid or level_id or "")
+    main, theme = parts[0], parts[1]
+    match = re.match(r"^S(\d+)\.T(\d+)$", str(theme), re.I)
+    if not match:
+        return theme
+    series = int(match.group(1))
+    test_num = match.group(2)
+    if main in ("L01-Entry", "L02-Activated"):
+        component = series + 1
+    else:
+        component = series
+    return f"C{component}.T{test_num}"
+
+
 @app.get("/app-config")
 async def app_config():
     levels = []
@@ -3389,9 +3435,8 @@ async def app_config():
         if level_id == "L00-Foundation":
             display = PROGRESSION.get(main, {}).get("display", level_id)
         else:
-            # Same naming as Activated opening: S1.T1 / S2.T1 (no band prefix).
-            parts = level_id.split("/")
-            display = parts[1] if len(parts) >= 2 else level_id
+            # Operator shows Component labels (C1.T1); ids stay S0.T1 / S1.T1.
+            display = format_operator_component_label(level_id)
         levels.append({
             "id": level_id,
             "display": display,
@@ -3472,13 +3517,12 @@ async def get_levels():
             if exists:
                 videos = [f for f in os.listdir(path) if f.lower().endswith('.mp4')]
                 video_count = len(videos)
-            # Determine display name (series levels: S1.T1 / S2.T1 like Activated)
+            # Operator display: Component labels (C1.T1); ids stay S*.
             main = get_main_level(level_id)
             if level_id == "L00-Foundation":
                 display = PROGRESSION[main]["display"]
             else:
-                parts = level_id.split('/')
-                display = parts[1] if len(parts) >= 2 else level_id
+                display = format_operator_component_label(level_id)
             levels_info.append({
                 "id": level_id,
                 "display": display,
@@ -4058,12 +4102,15 @@ async def manual_coach_start(request: Request):
     if not read_cabinet_controls().get("system_on", True):
         raise HTTPException(400, "System is off — turn System on first")
     try:
-        # Stop any active level session first.
+        # Stop any active level session first — keep waits short so Start Manual
+        # returns quickly; camera/player warm up in the background.
         apply_stop_realtime({"abort": True, "operator_stop": True})
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.15)
         realtime_aborted = False
         clear_image_action_cue(force_end=True)
         simust_manual_coach.clear_command_files()
+        # Vis starts OFF; operator presses Area A / Area B to open that half.
+        write_visualization_setting(fields={"A": False, "B": False})
         # Drop stale Correct scores so the first A/B tap does not clear instantly.
         try:
             live_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "live_action_result.json")
@@ -4133,7 +4180,6 @@ async def manual_coach_start(request: Request):
                 [python_exe, realtime_script, foundation_path, "1"],
             )
             logger.info("Manual coach: realtime camera started")
-            await asyncio.sleep(2.5)
         else:
             logger.warning("Manual coach: simust_realtime.py missing — cylinders unavailable")
         smart_script = os.path.join(script_dir, "smart_simust_player.py")
@@ -4153,7 +4199,7 @@ async def manual_coach_start(request: Request):
             cwd=script_dir,
         )
         _realtime_session_active = True
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.12)
         if smart_player_process.poll() is not None:
             _realtime_session_active = False
             raise HTTPException(500, "Manual coach player exited immediately")
@@ -4163,7 +4209,7 @@ async def manual_coach_start(request: Request):
             waiting_hit=False,
             last_hit=None,
             seq=0,
-            message="Manual coach ready — tap a goal area",
+            message="Manual ready — tap goals; Area A/B turns that field's camera vis on",
         )
         logger.info(
             "Manual coach started (player pid %s)",
@@ -4796,10 +4842,45 @@ async def booking_deadline_release(req: Request):
 async def set_visualization(req: Request):
     try:
         data = await req.json()
+        fields = data.get("fields") if isinstance(data.get("fields"), dict) else None
+        if fields is None and data.get("field"):
+            # Toggle one area: {field:"A", enabled:true}
+            fid = str(data.get("field") or "").upper()[:1]
+            current = {"A": False, "B": False}
+            try:
+                viz_path = os.path.join(SIMUST_PLAYER_DIRECTORY, "visualization.txt")
+                if os.path.isfile(viz_path):
+                    raw = open(viz_path, "r", encoding="utf-8").read().strip()
+                    if raw[:1] == "{":
+                        parsed = json.loads(raw) or {}
+                        current = {
+                            "A": bool(parsed.get("A") or parsed.get("a")),
+                            "B": bool(parsed.get("B") or parsed.get("b")),
+                        }
+                    elif raw.lower() in ("true", "1", "yes", "on"):
+                        current = {"A": True, "B": True}
+            except Exception:
+                pass
+            if fid in ("A", "B"):
+                current[fid] = bool(data.get("enabled", False))
+            fields = current
+        if fields is not None:
+            write_visualization_setting(fields=fields)
+            any_on = bool(fields.get("A") or fields.get("B"))
+            logger.info("Visualization fields set to: %s", fields)
+            return {
+                "status": "success",
+                "visualization_enabled": any_on,
+                "fields": {"A": bool(fields.get("A")), "B": bool(fields.get("B"))},
+            }
         enabled = bool(data.get("enabled", False))
         write_visualization_setting(enabled)
         logger.info(f"Visualization set to: {enabled}")
-        return {"status": "success", "visualization_enabled": enabled}
+        return {
+            "status": "success",
+            "visualization_enabled": enabled,
+            "fields": {"A": enabled, "B": enabled},
+        }
     except Exception as e:
         logger.error(f"Failed to set visualization: {e}")
         raise HTTPException(500, f"Failed to set visualization: {str(e)}")
@@ -5464,6 +5545,82 @@ async def goal_lines_reset(req: Request):
     except Exception as exc:
         raise HTTPException(500, str(exc))
     return {"status": "success", **goal_lines_status_snapshot()}
+
+
+_lab_tool_procs: Dict[str, Any] = {}
+
+_LAB_TOOL_SCRIPTS = {
+    "screen_offset_gui": "screen_offset_gui.py",
+    "rtsp": "rtsp.py",
+}
+
+
+def _popen_gui_tool(script_path: str) -> subprocess.Popen:
+    """Launch a visible PyQt/OpenCV tool (not hidden like camera helpers)."""
+    script_dir = os.path.dirname(os.path.abspath(script_path)) or os.getcwd()
+    kwargs = {
+        "cwd": script_dir,
+        "shell": False,
+    }
+    if sys.platform == "win32":
+        # Detach so the Settings UI stays responsive; keep a normal window.
+        kwargs["creationflags"] = int(
+            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        )
+        kwargs["stdin"] = subprocess.DEVNULL
+        kwargs["stdout"] = subprocess.DEVNULL
+        kwargs["stderr"] = subprocess.DEVNULL
+        kwargs["close_fds"] = True
+    return subprocess.Popen([sys.executable, script_path], **kwargs)
+
+
+@app.post("/lab-tools/run")
+async def lab_tools_run(request: Request):
+    """Start screen_offset_gui.py or rtsp.py from Settings (lab PC only)."""
+    _require_operator_staff(request)
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Lab tools run on the training machine")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    tool = str((data or {}).get("tool") or "").strip().lower()
+    script_name = _LAB_TOOL_SCRIPTS.get(tool)
+    if not script_name:
+        raise HTTPException(
+            400,
+            "Unknown tool — use screen_offset_gui or rtsp",
+        )
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(script_dir, script_name)
+    if not os.path.isfile(script_path):
+        script_path = os.path.join(os.getcwd(), script_name)
+    if not os.path.isfile(script_path):
+        raise HTTPException(404, f"{script_name} not found")
+    prev = _lab_tool_procs.get(tool)
+    if prev is not None and getattr(prev, "poll", lambda: 0)() is None:
+        return {
+            "status": "success",
+            "tool": tool,
+            "message": f"{script_name} is already running",
+            "already_running": True,
+            "pid": getattr(prev, "pid", None),
+        }
+    try:
+        proc = _popen_gui_tool(script_path)
+    except Exception as exc:
+        logger.exception("Could not start lab tool %s", tool)
+        raise HTTPException(500, f"Could not start {script_name}: {exc}") from exc
+    _lab_tool_procs[tool] = proc
+    logger.info("Started lab tool %s (pid %s)", script_name, getattr(proc, "pid", "?"))
+    return {
+        "status": "success",
+        "tool": tool,
+        "message": f"Started {script_name}",
+        "already_running": False,
+        "pid": getattr(proc, "pid", None),
+    }
 
 
 @app.get("/hip-zone/status")
@@ -6335,12 +6492,109 @@ def _is_finish_balls_timeout_filler(row) -> bool:
     return False
 
 
+def _results_are_mode2_sim(results_list) -> bool:
+    """True only when this section was scored under Arena Sim Mode 2."""
+    for row in results_list or []:
+        if bool((row or {}).get("mode2_sim")):
+            return True
+    return False
+
+
+def _infer_expected_actions(results_list) -> int:
+    """Playlist action count for this test (never less than stamped rows).
+
+    Prefer actions_in_set on the rows. Also honor T1a12-style leftover ids so a
+    short results.json cannot report 100% AAC for 10/12 Correct.
+
+    Elite / World Class combined playlists stamp actions_in_set=12 on every half,
+    but each field only holds ~6 of those actions. Pad to 12 only when both
+    halves are present (or the rows already span A+B); otherwise keep len(rows).
+    """
+    rows = [row for row in (results_list or []) if isinstance(row, dict)]
+    expected = 0
+    for row in rows:
+        try:
+            expected = max(expected, int(row.get("actions_in_set") or 0))
+        except (TypeError, ValueError):
+            pass
+        rid = str(row.get("id") or "").strip()
+        match = re.match(r"^T\d+a(\d+)$", rid, flags=re.I)
+        if match:
+            try:
+                expected = max(expected, int(match.group(1)))
+            except (TypeError, ValueError):
+                pass
+    if expected <= 0:
+        return len(rows)
+    combined_stamp = any(bool(row.get("combined_field")) for row in rows)
+    if combined_stamp and not _rows_look_combined_field(rows):
+        # One field of a combined test — partner rows are scored after merge.
+        return len(rows)
+    return max(expected, len(rows))
+
+
+def _synthetic_missing_wrongs(results_list, expected: int):
+    """Placeholder Wrong rows for actions never written to results.json."""
+    rows = [r for r in (results_list or []) if isinstance(r, dict)]
+    missing = max(0, int(expected or 0) - len(rows))
+    if missing <= 0:
+        return []
+    template = rows[0] if rows else {}
+    budget = _parse_positive_float(template.get("balls_budget_sec")) or 0.0
+    try:
+        vid = int(template.get("video_index") or 1)
+    except (TypeError, ValueError):
+        vid = 1
+    try:
+        actions_in_set = int(template.get("actions_in_set") or expected or 0)
+    except (TypeError, ValueError):
+        actions_in_set = int(expected or 0)
+    out = []
+    for i in range(missing):
+        entry = {
+            "id": f"T{vid}a_missing_{i + 1}",
+            "action": str(template.get("action") or "PASS"),
+            "result": "Wrong",
+            "movement": 0,
+            "video_index": vid,
+            "finish_balls": bool(template.get("finish_balls")),
+            "actions_in_set": actions_in_set,
+            "combined_field": bool(template.get("combined_field")),
+            "ae": 3.0,
+        }
+        if budget > 0:
+            entry["balls_budget_sec"] = budget
+            entry["balls_clock_sec"] = budget
+            entry["session_duration"] = f"{budget:.3f}"
+            entry["finishing_time"] = f"{budget:.3f}"
+        out.append(entry)
+    return out
+
+
+def _rows_for_accuracy(results_list, mode=None):
+    """Playable rows plus synthetic Wrongs so AAC uses the full playlist length."""
+    rows = list(results_list or [])
+    playable = _finish_balls_playable(rows, mode=mode)
+    expected = _infer_expected_actions(rows)
+    # Mode 2 sim fillers are dropped from playable — do not re-pad those away.
+    if mode is None:
+        try:
+            mode = int(read_simulator_score_mode())
+        except Exception:
+            mode = 1
+    if int(mode) == 2 and _results_are_mode2_sim(rows):
+        return playable
+    if expected > len(playable):
+        return list(playable) + _synthetic_missing_wrongs(playable, expected)
+    return playable
+
+
 def _finish_balls_playable(results_list, mode=None):
     """Rows that count toward finish-balls AAC / AET / AE.
 
-    Mode 2: drop timeout-filler Wrongs so an early all-Correct finish is not
-    forced to used=budget. Real / Mode 1: every stamped row counts — unplayed
-    leftovers are real misses and burn the shared clock.
+    Mode 2 *sim* only: drop timeout-filler Wrongs so an early all-Correct finish
+    is not forced to used=budget. Real play (sim OFF) always counts every stamp —
+    leftover T1aN Wrongs are real misses and must pull AAC below 100%.
     """
     rows = list(results_list or [])
     if mode is None:
@@ -6348,10 +6602,49 @@ def _finish_balls_playable(results_list, mode=None):
             mode = int(read_simulator_score_mode())
         except Exception:
             mode = 1
-    if int(mode) == 2:
+    if int(mode) == 2 and _results_are_mode2_sim(rows):
         playable = [row for row in rows if not _is_finish_balls_timeout_filler(row)]
         return playable if playable else rows
     return rows
+
+
+def _rows_look_combined_field(results_list) -> bool:
+    """True when result rows already span both Field A and Field B."""
+    rows = [r for r in (results_list or []) if isinstance(r, dict)]
+    fields = set()
+    for row in rows:
+        fid = str(row.get("field") or "").strip().upper()[:1]
+        if fid in ("A", "B"):
+            fields.add(fid)
+        for sid in row.get("screens") or []:
+            head = str(sid or "").strip().upper()[:1]
+            if head in ("A", "B"):
+                fields.add(head)
+    return fields >= {"A", "B"}
+
+
+def _overlay_shared_score_metrics(target: dict, shared: dict) -> dict:
+    """Copy ACC / AE / AET from the merged combined-field board onto one field."""
+    out = dict(target or {})
+    shared = shared or {}
+    for key in (
+        "aac",
+        "avg_ae",
+        "ae_display",
+        "aet",
+        "aet_percent",
+        "aet_display",
+        "aet_session_display",
+        "correct",
+        "late",
+        "wrong",
+        "miss",
+        "total_actions",
+        "finish_balls",
+    ):
+        if key in shared:
+            out[key] = shared[key]
+    return out
 
 
 
@@ -6372,7 +6665,7 @@ def finish_balls_clock(results_list, mode=None):
         except Exception:
             mode = 1
     results_list = list(results_list or [])
-    playable = _finish_balls_playable(results_list, mode=mode)
+    playable = _rows_for_accuracy(results_list, mode=mode)
     budgets = []
     clocks = []
     saw = False
@@ -6473,7 +6766,7 @@ def finish_balls_efficiency(results_list, aet_percent, mode=None):
             mode = int(read_simulator_score_mode())
         except Exception:
             mode = 1
-    rows = _finish_balls_playable(results_list, mode=mode)
+    rows = _rows_for_accuracy(results_list, mode=mode)
     scores = [finish_balls_action_ae(row, aet_percent) for row in rows]
     if not scores:
         return 0.0
@@ -6507,11 +6800,20 @@ def summarize_results_section_metrics(results_list):
     def _row_result(row):
         return str((row or {}).get("result") or (row or {}).get("Result") or "").strip()
 
-    correct = sum(1 for r in results_list if _row_result(r).lower() == "correct")
-    late = sum(1 for r in results_list if _row_result(r).lower() == "late")
-    wrong = sum(1 for r in results_list if _row_result(r).lower() == "wrong")
-    miss = sum(1 for r in results_list if _row_result(r).lower() == "miss")
-    total_actions = len(results_list)
+    score_mode_for_counts = 1
+    try:
+        score_mode_for_counts = int(read_simulator_score_mode())
+    except Exception:
+        score_mode_for_counts = 1
+    if int(score_mode_for_counts) == 2 and not _results_are_mode2_sim(results_list):
+        score_mode_for_counts = 1
+    # Pad missing playlist actions as Wrong so 10 Correct of 12 never reads 100%.
+    counted = _rows_for_accuracy(results_list, mode=score_mode_for_counts)
+    correct = sum(1 for r in counted if _row_result(r).lower() == "correct")
+    late = sum(1 for r in counted if _row_result(r).lower() == "late")
+    wrong = sum(1 for r in counted if _row_result(r).lower() == "wrong")
+    miss = sum(1 for r in counted if _row_result(r).lower() == "miss")
+    total_actions = len(counted)
     aac = ((correct + late) / total_actions) * 100 if total_actions > 0 else 0.0
 
     ae_values = []
@@ -6577,6 +6879,10 @@ def summarize_results_section_metrics(results_list):
         score_mode_for_clock = int(read_simulator_score_mode())
     except Exception:
         score_mode_for_clock = 1
+    # Admin Mode 2 file must not rewrite real (sim OFF) Elite/WC rings —
+    # that dropped leftover Wrongs as fillers → always 100% AAC / inflated AE.
+    if int(score_mode_for_clock) == 2 and not _results_are_mode2_sim(results_list):
+        score_mode_for_clock = 1
     clock = finish_balls_clock(results_list, mode=score_mode_for_clock)
     if clock:
         aac = clock["aac"]
@@ -6586,7 +6892,7 @@ def summarize_results_section_metrics(results_list):
         aet_session_display = clock["aet_session_display"]
         # Always recompute AE from shared-clock AET% (finish-balls formula).
         # Do not reuse per-row stamped AE — that pinned real S3 rings at ~88%.
-        # Mode 2 floors AE above 75% inside finish_balls_efficiency.
+        # Mode 2 *sim* floors AE above 75% inside finish_balls_efficiency.
         avg_ae = finish_balls_efficiency(
             results_list, aet_percent, mode=score_mode_for_clock
         )
@@ -7769,6 +8075,7 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         stamp_distances = _mv.strip().lower() in ("1", "true", "yes")
     else:
         stamp_distances = bool(_mv)
+    per_field_video = {}
     for fid, fdir, all_results, results_json_path in field_jobs:
         recognition_path = os.path.join(fdir, "recognition.json")
         if stamp_distances and os.path.exists(recognition_path):
@@ -7816,7 +8123,39 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
         if not video_results:
             logger.warning("No results for video_index %s on Field %s", video_index, fid)
             continue
+        per_field_video[fid] = (fdir, video_results)
 
+    # Elite / World Class: ACC/AE/AET are one shared clock across both halves.
+    # Scoring Field A alone (6/6) used to show 100% when the test was only 10/12.
+    combined_rows = []
+    for fid in ("A", "B"):
+        if fid in per_field_video:
+            combined_rows.extend(per_field_video[fid][1])
+    use_shared = False
+    shared_section = None
+    try:
+        with open(
+            os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"),
+            "r",
+            encoding="utf-8",
+        ) as pf:
+            _pf_live = json.load(pf) or {}
+    except Exception:
+        _pf_live = {}
+    _pf_fields_live = _pf_live.get("fields") if isinstance(_pf_live, dict) else {}
+    if not isinstance(_pf_fields_live, dict):
+        _pf_fields_live = {}
+    if (
+        len(per_field_video) >= 2
+        and (
+            _session_is_combined_fields(_pf_fields_live, _pf_live)
+            or _rows_look_combined_field(combined_rows)
+        )
+    ):
+        use_shared = True
+        shared_section = summarize_results_section_metrics(combined_rows)
+
+    for fid, (fdir, video_results) in per_field_video.items():
         # Recompute hips only when this test still has 0 m (session-end stamp
         # hasn't run). Lightweight local math — never pulls torch into uvicorn.
         need_dist = True
@@ -7831,10 +8170,12 @@ def _build_create_video_results_sync(data, directory, video_index, spawn_display
             is_final=False,
             recompute_distance=need_dist,
         )
+        if use_shared and shared_section:
+            section = _overlay_shared_score_metrics(section, shared_section)
         save_section_metrics_entry(fdir, video_index, section)
         panels[fid] = build_results_ring_panel(section, field=fid)
         if primary_rows is None or fid == primary_fid:
-            primary_rows = video_results
+            primary_rows = combined_rows if use_shared and combined_rows else video_results
             primary_fid = fid
             primary_dir = fdir
 
@@ -8121,8 +8462,28 @@ def _build_create_results_video_sync(data, session_root, directory, field_id, sp
             or field_id
             or ""
         ).upper()[:1]
+        all_combined_rows = []
+        for _fid, _fdir, rows in field_dirs:
+            all_combined_rows.extend(list(rows or []))
+        use_shared_final = bool(
+            len(field_dirs) >= 2
+            and (
+                _session_is_combined_fields(_pf_fields, _pf)
+                or _rows_look_combined_field(all_combined_rows)
+            )
+        )
+        shared_final = None
+        if use_shared_final:
+            # One ACC/AE/AET from every action on both halves (Elite / World Class).
+            shared_final = prepare_field_section_metrics(
+                all_combined_rows,
+                field_dirs[0][1],
+                is_final=True,
+            )
         for fid, fdir, rows in field_dirs:
             metrics = prepare_field_section_metrics(rows, fdir, is_final=True)
+            if use_shared_final and shared_final:
+                metrics = _overlay_shared_score_metrics(metrics, shared_final)
             slot = _pf_fields.get(fid) if isinstance(_pf_fields.get(fid), dict) else {}
             level_for_mode = str((slot or {}).get("level") or _session_level or "").strip()
             metrics = apply_simulator_score_mode_to_metrics(
@@ -8135,7 +8496,7 @@ def _build_create_results_video_sync(data, session_root, directory, field_id, sp
             field_metrics[fid] = metrics or {}
             panels[fid] = build_results_ring_panel(metrics, field=fid)
             if primary_rows is None or fid == primary_fid:
-                primary_rows = rows
+                primary_rows = all_combined_rows if use_shared_final else rows
                 primary_fid = fid
                 primary_dir = fdir
 

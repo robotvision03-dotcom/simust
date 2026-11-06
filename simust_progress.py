@@ -6,11 +6,12 @@ Rules:
 - All unlocks are AE-only (accuracy is recorded but does not gate).
 - Foundation SF-30N → SF-60N → SF-110N → SF-180N → Entry: AE ≥ 65%.
 - Entry and every later set: AE ≥ 70%.
-- Every sub-level is played in order (S1.T1…T5, S2.T1…T5, S3.T1…T5).
+- Every sub-level is played in order (Entry S0 then S1; later bands S1…S3).
   Passing the last set of a band opens the next band (Entry S1.T5 → Activated
   S1.T1, Activated S2.T5 → High Performance, High Performance S3.T5 → Elite,
   Elite S3.T5 → World Class). World Class S3.T5 is the end.
-  Booking does not open levels. Sub-level names: A-T# → S1.T#, A1.T# → S2.T#.
+  Booking does not open levels. Sub-level names: S0-T# → S0.T#, A-T# → S1.T#,
+  A1.T# → S2.T#.
 """
 
 from __future__ import annotations
@@ -20,20 +21,24 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def normalize_level_id(level_id: str) -> str:
-    """Map legacy A-T / A1.T theme ids to S1.T / S2.T."""
+    """Map legacy A-T / A1.T / S0-T theme ids to S1.T / S2.T / S0.T."""
     cid = str(level_id or "").strip()
     if not cid or "/" not in cid:
         return cid
     parts = cid.split("/")
     main, theme = parts[0], parts[1]
     rest = parts[2:]
-    a1 = re.match(r"^A1[.-]?T([1-5])$", theme, re.I)
-    if a1:
-        theme = f"S2.T{a1.group(1)}"
+    a0 = re.match(r"^(?:A0|S0)[-.]?T([1-5])$", theme, re.I)
+    if a0:
+        theme = f"S0.T{a0.group(1)}"
     else:
-        legacy = re.match(r"^A[-.]?T([1-5])$", theme, re.I)
-        if legacy:
-            theme = f"S1.T{legacy.group(1)}"
+        a1 = re.match(r"^A1[.-]?T([1-5])$", theme, re.I)
+        if a1:
+            theme = f"S2.T{a1.group(1)}"
+        else:
+            legacy = re.match(r"^A[-.]?T([1-5])$", theme, re.I)
+            if legacy:
+                theme = f"S1.T{legacy.group(1)}"
     return "/".join([main, theme] + rest)
 
 

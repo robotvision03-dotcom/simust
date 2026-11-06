@@ -92,7 +92,7 @@ class IndependentComposeTests(unittest.TestCase):
             {"test_num": 3, "budget_ms": 54000, "actions_in_set": 12, "finish_balls": True},
             [],
         )
-        self.assertEqual(text.split("\n"), ["S1.T2", "12 Actions"])
+        self.assertEqual(text.split("\n"), ["Numbers", "C1.T2", "12 Actions"])
         self.assertNotIn("Elite", text)
         self.assertNotIn("54.00", text)
 
@@ -1901,6 +1901,8 @@ class SingleFieldThenJoinTests(unittest.TestCase):
                 True if path == coach or path.endswith("logo_entry.mp4") else _orig(path)
             )
             self.addCleanup(lambda: setattr(player.os.path, "isfile", original_isfile))
+        audio = []
+        inst._play_intro_audio = lambda path: audio.append(path)
         panel = {"coach_video": coach, "slice_aet": "A1", "aac": 80}
         inst._play_result_side_videos("A", panel)
         self.assertEqual(cleared, [{"A"}])
@@ -1912,6 +1914,9 @@ class SingleFieldThenJoinTests(unittest.TestCase):
         self.assertEqual(len(coach_layers), 1)
         self.assertIn("A3", coach_layers[0][0])
         self.assertIn("A4", coach_layers[0][0])
+        # OpenCV paints the clip; VLC must still play the coach voice.
+        self.assertEqual(audio, [coach])
+        self.assertEqual(inst._coach_audio_field, "A")
 
     def test_sim_a_20s_then_join_b_via_operator_path(self):
         """~20s of Field A (flat), then operator join B; every test on both fields finishes."""

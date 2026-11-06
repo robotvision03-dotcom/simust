@@ -58,11 +58,15 @@ class FinishBallsTests(unittest.TestCase):
         self.assertNotIn("Entry", cards["A"]["text"])
         self.assertIn("1.80 S", cards["A"]["text"])
         self.assertIn("8 Actions", cards["A"]["text"])
-        self.assertEqual(cards["B"]["text"].split("\n"), ["S1.T3", "6 Actions"])
+        self.assertEqual(
+            cards["B"]["text"].split("\n"),
+            ["Numbers", "C2.T3", "6 Actions"],
+        )
         self.assertNotIn("Entry", cards["B"]["text"])
         self.assertNotIn("14.40", cards["B"]["text"])
-        self.assertEqual(cards["A"]["bg"], (0, 0, 0))
-        self.assertEqual(cards["B"]["bg"], (0, 0, 0))
+        # Each field keeps its band brand fill (Foundation green / Entry light).
+        self.assertEqual(cards["A"]["bg"], (125, 255, 168))
+        self.assertEqual(cards["B"]["bg"], (241, 243, 245))
         self.assertNotEqual(cards["A"]["fg"], cards["B"]["fg"])
 
     def test_simulator_accuracy_runs_100_80_50_20_100(self):
@@ -165,15 +169,81 @@ class FinishBallsTests(unittest.TestCase):
     def test_mode2_timeout_fillers_excluded_from_aet(self):
         rows = [
             {"id": "S1", "action": "PASS", "result": "Correct", "movement": 100,
-             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 12},
+             "finish_balls": True, "mode2_sim": True,
+             "balls_budget_sec": 60, "balls_clock_sec": 12},
             {"id": "S2", "action": "PASS", "result": "Correct", "movement": 100,
-             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 24},
+             "finish_balls": True, "mode2_sim": True,
+             "balls_budget_sec": 60, "balls_clock_sec": 24},
             {"id": "T1a3", "action": "PASS", "result": "Wrong", "movement": 0,
-             "finish_balls": True, "balls_budget_sec": 60, "balls_clock_sec": 60, "ae": 3.0},
+             "finish_balls": True, "mode2_sim": True,
+             "balls_budget_sec": 60, "balls_clock_sec": 60, "ae": 3.0},
         ]
         clock = finish_balls_clock(rows, mode=2)
         self.assertEqual(clock["aet"], 24.0)
         self.assertAlmostEqual(clock["aet_percent"], (1.0 - 24.0 / 60.0) * 100.0)
+
+    def test_ten_of_twelve_never_reports_full_accuracy(self):
+        """World Class / Elite: 10 Correct of 12 must not show 100% AAC."""
+        from app import summarize_results_section_metrics, _overlay_shared_score_metrics
+
+        field_a = [
+            {
+                "id": f"S{i}",
+                "field": "A",
+                "action": "PASS",
+                "result": "Correct",
+                "screens": [f"A{(i % 6) + 1}"],
+                "finish_balls": True,
+                "combined_field": True,
+                "actions_in_set": 12,
+                "balls_budget_sec": 48.6,
+                "balls_clock_sec": float(i),
+                "movement": 100,
+                "video_index": 1,
+            }
+            for i in range(1, 7)
+        ]
+        field_b = [
+            {
+                "id": f"S{i + 10}",
+                "field": "B",
+                "action": "PASS",
+                "result": "Correct",
+                "screens": [f"B{(i % 6) + 1}"],
+                "finish_balls": True,
+                "combined_field": True,
+                "actions_in_set": 12,
+                "balls_budget_sec": 48.6,
+                "balls_clock_sec": float(i + 6),
+                "movement": 100,
+                "video_index": 1,
+            }
+            for i in range(1, 5)
+        ]
+        field_b.append({
+            "id": "T1a12",
+            "field": "B",
+            "action": "PASS",
+            "result": "Wrong",
+            "screens": ["B4"],
+            "finish_balls": True,
+            "combined_field": True,
+            "actions_in_set": 12,
+            "balls_budget_sec": 48.6,
+            "balls_clock_sec": 48.6,
+            "movement": 0,
+            "video_index": 1,
+        })
+        # One half alone keeps its own count; rings use the merged board.
+        alone = summarize_results_section_metrics(field_a)
+        self.assertAlmostEqual(alone["aac"], 100.0)
+        merged = summarize_results_section_metrics(field_a + field_b)
+        self.assertAlmostEqual(merged["aac"], (10 / 12) * 100.0)
+        self.assertEqual(merged["correct"], 10)
+        self.assertEqual(merged["total_actions"], 12)
+        overlaid = _overlay_shared_score_metrics(alone, merged)
+        self.assertAlmostEqual(overlaid["aac"], (10 / 12) * 100.0)
+        self.assertLess(overlaid["aac"], 100.0)
 
 
 if __name__ == "__main__":

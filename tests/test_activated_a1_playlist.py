@@ -48,7 +48,7 @@ class ActivatedA1PlaylistTests(unittest.TestCase):
     def test_opening_card_shows_a1_label(self):
         name, series = player._level_display_parts("L02-Activated/S2.T2")
         self.assertEqual(name, "Activated")
-        self.assertEqual(series, "S2.T2")
+        self.assertEqual(series, "C2.T2")
 
     def test_opening_card_shows_s_label_and_actions_only(self):
         text = player._level_card_text(
@@ -57,7 +57,7 @@ class ActivatedA1PlaylistTests(unittest.TestCase):
             {"test_num": 2, "on_ms": 3000, "actions_in_set": 6, "budget_ms": 18000, "finish_balls": True},
             [],
         )
-        self.assertEqual(text.split("\n"), ["S1.T1", "6 Actions"])
+        self.assertEqual(text.split("\n"), ["Numbers", "C1.T1", "6 Actions"])
         self.assertNotIn("Activated", text)
         self.assertNotIn("18.00", text)
         a1 = player._level_card_text(
@@ -66,7 +66,7 @@ class ActivatedA1PlaylistTests(unittest.TestCase):
             {"test_num": 5, "on_ms": 2700, "actions_in_set": 6},
             [],
         )
-        self.assertEqual(a1.split("\n"), ["S2.T2", "6 Actions"])
+        self.assertEqual(a1.split("\n"), ["Divergent", "C2.T2", "6 Actions"])
 
     def test_opening_logos_exist_for_all_bands(self):
         expected = {

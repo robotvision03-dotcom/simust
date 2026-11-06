@@ -118,8 +118,15 @@ def normalize_field(value) -> Optional[str]:
 
 
 def canonical_screen(raw) -> Optional[str]:
-    """Screen name A1–A6 or B1–B6. Old cabinet numbers still map to these names."""
+    """Screen name A1–A6 or B1–B6. Old cabinet numbers still map to these names.
+
+    Side targets (A3R / B2L) map to the parent cabinet tile for display.
+    """
     text = str(raw or "").strip().upper()
+    if len(text) >= 3 and text[0] in ("A", "B") and text[-1] in ("L", "R"):
+        body = text[:-1]
+        if body[1:].isdigit():
+            text = body
     if text in FIELD_A_SCREENS or text in FIELD_B_SCREENS:
         return text
     if len(text) >= 2 and text[0] in ("A", "B") and text[1:].isdigit():

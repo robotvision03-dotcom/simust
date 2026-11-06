@@ -383,6 +383,12 @@ SCREEN_CORRECT_THRESHOLDS = {
     '1': 13,  '8': 13,
     '9L': 40,   '6L': 40,
 }
+# Activated Players L/R side goals inherit the parent cabinet threshold.
+for _cab, _thresh in list(SCREEN_CORRECT_THRESHOLDS.items()):
+    if str(_cab).endswith(("L", "R")):
+        continue
+    for _side in ("L", "R"):
+        SCREEN_CORRECT_THRESHOLDS.setdefault(f"{_cab}{_side}", int(_thresh))
 
 # Screen-specific thresholds for PRESS
 PRESS_SCREEN_THRESHOLDS = {
@@ -396,7 +402,8 @@ GOAL_SCREEN_THRESHOLDS = {
     '7': 73,  # Field B right-edge goal / keypoint area
 }
 
-# Goal lines for 1280x360 (defaults; Settings calibration can override A1–A6 / B1–B6)
+# Goal lines for 1280x360 (defaults; Settings calibration can override A1–A6 / B1–B6
+# plus Activated Players L/R side goals A1L…A6R / B1L…B6R).
 GOAL_LINES = {
     "1": {"p0": (629, 293), "p1":  (12, 285)},
     "2": {"p0": (2, 298), "p1": (3, 253)},
@@ -415,6 +422,55 @@ GOAL_LINES = {
     "9L": {"p0": (642, 241), "p1": (647, 191)},
     "6L": {"p0": (1262, 181), "p1": (1273, 222)},
 }
+
+
+def _seed_side_goal_halves(goal_lines: dict) -> None:
+    """Fill missing cabinet L/R halves from the parent mouth (software defaults)."""
+    # Screen 1 = L only, screen 6 = R only, screens 2–5 = both.
+    side_map = {
+        "12": ("L",),      # A1
+        "13": ("L", "R"),  # A2
+        "14": ("L", "R"),  # A3
+        "2": ("L", "R"),   # A4
+        "3": ("L", "R"),   # A5
+        "4": ("R",),       # A6
+        "5": ("L",),       # B1
+        "6": ("L", "R"),   # B2
+        "7": ("L", "R"),   # B3
+        "9": ("L", "R"),   # B4
+        "10": ("L", "R"),  # B5
+        "11": ("R",),      # B6
+    }
+    for cab, sides in side_map.items():
+        parent = goal_lines.get(cab)
+        if not parent:
+            continue
+        try:
+            x0, y0 = float(parent["p0"][0]), float(parent["p0"][1])
+            x1, y1 = float(parent["p1"][0]), float(parent["p1"][1])
+        except Exception:
+            continue
+        mx, my = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+        for side in sides:
+            key = f"{cab}{side}"
+            if key in goal_lines:
+                continue
+            if side == "L":
+                a, b = (x0, y0), (mx, my)
+            else:
+                a, b = (mx, my), (x1, y1)
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            length = (dx * dx + dy * dy) ** 0.5
+            if length < 20.0 and length > 1e-6:
+                scale = 20.0 / length
+                cx, cy = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
+                hx, hy = dx * 0.5 * scale, dy * 0.5 * scale
+                a = (cx - hx, cy - hy)
+                b = (cx + hx, cy + hy)
+            goal_lines[key] = {"p0": a, "p1": b}
+
+
+_seed_side_goal_halves(GOAL_LINES)
 
 _BUILTIN_GOAL_LINES = {k: dict(v) for k, v in GOAL_LINES.items()}
 
@@ -1285,27 +1341,54 @@ def find_min_distance_to_screens(positions, screens, goal_lines, require_movemen
 
     return best_screen, best_dist, best_time, best_proj_t
 
+def _field_a_pair_cabinet(screen: str) -> str:
+    """Map a Field B cabinet/side id onto its Field A pair (B2→13, B2L→13L).
+
+    Cylinder volume and accept depth on B must match the matching A screen.
+    """
+    geom = geometry_screen_id(screen)
+    if not geom:
+        return ""
+    base = geom.rstrip("LR")
+    side = geom[len(base):] if geom != base else ""
+    # Defined later; fall back safely if import order ever changes.
+    pair_map = globals().get("_B_TO_A_CABINET") or {}
+    a_base = pair_map.get(base, base)
+    return f"{a_base}{side}"
+
+
 def get_threshold_for_screen(screen: str, action_type: str) -> float:
     screen = geometry_screen_id(screen)
+    # Size/accept depth: Field B uses the matching Field A threshold.
+    paired = _field_a_pair_cabinet(screen) or screen
+    keys = []
+    for key in (paired, screen):
+        if key and key not in keys:
+            keys.append(key)
+        base = str(key or "").rstrip("LR")
+        if base and base not in keys:
+            keys.append(base)
+
     if action_type == 'PRESS':
-        if screen in PRESS_SCREEN_THRESHOLDS:
-            return PRESS_SCREEN_THRESHOLDS[screen]
-        base = screen.rstrip('LR')
-        return PRESS_SCREEN_THRESHOLDS.get(base, 100)
+        for key in keys:
+            if key in PRESS_SCREEN_THRESHOLDS:
+                return PRESS_SCREEN_THRESHOLDS[key]
+        return 100
 
     if action_type == 'GOAL':
-        if screen in GOAL_SCREEN_THRESHOLDS:
-            return GOAL_SCREEN_THRESHOLDS[screen]
-        if screen in SCREEN_CORRECT_THRESHOLDS:
-            return SCREEN_CORRECT_THRESHOLDS[screen]
-        base = screen.rstrip('LR')
-        return SCREEN_CORRECT_THRESHOLDS.get(base, CORRECT_THRESHOLD)
+        for key in keys:
+            if key in GOAL_SCREEN_THRESHOLDS:
+                return GOAL_SCREEN_THRESHOLDS[key]
+        for key in keys:
+            if key in SCREEN_CORRECT_THRESHOLDS:
+                return SCREEN_CORRECT_THRESHOLDS[key]
+        return CORRECT_THRESHOLD
 
     # PASS, TARGET
-    if screen in SCREEN_CORRECT_THRESHOLDS:
-        return SCREEN_CORRECT_THRESHOLDS[screen]
-    base = screen.rstrip('LR')
-    return SCREEN_CORRECT_THRESHOLDS.get(base, CORRECT_THRESHOLD)
+    for key in keys:
+        if key in SCREEN_CORRECT_THRESHOLDS:
+            return SCREEN_CORRECT_THRESHOLDS[key]
+    return CORRECT_THRESHOLD
 
 # ============================================================================
 # GOAL-specific late search – no time limit, no filtering, no movement check
@@ -1822,34 +1905,58 @@ _B_TO_A_CABINET = {
     "11": "4",   # B6 → A6
     "8": "1",    # B goal mouth → A goal mouth when present
 }
-# Screens 2–5: extra size, then −10%, then another −10%.
-_SCREEN_2_AND_5_CABINETS = frozenset({"13", "3", "6", "10"})
-_SCREEN_2_TO_5_CABINETS = frozenset({"13", "14", "2", "3", "6", "7", "9", "10"})
-_SCREEN_2_CABINETS = frozenset({"13", "6"})  # Field A2 and Field B2
+# Keep Field B accept depths identical to the matching Field A screen.
+for _b_cab, _a_cab in list(_B_TO_A_CABINET.items()):
+    if _a_cab in SCREEN_CORRECT_THRESHOLDS:
+        SCREEN_CORRECT_THRESHOLDS[_b_cab] = int(SCREEN_CORRECT_THRESHOLDS[_a_cab])
+    for _side in ("L", "R"):
+        a_side = f"{_a_cab}{_side}"
+        b_side = f"{_b_cab}{_side}"
+        if a_side in SCREEN_CORRECT_THRESHOLDS:
+            SCREEN_CORRECT_THRESHOLDS[b_side] = int(SCREEN_CORRECT_THRESHOLDS[a_side])
+# Screens 2–5: extra size, then −10%, then another −10% (Field A cabinets;
+# Field B sizes through _sizing_endpoints → A pair).
+_SCREEN_2_AND_5_CABINETS = frozenset({"13", "3"})
+_SCREEN_2_TO_5_CABINETS = frozenset({"13", "14", "2", "3"})
+_SCREEN_2_CABINETS = frozenset({"13"})  # Field A2 (B2 mirrors this)
 _FINISH_CIRCLE_EXTRA = 1.15
 _FINISH_CIRCLE_MORE = 1.10
 _FINISH_CIRCLE_SHRINK = 0.90 * 0.90
 _FINISH_CYLINDER_SCREEN2 = 1.10
 
 
-def _sizing_endpoints(p0, p1):
-    """Endpoints used for cylinder size. Field B mirrors its Field A pair."""
-    if p0 is None or p1 is None:
-        return p0, p1
-    cabinet = _cabinet_for_line(p0, p1)
-    if not cabinet:
-        return p0, p1
-    base = str(cabinet).rstrip("LR")
-    pair = _B_TO_A_CABINET.get(base)
+def _sizing_endpoints(p0, p1, screen=None):
+    """Endpoints used for cylinder size. Field B mirrors its Field A pair.
+
+    Prefer the screen id (B2→A2/13) so calibrated B lines still size like A.
+    Fall back to matching the drawn segment against GOAL_LINES.
+    """
+    pair = None
+    side = ""
+    if screen is not None:
+        paired = _field_a_pair_cabinet(screen)
+        if paired:
+            base = paired.rstrip("LR")
+            side = paired[len(base):] if paired != base else ""
+            pair = base
+    if not pair and p0 is not None and p1 is not None:
+        cabinet = _cabinet_for_line(p0, p1)
+        if cabinet:
+            base = str(cabinet).rstrip("LR")
+            side = str(cabinet)[len(base):] if str(cabinet) != base else ""
+            pair = _B_TO_A_CABINET.get(base) or (
+                base if base in _FIELD_A_CABINETS else None
+            )
     if not pair:
         return p0, p1
-    line = GOAL_LINES.get(pair)
-    if not isinstance(line, dict):
-        return p0, p1
-    a0, a1 = line.get("p0"), line.get("p1")
-    if a0 is None or a1 is None:
-        return p0, p1
-    return a0, a1
+    for key in (f"{pair}{side}", pair):
+        line = GOAL_LINES.get(key)
+        if not isinstance(line, dict):
+            continue
+        a0, a1 = line.get("p0"), line.get("p1")
+        if a0 is not None and a1 is not None:
+            return a0, a1
+    return p0, p1
 
 
 def _finish_circle_boost(p0, p1) -> float:
@@ -1895,16 +2002,17 @@ def finish_zone_scale(p0, p1):
     return min(1.0, max(0.35, this_len / ref_len))
 
 
-def goal_circle_radius(depth, p0=None, p1=None):
+def goal_circle_radius(depth, p0=None, p1=None, screen=None):
     """Radius of the goal circle drawn on the goal-line midpoint.
 
     Field B uses the matching Field A screen's scale so cylinder size matches A.
     """
     radius = max(4.0, float(depth) * GOAL_CIRCLE_SCALE)
-    if p0 is not None and p1 is not None:
-        sp0, sp1 = _sizing_endpoints(p0, p1)
-        radius *= finish_zone_scale(sp0, sp1)
-        radius *= _finish_circle_boost(sp0, sp1)
+    if p0 is not None and p1 is not None or screen is not None:
+        sp0, sp1 = _sizing_endpoints(p0, p1, screen=screen)
+        if sp0 is not None and sp1 is not None:
+            radius *= finish_zone_scale(sp0, sp1)
+            radius *= _finish_circle_boost(sp0, sp1)
     return max(4.0, radius)
 
 
@@ -1934,33 +2042,35 @@ def draw_finish_cylinder(img, cx, cy, radius, height=FINISH_CYLINDER_HEIGHT_PX, 
     cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 180, edge, 2)
 
 
-def finish_cylinder_height_sim(p0=None, p1=None):
+def finish_cylinder_height_sim(p0=None, p1=None, screen=None):
     """Cylinder height in SIM pixels (matches the 31px overlay on a 360p frame).
 
     Field B mirrors the matching Field A screen (same as goal_circle_radius).
     """
     height = float(FINISH_CYLINDER_HEIGHT_PX)
-    if p0 is None or p1 is None:
+    sp0, sp1 = _sizing_endpoints(p0, p1, screen=screen)
+    if sp0 is None or sp1 is None:
         return height
-    sp0, sp1 = _sizing_endpoints(p0, p1)
     cabinet = _cabinet_for_line(sp0, sp1)
+    if not cabinet and screen is not None:
+        cabinet = _field_a_pair_cabinet(screen)
     if cabinet and str(cabinet).rstrip("LR") in _SCREEN_2_CABINETS:
         height *= _FINISH_CYLINDER_SCREEN2
     return height
 
 
-def in_finish_cylinder(point, p0, p1, depth):
+def in_finish_cylinder(point, p0, p1, depth, screen=None):
     """True when the point is inside the green finish cylinder (circle + shaft + top)."""
     if p0 is None or p1 is None or point is None:
         return False
     cx, cy = goal_circle_center(p0, p1)
-    radius = goal_circle_radius(depth, p0, p1)
+    radius = goal_circle_radius(depth, p0, p1, screen=screen)
     px, py = float(point[0]), float(point[1])
     dx = px - cx
     dy = py - cy
     if math.hypot(dx, dy) <= radius:
         return True
-    height = finish_cylinder_height_sim(p0, p1)
+    height = finish_cylinder_height_sim(p0, p1, screen=screen)
     top_cy = cy - height
     ry = max(3.0, radius * 0.35)
     if abs(dx) <= radius and top_cy <= py <= cy:
@@ -2679,8 +2789,59 @@ def _read_flag_file(path):
         return None
 
 
+def parse_visualization_fields(content) -> dict:
+    """Map visualization.txt to per-field flags. Legacy true/false means both."""
+    raw = str(content or "").strip()
+    if not raw:
+        return {"A": False, "B": False}
+    lower = raw.lower()
+    if lower in ("true", "1", "yes", "on"):
+        return {"A": True, "B": True}
+    if lower in ("false", "0", "no", "off"):
+        return {"A": False, "B": False}
+    if raw[:1] == "{":
+        try:
+            data = json.loads(raw) or {}
+        except Exception:
+            return {"A": False, "B": False}
+        return {
+            "A": bool(data.get("A") or data.get("a")),
+            "B": bool(data.get("B") or data.get("b")),
+        }
+    tokens = {
+        part.strip().upper()[:1]
+        for part in raw.replace(";", ",").split(",")
+        if part.strip()
+    }
+    return {"A": "A" in tokens, "B": "B" in tokens}
+
+
+def read_visualization_fields() -> dict:
+    try:
+        if not os.path.exists(VIZ_FILE):
+            return {"A": False, "B": False}
+        with open(VIZ_FILE, "r", encoding="utf-8") as handle:
+            return parse_visualization_fields(handle.read())
+    except Exception:
+        return {"A": False, "B": False}
+
+
 def read_visualization_setting():
-    return _read_flag_file(VIZ_FILE)
+    """True when either field's camera vis is on (legacy callers)."""
+    fields = read_visualization_fields()
+    return bool(fields.get("A") or fields.get("B"))
+
+
+def _players_fields_manual_coach() -> bool:
+    try:
+        path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+        if not os.path.isfile(path):
+            return False
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        return bool(data.get("manual_coach"))
+    except Exception:
+        return False
 
 
 def parse_simulation_fields(content) -> dict:
@@ -4062,8 +4223,10 @@ class SimustRealtimeCamera:
         self.simulators = {"A": self.simulator_a, "B": self.simulator_b}
         both_sim = bool(self.simulation_fields["A"] and self.simulation_fields["B"])
         self.tracker = DetectionTracker(require_models=not both_sim)
-        viz = read_visualization_setting()
-        self.visualization_enabled = bool(viz)
+        self.visualization_fields = read_visualization_fields()
+        self.visualization_enabled = bool(
+            self.visualization_fields.get("A") or self.visualization_fields.get("B")
+        )
 
         self.session_lock = threading.RLock()
         self._live_file_lock = threading.Lock()
@@ -4165,7 +4328,11 @@ class SimustRealtimeCamera:
         print(f"Pose model: {POSE_ENGINE_PATH if os.path.exists(POSE_ENGINE_PATH) else 'Not found – pose will be skipped'}")
         print(f"Detection Confidence: {DETECTION_CONF}")
         print(f"Recordings: {DEFAULT_RECORDINGS_DIR}")
-        print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
+        print(
+            "Visualization: "
+            f"A={'ON' if self.visualization_fields.get('A') else 'OFF'} "
+            f"B={'ON' if self.visualization_fields.get('B') else 'OFF'}"
+        )
         print(
             "Arena simulation: "
             f"A={'ON' if self.simulation_fields.get('A') else 'OFF'} "
@@ -4603,10 +4770,14 @@ class SimustRealtimeCamera:
         for screen_str in candidates:
             geom = geometry_screen_id(screen_str)
             base = geom.rstrip("LR")
+            side = geom[len(base):] if geom != base else ""
             if use_keypoints_only and base not in GOAL_MOUTH_SCREENS and geom not in GOAL_MOUTH_SCREENS:
                 continue
             if geom in GOAL_LINES:
                 lines[screen_str] = GOAL_LINES[geom]
+            elif side and base in GOAL_LINES:
+                # Prefer a calibrated side mouth; otherwise fall back to full mouth.
+                lines[screen_str] = GOAL_LINES[base]
             elif base in GOAL_LINES:
                 lines[screen_str] = GOAL_LINES[base]
         # GOAL / TARGET / PASS always need software lines for listed screens
@@ -4614,7 +4785,9 @@ class SimustRealtimeCamera:
             for screen_str in candidates:
                 geom = geometry_screen_id(screen_str)
                 base = geom.rstrip("LR")
-                if screen_str not in lines and base in GOAL_LINES:
+                if screen_str not in lines and geom in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[geom]
+                elif screen_str not in lines and base in GOAL_LINES:
                     lines[screen_str] = GOAL_LINES[base]
         # Always expose mouth geometry when any mouth id is present
         for screen_str in candidates:
@@ -4768,7 +4941,8 @@ class SimustRealtimeCamera:
     def schedule_session_start(self, action, screens, keypoints, block_id, detected_time_str, detected_timestamp, ch,
                                paired_session_start=None, paired_offset_str=None, on_sec=None, efficiency_max_sec=None,
                                finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None,
-                               action_in_set=None, actions_in_set=None, test_num=None):
+                               action_in_set=None, actions_in_set=None, test_num=None,
+                               combined_field=False):
         offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, _start_offset_seconds())
         with self.session_lock:
             ch.pending_start = {
@@ -4781,6 +4955,8 @@ class SimustRealtimeCamera:
                 "detected_timestamp": detected_timestamp,
                 "field": ch.field_id,
             }
+            if combined_field:
+                ch.pending_start["combined_field"] = True
             if on_sec is not None:
                 try:
                     cap = 3600.0 if finish_balls else 60.0
@@ -4997,6 +5173,24 @@ class SimustRealtimeCamera:
         sim = (getattr(self, "simulators", None) or {}).get(ch.field_id)
         mode2_sim = bool(sim is not None and getattr(sim, "always_correct", False))
         qr_block = getattr(ch, "current_qr_block", None) or {}
+        # Stamp playlist length so results rings cannot treat a short file as 100%.
+        try:
+            actions_in_set = int(
+                (action_data or {}).get("actions_in_set")
+                or qr_block.get("actions_in_set")
+                or (ch.pending_analysis or {}).get("actions_in_set")
+                or 0
+            )
+        except (TypeError, ValueError):
+            actions_in_set = 0
+        if actions_in_set > 0:
+            result_entry["actions_in_set"] = actions_in_set
+        if (
+            bool((action_data or {}).get("combined_field"))
+            or bool(qr_block.get("combined_field"))
+            or bool((ch.pending_analysis or {}).get("combined_field"))
+        ):
+            result_entry["combined_field"] = True
         finish_balls = bool(
             analysis_result.get("finish_balls")
             or (action_data or {}).get("finish_balls")
@@ -5601,6 +5795,8 @@ class SimustRealtimeCamera:
                 ch.current_qr_block["actions_in_set"] = p.get("actions_in_set")
             if p.get("test_num") is not None:
                 ch.current_qr_block["test_num"] = p.get("test_num")
+            if p.get("combined_field"):
+                ch.current_qr_block["combined_field"] = True
             hold_frames = max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
             ch.keypoint_hold_frames = hold_frames
             ch.keypoint_frames_shown = 0
@@ -5642,8 +5838,13 @@ class SimustRealtimeCamera:
                 depth = arrival_depth_for(str(screen_name), action)
                 cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
                 cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
-                radius = max(4, int(round(goal_circle_radius(depth, (x1, y1), (x2, y2)) * min(sx, sy))))
-                height_px = max(8, int(round(finish_cylinder_height_sim((x1, y1), (x2, y2)) * sy)))
+                radius = max(4, int(round(
+                    goal_circle_radius(depth, (x1, y1), (x2, y2), screen=screen_name)
+                    * min(sx, sy)
+                )))
+                height_px = max(8, int(round(
+                    finish_cylinder_height_sim((x1, y1), (x2, y2), screen=screen_name) * sy
+                )))
                 draw_finish_cylinder(overlay, cx, cy, radius, height=height_px)
                 drew_band = True
                 line_marks.append((
@@ -5724,15 +5925,18 @@ class SimustRealtimeCamera:
             was_cue_off = bool(getattr(ch, "_image_cue_was_off", False))
             if not field_on:
                 ch._image_cue_was_off = True
-                # Opening silenced this half: do not let a pending appear finish
-                # after the cue no longer lists the field (premature cylinder).
-                if not ch.session_active:
-                    if ch.kp_appear_frames_left is not None or ch._pending_cue_info is not None:
-                        ch.kp_appear_frames_left = None
-                        ch._pending_cue_info = None
-                        ch._frame_sync_cue_raw = None
-                    if ch.pending_start:
-                        ch.pending_start = None
+                # Results / beginning-info / starting video silence this half in the
+                # cue. Drop pending appear AND any live finish_balls session — a
+                # leftover active session kept drawing the cylinder through rings
+                # and intro clips (Entry S1 Field A).
+                if ch.kp_appear_frames_left is not None or ch._pending_cue_info is not None:
+                    ch.kp_appear_frames_left = None
+                    ch._pending_cue_info = None
+                    ch._frame_sync_cue_raw = None
+                if ch.pending_start:
+                    ch.pending_start = None
+                if ch.session_active or ch.active_goal_lines:
+                    self._clear_goal_area_now(ch, current_timestamp)
             else:
                 ch._image_cue_was_off = False
 
@@ -5793,23 +5997,33 @@ class SimustRealtimeCamera:
                         for name, data in (ch.active_goal_lines or {}).items()
                         if str(name) not in removed and str(name) not in scored
                     }
-                    if added:
+                    # Manual: delay NEW cylinders with Foundation appear shift so
+                    # they land with the wall pass (do not draw ahead of the image).
+                    pending_add = []
+                    if manual_coach and added:
+                        pending_add = list(added)
+                    elif added:
                         extra = self.get_goal_lines(
                             added, hit.get("action") or ch.current_action or "PASS", []
                         )
                         lines.update(extra or {})
-                    # Re-draw any lit screens that lost their line after a wipe.
+                    # Re-draw any lit screens that lost their line after a wipe
+                    # (non-Manual finish_balls only — Manual waits on appear).
                     missing = [
                         s for s in new_screens
-                        if s not in lines and s not in scored
+                        if s not in lines and s not in scored and s not in pending_add
                     ]
-                    if missing:
+                    if missing and not manual_coach:
                         extra = self.get_goal_lines(
                             missing,
                             hit.get("action") or ch.current_action or "PASS",
                             [],
                         )
                         lines.update(extra or {})
+                    elif missing and manual_coach:
+                        for s in missing:
+                            if s not in pending_add:
+                                pending_add.append(s)
                     ch.active_goal_lines = lines
                     ch.current_screens = list(new_screens)
                     if isinstance(ch.current_qr_block, dict):
@@ -5827,7 +6041,27 @@ class SimustRealtimeCamera:
                             ch._display_seq = new_seq
                     except (TypeError, ValueError):
                         pass
-                    if self._field_is_simulated(fid):
+                    if pending_add:
+                        on_sec = hit.get("on_sec")
+                        if on_sec is None:
+                            on_sec = _cue_on_sec(cue)
+                        hold_frames = _on_hold_frames(on_sec)
+                        ch._pending_cue_info = {
+                            "manual_add_only": True,
+                            "action": hit.get("action") or ch.current_action or "PASS",
+                            "screens": list(pending_add),
+                            "all_screens": list(new_screens),
+                            "on_sec": on_sec,
+                            "hold_frames": hold_frames,
+                            "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
+                        }
+                        ch.kp_appear_frames_left = shift
+                        just_armed = True
+                        print(
+                            f"[{ch.label}] manual soft-add {pending_add} "
+                            f"→ cylinder in {shift}f (Foundation sync)"
+                        )
+                    elif self._field_is_simulated(fid):
                         self._manual_or_finish_retarget_sim(
                             fid,
                             ch,
@@ -5835,13 +6069,14 @@ class SimustRealtimeCamera:
                             scored,
                             force=bool(added or missing),
                         )
-                    print(
-                        f"[{ch.label}] finish_balls soft-update screens "
-                        f"{old_screens} → {new_screens} (cylinders kept)"
-                    )
+                    if not pending_add:
+                        print(
+                            f"[{ch.label}] finish_balls soft-update screens "
+                            f"{old_screens} → {new_screens} (cylinders kept)"
+                        )
                 else:
-                    # Manual coach: never wipe live cylinders on a cue rewrite —
-                    # merge / re-arm instead so pass images stay matched.
+                    # Manual coach: keep live cylinders; delay only NEW screens
+                    # with the Foundation appear shift (pass + cylinder together).
                     if ch.session_active and (finish_balls or manual_coach) and manual_coach and new_screens:
                         ch._frame_sync_cue_raw = cue_raw
                         lines = dict(ch.active_goal_lines or {})
@@ -5849,13 +6084,6 @@ class SimustRealtimeCamera:
                             s for s in new_screens
                             if s not in lines and s not in scored
                         ]
-                        if missing:
-                            extra = self.get_goal_lines(
-                                missing,
-                                hit.get("action") or ch.current_action or "PASS",
-                                [],
-                            )
-                            lines.update(extra or {})
                         removed = set(old_screens) - set(new_screens)
                         if removed:
                             lines = {
@@ -5867,14 +6095,35 @@ class SimustRealtimeCamera:
                         ch.current_screens = list(new_screens)
                         if isinstance(ch.current_qr_block, dict):
                             ch.current_qr_block["screens"] = list(new_screens)
-                        if self._field_is_simulated(fid):
+                        if missing:
+                            on_sec = hit.get("on_sec")
+                            if on_sec is None:
+                                on_sec = _cue_on_sec(cue)
+                            hold_frames = _on_hold_frames(on_sec)
+                            ch._pending_cue_info = {
+                                "manual_add_only": True,
+                                "action": hit.get("action") or ch.current_action or "PASS",
+                                "screens": list(missing),
+                                "all_screens": list(new_screens),
+                                "on_sec": on_sec,
+                                "hold_frames": hold_frames,
+                                "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
+                            }
+                            ch.kp_appear_frames_left = shift
+                            just_armed = True
+                            print(
+                                f"[{ch.label}] manual merge-add {missing} "
+                                f"→ cylinder in {shift}f (Foundation sync)"
+                            )
+                        elif self._field_is_simulated(fid):
                             self._manual_or_finish_retarget_sim(
                                 fid, ch, list(new_screens), scored, force=True
                             )
-                        print(
-                            f"[{ch.label}] manual_coach merge screens "
-                            f"{old_screens} → {new_screens} (no wipe)"
-                        )
+                        if not missing:
+                            print(
+                                f"[{ch.label}] manual_coach merge screens "
+                                f"{old_screens} → {new_screens} (no wipe)"
+                            )
                     else:
                         if ch.session_active and finish_balls and not manual_coach:
                             self._clear_goal_area_now(ch, current_timestamp)
@@ -5902,13 +6151,20 @@ class SimustRealtimeCamera:
                             "action_in_set": hit.get("action_in_set") if hit.get("action_in_set") is not None else (cue or {}).get("action_in_set"),
                             "actions_in_set": hit.get("actions_in_set") if hit.get("actions_in_set") is not None else (cue or {}).get("actions_in_set"),
                             "test_num": hit.get("test_num") if hit.get("test_num") is not None else (cue or {}).get("test_num"),
+                            "combined_field": bool(
+                                hit.get("combined_field")
+                                if hit.get("combined_field") is not None
+                                else (cue or {}).get("combined_field")
+                            ),
                             "raw": cue_raw,
                             "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
                             "hold_frames": hold_frames,
                         }
-                        # Manual coach needs the cylinder as soon as the pass still
-                        # lights — skip the normal ~0.85s appear delay.
-                        appear = 1 if manual_coach else shift
+                        # Same appear delay as playlist actions (~0.85s). Manual
+                        # used appear=1 briefly and the cylinder beat the pass
+                        # image onto the wall; restore shared timing so both show
+                        # together (pre–Oct 28 Manual behaviour).
+                        appear = shift
                         ch.kp_appear_frames_left = appear
                         just_armed = True
                         recover_note = " [recover after stale]" if recover_after_stale else ""
@@ -5924,6 +6180,47 @@ class SimustRealtimeCamera:
                     info = ch._pending_cue_info or {}
                     ch.kp_appear_frames_left = None
                     ch._pending_cue_info = None
+                    # Manual soft-add: only light new cylinders after Foundation
+                    # appear delay — keep the existing session (do not restart).
+                    if info.get("manual_add_only") and ch.session_active:
+                        add_screens = [str(s) for s in (info.get("screens") or [])]
+                        scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
+                        add_screens = [s for s in add_screens if s not in scored]
+                        if add_screens:
+                            extra = self.get_goal_lines(
+                                add_screens,
+                                info.get("action") or ch.current_action or "PASS",
+                                [],
+                            )
+                            lines = dict(ch.active_goal_lines or {})
+                            lines.update(extra or {})
+                            ch.active_goal_lines = lines
+                        all_screens = [
+                            str(s) for s in (info.get("all_screens") or ch.current_screens or [])
+                        ]
+                        if all_screens:
+                            ch.current_screens = list(all_screens)
+                            if isinstance(ch.current_qr_block, dict):
+                                ch.current_qr_block["screens"] = list(all_screens)
+                        try:
+                            new_seq = int(info.get("seq") or 0)
+                            if new_seq:
+                                ch._display_seq = new_seq
+                        except (TypeError, ValueError):
+                            pass
+                        if self._field_is_simulated(fid):
+                            self._manual_or_finish_retarget_sim(
+                                fid,
+                                ch,
+                                list(ch.current_screens or []),
+                                scored,
+                                force=True,
+                            )
+                        print(
+                            f"[{ch.label}] manual cylinder sync with pass "
+                            f"on {add_screens or all_screens}"
+                        )
+                        continue
                     if ch.session_active:
                         ch.kp_clear_frames_left = None
                         with self.session_lock:
@@ -5966,6 +6263,7 @@ class SimustRealtimeCamera:
                         action_in_set=info.get("action_in_set"),
                         actions_in_set=info.get("actions_in_set"),
                         test_num=info.get("test_num"),
+                        combined_field=bool(info.get("combined_field")),
                     )
                     with self.session_lock:
                         if ch.pending_start:
@@ -6865,7 +7163,7 @@ class SimustRealtimeCamera:
             os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
             tmp = VIZ_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
-                handle.write("false")
+                handle.write(json.dumps({"A": False, "B": False}, separators=(",", ":")))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, VIZ_FILE)
@@ -6873,6 +7171,7 @@ class SimustRealtimeCamera:
             pass
 
     def _on_viz_window_closed_by_user(self):
+        self.visualization_fields = {"A": False, "B": False}
         self.visualization_enabled = False
         self.window_created = False
         self._viz_seen_visible = False
@@ -6880,6 +7179,25 @@ class SimustRealtimeCamera:
         self._persist_visualization_off()
         self._close_viz_window()
         print("Camera feed closed (X) — visualization off")
+
+    def _mask_visualization_half(self, frame):
+        """Black out halves the operator did not enable (Area A / Area B)."""
+        if frame is None:
+            return frame
+        want_a = bool((self.visualization_fields or {}).get("A"))
+        want_b = bool((self.visualization_fields or {}).get("B"))
+        if want_a and want_b:
+            return frame
+        if not want_a and not want_b:
+            return frame
+        h, w = frame.shape[:2]
+        mid = w // 2
+        out = frame.copy()
+        if not want_a:
+            out[:, :mid] = 0
+        if not want_b:
+            out[:, mid:] = 0
+        return out
 
     def show_frame(self, frame):
         if not self.visualization_enabled:
@@ -6901,6 +7219,7 @@ class SimustRealtimeCamera:
                 print(f"Could not open camera feed window: {exc}")
                 return
 
+        frame = self._mask_visualization_half(frame)
         h, w = frame.shape[:2]
         scale = min(DISPLAY_WIDTH / w, DISPLAY_HEIGHT / h)
         new_w, new_h = int(w * scale), int(h * scale)
@@ -6960,11 +7279,25 @@ class SimustRealtimeCamera:
         return False
 
     def _apply_visualization_setting(self):
-        new_viz = read_visualization_setting()
-        if new_viz is None or new_viz == self.visualization_enabled:
+        new_fields = read_visualization_fields()
+        prev = getattr(self, "visualization_fields", None) or {"A": False, "B": False}
+        if (
+            bool(new_fields.get("A")) == bool(prev.get("A"))
+            and bool(new_fields.get("B")) == bool(prev.get("B"))
+        ):
             return
-        self.visualization_enabled = new_viz
-        print(f"Visualization: {'ON' if self.visualization_enabled else 'OFF'}")
+        self.visualization_fields = {
+            "A": bool(new_fields.get("A")),
+            "B": bool(new_fields.get("B")),
+        }
+        self.visualization_enabled = bool(
+            self.visualization_fields["A"] or self.visualization_fields["B"]
+        )
+        print(
+            "Visualization: "
+            f"A={'ON' if self.visualization_fields['A'] else 'OFF'} "
+            f"B={'ON' if self.visualization_fields['B'] else 'OFF'}"
+        )
         if not self.visualization_enabled:
             self._close_viz_window()
         else:
@@ -7100,11 +7433,14 @@ class SimustRealtimeCamera:
             t = threading.Thread(target=self.capture_stream, args=(name, config["address"]), daemon=True)
             t.start()
 
-        time.sleep(3)
+        # Manual coach must come up fast; normal sessions keep the warm-up.
+        time.sleep(0.35 if _players_fields_manual_coach() else 3)
 
         self.start_new_recording()
-        viz = read_visualization_setting()
-        self.visualization_enabled = bool(viz)
+        self.visualization_fields = read_visualization_fields()
+        self.visualization_enabled = bool(
+            self.visualization_fields.get("A") or self.visualization_fields.get("B")
+        )
 
         last_viz_check = 0
         recording_started_for_video = False

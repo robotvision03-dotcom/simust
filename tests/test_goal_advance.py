@@ -229,6 +229,33 @@ class EliteGoalAdvancePollTests(unittest.TestCase):
         self.inst._poll_goal_advance()
         self.assertFalse(self.inst._goal_arrived)
 
+    def test_clear_now_flag_switches_screen(self):
+        """Realtime clear_now must wipe the wall even if result text is odd-cased."""
+        self._write({
+            "fields": {
+                "A": {
+                    "seq": 4,
+                    "ts": 10.0,
+                    "result": "Correct",
+                    "clear_now": True,
+                    "by_seq": {
+                        "4": {
+                            "seq": 4,
+                            "ts": 10.0,
+                            "result": "Correct",
+                            "clear_now": True,
+                        }
+                    },
+                }
+            }
+        })
+        cleared = []
+        self.inst._clear_field_action_now = lambda fid: cleared.append(fid)
+        self.inst._poll_goal_advance()
+        self.assertTrue(self.inst._goal_arrived)
+        self.assertEqual(cleared, ["A"])
+        self.assertEqual(self.inst.finished, [True])
+
 
 if __name__ == "__main__":
     unittest.main()

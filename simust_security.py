@@ -78,6 +78,7 @@ LAB_ONLY_PREFIXES = (
     "/hip-zone",
     "/cabinet-controls",
     "/manual-coach",
+    "/lab-tools",
 )
 
 
