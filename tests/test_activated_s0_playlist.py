@@ -62,6 +62,16 @@ class ActivatedS0PlaylistTests(unittest.TestCase):
         }
         for step in playlist:
             self.assertTrue(step.get("finish_balls"))
+            self.assertTrue(step.get("uniform_player_stills"))
+            self.assertAlmostEqual(
+                float(step.get("pass_image_scale") or 0),
+                player.ACTIVATED_S0_PASS_IMAGE_SCALE,
+                places=4,
+            )
+            self.assertEqual(
+                player.ACTIVATED_S0_PASS_IMAGE_SCALE,
+                player.ENTRY_S0_PASS_IMAGE_SCALE,
+            )
             images = step.get("screen_images") or {}
             self.assertEqual(len(images), 5)
             goals = (step.get("field_screens") or {}).get("A") or []

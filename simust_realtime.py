@@ -2023,23 +2023,97 @@ def goal_circle_center(p0, p1):
     )
 
 
-def draw_finish_cylinder(img, cx, cy, radius, height=FINISH_CYLINDER_HEIGHT_PX, color=FINISH_CYLINDER_COLOR):
-    """Draw a standing cylinder: circle at the base, ellipse on top."""
-    r = max(4, int(radius))
-    h = max(8, int(height))
-    cx, cy = int(cx), int(cy)
-    top_cy = cy - h
-    ry = max(3, int(round(r * 0.35)))
-    fill = color
-    edge = (0, 220, 0)
-    cv2.rectangle(img, (cx - r, top_cy), (cx + r, cy), fill, -1)
-    cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 360, fill, -1)
-    cv2.circle(img, (cx, cy), r, fill, -1)
-    cv2.ellipse(img, (cx, top_cy), (r, ry), 0, 0, 360, fill, -1)
-    cv2.ellipse(img, (cx, top_cy), (r, ry), 0, 0, 360, edge, 2)
-    cv2.line(img, (cx - r, top_cy), (cx - r, cy), edge, 2)
-    cv2.line(img, (cx + r, top_cy), (cx + r, cy), edge, 2)
-    cv2.ellipse(img, (cx, cy), (r, ry), 0, 0, 180, edge, 2)
+def _sculpted_mesh_for_screen(screen=None):
+    """Return saved sculpted cylinder mesh for this screen, if any."""
+    if not screen:
+        return None
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        return cylmesh.get_screen_mesh(screen)
+    except Exception:
+        return None
+
+
+def _finish_mesh_points_sim(
+    screen=None,
+    *,
+    cx: float = 0.0,
+    cy: float = 0.0,
+    radius: float = 0.0,
+    height: float = FINISH_CYLINDER_HEIGHT_PX,
+):
+    """Triangle-mesh control points in SIM 1280×360 (sculpted or default)."""
+    try:
+        import simust_cylinder_mesh as cylmesh
+        import numpy as np
+
+        n_theta = cylmesh.N_THETA
+        n_height = cylmesh.N_HEIGHT
+        sculpt = _sculpted_mesh_for_screen(screen)
+        if sculpt and isinstance(sculpt.get("points"), list):
+            pts = np.asarray(sculpt["points"], dtype=np.float64)
+            n_theta = int(sculpt.get("n_theta") or n_theta)
+            n_height = int(sculpt.get("n_height") or n_height)
+            return pts, n_theta, n_height, True
+        pts = cylmesh.make_cylinder_points(
+            float(cx),
+            float(cy),
+            float(radius),
+            float(height),
+            n_theta,
+            n_height,
+        )
+        return pts, n_theta, n_height, False
+    except Exception:
+        return None, 0, 0, False
+
+
+def draw_finish_cylinder(
+    img,
+    cx,
+    cy,
+    radius,
+    height=FINISH_CYLINDER_HEIGHT_PX,
+    color=FINISH_CYLINDER_COLOR,
+    screen=None,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+):
+    """Draw only white mesh points + wire links (no green fill).
+
+    ``cx`` / ``cy`` / ``radius`` / ``height`` are SIM 1280×360 coordinates.
+    ``scale_x`` / ``scale_y`` map that mesh onto the live frame.
+    """
+    try:
+        import simust_cylinder_mesh as cylmesh
+        import numpy as np
+
+        pts, n_theta, n_height, _sculpted = _finish_mesh_points_sim(
+            screen, cx=cx, cy=cy, radius=radius, height=height
+        )
+        if pts is None or len(pts) == 0:
+            return
+        pts = np.asarray(pts, dtype=np.float64).copy()
+        pts[:, 0] *= float(scale_x)
+        pts[:, 1] *= float(scale_y)
+        wire = (255, 255, 255)
+        point = (255, 255, 255)
+        for a, b in cylmesh.wire_segments(pts, n_theta=n_theta, n_height=n_height):
+            p0 = (int(round(a[0])), int(round(a[1])))
+            p1 = (int(round(b[0])), int(round(b[1])))
+            cv2.line(img, p0, p1, wire, 1, lineType=cv2.LINE_AA)
+        for p in pts:
+            cv2.circle(
+                img,
+                (int(round(p[0])), int(round(p[1]))),
+                2,
+                point,
+                -1,
+                lineType=cv2.LINE_AA,
+            )
+    except Exception:
+        pass
 
 
 def finish_cylinder_height_sim(p0=None, p1=None, screen=None):
@@ -2060,33 +2134,145 @@ def finish_cylinder_height_sim(p0=None, p1=None, screen=None):
 
 
 def in_finish_cylinder(point, p0, p1, depth, screen=None):
-    """True when the point is inside the green finish cylinder (circle + shaft + top)."""
+    """True when the ball is inside the triangle-mesh goal volume.
+
+    Always uses the 3D mesh (saved sculpt when present, otherwise the default
+    triangulated cylinder sized from the goal line).
+    """
     if p0 is None or p1 is None or point is None:
         return False
-    cx, cy = goal_circle_center(p0, p1)
-    radius = goal_circle_radius(depth, p0, p1, screen=screen)
-    px, py = float(point[0]), float(point[1])
-    dx = px - cx
-    dy = py - cy
-    if math.hypot(dx, dy) <= radius:
-        return True
-    height = finish_cylinder_height_sim(p0, p1, screen=screen)
-    top_cy = cy - height
-    ry = max(3.0, radius * 0.35)
-    if abs(dx) <= radius and top_cy <= py <= cy:
-        return True
-    if radius > 0 and ry > 0:
-        if (dx / radius) ** 2 + ((py - top_cy) / ry) ** 2 <= 1.0:
-            return True
-    return False
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        cx, cy = goal_circle_center(p0, p1)
+        radius = goal_circle_radius(depth, p0, p1, screen=screen)
+        height = finish_cylinder_height_sim(p0, p1, screen=screen)
+        pts, n_theta, n_height, _sculpted = _finish_mesh_points_sim(
+            screen, cx=cx, cy=cy, radius=radius, height=height
+        )
+        if pts is None or len(pts) == 0:
+            return False
+        return bool(
+            cylmesh.point_inside_mesh(
+                point,
+                pts,
+                n_theta=n_theta,
+                n_height=n_height,
+            )
+        )
+    except Exception:
+        return False
 
 
 def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
-    """True when the ball is inside the displayed green finish cylinder.
+    """True when the ball is inside the displayed triangle-mesh goal volume.
 
     A ball in that zone is a correct finish (no return required).
     """
     return in_finish_cylinder(point, p0, p1, depth)
+
+
+def finish_cylinder_preview(screen, p0=None, p1=None, action="PASS") -> dict:
+    """Live cylinder size for Goal Area Calibration (same math as finish_balls)."""
+    sid = str(screen or "").strip().upper()
+    action_u = str(action or "PASS").strip().upper() or "PASS"
+    if p0 is None or p1 is None:
+        geom = geometry_screen_id(sid)
+        base = str(geom).rstrip("LR")
+        line = GOAL_LINES.get(geom) or GOAL_LINES.get(base) or {}
+        p0 = line.get("p0")
+        p1 = line.get("p1")
+    if p0 is None or p1 is None:
+        return {
+            "screen": sid,
+            "depth": float(FINISH_DIST),
+            "radius": 0.0,
+            "height": float(FINISH_CYLINDER_HEIGHT_PX),
+            "cx": 0.0,
+            "cy": 0.0,
+        }
+    depth = float(approach_finish_depth(sid, action_u))
+    radius = float(goal_circle_radius(depth, p0, p1, screen=sid))
+    height = float(finish_cylinder_height_sim(p0, p1, screen=sid))
+    cx, cy = goal_circle_center(p0, p1)
+    out = {
+        "screen": sid,
+        "depth": depth,
+        "radius": radius,
+        "height": height,
+        "cx": float(cx),
+        "cy": float(cy),
+        "p0": [float(p0[0]), float(p0[1])],
+        "p1": [float(p1[0]), float(p1[1])],
+        "sculpted": False,
+        "silhouette": [],
+        "wire": [],
+        "faces": [],
+        "n_points": 0,
+    }
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        n_theta = cylmesh.N_THETA
+        n_height = cylmesh.N_HEIGHT
+        sculpt = _sculpted_mesh_for_screen(sid)
+        if sculpt and isinstance(sculpt.get("points"), list):
+            pts = sculpt["points"]
+            n_theta = int(sculpt.get("n_theta") or n_theta)
+            n_height = int(sculpt.get("n_height") or n_height)
+            out["sculpted"] = True
+        else:
+            # Same classic cylinder shape, already triangulated for 3D edit.
+            pts = cylmesh.make_cylinder_points(
+                float(cx), float(cy), float(radius), float(height), n_theta, n_height
+            ).tolist()
+        out["n_points"] = int(len(pts))
+        out["n_theta"] = int(n_theta)
+        out["n_height"] = int(n_height)
+        out["faces"] = cylmesh.faces_as_triangles(n_theta, n_height)
+        out["silhouette"] = cylmesh.silhouette_polyline(
+            pts, n_theta=n_theta, n_height=n_height
+        )
+        # Sparse wire for browser overlay (outer rings + a few meridians).
+        wire = []
+        for z in (0, max(0, n_height // 2), n_height - 1):
+            for t in range(n_theta):
+                a = pts[z * n_theta + t]
+                b = pts[z * n_theta + ((t + 1) % n_theta)]
+                wire.append([[float(a[0]), float(a[1])], [float(b[0]), float(b[1])]])
+        for t in range(0, n_theta, max(1, n_theta // 8)):
+            for z in range(n_height - 1):
+                a = pts[z * n_theta + t]
+                b = pts[(z + 1) * n_theta + t]
+                wire.append([[float(a[0]), float(a[1])], [float(b[0]), float(b[1])]])
+        out["wire"] = wire
+    except Exception:
+        pass
+    return out
+
+
+def finish_cylinder_previews(screens=None, action="PASS") -> dict:
+    """screen id → live cylinder preview for every calibrated / software mouth."""
+    reload_goal_line_calibration()
+    ids = []
+    if isinstance(screens, dict) and screens:
+        ids = [str(k).strip().upper() for k in screens.keys() if str(k).strip()]
+    else:
+        try:
+            from simust_goal_calibrate import ALL_SCREENS
+
+            ids = list(ALL_SCREENS)
+        except Exception:
+            ids = []
+    out = {}
+    for sid in ids:
+        p0 = p1 = None
+        if isinstance(screens, dict):
+            entry = screens.get(sid) or {}
+            p0 = entry.get("p0")
+            p1 = entry.get("p1")
+        out[sid] = finish_cylinder_preview(sid, p0=p0, p1=p1, action=action)
+    return out
 
 
 def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_POST_RADIUS):
@@ -2902,11 +3088,6 @@ def read_simulator_score_mode() -> int:
             return parse_simulator_score_mode(handle.read())
     except Exception:
         return SIM_SCORE_MODE_PASS
-
-
-def read_simulation_setting():
-    fields = read_simulation_fields()
-    return bool(fields.get("A") or fields.get("B"))
 
 
 def read_pause_fields() -> dict:
@@ -3889,6 +4070,7 @@ class VideoSaver:
             self.is_recording = False
 
     def stop(self):
+        """Close ffmpeg stdin and wait so the MP4 is always playable on Stop/exit."""
         proc = self._ffmpeg
         self._ffmpeg = None
         self.writer = None
@@ -3897,18 +4079,40 @@ class VideoSaver:
             return True
         try:
             if proc.stdin:
-                proc.stdin.close()
+                try:
+                    proc.stdin.flush()
+                except Exception:
+                    pass
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
         except Exception:
             pass
         try:
-            proc.wait(timeout=30)
+            # Give libx264 time to write the trailer after stdin closes.
+            proc.wait(timeout=45)
         except Exception:
             try:
-                proc.kill()
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if self.output_path and os.path.isfile(self.output_path):
+            size = 0
+            try:
+                size = os.path.getsize(self.output_path)
             except Exception:
                 pass
-        if self.output_path and os.path.isfile(self.output_path):
-            print(f"Session video MP4: {self.output_path}")
+            print(
+                f"Session video MP4 saved ({self.frame_count} frames, "
+                f"{size} bytes): {self.output_path}"
+            )
+        else:
+            print("WARNING: Session video MP4 was not written")
         return True
 
 def get_current_time_ms():
@@ -4371,10 +4575,32 @@ class SimustRealtimeCamera:
 
     def signal_handler(self, signum, frame):
         print()
+        print(f"Signal {signum} — saving session video before exit…")
         self.camera_running = False
         self.screen_capture_running = False
-        self.cleanup()
+        try:
+            self.cleanup()
+        except Exception as exc:
+            print(f"Cleanup after signal failed: {exc}")
         sys.exit(0)
+
+    def _finalize_video_now(self, reason: str = "") -> None:
+        """Always close the MP4 (and session files) as soon as Stop/exit is asked."""
+        why = f" ({reason})" if reason else ""
+        try:
+            if self.recording_active:
+                print(f"Finalizing realtime recording{why}…")
+                self.stop_recording()
+            elif getattr(self, "video_saver", None) is not None and self.video_saver.is_recording:
+                print(f"Finalizing open MP4{why}…")
+                self.video_saver.stop()
+        except Exception as exc:
+            print(f"Video finalize failed{why}: {exc}")
+        try:
+            if os.path.isfile(STOP_SAVE_FILE):
+                os.remove(STOP_SAVE_FILE)
+        except Exception:
+            pass
 
     def _players_fields_path(self):
         return os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
@@ -5825,8 +6051,6 @@ class SimustRealtimeCamera:
         h, w = frame.shape[:2]
         sx = w / float(SIM_FRAME_WIDTH)
         sy = h / float(SIM_FRAME_HEIGHT)
-        overlay = frame.copy()
-        drew_band = False
         line_marks = []
         for channel in channels:
             if not channel.session_active or not channel.active_goal_lines:
@@ -5836,26 +6060,33 @@ class SimustRealtimeCamera:
                 x1, y1 = line_data['p0']
                 x2, y2 = line_data['p1']
                 depth = arrival_depth_for(str(screen_name), action)
-                cx = int(round(((float(x1) + float(x2)) / 2.0) * sx))
-                cy = int(round(((float(y1) + float(y2)) / 2.0) * sy))
-                radius = max(4, int(round(
+                # Mesh geometry stays in SIM 1280×360; scale only when drawing.
+                cx_sim, cy_sim = goal_circle_center((x1, y1), (x2, y2))
+                radius_sim = float(
                     goal_circle_radius(depth, (x1, y1), (x2, y2), screen=screen_name)
-                    * min(sx, sy)
-                )))
-                height_px = max(8, int(round(
-                    finish_cylinder_height_sim((x1, y1), (x2, y2), screen=screen_name) * sy
-                )))
-                draw_finish_cylinder(overlay, cx, cy, radius, height=height_px)
-                drew_band = True
+                )
+                height_sim = float(
+                    finish_cylinder_height_sim((x1, y1), (x2, y2), screen=screen_name)
+                )
+                # White points + links drawn directly (no green fill / fade).
+                draw_finish_cylinder(
+                    frame,
+                    cx_sim,
+                    cy_sim,
+                    radius_sim,
+                    height=height_sim,
+                    screen=screen_name,
+                    scale_x=sx,
+                    scale_y=sy,
+                )
                 line_marks.append((
                     action,
                     screen_name,
                     (int(x1 * sx), int(y1 * sy)),
                     (int(x2 * sx), int(y2 * sy)),
                 ))
-        if drew_band:
-            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
         for action, screen_name, p0, p1 in line_marks:
+            # Goal line stays visible; triangle mesh is the only goal volume.
             cv2.line(frame, p0, p1, COLOR_GOAL_LINE, 3)
             cv2.circle(frame, p0, 5, (0, 0, 255), -1)
             cv2.circle(frame, p1, 5, (0, 0, 255), -1)
@@ -7278,6 +7509,13 @@ class SimustRealtimeCamera:
             pass
         return False
 
+    def _save_stop_requested(self) -> bool:
+        """True when player/UI asked to close the MP4 while keeping camera briefly."""
+        try:
+            return os.path.isfile(STOP_SAVE_FILE)
+        except Exception:
+            return False
+
     def _apply_visualization_setting(self):
         new_fields = read_visualization_fields()
         prev = getattr(self, "visualization_fields", None) or {"A": False, "B": False}
@@ -7457,8 +7695,12 @@ class SimustRealtimeCamera:
 
         try:
             while self.camera_running:
+                # Close MP4 as soon as Stop/save is asked — before any force-kill.
+                if self._save_stop_requested():
+                    self._finalize_video_now("stop_save")
                 if self._stop_requested():
-                    print("Stop camera requested — closing feed and exiting")
+                    print("Stop camera requested — saving video, then closing feed")
+                    self._finalize_video_now("stop_camera")
                     self.camera_running = False
                     self.screen_capture_running = False
                     break
@@ -7561,14 +7803,9 @@ class SimustRealtimeCamera:
                 while current_timestamp >= slot and catch < 4:
                     self._tick_image_cue_frame_sync(current_time_str, current_timestamp)
                     if self.recording_active and self.video_saver.is_recording:
-                        if os.path.isfile(STOP_SAVE_FILE):
+                        if self._save_stop_requested():
                             # Player signals this after final results end, or on Stop.
-                            print("Stopping video save (final results done or operator Stop)")
-                            self.video_saver.stop()
-                            try:
-                                os.remove(STOP_SAVE_FILE)
-                            except Exception:
-                                pass
+                            self._finalize_video_now("stop_save/frame")
                         else:
                             self.video_saver.write_frame(stitched)
                     slot += frame_dt
@@ -7583,12 +7820,15 @@ class SimustRealtimeCamera:
                 time.sleep(0.005)
 
         except KeyboardInterrupt:
-            pass
+            print("\nKeyboardInterrupt — saving session video…")
         finally:
             self.camera_running = False
             self.screen_capture_running = False
-            if self.recording_active:
-                self.stop_recording()
+            # Always finalize MP4 + session files, even on abrupt Stop/exit.
+            try:
+                self._finalize_video_now("main-loop exit")
+            except Exception as exc:
+                print(f"Final video save failed: {exc}")
             self.destroy_window()
             # Extra HighGUI pump after teardown so a stuck HWND cannot linger.
             try:

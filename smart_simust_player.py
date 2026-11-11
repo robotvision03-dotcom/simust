@@ -1,9 +1,9 @@
 """
 smart_simust_player.py - Screen 2 coach band for image-based labeled actions.
   Foundation SF-30/60/110/180N: degree-spaced screens; digit/random: random
-  screens; rotation: spin then hold; sum/sub/multiply/divide: equations on all
-  screens with 2 correct targets per field. 5 tests × 10 actions, On/Gap then
-  −10% each test. Fields are independent.
+  screens; rotation: spin then hold; rabbit: hop left 1→6→1 then ball finish;
+  sum/sub/multiply/divide: equations on all screens with 2 correct targets per
+  field. 5 tests × 10 actions, On/Gap then −10% each test. Fields are independent.
   Missing filler/gap → black.
 """
 
@@ -494,28 +494,32 @@ ENTRY_S0_SCREEN_COUNT = 6
 PASS_IMAGE_BASE_SCALE = 0.564
 # Other (non-Entry-pass) stills: +5%.
 PASS_IMAGE_SCALE = round(PASS_IMAGE_BASE_SCALE * 1.05, 4)
-# Entry S0 pass among players: +10% over the base still size.
-ENTRY_S0_PASS_IMAGE_SCALE = round(PASS_IMAGE_BASE_SCALE * 1.10, 4)
+# Entry/Activated S0 players: shared box for every still (−20%, +10%, +5%).
+ENTRY_S0_PASS_IMAGE_SCALE = round(
+    PASS_IMAGE_BASE_SCALE * 1.10 * 1.30 * 1.15 * 1.10 * 0.80 * 1.10 * 1.05, 4
+)
+# Activated Players uses the same on-screen size as Entry Players.
+ACTIVATED_S0_PASS_IMAGE_SCALE = ENTRY_S0_PASS_IMAGE_SCALE
 ENTRY_S0_T12_DISTRACTORS = (
-    "Male-Opponent-Player-01-01.png",
-    "Male-Opponent-Player-02-01.jpeg",
+    "Opponent-PL-01-B.png",
+    "Opponent-PL-03-B.png",
 )
 ENTRY_S0_T35_EXTRA = (
-    "Male-Opponent-Player-03-01.png",
-    "Male-Teamate-Player-01-01.png",
+    "Opponent-PL-02-B.png",
+    "Teammate-PL-01-B.png",
 )
 # Activated S0 Players — pass among teammate + opponents; T3–T5 use L/R side goals.
 ACTIVATED_S0_IMAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "static", "players", "Activated"
 )
-ACTIVATED_S0_PASS_CENTER = ("pass.png", "pass2.png", "pass3.png")
+ACTIVATED_S0_PASS_CENTER = ("pass.png", "pass3.png")
 ACTIVATED_S0_PASS_LEFT = "pass-left.png"
 ACTIVATED_S0_PASS_RIGHT = "pass-right.png"
-ACTIVATED_S0_TEAMMATE = "Male-Teamate-Player-08-01.png"
+ACTIVATED_S0_TEAMMATE = "Teammate-PL-04-B.png"
 ACTIVATED_S0_OPPONENTS = (
-    "Male-Opponent-Player-04-01.png",
-    "Male-Opponent-Player-05-01.png",
-    "Male-Opponent-Player-07-01.png",
+    "Opponent-PL-04-B.png",
+    "Opponent-PL-05-B.png",
+    "Opponent-PL-06-B.png",
 )
 ACTIVATED_S0_ACTIONS_PER_TEST = 10
 # Operator / beginning-info content names — same folders as the frontend picker.
@@ -745,7 +749,7 @@ except ImportError:
         return []
 
 FOUNDATION_EXTRA_MODES = (
-    ("digit", "rotation", "omid_2", "omid")
+    ("digit", "rotation", "rabbit", "omid_2", "omid")
     + FOUNDATION_MATH_MODES
     + tuple(FOUNDATION_COGNITIVE_MODES)
 )
@@ -753,7 +757,7 @@ _FOUNDATION_SF_RE = re.compile(r"(SF-30N|SF-60N|SF-110N|SF-180N)", re.IGNORECASE
 # omid_2 before omid so folder names do not match the shorter token first.
 _cog_alt = "|".join(
     re.escape(m) for m in (
-        ("digit", "rotation", "omid_2", "omid")
+        ("digit", "rotation", "rabbit", "omid_2", "omid")
         + FOUNDATION_MATH_MODES
         + tuple(FOUNDATION_COGNITIVE_MODES)
     )
@@ -776,9 +780,19 @@ ROTATION_ARC_A = list(FOUNDATION_ARC_A)  # A4→A5→A6→A1→A2→A3
 ROTATION_ARC_B = list(FOUNDATION_ARC_B)  # B6→B5→B4→B3→B2→B1
 ROTATION_STEP_MS = 45
 ROTATION_MIN_LAPS = 2
+# Foundation rabbit: hop left screen 1→2→…→6→1; ball on lit screen = Correct.
+RABBIT_ARC_A = [_screen_name("A", n) for n in range(1, 7)]
+RABBIT_ARC_B = [_screen_name("B", n) for n in range(1, 7)]
+RABBIT_ACTIONS_PER_TEST = 12  # two full 1→6 loops
+RABBIT_TEST_COUNT = 1
+RABBIT_ON_MS = 3000
+RABBIT_HOP_STEP_MS = 55
+RABBIT_HOP_EXIT_FRAMES = 6
+RABBIT_HOP_ENTER_FRAMES = 6
 # Math modes: equations on every field screen; exactly 2 correct targets per field.
 MATH_CORRECT_PER_FIELD = 2
 MATH_EQ_CACHE_DIR = "C:/Users/siama/Documents/simust_player/math_eq_cache"
+RABBIT_CACHE_DIR = os.path.join(MATH_EQ_CACHE_DIR, "rabbit")
 MATH_OP_SYMBOL = {
     "sum": "+",
     "sub": "-",
@@ -1044,6 +1058,8 @@ def _mode_slot_factory(mode_id: str, active_fields):
         return lambda *_: _math_correct_slot(active)
     if mode_low == "rotation":
         return lambda *_: _rotation_field_slot(active)
+    if mode_low == "rabbit":
+        return lambda action_in_set, _test: _rabbit_field_slot(active, action_in_set)
     if mode_low in FOUNDATION_EXTRA_MODES or not mode or mode_low == "dual":
         return lambda *_: _random_field_slot(active)
     sf_id = None
@@ -1814,13 +1830,15 @@ def _s3_sum_screen_numbers_multi(
     ref: int,
     screen_count: int = ELITE_ACTIONS_PER_TEST,
     pair_count: int = 3,
+    fill_distractors: bool = False,
 ) -> Tuple[List[Optional[int]], List[Tuple[int, int]]]:
     """Elite/WC sum only: `pair_count` answer pairs, always split A then B.
 
     Every pair places answer-1 on a Field A screen and answer-2 on a Field B
     screen (never both on the same field). With pair_count=3 that is 6 answer
-    screens / 6 cylinders. Non-goal screens stay None (solid fill). Completing
-    any one pair is a Correct finish.
+    screens / 6 cylinders. Non-goal screens stay None unless fill_distractors
+    (C3.T3–T5), which paints random numbers that do not form an extra A+B sum
+    to ref. Completing any one pair is a Correct finish.
     """
     ref = int(ref)
     count = max(2, int(screen_count or ELITE_ACTIONS_PER_TEST))
@@ -1843,6 +1861,35 @@ def _s3_sum_screen_numbers_multi(
         values[ia] = int(va)
         values[ib] = int(vb)
         goal_pairs.append((ia, ib))
+    if not fill_distractors:
+        return values, goal_pairs
+
+    a_vals = [int(values[i]) for i in range(half) if values[i] is not None]
+    b_vals = [int(values[i]) for i in range(half, count) if values[i] is not None]
+    for idx in range(count):
+        if values[idx] is not None:
+            continue
+        opposite = b_vals if idx < half else a_vals
+        forbidden = {int(ref) - int(other) for other in opposite}
+        pick = None
+        for _ in range(80):
+            if ref <= 49:
+                candidate = random.randint(0, max(9, min(99, ref + 25)))
+            else:
+                candidate = random.randint(0, 99)
+            if candidate in forbidden:
+                continue
+            pick = int(candidate)
+            break
+        if pick is None:
+            pick = int(ref) + 1 + idx
+            while pick in forbidden:
+                pick += 1
+        values[idx] = pick
+        if idx < half:
+            a_vals.append(pick)
+        else:
+            b_vals.append(pick)
     return values, goal_pairs
 
 
@@ -1850,10 +1897,13 @@ def _s3_combined_multi_pair_layout(
     ref: int,
     screens: List[str],
     pair_count: int = 3,
+    fill_distractors: bool = False,
 ) -> Tuple[List[Optional[int]], List[List[str]], dict, List[Tuple[int, int]]]:
     """Elite/WC sum actions: 3 pairs → [A-screen, B-screen] each, every action."""
     ids = list(screens or _elite_screen_ids())
-    nums, pair_idxs = _s3_sum_screen_numbers_multi(ref, len(ids), pair_count)
+    nums, pair_idxs = _s3_sum_screen_numbers_multi(
+        ref, len(ids), pair_count, fill_distractors=fill_distractors
+    )
     goal_pairs: List[List[str]] = []
     goal_sids: List[str] = []
     value_pairs: List[Tuple[int, int]] = []
@@ -2750,9 +2800,9 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     """Elite S3: encode a two-digit ref (<50), then 3 A+B answer pairs on 6 screens.
 
     Combined 12-screen field. Six cylinders (3 on A, 3 on B); each pair sums to
-    the reference. Completing any one pair advances. Non-goal screens stay solid.
-    S3.T1–T2: shared per-test fill + one digit color. S3.T3–T5: same fill, but
-    each answer uses a different digit color for visibility.
+    the reference. Completing any one pair advances.
+    S3.T1–T2: answers only on the 6 goal screens (others solid). S3.T3–T5: random
+    distractor digits on the other 6 screens + varied digit colors.
     Reference encode is 3s on every set. Answer clock 120s (encode not counted).
     """
     series = max(1, min(5, int(series_num or 1)))
@@ -2762,6 +2812,7 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
     gap_ms = 80
     encode_ms = int(ELITE_S3_ENCODE_MS.get(series, 3000))
     multi_digit_colors = int(series) >= 3
+    fill_distractors = int(series) >= 3
     screens = _elite_screen_ids()
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
@@ -2770,7 +2821,9 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
         for action_in_set in range(1, actions + 1):
             ref = _elite_s3_reference()
             nums, goal_pairs, field_screens, value_pairs = (
-                _s3_combined_multi_pair_layout(ref, screens, pair_count=3)
+                _s3_combined_multi_pair_layout(
+                    ref, screens, pair_count=3, fill_distractors=fill_distractors
+                )
             )
             goal_sids = [sid for pair in goal_pairs for sid in pair]
             if (
@@ -2791,7 +2844,7 @@ def _build_elite_s3_playlist(series_num: int) -> List[dict]:
                 continue
             images = {}
             for idx, sid in enumerate(screens):
-                if sid in goal_set and nums[idx] is not None:
+                if nums[idx] is not None:
                     fg = (
                         ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
                         if multi_digit_colors
@@ -2870,11 +2923,12 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     """World Class S3: encode ref (50<ref<100), then 3 A+B answer pairs on 6 screens.
 
     Combined 12-screen field. Six cylinders (3 on A, 3 on B); each pair sums to
-    the reference. Completing any one pair advances. Non-goal screens stay solid.
-    All sets (S3.T1–T5): solid multi-color per-screen fills + digit colors on the
-    answers section (same as S3.T3 — no motion flowers/fruits camo). Reference is
-    red at S1 digit size. Encode is 3s on every set. Answer clock 120s (encode not
-    counted).
+    the reference. Completing any one pair advances.
+    Every S3.T1–T5 answer phase fills all 12 screens: the 6 goal digits plus
+    random distractor digits on the other 6 (never forming an extra A+B sum to
+    ref). Solid multi-color per-screen fills + digit colors (no motion camo).
+    Reference is red at S1 digit size. Encode is 3s on every set. Answer clock
+    120s (encode not counted).
     """
     series = max(1, min(5, int(series_num or 1)))
     actions = int(WC_S3_ACTIONS.get(series, ELITE_ACTIONS_PER_TEST))
@@ -2882,6 +2936,8 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
     on_ms = max(1, budget_ms // max(1, actions))
     gap_ms = 80
     encode_ms = int(WC_S3_ENCODE_MS.get(series, 3000))
+    # Always paint distractors on non-goal screens so no cabinet stays empty.
+    fill_distractors = True
     base_seed = WORLD_S2_FLOWER_SEEDS[(series - 1) % len(WORLD_S2_FLOWER_SEEDS)]
     screens = _elite_screen_ids()
     playlist = []
@@ -2895,7 +2951,9 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
         for action_in_set in range(1, actions + 1):
             ref = _wc_s3_reference()
             nums, goal_pairs, field_screens, value_pairs = (
-                _s3_combined_multi_pair_layout(ref, screens, pair_count=3)
+                _s3_combined_multi_pair_layout(
+                    ref, screens, pair_count=3, fill_distractors=fill_distractors
+                )
             )
             goal_sids = [sid for pair in goal_pairs for sid in pair]
             if (
@@ -2919,11 +2977,10 @@ def _build_world_class_s3_playlist(series_num: int) -> List[dict]:
                 sid: _wc_text_anchor_frac(test_seed, f"enc:{sid}:{ref_text}")
                 for sid in screens
             }
-            goal_set = set(goal_sids)
             images = {}
             for idx, sid in enumerate(screens):
                 screen_bg = ELITE_S3_SCREEN_BG[idx % len(ELITE_S3_SCREEN_BG)]
-                if sid in goal_set and nums[idx] is not None:
+                if nums[idx] is not None:
                     screen_fg = ELITE_S3_SCREEN_FG[idx % len(ELITE_S3_SCREEN_FG)]
                     png = _render_band_digit_image(
                         str(nums[idx]), screen_bg, screen_fg
@@ -3231,6 +3288,7 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "action": "PASS",
                 "no_fillers": True,
                 "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
                 "arena_pair": (1, 1),
                 "field_screens": field_screens,
                 "screen_images": dict(images),
@@ -3346,7 +3404,7 @@ def _activated_s0_side_plan(actions_per_test: int) -> List[bool]:
 def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
     """Activated S0.T1–T5 Players (operator C1.T1–T5).
 
-    C1.T1–T2: center pass (pass / pass2 / pass3) + teammate + 3 opponents.
+    C1.T1–T2: center pass (pass / pass3) + teammate + 3 opponents.
     C1.T3–T5: every test includes pass-left/pass-right side targets — 5 center
     + 5 L/R (A1L / A2L… / A6R) shuffled across the 10 actions.
     """
@@ -3439,7 +3497,8 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "action_num": action_in_set,
                 "action": "PASS",
                 "no_fillers": True,
-                "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "pass_image_scale": float(ACTIVATED_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
                 "arena_pair": (1, 1),
                 "field_screens": field_screens,
                 "screen_images": dict(images),
@@ -3548,6 +3607,7 @@ def _compose_independent_entry(parts: dict, indices: dict, skip=None) -> Optiona
     require_all_goals = False
     hold_full_on = False
     cognitive_encode = False
+    uniform_player_stills = False
     pass_image_scale = None
     budgets = []
     efficiencies = []
@@ -3597,6 +3657,8 @@ def _compose_independent_entry(parts: dict, indices: dict, skip=None) -> Optiona
             hold_full_on = True
         if step.get("cognitive_encode"):
             cognitive_encode = True
+        if step.get("uniform_player_stills"):
+            uniform_player_stills = True
         try:
             step_scale = float(step.get("pass_image_scale"))
         except (TypeError, ValueError):
@@ -3693,6 +3755,8 @@ def _compose_independent_entry(parts: dict, indices: dict, skip=None) -> Optiona
         entry["sum_pairs"] = sum_pairs
     if pass_image_scale is not None:
         entry["pass_image_scale"] = float(pass_image_scale)
+    if uniform_player_stills:
+        entry["uniform_player_stills"] = True
     return entry
 
 
@@ -6345,6 +6409,248 @@ def _spin_arcs_for_fields(field_ids) -> dict:
     }
 
 
+def _rabbit_arc_for_field(fid: str) -> List[str]:
+    """Arena order 1→6 for rabbit hops (wraps 6→1)."""
+    return list(RABBIT_ARC_A if str(fid).upper() == "A" else RABBIT_ARC_B)
+
+
+def _rabbit_field_slot(active_fields, action_in_set: int) -> dict:
+    """One rabbit screen per field: action 1→A1/B1, 2→A2/B2, … 7→A1/B1."""
+    active = set(active_fields or [])
+    idx = (max(1, int(action_in_set or 1)) - 1) % 6
+    slot = {}
+    if "A" in active:
+        slot["A"] = [RABBIT_ARC_A[idx]]
+    if "B" in active:
+        slot["B"] = [RABBIT_ARC_B[idx]]
+    return slot
+
+
+def _pil_draw_rabbit_facing_left(draw, cx: int, cy: int, scale: float = 1.0, tuck: float = 0.0):
+    """Simple left-facing rabbit (ears leftward) for hop frames."""
+    try:
+        from PIL import ImageDraw
+    except Exception:
+        return
+    if not isinstance(draw, ImageDraw.ImageDraw):
+        return
+    s = max(0.35, float(scale or 1.0))
+    tuck = max(0.0, min(1.0, float(tuck or 0.0)))
+    body = (245, 245, 250, 255)
+    ear_in = (255, 180, 200, 255)
+    eye = (30, 30, 40, 255)
+    nose = (230, 90, 120, 255)
+    # Body
+    bw, bh = int(90 * s), int(70 * s)
+    draw.ellipse(
+        [cx - bw // 5, cy - bh // 2, cx + bw, cy + bh // 2],
+        fill=body,
+        outline=(200, 200, 210, 255),
+        width=max(1, int(2 * s)),
+    )
+    # Head (left)
+    hx = cx - int(55 * s)
+    hy = cy - int(8 * s)
+    hr = int(38 * s)
+    draw.ellipse([hx - hr, hy - hr, hx + hr, hy + hr], fill=body, outline=(200, 200, 210, 255), width=max(1, int(2 * s)))
+    # Ears pointing up-left
+    for dx, dy in ((-18, -70), (-2, -78)):
+        ex = hx + int(dx * s)
+        ey = hy + int(dy * s)
+        ew, eh = int(16 * s), int(48 * s)
+        draw.ellipse([ex - ew // 2, ey - eh // 2, ex + ew // 2, ey + eh // 2], fill=body)
+        draw.ellipse(
+            [ex - ew // 4, ey - eh // 3, ex + ew // 4, ey + eh // 4],
+            fill=ear_in,
+        )
+    # Eye + nose
+    draw.ellipse(
+        [hx - int(18 * s), hy - int(8 * s), hx - int(6 * s), hy + int(4 * s)],
+        fill=eye,
+    )
+    draw.ellipse(
+        [hx - int(34 * s), hy + int(4 * s), hx - int(22 * s), hy + int(14 * s)],
+        fill=nose,
+    )
+    # Hind legs tucked for jump
+    leg_y = cy + int((28 - 18 * tuck) * s)
+    draw.ellipse(
+        [cx + int(20 * s), leg_y, cx + int(55 * s), leg_y + int(28 * s)],
+        fill=body,
+    )
+    draw.ellipse(
+        [cx - int(5 * s), leg_y + int(4 * s), cx + int(28 * s), leg_y + int(30 * s)],
+        fill=body,
+    )
+
+
+def _render_rabbit_frame(x_frac: float, y_frac: float, tuck: float = 0.0, tag: str = "c") -> Optional[str]:
+    """Rabbit PNG on transparent tile; x_frac 0=left, 0.5=center, 1=right."""
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return None
+    try:
+        os.makedirs(RABBIT_CACHE_DIR, exist_ok=True)
+    except Exception:
+        return None
+    xf = max(-0.35, min(1.35, float(x_frac)))
+    yf = max(0.15, min(0.85, float(y_frac)))
+    tk = max(0.0, min(1.0, float(tuck or 0.0)))
+    key = f"rabbit_{tag}_x{int(round(xf * 100))}_y{int(round(yf * 100))}_t{int(round(tk * 100))}.png"
+    path = os.path.join(RABBIT_CACHE_DIR, key)
+    if os.path.isfile(path):
+        return path
+    w = h = 512
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Soft ground shadow
+    sx = int(w * xf)
+    sy = int(h * 0.78)
+    draw.ellipse([sx - 50, sy - 12, sx + 50, sy + 12], fill=(0, 0, 0, 55))
+    _pil_draw_rabbit_facing_left(draw, sx, int(h * yf), scale=1.15, tuck=tk)
+    try:
+        img.save(path, "PNG")
+    except Exception:
+        return None
+    return path
+
+
+def _rabbit_hold_image() -> Optional[str]:
+    """Centered left-facing rabbit for the hold / goal screen."""
+    return _render_rabbit_frame(0.52, 0.52, tuck=0.15, tag="hold")
+
+
+def _rabbit_hop_frame_paths() -> Tuple[List[str], List[str], Optional[str]]:
+    """Exit (leave left) + enter (arrive from right) + hold image paths."""
+    hold = _rabbit_hold_image()
+    exit_frames = []
+    enter_frames = []
+    n_exit = max(3, int(RABBIT_HOP_EXIT_FRAMES))
+    n_enter = max(3, int(RABBIT_HOP_ENTER_FRAMES))
+    for i in range(n_exit):
+        t = (i + 1) / float(n_exit)
+        # Jump left off the tile; bounce up mid-hop.
+        x = 0.52 - 0.95 * t
+        y = 0.52 - 0.22 * math.sin(math.pi * t)
+        path = _render_rabbit_frame(x, y, tuck=0.35 + 0.4 * t, tag=f"ex{i}")
+        if path:
+            exit_frames.append(path)
+    for i in range(n_enter):
+        t = (i + 1) / float(n_enter)
+        x = 1.25 - 0.73 * t
+        y = 0.52 - 0.22 * math.sin(math.pi * t)
+        path = _render_rabbit_frame(x, y, tuck=0.7 - 0.5 * t, tag=f"en{i}")
+        if path:
+            enter_frames.append(path)
+    return exit_frames, enter_frames, hold
+
+
+def _ensure_rabbit_mode_assets(directory: Optional[str] = None) -> Optional[str]:
+    """Build rabbit art; optionally seed Foundation rabbit/ folder with hold PNG."""
+    hold = _rabbit_hold_image()
+    if not hold:
+        return None
+    _rabbit_hop_frame_paths()
+    if directory:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            dest = os.path.join(directory, "rabbit.png")
+            if not os.path.isfile(dest):
+                import shutil
+                shutil.copy2(hold, dest)
+        except Exception:
+            logger.exception("Could not seed rabbit assets into %s", directory)
+    return hold
+
+
+def _build_rabbit_playlist(
+    active_fields,
+    rabbit_image: Optional[str] = None,
+    gaps: dict = None,
+) -> List[dict]:
+    """Foundation rabbit: hop left 1→2→…→6→1; ball on the lit screen finishes."""
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    hold = rabbit_image or _ensure_rabbit_mode_assets()
+    if not active or not hold:
+        return []
+    exit_frames, enter_frames, hold = _rabbit_hop_frame_paths()
+    if not hold:
+        return []
+    gaps = gaps or {}
+    playlist = []
+    actions = int(RABBIT_ACTIONS_PER_TEST)
+    tests = int(RABBIT_TEST_COUNT)
+    for test_num in range(1, tests + 1):
+        scale = LABEL_TIMING_DECAY ** (test_num - 1)
+        for action_in_set in range(1, actions + 1):
+            slot = _rabbit_field_slot(active, action_in_set) or {}
+            # First action: rabbit appears on screen 1. Later actions hop N-1 → N (6→1).
+            prev_slot = (
+                _rabbit_field_slot(active, action_in_set - 1)
+                if action_in_set > 1
+                else {}
+            )
+            field_screens = {}
+            screen_images = {}
+            rabbit_from = {}
+            rabbit_to = {}
+            for fid in active:
+                targets = _named_screens(slot.get(fid) or [])
+                if not targets:
+                    continue
+                to_sid = targets[0]
+                field_screens[fid] = [to_sid]
+                screen_images[to_sid] = hold
+                rabbit_to[fid] = to_sid
+                prevs = _named_screens((prev_slot or {}).get(fid) or [])
+                if prevs and prevs[0] != to_sid:
+                    rabbit_from[fid] = prevs[0]
+            if not screen_images:
+                continue
+            lit = "_".join(str(s) for s in sorted(screen_images.keys(), key=_screen_sort_key))
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions,
+                "is_last_in_set": action_in_set == actions,
+                "timing_scale": scale,
+                "fixed_timing": True,
+                "on_ms": int(round(RABBIT_ON_MS * float(scale))),
+                "gap_ms": 80,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "rabbit": True,
+                "rabbit_fields": list(active),
+                "rabbit_from": dict(rabbit_from),
+                "rabbit_to": dict(rabbit_to),
+                "rabbit_exit_frames": list(exit_frames),
+                "rabbit_enter_frames": list(enter_frames),
+                "parts": [{
+                    "screens": list(screen_images.keys()),
+                    "path": hold,
+                    "field": next(iter(field_screens)),
+                }],
+                "field_screens": field_screens,
+                "screen_images": dict(screen_images),
+                "gap_path": (
+                    gaps.get(action_in_set)
+                    if gaps.get(action_in_set) and os.path.isfile(gaps[action_in_set])
+                    else None
+                ),
+                "label": (
+                    f"rabbit T{test_num}/{tests} "
+                    f"a{action_in_set}/{actions} "
+                    f"hop_{lit}"
+                ),
+                "path": f"image://rabbit/test{test_num}/{action_in_set}",
+                "foundation_sf": "rabbit",
+            })
+    return _stamp_finish_balls(playlist)
+
+
 def _build_rotation_playlist(
     active_fields,
     pass_image: str,
@@ -6788,6 +7094,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_groups = []  # [{cap, screens, path}]
         self._video_fill = False
         self._content_scale = 1.0
+        # Entry/Activated player PNGs: fit inside pass-sized box (KeepAspectRatio).
+        self._uniform_player_stills = False
         self._summary_lines = []
         self._summary_screens = None
         self._summary_by_screen = {}
@@ -6848,6 +7156,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self.active_screens = set()
         self._screen_pixmaps = {}
         self._content_scale = 1.0
+        self._uniform_player_stills = False
         self._summary_lines = []
         self._summary_screens = None
         self._summary_by_screen = {}
@@ -7219,6 +7528,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 continue
             stills[key] = pix
         # Action stills must never keep the opening/results logo box size.
+        # (uniform_player_stills is set by the player when applying Entry/Activated.)
         logo_scale = set(getattr(self, "_logo_scale_screens", None) or set())
         for key in stills:
             logo_scale.discard(key)
@@ -8015,6 +8325,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._video_fill_screens = fill
         self._video_fill = False
         self._content_scale = 1.0
+        self._uniform_player_stills = False
         self._summary_lines = []
         self._summary_screens = None
         self._summary_by_screen = {}
@@ -8500,10 +8811,17 @@ class ImageActionCanvas(QtWidgets.QWidget):
                     scale = 1.0 if fill else float(self._content_scale or 1.0)
                     draw_w = max(1, int(round(rect_w * scale)))
                     draw_h = max(1, int(round(self.height() * scale)))
+                    # Entry/Activated: same pass box for every player still (no crop
+                    # size drift from different PNG aspect ratios / padding).
+                    aspect_mode = (
+                        QtCore.Qt.KeepAspectRatio
+                        if (not fill and getattr(self, "_uniform_player_stills", False))
+                        else QtCore.Qt.KeepAspectRatioByExpanding
+                    )
                     scaled = pix.scaled(
                         draw_w,
                         draw_h,
-                        QtCore.Qt.KeepAspectRatioByExpanding,
+                        aspect_mode,
                         QtCore.Qt.SmoothTransformation,
                     )
                     px = left + (rect_w - scaled.width()) // 2
@@ -10402,7 +10720,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._label_mode = False
             return []
 
-        # ---- Foundation digit / rotation ----
+        # ---- Foundation digit / rotation / rabbit ----
         if extra_mode == "rotation":
             pass_image = _find_any_foundation_pass_image(self.video_directory)
             if pass_image:
@@ -10421,6 +10739,29 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             logger.error(
                 "Rotation mode selected but no pass image found under %s "
                 "(will NOT fall back to SF-30N degree pairs)",
+                self.video_directory,
+            )
+            self._label_mode = False
+            return []
+        if extra_mode == "rabbit":
+            rabbit_image = _ensure_rabbit_mode_assets(self.video_directory)
+            if not rabbit_image:
+                rabbit_image = _find_any_foundation_pass_image(self.video_directory)
+            if rabbit_image:
+                self._label_mode = True
+                playlist = _build_rabbit_playlist(active, rabbit_image, gaps=gaps)
+                if playlist:
+                    logger.info(
+                        "Foundation rabbit playlist: %s tests x %s actions "
+                        "(hop 1→6→1, image=%s) from %s",
+                        RABBIT_TEST_COUNT,
+                        RABBIT_ACTIONS_PER_TEST,
+                        os.path.basename(rabbit_image),
+                        self.video_directory,
+                    )
+                    return playlist
+            logger.error(
+                "Rabbit mode selected but no rabbit art could be rendered under %s",
                 self.video_directory,
             )
             self._label_mode = False
@@ -12394,6 +12735,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     ssav_path = str(entry.get("screen_ssav") or "")
                     if ssav_path.lower().endswith(".ssav") and os.path.isfile(ssav_path):
                         ssav_paint = {sid: ssav_path for sid in (paint or screen_images or {})}
+                self.image_canvas._uniform_player_stills = bool(
+                    entry.get("uniform_player_stills")
+                )
                 if player_paint:
                     self.image_canvas.set_screen_players(
                         player_paint,
@@ -12541,6 +12885,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if isinstance(entry, dict) and entry.get("rotation") and entry.get("rotation_fields"):
             self._label_phase = "spin"
             self._begin_rotation_spin(entry)
+            return
+        if isinstance(entry, dict) and entry.get("rabbit") and entry.get("rabbit_fields"):
+            self._label_phase = "rabbit_hop"
+            self._begin_rabbit_hop(entry)
             return
         self._label_phase = "action"
         self._apply_label_phase()
@@ -12766,6 +13114,135 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         self.action_timer = QtCore.QTimer(singleShot=True)
         self.action_timer.timeout.connect(self._tick_rotation_spin)
         self.action_timer.start(max(20, int(ROTATION_STEP_MS)))
+
+    def _begin_rabbit_hop(self, entry):
+        """Animate rabbit jumping left from previous screen onto the goal screen."""
+        self._hide_waiting_overlay()
+        if self.image_canvas:
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+        fields = [
+            f for f in (entry.get("rabbit_fields") or [])
+            if f in set(self._active_fields())
+        ]
+        rabbit_from = dict(entry.get("rabbit_from") or {})
+        rabbit_to = dict(entry.get("rabbit_to") or {})
+        exit_frames = [
+            p for p in (entry.get("rabbit_exit_frames") or []) if p and os.path.isfile(p)
+        ]
+        enter_frames = [
+            p for p in (entry.get("rabbit_enter_frames") or []) if p and os.path.isfile(p)
+        ]
+        hold = None
+        for path in (entry.get("screen_images") or {}).values():
+            if path and os.path.isfile(str(path)):
+                hold = str(path)
+                break
+        if not hold:
+            hold = _rabbit_hold_image()
+        self._rabbit_fields = []
+        self._rabbit_from = {}
+        self._rabbit_to = {}
+        self._rabbit_hold = hold
+        self._rabbit_exit_frames = exit_frames
+        self._rabbit_enter_frames = enter_frames
+        self._rabbit_frame_i = 0
+        self._rabbit_phase = "enter"  # first action may only enter
+        for fid in fields:
+            to_sid = _sid(rabbit_to.get(fid)) or (
+                (_named_screens((entry.get("field_screens") or {}).get(fid) or []) or [None])[0]
+            )
+            from_sid = _sid(rabbit_from.get(fid))
+            if not to_sid:
+                continue
+            self._rabbit_fields.append(fid)
+            self._rabbit_to[fid] = to_sid
+            if from_sid and from_sid != to_sid and exit_frames:
+                self._rabbit_from[fid] = from_sid
+                self._rabbit_phase = "exit"
+            else:
+                self._rabbit_from[fid] = None
+        if not self._rabbit_fields:
+            self._label_phase = "action"
+            self._apply_label_phase()
+            return
+        if self._rabbit_phase == "exit" and not exit_frames:
+            self._rabbit_phase = "enter"
+        if self._rabbit_phase == "enter" and not enter_frames:
+            self._label_phase = "action"
+            self._apply_label_phase()
+            return
+        logger.info(
+            "Rabbit hop %s → %s phase=%s",
+            self._rabbit_from,
+            self._rabbit_to,
+            self._rabbit_phase,
+        )
+        self._tick_rabbit_hop()
+
+    def _tick_rabbit_hop(self):
+        if self.display_phase != "action" or self._action_phase != "label":
+            return
+        if self._label_phase != "rabbit_hop":
+            return
+        if self.operator_paused:
+            QTimer.singleShot(200, self._tick_rabbit_hop)
+            return
+        phase = str(getattr(self, "_rabbit_phase", "") or "")
+        frame_i = int(getattr(self, "_rabbit_frame_i", 0) or 0)
+        exit_frames = list(getattr(self, "_rabbit_exit_frames", None) or [])
+        enter_frames = list(getattr(self, "_rabbit_enter_frames", None) or [])
+        hold = getattr(self, "_rabbit_hold", None)
+        frame_images = {}
+        done = False
+        if phase == "exit":
+            if frame_i >= len(exit_frames):
+                self._rabbit_phase = "enter"
+                self._rabbit_frame_i = 0
+                phase = "enter"
+                frame_i = 0
+            else:
+                img = exit_frames[frame_i]
+                for fid in self._rabbit_fields:
+                    from_sid = self._rabbit_from.get(fid)
+                    if from_sid and img:
+                        frame_images[from_sid] = img
+                self._rabbit_frame_i = frame_i + 1
+        if phase == "enter":
+            if frame_i >= len(enter_frames):
+                done = True
+            else:
+                img = enter_frames[frame_i]
+                for fid in self._rabbit_fields:
+                    to_sid = self._rabbit_to.get(fid)
+                    if to_sid and img:
+                        frame_images[to_sid] = img
+                self._rabbit_frame_i = frame_i + 1
+        if self.image_canvas:
+            if frame_images:
+                self.image_canvas.set_screen_images(
+                    frame_images, scale=self.image_canvas.PASS_IMAGE_SCALE
+                )
+            elif done and hold:
+                hold_map = {
+                    self._rabbit_to[fid]: hold
+                    for fid in self._rabbit_fields
+                    if self._rabbit_to.get(fid)
+                }
+                self.image_canvas.set_screen_images(
+                    hold_map, scale=self.image_canvas.PASS_IMAGE_SCALE
+                )
+            else:
+                self.image_canvas.clear()
+        if done:
+            logger.info("Rabbit landed on %s — hold for ball", self._rabbit_to)
+            self._label_phase = "action"
+            self._apply_label_phase()
+            return
+        self._stop_action_timer()
+        self.action_timer = QtCore.QTimer(singleShot=True)
+        self.action_timer.timeout.connect(self._tick_rabbit_hop)
+        self.action_timer.start(max(20, int(RABBIT_HOP_STEP_MS)))
 
     def _advance_independent_field(self, fid, reload=True):
         """Move one field to its next action. A finished test does not stop the other field."""
@@ -13770,8 +14247,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         replace_fields=restart_fields,
                     )
                 else:
+                    canvas._uniform_player_stills = bool(
+                        entry.get("uniform_player_stills")
+                    )
                     canvas.set_screen_images(
-                        images, keep_videos=True, replace_fields=restart_fields,
+                        images,
+                        scale=pass_scale,
+                        keep_videos=True,
+                        replace_fields=restart_fields,
                     )
             except Exception:
                 pass
@@ -15271,12 +15754,36 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if saver_on and not self._realtime_session_active():
             want = {"A", "B"}
         active = set(self._player_attr("_screensaver_fields") or set())
-        for fid in list(active - want):
-            self._stop_field_screensaver(fid)
+        # Switch off → hard-clear coded tiles (no flash / leftover panel).
         if not want:
+            turned_off = bool(prev.get("screensaver_on")) and not saver_on
+            if active or turned_off:
+                try:
+                    self._stop_all_screensaver()
+                except Exception:
+                    for fid in ("A", "B"):
+                        try:
+                            self._stop_field_screensaver(fid)
+                        except Exception:
+                            pass
+            if turned_off:
+                try:
+                    self._idle_screensaver_mode = False
+                except Exception:
+                    pass
+                canvas = getattr(self, "image_canvas", None)
+                if canvas is not None and not self._realtime_session_active():
+                    try:
+                        canvas.clear()
+                        canvas.repaint()
+                        QtWidgets.QApplication.processEvents()
+                    except Exception:
+                        pass
             return
         canvas = getattr(self, "image_canvas", None)
         saver_tiles = set(getattr(canvas, "_screensaver_scale_screens", None) or set()) if canvas else set()
+        for fid in list(active - want):
+            self._stop_field_screensaver(fid)
         for fid in want:
             field_tiles = {_sid(n) for n in _field_all_screens(fid)}
             # Re-attach coded tiles if action/bounce dropped them mid-play.
@@ -17739,33 +18246,24 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     def _field_uses_simulator(self, fid):
         """True only while this field's simulator switch is on."""
-        directory = getattr(self, "speed_file_dir", None) or "C:/Users/siama/Documents/simust_player"
-        path = os.path.join(directory, "arena_simulation.txt")
+        key = str(fid or "").upper()[:1]
+        if key not in ("A", "B"):
+            return False
         try:
+            import simust_realtime as _rt
+
+            directory = (
+                getattr(self, "speed_file_dir", None)
+                or "C:/Users/siama/Documents/simust_player"
+            )
+            path = os.path.join(directory, "arena_simulation.txt")
             if not os.path.exists(path):
                 return False
             with open(path, "r", encoding="utf-8") as handle:
-                raw = handle.read().strip()
+                fields = _rt.parse_simulation_fields(handle.read())
+            return bool(fields.get(key))
         except Exception:
             return False
-        lower = raw.lower()
-        if lower in ("1", "true", "yes", "on"):
-            return True
-        if lower in ("0", "false", "no", "off", ""):
-            return False
-        key = str(fid or "").upper()[:1]
-        if raw[:1] == "{":
-            try:
-                data = json.loads(raw) or {}
-            except Exception:
-                return False
-            return bool(data.get(key))
-        tokens = {
-            part.strip().upper()[:1]
-            for part in raw.replace(";", ",").split(",")
-            if part.strip()
-        }
-        return key in tokens
 
     def _hold_paused_fields(self, paused):
         """Keep a paused field's On clock from expiring while the other field plays."""

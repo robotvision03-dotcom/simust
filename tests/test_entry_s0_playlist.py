@@ -55,8 +55,8 @@ class EntryS0PlaylistTests(unittest.TestCase):
         self.assertEqual(
             names,
             {
-                "Male-Opponent-Player-01-01.png",
-                "Male-Opponent-Player-02-01.jpeg",
+                "Opponent-PL-01-B.png",
+                "Opponent-PL-03-B.png",
             },
         )
 
@@ -65,8 +65,8 @@ class EntryS0PlaylistTests(unittest.TestCase):
         self.assertTrue(pass_path)
         self.assertEqual(len(distractors), 4)
         names = {os.path.basename(p) for p in distractors}
-        self.assertIn("Male-Opponent-Player-03-01.png", names)
-        self.assertIn("Male-Teamate-Player-01-01.png", names)
+        self.assertIn("Opponent-PL-02-B.png", names)
+        self.assertIn("Teammate-PL-01-B.png", names)
 
     def test_playlist_has_ten_actions_and_larger_scale(self):
         playlist = player._build_entry_s0_playlist(1, ["A"])
@@ -77,6 +77,7 @@ class EntryS0PlaylistTests(unittest.TestCase):
             player.ENTRY_S0_PASS_IMAGE_SCALE,
             places=4,
         )
+        self.assertTrue(playlist[0].get("uniform_player_stills"))
 
     def test_playlist_pass_is_only_goal(self):
         playlist = player._build_entry_s0_playlist(1, ["A"])

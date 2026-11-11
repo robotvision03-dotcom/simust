@@ -84,6 +84,15 @@ class HpS3GoalAdvanceTests(unittest.TestCase):
                 ia = screens.index(pair[0])
                 ib = screens.index(pair[1])
                 self.assertEqual(nums[ia] + nums[ib], ref)
+            filled, filled_pairs, _, _ = player._s3_combined_multi_pair_layout(
+                ref, screens, 3, fill_distractors=True
+            )
+            self.assertEqual(sum(1 for n in filled if n is not None), 12)
+            self.assertEqual(len(filled_pairs), 3)
+            for pair in filled_pairs:
+                ia = screens.index(pair[0])
+                ib = screens.index(pair[1])
+                self.assertEqual(filled[ia] + filled[ib], ref)
 
     def test_sum_layout_has_exactly_one_pair(self):
         for ref in (5, 9, 17, 42, 99):

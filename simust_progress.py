@@ -62,7 +62,7 @@ FOUNDATION_COGNITIVE_PLAYLISTS = [
     "flex", "dual_rule", "peripheral", "emotion", "symbols",
 ]
 FOUNDATION_EXTRA_PLAYLISTS = (
-    ["digit", "rotation", "omid", "omid_2"]
+    ["digit", "rotation", "rabbit", "omid", "omid_2"]
     + FOUNDATION_MATH_PLAYLISTS
     + FOUNDATION_COGNITIVE_PLAYLISTS
 )

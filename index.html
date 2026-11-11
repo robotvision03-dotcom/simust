@@ -9,7 +9,55 @@
     <meta name="theme-color" content="#06101f" />
     <title>SIMUST PLAY IT SMART · Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/mesh_volume_viewer.js"></script>
     <style>
+        .mesh-volume-wrap {
+            border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+            background: #0a1422; min-height: 280px; position: relative; width: 100%;
+        }
+        .mesh-volume-wrap.mesh-volume-full { min-height: 460px; }
+        .mesh-volume-wrap canvas { width: 100%; height: 280px; display: block; cursor: grab; }
+        .mesh-volume-wrap.mesh-volume-full canvas { height: 420px; }
+        .mesh-volume-caption {
+            position: absolute; left: 10px; top: 8px; font-size: 11px; color: #c5d0de;
+            pointer-events: none; text-shadow: 0 1px 2px #000; z-index: 1;
+        }
+        .mesh-field-row { width: 100%; margin-bottom: 12px; }
+        .mesh-field-title {
+            font-size: 13px; font-weight: 800; letter-spacing: 0.04em; margin: 0 0 6px;
+            color: #ead48f; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+        }
+        .mesh-field-title .mesh-field-a { color: #9ec0ff; }
+        .mesh-field-title .mesh-field-b { color: #f3c98a; }
+        /* One field half of the 1280×360 stitch, scaled to full editor width. */
+        .calib-field-view {
+            position: relative; width: 100%; overflow: hidden; user-select: none;
+            background: #040a14; border: 1px solid var(--line); border-radius: 8px;
+            aspect-ratio: 16 / 9;
+        }
+        .calib-field-view img.calib-stitch {
+            position: absolute; left: 0; top: 0; width: 200%; height: 100%;
+            max-width: none; display: block; pointer-events: none; object-fit: fill;
+        }
+        .calib-field-view.field-b img.calib-stitch { transform: translateX(-50%); }
+        .calib-field-view canvas {
+            position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+        }
+        .mesh-zoom-bar {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            padding: 8px 10px; background: #07111f; border-top: 1px solid var(--line);
+        }
+        .mesh-zoom-bar button {
+            min-width: 36px; height: 32px; border-radius: 6px; border: 1px solid var(--line);
+            background: #10243f; color: #f5f8fb; font-weight: 700; cursor: pointer;
+        }
+        .mesh-zoom-bar button:hover { border-color: #276ce5; }
+        .mesh-zoom-bar input[type="range"] { flex: 1 1 160px; min-width: 120px; accent-color: #276ce5; }
+        .mesh-zoom-label { font-size: 12px; color: #ead48f; min-width: 52px; text-align: right; }
+        @media (max-width: 900px) {
+            .mesh-volume-wrap.mesh-volume-full { min-height: 340px; }
+            .mesh-volume-wrap.mesh-volume-full canvas { height: 300px; }
+        }
         /* ----- SIMUST portal theme (matched to my_simust.html) ----- */
         :root {
             --ink: #f5f8fb;
@@ -491,27 +539,73 @@
             .field-region-title { font-size: 1rem; }
             .btn-realtime { width: 100%; }
         }
-        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; width: 100%; max-width: 100%; overflow-x: hidden; }
-        html.simust-android .simust-card { min-height: 100dvh; width: 100%; border-radius: 0; max-width: none; }
-        html.simust-android .simust-body { min-height: 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; max-width: 100%; }
-        html.simust-android .simust-header { padding: 12px 16px; gap: 10px; }
-        html.simust-android .simust-tabs { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+        html.simust-android, html.simust-android body { padding: 0; align-items: stretch; justify-content: flex-start; min-height: 100dvh; width: 100%; max-width: 100%; overflow-x: hidden; box-sizing: border-box; }
+        html.simust-android *, html.simust-android *::before, html.simust-android *::after { box-sizing: border-box; }
+        html.simust-android .simust-card { min-height: 100dvh; width: 100%; max-width: 100vw; border-radius: 0; overflow-x: hidden; }
+        html.simust-android .simust-body { min-height: 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; max-width: 100%; width: 100%; }
+        html.simust-android .simust-header { padding: 10px 12px; gap: 8px; flex-wrap: wrap; width: 100%; max-width: 100%; }
+        html.simust-android .simust-header .header-brand { min-width: 0; flex: 1 1 auto; }
+        html.simust-android .header-cabinet-switches { flex-wrap: wrap; width: 100%; max-width: 100%; justify-content: flex-start; gap: 8px; }
+        html.simust-android .simust-tabs { -webkit-overflow-scrolling: touch; scrollbar-width: thin; width: 100%; max-width: 100%; }
         html.simust-android .btn-primary, html.simust-android .btn-realtime, html.simust-android .btn-unlock, html.simust-android .login-btn, html.simust-android .btn-logout, html.simust-android .btn-results, html.simust-android .btn-danger, html.simust-android .btn-pause, html.simust-android .btn-resume { min-height: 48px; padding: 12px 20px; font-size: 16px; }
-        html.simust-android .btn-realtime { min-height: 56px; min-width: min(100%, 280px); font-size: 17px; }
+        html.simust-android .btn-realtime { min-height: 56px; min-width: 0; width: 100%; max-width: 100%; font-size: 17px; }
         html.simust-android .tab-button { min-height: 48px; padding: 12px 18px; font-size: 14px; }
-        html.simust-android .search-input, html.simust-android .login-input, html.simust-android .modal-box .form-group input { min-height: 48px; font-size: 16px; }
-        html.simust-android .player-card { min-height: 56px; padding: 14px 16px; }
+        html.simust-android .search-input, html.simust-android .login-input, html.simust-android .modal-box .form-group input { min-height: 48px; font-size: 16px; max-width: 100%; }
+        html.simust-android .player-card { min-height: 56px; padding: 14px 16px; max-width: 100%; }
         html.simust-android .toggle-switch { width: 64px; height: 32px; }
         html.simust-android .slider::before { height: 26px; width: 26px; }
         html.simust-android input:checked + .slider::before { transform: translateX(32px); }
         html.simust-android .lab-link-banner { font-size: 13px; padding: 10px 16px; }
-        html.simust-android .field-regions { grid-template-columns: 1fr; }
-        html.simust-android .level-main-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-        html.simust-android .level-main-btn { height: 48px; min-height: 48px; font-size: 11px; }
+        /* Stack Field A / Field B on phones; side-by-side only on wide tablets. */
+        html.simust-android .field-regions {
+            display: grid;
+            grid-template-columns: 1fr !important;
+            gap: 12px;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+        }
+        @media (min-width: 900px) {
+            html.simust-android .field-regions {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+            }
+        }
+        html.simust-android .field-region {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            padding: 12px;
+        }
+        html.simust-android .field-region .panel,
+        html.simust-android .field-region .transport-bar,
+        html.simust-android .level-main-wrap,
+        html.simust-android .level-sub-rows {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+        }
+        html.simust-android .level-main-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; width: 100%; }
+        html.simust-android .level-main-btn { height: 48px; min-height: 48px; font-size: 11px; min-width: 0; }
+        html.simust-android .transport-bar { width: 100%; max-width: 100%; }
         html.simust-android .transport-bar .btn-primary,
         html.simust-android .transport-bar .btn-realtime { flex: 1 1 100%; min-width: 0; width: 100%; }
+        html.simust-android .manual-pitch { grid-template-columns: 1fr !important; width: 100%; max-width: 100%; }
+        html.simust-android .op-res-grid { min-width: 0; width: 100%; }
         @media (max-width: 480px) {
+            html.simust-android .simust-body { padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px)); }
             html.simust-android .level-main-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            html.simust-android .field-region { padding: 10px; }
+            html.simust-android .btn-realtime { font-size: 15px; min-height: 52px; }
+        }
+        @media (max-width: 360px) {
+            html.simust-android .level-main-row { grid-template-columns: 1fr 1fr; gap: 4px; }
+            html.simust-android .level-main-btn { font-size: 10px; height: 44px; min-height: 44px; padding: 4px; }
+            html.simust-android .field-region-title { font-size: 0.95rem; }
+            html.simust-android .tab-button { padding: 10px 12px; font-size: 12px; }
+        }
+        @media (orientation: landscape) and (max-height: 500px) {
+            html.simust-android .field-regions { grid-template-columns: 1fr !important; }
+            html.simust-android .simust-body { padding: 8px 12px; }
         }
         .transport-bar {
             position: sticky;
@@ -582,7 +676,13 @@
         .field-region-a .field-note { color: #c5d8ff; }
         .field-region-b .field-note { color: #f6ddb6; }
         @media (max-width: 900px) {
-            .field-regions { grid-template-columns: 1fr; }
+            .field-regions { grid-template-columns: 1fr; width: 100%; max-width: 100%; }
+            .field-region { width: 100%; max-width: 100%; min-width: 0; }
+            .mesh-volume-wrap canvas { height: 240px; }
+        }
+        @media (max-width: 600px) {
+            .field-regions { grid-template-columns: 1fr !important; }
+            .simust-card { min-height: 100dvh; max-width: 100%; }
         }
         html.simust-android .transport-bar {
             padding-top: 8px;
@@ -592,8 +692,9 @@
         html.simust-android .table-wrap { -webkit-overflow-scrolling: touch; }
         html.simust-android .toast { inset-inline-end: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
         @media (orientation: landscape) {
-            html.simust-android .simust-body { padding: 12px 16px; }
-            html.simust-android .btn-realtime { min-width: 240px; }
+            html.simust-android .simust-body { padding: 8px 12px; }
+            html.simust-android .btn-realtime { min-width: 0; width: 100%; max-width: 100%; }
+            html.simust-android .field-regions { grid-template-columns: 1fr !important; }
         }
         .lab-link-banner { display: none; }
         .lab-online-dot {
@@ -753,6 +854,12 @@
                 'goal-lines/capture': true,
                 'goal-lines/save': true,
                 'goal-lines/reset': true,
+                'goal-lines/preview': true,
+                'goal-lines/sculpt/mesh': true,
+                'goal-lines/sculpt/save': true,
+                'goal-lines/sculpt/reload': true,
+                'goal-lines/sculpt/clear': true,
+                'lab-tools/run': true,
                 'hip-zone/capture': true,
                 'hip-zone/save': true,
                 'hip-zone/reset': true,
@@ -1134,11 +1241,11 @@
         var LEVEL_SUBDIRS = {
             'L00-Foundation': [
                 'SF-30N', 'SF-60N', 'SF-110N', 'SF-180N',
-                'digit', 'rotation', 'omid', 'omid_2'
+                'digit', 'rotation', 'rabbit', 'omid', 'omid_2'
             ]
         };
         var FOUNDATION_PLAYLISTS = ['SF-30N', 'SF-60N', 'SF-110N', 'SF-180N'];
-        var FOUNDATION_EXTRA_PLAYLISTS = ['digit', 'rotation', 'omid', 'omid_2'];
+        var FOUNDATION_EXTRA_PLAYLISTS = ['digit', 'rotation', 'rabbit', 'omid', 'omid_2'];
         var applyFoundationSubdirs = function(subdirs, extras) {
             if (Array.isArray(subdirs) && subdirs.length) {
                 LEVEL_SUBDIRS['L00-Foundation'] = subdirs.slice();
@@ -1525,8 +1632,8 @@
                     setMessage('', false);
                     return;
                 }
-                setCancelId('');
-                setMessage('', false);
+                    setCancelId('');
+                    setMessage('', false);
                 if (fieldId !== field || !selectedSlots.length) {
                     setField(fieldId);
                     setSelectedSlots([hm]);
@@ -2266,11 +2373,11 @@
                                 key: btn.id,
                                 className: "level-main-wrap" + (isOpen ? " open" : "")
                             },
-                                React.createElement('button', {
+                        React.createElement('button', {
                                     type: "button",
                                     className: "level-main-btn" + (active ? " active" : ""),
                                     style: { background: btn.bg, color: btn.fg },
-                                    onClick: function() {
+                            onClick: function() {
                                         if (openMain === btn.id) {
                                             setOpenMain('');
                                             setOpenContentSet('');
@@ -2282,7 +2389,7 @@
                                         var selectedSet = contentSetForLevel(selectedLevel);
                                         if (mainLevelIdOf(selectedLevel) === btn.id && selectedSet) {
                                             setOpenContentSet(selectedSet.key);
-                                        } else {
+                                } else {
                                             setOpenContentSet('');
                                         }
                                     }
@@ -2727,7 +2834,8 @@
             var visFieldsState = useState({ A: false, B: false });
             var visFields = visFieldsState[0];
             var setVisFields = visFieldsState[1];
-            var running = !!status.session_running || !!status.active;
+            // Only true after Manual Coach Start — never during normal Field A/B play.
+            var running = !!status.active;
             var litSet = {};
             (status.lit_screens || []).forEach(function(sid) { litSet[sid] = true; });
             if (status.lit_screen) litSet[status.lit_screen] = true;
@@ -3425,6 +3533,9 @@
             var screensState = useState({});
             var screens = screensState[0];
             var setScreens = screensState[1];
+            var cylindersState = useState({});
+            var cylinders = cylindersState[0];
+            var setCylinders = cylindersState[1];
             // Center mouths + Activated Players side targets (1=L only, 6=R only, 2–5 both).
             var orderState = useState({
                 A: ['A1','A1L','A2','A2L','A2R','A3','A3L','A3R','A4','A4L','A4R','A5','A5L','A5R','A6','A6R'],
@@ -3449,16 +3560,51 @@
             var setBusy = busyState[1];
             var imgRef = useRef(null);
             var canvasRef = useRef(null);
+            var meshPointsState = useState(null);
+            var meshPoints = meshPointsState[0];
+            var setMeshPoints = meshPointsState[1];
+            var meshMetaState = useState({ nTheta: 20, nHeight: 10 });
+            var meshMeta = meshMetaState[0];
+            var setMeshMeta = meshMetaState[1];
+            var dragVertexState = useState(null);
+            var dragVertex = dragVertexState[0];
+            var setDragVertex = dragVertexState[1];
+            var meshDirtyRef = useRef(false);
+            var meshPointsRef = useRef(null);
+            var meshFacesState = useState([]);
+            var meshFaces = meshFacesState[0];
+            var setMeshFaces = meshFacesState[1];
+            // Separate full-width 3D viewers for Field A and Field B.
+            var fieldMeshesState = useState({ A: null, B: null });
+            var fieldMeshes = fieldMeshesState[0];
+            var setFieldMeshes = fieldMeshesState[1];
+            var fieldZoomState = useState({ A: 100, B: 100 });
+            var fieldZoom = fieldZoomState[0];
+            var setFieldZoom = fieldZoomState[1];
+            var meshViewersRef = useRef({ A: null, B: null });
+            var meshHostARef = useRef(null);
+            var meshHostBRef = useRef(null);
+            var selectedScreenRef = useRef(selectedScreen);
+            selectedScreenRef.current = selectedScreen;
+            var fieldScreenRef = useRef({ A: 'A1', B: 'B1' });
 
             // Scoring coords are always logical 1280×360 (same as GOAL_LINES).
             // Live scales them by frame_w/1280 — overlay/clicks must do the same.
             var LOG_W = 1280;
             var LOG_H = 360;
+            var FIELD_HALF = LOG_W / 2; // Field A = left 640, Field B = right 640
+            var MESH_N_THETA = 20;
+            var MESH_N_HEIGHT = 10;
+
+            var fieldXOffset = function(fid) {
+                return (fid || field) === 'B' ? FIELD_HALF : 0;
+            };
 
             var applyStatus = function(data) {
                 data = data || {};
                 if (data.order) setOrder(data.order);
                 if (data.screens) setScreens(data.screens);
+                if (data.cylinders) setCylinders(data.cylinders);
                 var frame = data.frame || {};
                 if (frame.data_url) setFrameUrl(frame.data_url);
                 // Keep logical size for coords; stash native stitch size from the frame.
@@ -3489,104 +3635,377 @@
                 }
             }, [field]);
 
-            var drawCylinder = function(ctx, cx, cy, radius, height) {
-                // Same green finish cylinder as simust_realtime.draw_finish_cylinder.
-                var r = Math.max(4, radius | 0);
-                var h = Math.max(8, height | 0);
+            var makeDefaultMeshPoints = function(cx, cy, radius, height) {
+                // Same classic green body as draw_finish_cylinder:
+                // bottom ring = base circle, top ring = foreshortened ellipse,
+                // middle rings = circular shaft wall (radius r, axis −Y).
+                var r = Math.max(4, Number(radius) || 40);
+                var h = Math.max(8, Number(height) || 31);
+                var ry = Math.max(3, r * 0.35);
                 var topCy = cy - h;
-                var ry = Math.max(3, Math.round(r * 0.35));
+                var pts = [];
+                var zi, ti, t, th, c, s;
+                for (zi = 0; zi < MESH_N_HEIGHT; zi++) {
+                    t = MESH_N_HEIGHT <= 1 ? 0 : zi / (MESH_N_HEIGHT - 1);
+                    for (ti = 0; ti < MESH_N_THETA; ti++) {
+                        th = (2 * Math.PI * ti) / MESH_N_THETA;
+                        c = Math.cos(th);
+                        s = Math.sin(th);
+                        if (zi === 0) {
+                            pts.push([cx + r * c, cy + r * s, r * s]);
+                        } else if (zi === MESH_N_HEIGHT - 1) {
+                            pts.push([cx + r * c, topCy + ry * s, ry * s]);
+                        } else {
+                            pts.push([cx + r * c, cy - t * h, r * s]);
+                        }
+                    }
+                }
+                return pts;
+            };
+
+            var makeDefaultMeshFaces = function(nTheta, nHeight) {
+                // Fixed triangle indices (sides + caps) — editable mesh from the start.
+                nTheta = nTheta || MESH_N_THETA;
+                nHeight = nHeight || MESH_N_HEIGHT;
+                var faces = [];
+                var z, t, t2, a, b, c, d, base;
+                for (z = 0; z < nHeight - 1; z++) {
+                    for (t = 0; t < nTheta; t++) {
+                        t2 = (t + 1) % nTheta;
+                        a = z * nTheta + t;
+                        b = z * nTheta + t2;
+                        c = (z + 1) * nTheta + t2;
+                        d = (z + 1) * nTheta + t;
+                        faces.push([a, b, c], [a, c, d]);
+                    }
+                }
+                for (t = 1; t < nTheta - 1; t++) {
+                    faces.push([0, t + 1, t]);
+                }
+                base = (nHeight - 1) * nTheta;
+                for (t = 1; t < nTheta - 1; t++) {
+                    faces.push([base, base + t, base + t + 1]);
+                }
+                return faces;
+            };
+
+            var applyLocalCylinderMesh = function(sid, cx, cy, radius, height) {
+                if (!sid) return null;
+                var fid = String(sid).charAt(0).toUpperCase();
+                var pts = makeDefaultMeshPoints(cx, cy, radius, height);
+                var faces = makeDefaultMeshFaces(MESH_N_THETA, MESH_N_HEIGHT);
+                var meta = { nTheta: MESH_N_THETA, nHeight: MESH_N_HEIGHT };
+                fieldScreenRef.current[fid] = sid;
+                setMeshMeta(meta);
+                setMeshFaces(faces);
+                setMeshPoints(pts);
+                meshPointsRef.current = pts;
+                meshDirtyRef.current = false;
+                if (fid === 'A' || fid === 'B') {
+                    setFieldMeshes(function(prev) {
+                        var next = Object.assign({}, prev || {});
+                        next[fid] = { screen: sid, points: pts, faces: faces, meta: meta };
+                        return next;
+                    });
+                }
+                return pts;
+            };
+
+            var meshWireSegments = function(pts, nTheta, nHeight) {
+                var segs = [];
+                var z, t, a, b;
+                nTheta = nTheta || MESH_N_THETA;
+                nHeight = nHeight || MESH_N_HEIGHT;
+                if (!pts || !pts.length) return segs;
+                for (z = 0; z < nHeight; z++) {
+                    for (t = 0; t < nTheta; t++) {
+                        a = pts[z * nTheta + t];
+                        b = pts[z * nTheta + ((t + 1) % nTheta)];
+                        if (a && b) segs.push([a, b]);
+                    }
+                }
+                for (t = 0; t < nTheta; t++) {
+                    for (z = 0; z < nHeight - 1; z++) {
+                        a = pts[z * nTheta + t];
+                        b = pts[(z + 1) * nTheta + t];
+                        if (a && b) segs.push([a, b]);
+                    }
+                }
+                return segs;
+            };
+
+            var drawCylinder = function(ctx, cx, cy, radius, height, preview, sx, sy, points) {
+                // White mesh points + wire links only (no green fill/silhouette).
+                var pts = points || null;
                 ctx.save();
-                ctx.globalAlpha = 0.45;
-                ctx.fillStyle = 'rgb(0,180,0)';
-                ctx.fillRect(cx - r, topCy, r * 2, h);
-                ctx.beginPath();
-                ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.beginPath();
-                ctx.arc(cx, cy, r, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.beginPath();
-                ctx.ellipse(cx, topCy, r, ry, 0, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.globalAlpha = 1;
-                ctx.strokeStyle = 'rgb(0,220,0)';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.ellipse(cx, topCy, r, ry, 0, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(cx - r, topCy);
-                ctx.lineTo(cx - r, cy);
-                ctx.moveTo(cx + r, topCy);
-                ctx.lineTo(cx + r, cy);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI);
-                ctx.stroke();
+                if (pts && pts.length) {
+                    var segs = meshWireSegments(
+                        pts,
+                        meshMeta.nTheta || MESH_N_THETA,
+                        meshMeta.nHeight || MESH_N_HEIGHT
+                    );
+                    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+                    ctx.lineWidth = 1;
+                    segs.forEach(function(seg) {
+                        ctx.beginPath();
+                        ctx.moveTo(seg[0][0] * sx, seg[0][1] * sy);
+                        ctx.lineTo(seg[1][0] * sx, seg[1][1] * sy);
+                        ctx.stroke();
+                    });
+                    pts.forEach(function(p, idx) {
+                        var selected = dragVertex === idx;
+                        ctx.beginPath();
+                        ctx.fillStyle = selected ? '#ffcc00' : '#ffffff';
+                        ctx.arc(p[0] * sx, p[1] * sy, selected ? 5 : 2.5, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
+                } else if (preview && preview.wire && preview.wire.length) {
+                    (preview.wire || []).forEach(function(seg) {
+                        if (!seg || seg.length < 2) return;
+                        ctx.beginPath();
+                        ctx.moveTo(seg[0][0] * sx, seg[0][1] * sy);
+                        ctx.lineTo(seg[1][0] * sx, seg[1][1] * sy);
+                        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    });
+                }
                 ctx.restore();
             };
 
             var redrawOverlay = function() {
                 var canvas = canvasRef.current;
-                var img = imgRef.current;
-                if (!canvas || !img || !img.naturalWidth) return;
-                canvas.width = img.clientWidth;
-                canvas.height = img.clientHeight;
+                var stage = canvas && canvas.parentElement;
+                if (!canvas || !stage) return;
+                var rectW = stage.clientWidth || 1;
+                var rectH = stage.clientHeight || 1;
+                canvas.width = rectW;
+                canvas.height = rectH;
                 var ctx = canvas.getContext('2d');
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                // Image is SIM 1280×360 (same as cylinder frame). Map 1:1 to canvas.
-                var sx = canvas.width / LOG_W;
+                // Only the active field half is on screen (full-size).
+                var xOff = fieldXOffset(field);
+                var sx = canvas.width / FIELD_HALF;
                 var sy = canvas.height / LOG_H;
                 var scale = Math.min(sx, sy);
+                var lx = function(x) { return (Number(x) - xOff) * sx; };
+                var ly = function(y) { return Number(y) * sy; };
                 var drawGoal = function(sid, selected) {
-                    var line = screens[sid];
-                    if (!line || !line.p0 || !line.p1) return;
-                    var x1 = line.p0[0] * sx, y1 = line.p0[1] * sy;
-                    var x2 = line.p1[0] * sx, y2 = line.p1[1] * sy;
-                    var mx = (x1 + x2) / 2;
-                    var my = (y1 + y2) / 2;
-                    var depth = 45;
-                    var radius = Math.max(4, Math.round(depth * 0.65 * 0.70 * 0.9 * 0.9 * 0.9 * 0.9 * 0.93 * 1.03 * scale));
-                    var heightPx = Math.max(8, Math.round(31 * sy));
-                    drawCylinder(ctx, mx, my, radius, heightPx);
-                    ctx.strokeStyle = selected ? '#22c55e' : '#ffff00';
-                    ctx.lineWidth = selected ? 3 : 2;
-                    ctx.beginPath();
-                    ctx.moveTo(x1, y1);
-                    ctx.lineTo(x2, y2);
-                    ctx.stroke();
-                    ctx.fillStyle = selected ? '#22c55e' : '#ef4444';
-                    ctx.beginPath();
-                    ctx.arc(x1, y1, 5, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.beginPath();
-                    ctx.arc(x2, y2, 5, 0, Math.PI * 2);
-                    ctx.fill();
+                    var line = screens[sid] || {};
+                    var preview = cylinders[sid] || {};
+                    if (!line.p0 || !line.p1) {
+                        if (preview.cx == null) return;
+                    }
+                    var x1 = line.p0 ? lx(line.p0[0]) : 0;
+                    var y1 = line.p0 ? ly(line.p0[1]) : 0;
+                    var x2 = line.p1 ? lx(line.p1[0]) : 0;
+                    var y2 = line.p1 ? ly(line.p1[1]) : 0;
+                    var mx = lx(preview.cx != null
+                        ? preview.cx
+                        : (line.p0 && line.p1 ? ((line.p0[0] + line.p1[0]) / 2) : (xOff + FIELD_HALF / 2)));
+                    var my = ly(preview.cy != null
+                        ? preview.cy
+                        : (line.p0 && line.p1 ? ((line.p0[1] + line.p1[1]) / 2) : LOG_H / 2));
+                    var radius = Math.max(4, Math.round((preview.radius || 0) * scale));
+                    if (!preview.radius) {
+                        radius = Math.max(4, Math.round(100 * 0.65 * 0.70 * 0.9 * 0.9 * 0.9 * 0.9 * 0.93 * 1.03 * scale));
+                    }
+                    var heightPx = Math.max(8, Math.round((preview.height || 31) * sy));
+                    // Mesh-only overlay in the active field half (shift SIM X by field offset).
+                    var viewPreview = preview;
+                    if (preview && (preview.silhouette || preview.wire)) {
+                        viewPreview = Object.assign({}, preview, {
+                            silhouette: (preview.silhouette || []).map(function(pt) {
+                                return [pt[0] - xOff, pt[1]];
+                            }),
+                            wire: (preview.wire || []).map(function(seg) {
+                                if (!seg || seg.length < 2) return seg;
+                                return [
+                                    [seg[0][0] - xOff, seg[0][1]],
+                                    [seg[1][0] - xOff, seg[1][1]]
+                                ];
+                            })
+                        });
+                    }
+                    drawCylinder(ctx, mx, my, radius, heightPx, viewPreview, sx, sy,
+                        selected ? (meshPoints || []).map(function(p) {
+                            return [p[0] - xOff, p[1], p[2] || 0];
+                        }) : null);
+                    if (line.p0 && line.p1) {
+                        ctx.strokeStyle = selected ? '#22c55e' : '#ffff00';
+                        ctx.lineWidth = selected ? 3 : 2;
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                        ctx.fillStyle = selected ? '#22c55e' : '#ef4444';
+                        ctx.beginPath();
+                        ctx.arc(x1, y1, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(x2, y2, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
                     ctx.fillStyle = '#fff';
                     ctx.font = 'bold 11px sans-serif';
-                    ctx.fillText(sid, mx + 9, my - 6);
+                    ctx.fillText(sid + ' · mesh', mx + 9, my - 6);
                 };
-                // Only the selected goal (A1, A1R, …) — avoid cluttering every mouth at once.
                 if (selectedScreen) {
                     drawGoal(selectedScreen, true);
                 }
                 if (pendingP0) {
                     ctx.fillStyle = '#276ce5';
                     ctx.beginPath();
-                    ctx.arc(pendingP0[0] * sx, pendingP0[1] * sy, 6, 0, Math.PI * 2);
+                    ctx.arc(lx(pendingP0[0]), ly(pendingP0[1]), 6, 0, Math.PI * 2);
                     ctx.fill();
                 }
             };
 
             useEffect(function() {
+                meshPointsRef.current = meshPoints;
                 redrawOverlay();
-            }, [screens, selectedScreen, field, frameUrl, pendingP0, imageSize]);
+            }, [screens, cylinders, selectedScreen, field, frameUrl, pendingP0, imageSize, meshPoints, dragVertex]);
+
+            useEffect(function() {
+                // Re-fit overlay after the field half swaps full-screen.
+                var id = window.setTimeout(function() { redrawOverlay(); }, 30);
+                return function() { window.clearTimeout(id); };
+            }, [field, frameUrl]);
+
+            var loadMeshForScreen = function(sid, lineOverride, opts) {
+                if (!sid) return;
+                var fid = String(sid).charAt(0).toUpperCase();
+                if (fid !== 'A' && fid !== 'B') return;
+                fieldScreenRef.current[fid] = sid;
+                var line = lineOverride || screens[sid] || {};
+                opts = opts || {};
+                axios.post('/goal-lines/sculpt/mesh', {
+                    screen: sid,
+                    p0: line.p0,
+                    p1: line.p1,
+                    // New goal-line clicks rebuild the classic cylinder mesh from scratch.
+                    regenerate: !!opts.regenerate
+                }).then(function(res) {
+                    var data = res.data || {};
+                    var pts = data.points || null;
+                    var meta = {
+                        nTheta: data.n_theta || MESH_N_THETA,
+                        nHeight: data.n_height || MESH_N_HEIGHT
+                    };
+                    var faces = data.faces || [];
+                    setFieldMeshes(function(prev) {
+                        var next = Object.assign({}, prev || {});
+                        next[fid] = { screen: sid, points: pts, faces: faces, meta: meta };
+                        return next;
+                    });
+                    if (sid === selectedScreenRef.current) {
+                        setMeshMeta(meta);
+                        setMeshFaces(faces);
+                        setMeshPoints(pts);
+                        meshPointsRef.current = pts;
+                        meshDirtyRef.current = false;
+                    }
+                    if (data.preview) {
+                        setCylinders(function(prev) {
+                            var next = Object.assign({}, prev || {});
+                            next[sid] = Object.assign({}, next[sid] || {}, data.preview, {
+                                sculpted: !!data.sculpted
+                            });
+                            return next;
+                        });
+                    }
+                }).catch(function() {
+                    var preview = cylinders[sid] || {};
+                    applyLocalCylinderMesh(
+                        sid,
+                        preview.cx || LOG_W / 2,
+                        preview.cy || LOG_H / 2,
+                        preview.radius || 40,
+                        preview.height || 31
+                    );
+                });
+            };
+
+            var ensureFieldViewer = function(fid, host) {
+                if (!host || typeof window.createMeshVolumeViewer !== 'function') return null;
+                var canvas = host.querySelector('canvas.mesh-volume-gl');
+                if (!canvas) {
+                    // Host remounted for this field — rebuild viewer on a fresh canvas.
+                    if (meshViewersRef.current[fid] && meshViewersRef.current[fid].destroy) {
+                        try { meshViewersRef.current[fid].destroy(); } catch (e) {}
+                    }
+                    meshViewersRef.current[fid] = null;
+                    canvas = document.createElement('canvas');
+                    canvas.className = 'mesh-volume-gl';
+                    host.insertBefore(canvas, host.firstChild);
+                }
+                if (!meshViewersRef.current[fid]) {
+                    meshViewersRef.current[fid] = window.createMeshVolumeViewer(canvas, {
+                        onVertexDrag: function(idx, point, pts) {
+                            var sid = fieldScreenRef.current[fid];
+                            meshDirtyRef.current = true;
+                            setFieldMeshes(function(prev) {
+                                var next = Object.assign({}, prev || {});
+                                var cur = Object.assign({}, next[fid] || {});
+                                cur.points = pts.slice();
+                                next[fid] = cur;
+                                return next;
+                            });
+                            if (sid && sid === selectedScreenRef.current) {
+                                meshPointsRef.current = pts;
+                                setMeshPoints(pts.slice());
+                                setDragVertex(idx);
+                            }
+                        },
+                        onVertexRelease: function(idx, pts) {
+                            setDragVertex(null);
+                            var sid = fieldScreenRef.current[fid];
+                            if (meshDirtyRef.current && sid && typeof window.__simustSaveGoalMesh === 'function') {
+                                window.__simustSaveGoalMesh(sid, pts);
+                            }
+                        },
+                        onZoomChange: function(info) {
+                            if (info && info.percent != null) {
+                                setFieldZoom(function(prev) {
+                                    var next = Object.assign({}, prev || {});
+                                    next[fid] = info.percent;
+                                    return next;
+                                });
+                            }
+                        }
+                    });
+                }
+                return meshViewersRef.current[fid];
+            };
+
+            useEffect(function() {
+                // Only the active field's 3D mesh is mounted full-size.
+                var fid = field === 'B' ? 'B' : 'A';
+                var host = fid === 'A' ? meshHostARef.current : meshHostBRef.current;
+                if (!host) return;
+                try {
+                    var viewer = ensureFieldViewer(fid, host);
+                    var pack = fieldMeshes[fid];
+                    if (viewer && pack && pack.points && pack.points.length) {
+                        viewer.setMesh(pack.points, pack.faces || [], {
+                            nTheta: (pack.meta && pack.meta.nTheta) || MESH_N_THETA,
+                            nHeight: (pack.meta && pack.meta.nHeight) || MESH_N_HEIGHT
+                        });
+                    }
+                } catch (err) {
+                    setMessage('WebGL mesh viewer unavailable: ' + (err && err.message ? err.message : err));
+                }
+            }, [fieldMeshes, frameUrl, field, selectedScreen]);
+
+            useEffect(function() {
+                if (selectedScreen) loadMeshForScreen(selectedScreen);
+            }, [selectedScreen, frameUrl]);
 
             var frameReadyMessage = function(data) {
                 var frame = (data && data.frame) || {};
                 var nw = frame.width || LOG_W;
                 var nh = frame.height || LOG_H;
-                return 'Frame ready — ' + nw + '×' + nh + ' stitched (same as Realtime cylinder). Green cylinders = current goal areas. Click post A then post B to adjust.';
+                return 'Frame ready — ' + nw + '×' + nh + '. Click post A then post B to set the goal line (cylinder follows line diameter). Hold Ctrl and drag a mesh vertex to reshape the surface.';
             };
 
             var captureStitched = function() {
@@ -3629,11 +4048,14 @@
             };
 
             var eventToImage = function(ev) {
-                var img = imgRef.current;
-                if (!img || !img.naturalWidth) return null;
-                var rect = img.getBoundingClientRect();
-                // Click → logical 1280×360 (inverse of live sx = frame_w/1280).
-                var x = (ev.clientX - rect.left) * (LOG_W / rect.width);
+                var canvas = canvasRef.current;
+                var stage = canvas && canvas.parentElement;
+                if (!stage) return null;
+                var rect = stage.getBoundingClientRect();
+                if (!rect.width || !rect.height) return null;
+                // Visible stage is one field half (640×360), mapped back into full 1280×360.
+                var xOff = fieldXOffset(field);
+                var x = xOff + (ev.clientX - rect.left) * (FIELD_HALF / rect.width);
                 var y = (ev.clientY - rect.top) * (LOG_H / rect.height);
                 return [
                     Math.max(0, Math.min(LOG_W, Math.round(x * 10) / 10)),
@@ -3641,29 +4063,161 @@
                 ];
             };
 
-            var onImageClick = function(ev) {
+            var refreshCylinderFromLine = function(sid, p0, p1) {
+                axios.post('/goal-lines/preview', { screen: sid, p0: p0, p1: p1 }).then(function(res) {
+                    var preview = (res.data || {}).preview || {};
+                    var cx = preview.cx || ((p0[0] + p1[0]) / 2);
+                    var cy = preview.cy || ((p0[1] + p1[1]) / 2);
+                    var radius = preview.radius || 40;
+                    var height = preview.height || 31;
+                    setCylinders(function(prev) {
+                        var next = Object.assign({}, prev || {});
+                        next[sid] = Object.assign({}, next[sid] || {}, preview, { sculpted: false });
+                        return next;
+                    });
+                    // Instant triangulated mesh in old cylinder shape for 3D edit.
+                    applyLocalCylinderMesh(sid, cx, cy, radius, height);
+                    // Prefer server faces/points (same connectivity) when available.
+                    loadMeshForScreen(sid, { p0: p0, p1: p1 }, { regenerate: true });
+                }).catch(function() {
+                    var cx = (p0[0] + p1[0]) / 2;
+                    var cy = (p0[1] + p1[1]) / 2;
+                    var span = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) || 40;
+                    var radius = Math.max(8, span * 0.55);
+                    setCylinders(function(prev) {
+                        var next = Object.assign({}, prev || {});
+                        next[sid] = Object.assign({}, next[sid] || {}, {
+                            cx: cx, cy: cy, radius: radius, height: 31, sculpted: false
+                        });
+                        return next;
+                    });
+                    applyLocalCylinderMesh(sid, cx, cy, radius, 31);
+                });
+            };
+
+            var findNearestVertex = function(pt, pts, maxDist) {
+                if (!pt || !pts || !pts.length) return -1;
+                var best = -1;
+                var bestD = maxDist != null ? maxDist : 14;
+                pts.forEach(function(p, i) {
+                    var d = Math.hypot(p[0] - pt[0], p[1] - pt[1]);
+                    if (d <= bestD) {
+                        bestD = d;
+                        best = i;
+                    }
+                });
+                return best;
+            };
+
+            var smoothMoveVertex = function(pts, index, x, y, smooth) {
+                var next = pts.map(function(p) { return p.slice(); });
+                var dx = x - pts[index][0];
+                var dy = y - pts[index][1];
+                if (!smooth) {
+                    next[index][0] = x;
+                    next[index][1] = y;
+                    return next;
+                }
+                var sigma = 18;
+                pts.forEach(function(p, i) {
+                    var d2 = Math.pow(p[0] - pts[index][0], 2) + Math.pow(p[1] - pts[index][1], 2);
+                    var w = Math.exp(-d2 / (2 * sigma * sigma));
+                    if (i === index) w = 1;
+                    next[i][0] = p[0] + dx * w;
+                    next[i][1] = p[1] + dy * w;
+                });
+                return next;
+            };
+
+            var saveMeshPoints = function(sid, pts) {
+                if (!sid || !pts || !pts.length) return;
+                var line = screens[sid] || {};
+                var preview = cylinders[sid] || {};
+                axios.post('/goal-lines/sculpt/save', {
+                    screen: sid,
+                    points: pts,
+                    p0: line.p0,
+                    p1: line.p1,
+                    radius: preview.radius,
+                    height: preview.height,
+                    cx: preview.cx,
+                    cy: preview.cy,
+                    smooth: true
+                }).then(function(res) {
+                    applyStatus(res.data || {});
+                    meshDirtyRef.current = false;
+                    setMessage(sid + ' mesh saved (' + pts.length + ' vertices).');
+                    loadMeshForScreen(sid);
+                }).catch(function(e) {
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Mesh save failed');
+                });
+            };
+            window.__simustSaveGoalMesh = saveMeshPoints;
+
+            var onCanvasMouseDown = function(ev) {
                 var pt = eventToImage(ev);
                 if (!pt || !selectedScreen) return;
+                if (ev.ctrlKey || ev.metaKey) {
+                    // Ctrl+drag mesh vertex (polygon surface only).
+                    var idx = findNearestVertex(pt, meshPointsRef.current || meshPoints, 16);
+                    if (idx < 0) {
+                        setMessage(selectedScreen + ': hold Ctrl near a green vertex, then drag to reshape the cylinder mesh.');
+                        return;
+                    }
+                    ev.preventDefault();
+                    setDragVertex(idx);
+                    setMessage(selectedScreen + ': dragging vertex ' + idx + ' (Ctrl). Release to save mesh.');
+                    return;
+                }
+                // Plain click = goal line posts; cylinder regenerates from line diameter.
                 if (!pendingP0) {
                     setPendingP0(pt);
                     setMessage(selectedScreen + ' post A: (' + pt[0] + ', ' + pt[1] + '). Now click post B.');
                     return;
                 }
+                var p0 = pendingP0.slice();
+                var p1 = pt.slice();
                 var next = Object.assign({}, screens);
                 next[selectedScreen] = Object.assign({}, next[selectedScreen] || {}, {
-                    p0: pendingP0.slice(),
-                    p1: pt.slice(),
+                    p0: p0,
+                    p1: p1,
                     calibrated: true,
                     field: field
                 });
                 setScreens(next);
                 setPendingP0(null);
-                setMessage(selectedScreen + ' line set. Choose the next goal or press Save Goal Areas.');
-                var list = (order && order[field]) || [];
-                var idx = list.indexOf(selectedScreen);
-                if (idx >= 0 && idx + 1 < list.length) {
-                    setSelectedScreen(list[idx + 1]);
+                setMessage(selectedScreen + ' line set — classic cylinder mesh ready in 3D (triangles + indices). Ctrl+drag a vertex to reshape.');
+                refreshCylinderFromLine(selectedScreen, p0, p1);
+            };
+
+            var onCanvasMouseMove = function(ev) {
+                if (dragVertex == null) return;
+                if (!(ev.ctrlKey || ev.metaKey)) return;
+                var pt = eventToImage(ev);
+                if (!pt) return;
+                var pts = meshPointsRef.current || meshPoints;
+                if (!pts) return;
+                var next = smoothMoveVertex(pts, dragVertex, pt[0], pt[1], true);
+                meshDirtyRef.current = true;
+                meshPointsRef.current = next;
+                setMeshPoints(next);
+            };
+
+            var onCanvasMouseUp = function(ev) {
+                if (dragVertex == null) return;
+                var idx = dragVertex;
+                setDragVertex(null);
+                var pts = meshPointsRef.current || meshPoints;
+                if (meshDirtyRef.current && pts && selectedScreen) {
+                    saveMeshPoints(selectedScreen, pts);
+                } else {
+                    setMessage(selectedScreen + ': released vertex ' + idx);
                 }
+            };
+
+            var onImageClick = function(ev) {
+                // Clicks are handled on the overlay canvas.
+                onCanvasMouseDown(ev);
             };
 
             var saveGoalAreas = function() {
@@ -3685,8 +4239,9 @@
                         return;
                     }
                     applyStatus(res.data || {});
-                    setMessage('Goal areas saved. Cylinder scoring uses these lines for center mouths and L/R side targets.');
+                    setMessage('Goal lines saved. Cylinder diameter follows each line; use Ctrl+drag to sculpt the mesh.');
                     setBusy(false);
+                    if (selectedScreen) loadMeshForScreen(selectedScreen);
                 }).catch(function(e) {
                     setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
                     setBusy(false);
@@ -3699,6 +4254,7 @@
                 axios.post('/goal-lines/reset', {}).then(function(res) {
                     applyStatus(res.data || {});
                     setPendingP0(null);
+                    setMeshPoints(null);
                     setMessage('Goal areas reset to defaults.');
                     setBusy(false);
                 }).catch(function(e) {
@@ -3713,7 +4269,7 @@
             return React.createElement('div', { className: 'panel p-5 mt-8' },
                 React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Goal Area Calibration'),
                 React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
-                    'Uses the same stitched 1280×360 image Realtime Play draws the green goal cylinder on (camera-1 + camera-8). Calibrate center mouths (A1–A6 / B1–B6) and left/right side targets (A1L, A2L/A2R … A6R; same on Field B). Screen 1 has left only, screen 6 right only, screens 2–5 both. Click two posts per goal, then Save.'),
+                    'Capture the stitch, then click Field A or Field B — only that field fills the screen with its selected goal. Click two posts for the line; the classic green cylinder becomes an editable TRIANGLES mesh. Orbit / zoom / Ctrl+drag in the 3D panel below.'),
                 React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
                     React.createElement('button', {
                         className: 'btn-primary',
@@ -3724,12 +4280,62 @@
                         className: 'btn-realtime',
                         disabled: busy || !Object.keys(screens || {}).length,
                         onClick: saveGoalAreas
-                    }, 'Save Goal Areas'),
+                    }, 'Save Goal Lines'),
                     React.createElement('button', {
                         className: 'btn-danger',
                         disabled: busy,
                         onClick: resetGoalAreas
-                    }, 'Reset Goal Areas')
+                    }, 'Reset Goal Lines'),
+                    React.createElement('button', {
+                        className: 'btn-resume',
+                        disabled: busy || !selectedScreen,
+                        onClick: function() {
+                            var preview = cylinders[selectedScreen] || {};
+                            setBusy(true);
+                            setMessage('Opening PyVista for ' + selectedScreen + ' (Ctrl+drag vertices)…');
+                            axios.post('/lab-tools/run', {
+                                tool: 'cylinder_sculpt',
+                                screen: selectedScreen,
+                                preview: {
+                                    radius: preview.radius,
+                                    height: preview.height,
+                                    cx: preview.cx,
+                                    cy: preview.cy
+                                }
+                            }).then(function(res) {
+                                setMessage((res.data && res.data.message) || ('PyVista opened for ' + selectedScreen + '. Ctrl+drag vertices, Enter saves.'));
+                                setBusy(false);
+                            }).catch(function(e) {
+                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not start cylinder sculpt');
+                                setBusy(false);
+                            });
+                        }
+                    }, '3D Sculpt (PyVista)'),
+                    React.createElement('button', {
+                        className: 'refresh-btn',
+                        disabled: busy || !selectedScreen,
+                        onClick: function() {
+                            loadMeshForScreen(selectedScreen);
+                            setMessage('Reloaded mesh for ' + selectedScreen);
+                        }
+                    }, 'Reload Mesh'),
+                    React.createElement('button', {
+                        className: 'refresh-btn',
+                        disabled: busy || !selectedScreen,
+                        onClick: function() {
+                            if (!window.confirm('Clear sculpted mesh for ' + selectedScreen + ' and restore the line-based cylinder?')) return;
+                            setBusy(true);
+                            axios.post('/goal-lines/sculpt/clear', { screen: selectedScreen }).then(function(res) {
+                                applyStatus(res.data || {});
+                                loadMeshForScreen(selectedScreen);
+                                setMessage('Cleared mesh for ' + selectedScreen + '.');
+                                setBusy(false);
+                            }).catch(function(e) {
+                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Clear failed');
+                                setBusy(false);
+                            });
+                        }
+                    }, 'Clear Mesh')
                 ),
                 message ? React.createElement('p', { className: 'text-sm mb-4', style: { color: '#ead48f' } }, message) : null,
                 React.createElement('div', { className: 'flex flex-wrap items-center gap-3 mb-3' },
@@ -3738,65 +4344,150 @@
                         return React.createElement('button', {
                             key: fid,
                             className: field === fid ? 'btn-resume' : 'refresh-btn',
-                            onClick: function() { setField(fid); setPendingP0(null); }
+                            onClick: function() {
+                                setField(fid);
+                                setPendingP0(null);
+                                setDragVertex(null);
+                                var list = (order && order[fid]) || [];
+                                var keep = fieldScreenRef.current[fid];
+                                if (keep && list.indexOf(keep) >= 0) setSelectedScreen(keep);
+                                else if (list[0]) setSelectedScreen(list[0]);
+                            }
                         }, 'Field ' + fid);
                     }),
                     React.createElement('span', { className: 'text-sm font-bold ml-2' }, 'Goal'),
                     fieldScreens.map(function(sid) {
-                        var done = !!(screens[sid] && screens[sid].calibrated);
+                        var lineDone = !!(screens[sid] && screens[sid].calibrated);
+                        var meshDone = !!(cylinders[sid] && cylinders[sid].sculpted);
                         return React.createElement('button', {
                             key: sid,
                             className: selectedScreen === sid ? 'btn-primary' : 'refresh-btn',
-                            style: done ? { borderColor: '#22c55e' } : null,
-                            onClick: function() { setSelectedScreen(sid); setPendingP0(null); }
+                            style: (lineDone || meshDone) ? { borderColor: '#22c55e' } : null,
+                            onClick: function() { setSelectedScreen(sid); setPendingP0(null); setDragVertex(null); }
                         }, sid);
                     })
                 ),
-                current.p0 && current.p1 ?
                 React.createElement('p', { className: 'text-xs text-gray-400 mb-2' },
-                    selectedScreen + ' · p0 (' + Number(current.p0[0]).toFixed(1) + ', ' + Number(current.p0[1]).toFixed(1) +
-                    ') → p1 (' + Number(current.p1[0]).toFixed(1) + ', ' + Number(current.p1[1]).toFixed(1) +
-                    ') · cabinet ' + (current.cabinet || '—')
-                ) : React.createElement('p', { className: 'text-xs text-gray-500 mb-2' },
-                    'Click post A, then post B for ' + selectedScreen + '.'
+                    selectedScreen +
+                    (current.p0 && current.p1
+                        ? (' · line (' + Number(current.p0[0]).toFixed(0) + ',' + Number(current.p0[1]).toFixed(0) +
+                            ')→(' + Number(current.p1[0]).toFixed(0) + ',' + Number(current.p1[1]).toFixed(0) + ')')
+                        : ' · click two posts for the goal line') +
+                    ' · r=' + Number((cylinders[selectedScreen] || {}).radius || 0).toFixed(1) +
+                    ' · h=' + Number((cylinders[selectedScreen] || {}).height || 0).toFixed(1) +
+                    ' · vertices=' + ((meshPoints && meshPoints.length) || 0) +
+                    ' · Ctrl+drag mesh'
                 ),
                 frameUrl ?
-                React.createElement('div', {
-                    className: 'calib-stage mb-4',
-                    style: { position: 'relative', maxWidth: '100%' }
-                },
-                    React.createElement('img', {
-                        src: frameUrl,
-                        alt: 'Stitched goal calibration',
-                        ref: imgRef,
-                        onLoad: function() {
-                            var img = imgRef.current;
-                            if (img && img.naturalWidth) {
-                                setImageSize(function(prev) {
-                                    return Object.assign({}, prev || {}, {
-                                        w: LOG_W,
-                                        h: LOG_H,
-                                        nativeW: img.naturalWidth,
-                                        nativeH: img.naturalHeight
+                React.createElement('div', { className: 'mb-4' },
+                    React.createElement('div', {
+                        className: 'calib-field-view mb-3' + (field === 'B' ? ' field-b' : ' field-a'),
+                        title: 'Field ' + field + ' only · full size'
+                    },
+                        React.createElement('img', {
+                            src: frameUrl,
+                            alt: 'Field ' + field + ' goal calibration',
+                            className: 'calib-stitch',
+                            ref: imgRef,
+                            onLoad: function() {
+                                var img = imgRef.current;
+                                if (img && img.naturalWidth) {
+                                    setImageSize(function(prev) {
+                                        return Object.assign({}, prev || {}, {
+                                            w: LOG_W,
+                                            h: LOG_H,
+                                            nativeW: img.naturalWidth,
+                                            nativeH: img.naturalHeight
+                                        });
                                     });
-                                });
-                            }
-                            redrawOverlay();
-                        },
-                        onClick: onImageClick,
-                        draggable: false,
-                        style: { width: '100%', display: 'block', cursor: 'crosshair' }
-                    }),
-                    React.createElement('canvas', {
-                        ref: canvasRef,
-                        style: {
-                            position: 'absolute', left: 0, top: 0, width: '100%', height: '100%',
-                            pointerEvents: 'none'
-                        }
-                    })
+                                }
+                                redrawOverlay();
+                            },
+                            draggable: false
+                        }),
+                        React.createElement('canvas', {
+                            ref: canvasRef,
+                            onMouseDown: onCanvasMouseDown,
+                            onMouseMove: onCanvasMouseMove,
+                            onMouseUp: onCanvasMouseUp,
+                            onMouseLeave: onCanvasMouseUp,
+                            style: { cursor: dragVertex != null ? 'grabbing' : 'crosshair' }
+                        })
+                    ),
+                    (function() {
+                        var fid = field === 'B' ? 'B' : 'A';
+                        var pack = fieldMeshes[fid] || {};
+                        var hostRef = fid === 'A' ? meshHostARef : meshHostBRef;
+                        var zoomPct = fieldZoom[fid] || 100;
+                        var goalId = selectedScreen || pack.screen || fieldScreenRef.current[fid] || (fid + '1');
+                        return React.createElement('div', { key: 'mesh-' + fid, className: 'mesh-field-row' },
+                            React.createElement('div', { className: 'mesh-field-title' },
+                                React.createElement('span', { className: fid === 'A' ? 'mesh-field-a' : 'mesh-field-b' },
+                                    'Field ' + fid + ' · 3D triangle mesh · ' + goalId
+                                ),
+                                React.createElement('span', { className: 'text-xs text-gray-400' },
+                                    ((pack.points && pack.points.length) || 0) + ' vertices · drag orbit · Ctrl+drag · zoom'
+                                )
+                            ),
+                            React.createElement('div', {
+                                className: 'mesh-volume-wrap mesh-volume-full',
+                                ref: hostRef
+                            },
+                                React.createElement('div', { className: 'mesh-volume-caption' },
+                                    'Field ' + fid + ' · ' + goalId + ' · full window'
+                                ),
+                                React.createElement('div', { className: 'mesh-zoom-bar' },
+                                    React.createElement('button', {
+                                        type: 'button',
+                                        title: 'Zoom out',
+                                        onClick: function() {
+                                            var v = meshViewersRef.current[fid];
+                                            if (v && v.zoomOut) v.zoomOut();
+                                        }
+                                    }, '−'),
+                                    React.createElement('input', {
+                                        type: 'range',
+                                        min: 25,
+                                        max: 400,
+                                        step: 5,
+                                        value: zoomPct,
+                                        title: 'Zoom Field ' + fid,
+                                        onChange: function(ev) {
+                                            var pct = Number(ev.target.value) || 100;
+                                            setFieldZoom(function(prev) {
+                                                var next = Object.assign({}, prev || {});
+                                                next[fid] = pct;
+                                                return next;
+                                            });
+                                            var v = meshViewersRef.current[fid];
+                                            if (v && v.zoomToPercent) v.zoomToPercent(pct);
+                                        }
+                                    }),
+                                    React.createElement('button', {
+                                        type: 'button',
+                                        title: 'Zoom in (closer)',
+                                        onClick: function() {
+                                            var v = meshViewersRef.current[fid];
+                                            if (v && v.zoomIn) v.zoomIn();
+                                        }
+                                    }, '+'),
+                                    React.createElement('span', { className: 'mesh-zoom-label' }, zoomPct + '%'),
+                                    React.createElement('button', {
+                                        type: 'button',
+                                        title: 'Fit Field ' + fid,
+                                        style: { minWidth: 52 },
+                                        onClick: function() {
+                                            var v = meshViewersRef.current[fid];
+                                            if (v && v.resetView) v.resetView();
+                                        }
+                                    }, 'Fit')
+                                )
+                            )
+                        );
+                    })()
                 ) :
                 React.createElement('div', { className: 'panel p-8 text-center text-gray-400 mb-4' },
-                    'Press Capture Stitched Camera to load the live arena view for goal picking.'
+                    'Press Capture Stitched Camera, then choose Field A or Field B — only that field fills the screen with its selected goal mesh.'
                 ),
                 React.createElement('div', { className: 'table-wrap homography-table' },
                     React.createElement('table', null,
@@ -3804,14 +4495,16 @@
                             React.createElement('tr', null,
                                 React.createElement('th', null, 'Goal'),
                                 React.createElement('th', null, 'Field'),
-                                React.createElement('th', null, 'Post A (x, y)'),
-                                React.createElement('th', null, 'Post B (x, y)'),
-                                React.createElement('th', null, 'Status')
+                                React.createElement('th', null, 'Post A'),
+                                React.createElement('th', null, 'Post B'),
+                                React.createElement('th', null, 'Radius'),
+                                React.createElement('th', null, 'Mesh')
                             )
                         ),
                         React.createElement('tbody', null,
-                            (order.A || []).concat(order.B || []).map(function(sid) {
+                            ((order && order[field]) || []).map(function(sid) {
                                 var line = screens[sid] || {};
+                                var preview = cylinders[sid] || {};
                                 return React.createElement('tr', {
                                     key: sid,
                                     style: sid === selectedScreen ? { background: 'rgba(34,197,94,0.12)' } : null,
@@ -3819,13 +4512,15 @@
                                         setField(sid.charAt(0));
                                         setSelectedScreen(sid);
                                         setPendingP0(null);
+                                        setDragVertex(null);
                                     }
                                 },
                                     React.createElement('td', null, sid),
                                     React.createElement('td', null, line.field || sid.charAt(0)),
                                     React.createElement('td', null, line.p0 ? Number(line.p0[0]).toFixed(1) + ', ' + Number(line.p0[1]).toFixed(1) : '—'),
                                     React.createElement('td', null, line.p1 ? Number(line.p1[0]).toFixed(1) + ', ' + Number(line.p1[1]).toFixed(1) : '—'),
-                                    React.createElement('td', null, line.calibrated ? 'Calibrated' : 'Default')
+                                    React.createElement('td', null, preview.radius != null ? Number(preview.radius).toFixed(1) : '—'),
+                                    React.createElement('td', null, preview.sculpted ? 'Sculpted' : 'Mesh')
                                 );
                             })
                         )
@@ -4828,10 +5523,10 @@
                             var sig = progressSignature(player.progress);
                             var prev = progressSigRef.current[pid];
                             progressSigRef.current[pid] = sig;
-                            var cur = String((player.progress || {}).current_level || '');
-                            var livePlaying = !!(window.__simustLivePlayActive);
+                            // Never snap the operator's level picker during live A/B play.
+                            // Only follow current_level when unlock/progress actually changed.
                             updater(player, {
-                                followCurrent: (!!prev && prev !== sig) || (livePlaying && !!cur)
+                                followCurrent: (!!prev && prev !== sig)
                             });
                         };
                         applyLoadedProgress(selectedPlayerIdRef.current, updateProgressForPlayer);
@@ -4886,17 +5581,15 @@
             };
 
             var resolveTrainingLevel = function(unlocked, playlists, current) {
-                // Saved CURRENT DEVELOPMENT LEVEL when still unlocked, else furthest unlock.
+                // Prefer the player's saved current level when still unlocked so the
+                // operator dropdown does not jump to the furthest unlock.
                 var highest = getHighestUnlockedLevel(allLevels, unlocked);
                 var saved = current || "";
-                var target = highest || saved || "L00-Foundation";
+                var target = "L00-Foundation";
                 if (saved && (unlocked || []).indexOf(saved) !== -1) {
-                    if (!highest || highest === "L00-Foundation") {
-                        target = saved;
-                    } else {
-                        var ordered = sortLevels([{ id: saved }, { id: highest }]);
-                        target = ordered[ordered.length - 1].id;
-                    }
+                    target = saved;
+                } else {
+                    target = highest || saved || "L00-Foundation";
                 }
                 if (target && target !== "L00-Foundation") {
                     return { level: target, subdirectory: "" };
@@ -5053,7 +5746,7 @@
 
                 if (followCurrent) {
                     applyLevelDefaultsB(unlocked, playlists, current);
-                } else {
+                    } else {
                     softPreserveLevelB(unlocked, playlists);
                 }
             };
@@ -5343,12 +6036,12 @@
                     }
                     var updatedPlayers = players.map(function(p) {
                         if (p.id === current.id || p.id === playerId || p.id === sid) return next;
-                        return p;
-                    });
+                    return p;
+                });
                     if (!updatedPlayers.some(function(p) { return p.id === sid; })) {
                         updatedPlayers = updatedPlayers.concat([next]);
                     }
-                    savePlayers(updatedPlayers);
+                savePlayers(updatedPlayers);
                     if (selectedPlayerId === current.id || selectedPlayerId === playerId || selectedPlayerId === sid) {
                         updateProgressForPlayer(next);
                         setSearchQuery((next.name || "") + " " + (next.surname || "").trim() + " · " + sid);
@@ -5356,8 +6049,8 @@
                     if (selectedPlayerBId === current.id || selectedPlayerBId === playerId || selectedPlayerBId === sid) {
                         updateProgressForPlayerB(next);
                         setSearchQueryB((next.name || "") + " " + (next.surname || "").trim() + " · " + sid);
-                    }
-                    closeEditModal();
+                }
+                closeEditModal();
                 };
                 // Writes this host, pushes/queues the other side (lab ↔ My SIMUST / remote).
                 axios.post("/staff-update-player", payload).then(function(res) {
@@ -5595,7 +6288,7 @@
             var handleUnlockLevel = function(levelId) {
                 if (!selectedPlayerId) { showToast("No Field A player selected", 'error'); return; }
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
-                applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
+                        applyLocalUnlock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 progressHoldUntilRef.current[selectedPlayerId] = Date.now() + 8000;
                 axios.post("/unlock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
@@ -5623,7 +6316,7 @@
             var handleUnlockLevelB = function(levelId) {
                 if (!selectedPlayerBId) { showToast("No Field B player selected", 'error'); return; }
                 if (!isAdmin && role !== 'coach') { showToast("Only a coach or admin can unlock levels", 'error'); return; }
-                applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
+                        applyLocalUnlock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 progressHoldUntilRef.current[selectedPlayerBId] = Date.now() + 8000;
                 axios.post("/unlock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
@@ -5680,15 +6373,15 @@
                                 });
                             }
                         } else {
-                            progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
-                            progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
+                        progress.unlocked_levels = progress.unlocked_levels.filter(function(id) { return id !== levelId; });
+                        progress.completed_levels = progress.completed_levels.filter(function(id) { return id !== levelId; });
                             if (progress.manually_locked_levels.indexOf(levelId) === -1) {
                                 progress.manually_locked_levels.push(levelId);
                             }
                             if (progress.unlocked_levels.indexOf("L00-Foundation") === -1 &&
                                 progress.unlocked_playlists.length) {
-                                progress.unlocked_levels.unshift("L00-Foundation");
-                            }
+                            progress.unlocked_levels.unshift("L00-Foundation");
+                        }
                         }
                         // After lock, CURRENT DEVELOPMENT LEVEL drops to the new highest open set.
                         var sortedLock = sortLevels(allLevels);
@@ -5697,9 +6390,9 @@
                             if (progress.unlocked_levels.indexOf(sortedLock[li].id) !== -1 &&
                                 sortedLock[li].id.indexOf('L00-Foundation') !== 0) {
                                 highestLock = sortedLock[li].id;
-                                break;
+                                    break;
+                                }
                             }
-                        }
                         progress.current_level = highestLock;
                         return Object.assign({}, p, { progress: progress });
                     }
@@ -5721,7 +6414,7 @@
                     showToast("Lock individual Foundation playlists", 'error');
                     return;
                 }
-                applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
+                        applyLocalLock(selectedPlayerId, levelId, true, selectedPlayerBId === selectedPlayerId);
                 progressHoldUntilRef.current[selectedPlayerId] = Date.now() + 8000;
                 axios.post("/lock-level", { player_id: selectedPlayerId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
@@ -5753,7 +6446,7 @@
                     showToast("Lock individual Foundation playlists", 'error');
                     return;
                 }
-                applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
+                        applyLocalLock(selectedPlayerBId, levelId, selectedPlayerId === selectedPlayerBId, true);
                 progressHoldUntilRef.current[selectedPlayerBId] = Date.now() + 8000;
                 axios.post("/lock-level", { player_id: selectedPlayerBId, level_id: levelId }).then(function(res) {
                     var st = (res.data && res.data.status) || '';
@@ -6501,24 +7194,24 @@
                         // while smart_simust_player / simust_realtime kept running.
                         var soft = !!opts.soft;
                         if (!soft) {
-                            realtimeRunningRef.current = false;
-                            setRealtimeRunning(false);
+                        realtimeRunningRef.current = false;
+                        setRealtimeRunning(false);
                             runningFieldsRef.current = { A: false, B: false };
                             setRunningFields({ A: false, B: false });
                             pausedFieldsRef.current = { A: false, B: false };
                             setPausedFields({ A: false, B: false });
-                            if (liveIntervalRef.current) {
-                                clearInterval(liveIntervalRef.current);
-                                liveIntervalRef.current = null;
-                            }
-                            if (autoStopTimeoutRef.current) {
-                                clearTimeout(autoStopTimeoutRef.current);
-                                autoStopTimeoutRef.current = null;
-                            }
-                            if (realtimeMonitorInterval.current) {
-                                clearTimeout(realtimeMonitorInterval.current);
-                                realtimeMonitorInterval.current = null;
-                            }
+                        if (liveIntervalRef.current) {
+                            clearInterval(liveIntervalRef.current);
+                            liveIntervalRef.current = null;
+                        }
+                        if (autoStopTimeoutRef.current) {
+                            clearTimeout(autoStopTimeoutRef.current);
+                            autoStopTimeoutRef.current = null;
+                        }
+                        if (realtimeMonitorInterval.current) {
+                            clearTimeout(realtimeMonitorInterval.current);
+                            realtimeMonitorInterval.current = null;
+                        }
                             setInstagramLive(false);
                             axios.post("/instagram-live", { on: false }).catch(function() {});
                         } else {
@@ -6631,10 +7324,10 @@
                                         realtimeMonitorInterval.current = setTimeout(checkStatus, 600);
                                         return;
                                     }
-                                    if (Date.now() - waitStartedAt > 28000) {
-                                        failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
-                                        return;
-                                    }
+                                if (Date.now() - waitStartedAt > 28000) {
+                                    failLabStart("Lab did not start Realtime Play. Check the green Lab online banner, that app.py is running on the training PC, and lab.env (SIMUST_PUSH_URL + SIMUST_PUSH_KEY).");
+                                    return;
+                                }
                                     realtimeMonitorInterval.current = setTimeout(checkStatus, 1000);
                                 }).catch(function() {
                                     if (Date.now() - waitStartedAt > 28000) {
@@ -7082,7 +7775,7 @@
                                     showToast("Lab did not stop: " + err, 'error');
                                     return;
                                 }
-                                setTimeout(verify, 400);
+                                    setTimeout(verify, 400);
                             }).catch(function() {
                                 if (tries < 12) setTimeout(verify, 400);
                             });
@@ -7094,7 +7787,7 @@
                     });
                     finishUiStop();
                     showToast(discard
-                        ? (window.SIMUST_PUBLIC
+                    ? (window.SIMUST_PUBLIC
                             ? "Discarding on the lab…"
                             : "Test discarded. Nothing was saved.")
                         : (window.SIMUST_PUBLIC
@@ -7169,10 +7862,10 @@
                     loadPlayers();
                 }, 15000);
                 // Default OFF. Only an admin can turn visualization on from the control row.
-                visualizationEnabledRef.current = false;
-                setVisualizationEnabled(false);
-                localStorage.setItem('simust_visualization', JSON.stringify(false));
-                axios.post("/set-visualization", { enabled: false }).catch(function() {});
+                    visualizationEnabledRef.current = false;
+                    setVisualizationEnabled(false);
+                    localStorage.setItem('simust_visualization', JSON.stringify(false));
+                    axios.post("/set-visualization", { enabled: false }).catch(function() {});
                 // Always boot Sim A/B OFF. Operator can turn either on at any time
                 // (including when both fields are running); never restore leftover ON.
                 applySimulationFields({ A: false, B: false }, false);
@@ -7965,18 +8658,18 @@
                                 React.createElement('span', { className: 'font-semibold' },
                                     isCoach ? 'Coach password' : t('adminPasswordLabel', 'Admin password'))
                             ),
-                            React.createElement('input', {
-                                type: 'password',
-                                value: adminTestPass,
-                                autoComplete: 'current-password',
+                                React.createElement('input', {
+                                    type: 'password',
+                                    value: adminTestPass,
+                                    autoComplete: 'current-password',
                                 placeholder: isCoach ? 'Coach password' : 'Admin password',
-                                className: 'w-full max-w-md',
-                                style: {
-                                    background: 'rgba(0,0,0,0.45)',
-                                    border: '1px solid rgba(212,175,55,0.45)',
-                                    borderRadius: 8,
-                                    padding: '10px 12px',
-                                    color: '#fff',
+                                    className: 'w-full max-w-md',
+                                    style: {
+                                        background: 'rgba(0,0,0,0.45)',
+                                        border: '1px solid rgba(212,175,55,0.45)',
+                                        borderRadius: 8,
+                                        padding: '10px 12px',
+                                        color: '#fff',
                                     fontSize: '16px',
                                     opacity: adminTestPlay ? 1 : 0.55
                                 },

@@ -2275,12 +2275,19 @@ def request_realtime_video_finalize() -> None:
 
 
 def stop_realtime_camera_process(grace_sec: float = 1.8) -> int:
-    """Graceful stop (close feed) then kill leftovers. Returns orphan kill count."""
+    """Finalize MP4, then graceful stop (close feed), then kill leftovers."""
     global realtime_camera_process
+    # Always ask for video finalize first so Stop/exit keeps a playable file.
+    try:
+        request_realtime_video_finalize()
+    except Exception:
+        pass
     request_realtime_camera_stop()
     proc = realtime_camera_process
+    # Extra time for ffmpeg trailer + stop_recording() after Stop.
+    wait_sec = max(2.5, float(grace_sec))
     if proc is not None and proc.poll() is None:
-        deadline = time.time() + max(0.2, float(grace_sec))
+        deadline = time.time() + wait_sec
         while time.time() < deadline:
             if proc.poll() is not None:
                 break
@@ -3070,16 +3077,15 @@ def apply_stop_realtime(data: Optional[dict] = None) -> dict:
     except Exception:
         logger.info("Instagram live was not running")
     # Finalize MP4 before killing player/camera so mid-test Stop keeps a playable file.
-    if not abort:
-        try:
-            request_realtime_video_finalize()
-            time.sleep(0.35)
-        except Exception:
-            pass
+    try:
+        request_realtime_video_finalize()
+        time.sleep(0.5 if not abort else 0.25)
+    except Exception:
+        pass
     force_kill_smart_player()
     try:
-        # Longer grace on save-stop so stop_recording() can finish the video.
-        stop_realtime_camera_process(1.6 if not abort else 0.8)
+        # Longer grace on save-stop so stop_recording() / ffmpeg can finish the video.
+        stop_realtime_camera_process(3.0 if not abort else 1.5)
     except Exception:
         kill_process_tree(realtime_camera_process)
         realtime_camera_process = None
@@ -3133,18 +3139,28 @@ def discard_aborted_realtime_folders() -> list:
     return removed
 
 def _atexit_stop_owned_realtime() -> None:
-    """On lab exit, stop only processes this app.py instance spawned.
+    """On lab exit, finalize the session video, then stop owned processes.
 
     Do not sweep orphans here — importing app from tests used to atexit-kill a
     live Realtime Play session on the arena.
     """
     global smart_player_process, realtime_camera_process
-    kill_process_tree(smart_player_process)
-    smart_player_process = None
+    # Save the MP4 before killing camera/player, even if the UI did not Stop.
+    try:
+        request_realtime_video_finalize()
+    except Exception:
+        pass
     try:
         request_realtime_camera_stop()
     except Exception:
         pass
+    proc = realtime_camera_process
+    if proc is not None and proc.poll() is None:
+        deadline = time.time() + 3.0
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.1)
+    kill_process_tree(smart_player_process)
+    smart_player_process = None
     kill_process_tree(realtime_camera_process)
     realtime_camera_process = None
     try:
@@ -3366,6 +3382,17 @@ async def root():
         # Canonical public entry: secure login page on my.simust.com
         return RedirectResponse(url="/login", status_code=302)
     return FileResponse("index.html")
+
+
+@app.get("/mesh_volume_viewer.js")
+async def mesh_volume_viewer_js():
+    """LearnWebGL-style TRIANGLES mesh viewer used by Goal Area Calibration."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mesh_volume_viewer.js")
+    if not os.path.isfile(path):
+        path = os.path.join(os.getcwd(), "mesh_volume_viewer.js")
+    if not os.path.isfile(path):
+        raise HTTPException(404, "mesh_volume_viewer.js not found")
+    return FileResponse(path, media_type="application/javascript")
 
 
 @app.get("/operator", response_class=FileResponse)
@@ -3940,7 +3967,22 @@ async def start_realtime_playback(req: Request):
                     "separate_fields": False,
                     "score_field": score_field,
                     "admin_test": bool(admin_test_override),
+                    # Clear Manual Coach so A/B play cannot arm coach cues.
+                    "manual_coach": False,
                 }, f, indent=2)
+            try:
+                simust_manual_coach.write_status(
+                    active=False,
+                    lit_screen=None,
+                    lit_screens=[],
+                    waiting_hit=False,
+                    last_hit=None,
+                    seq=0,
+                    message="Normal play — Manual coach idle",
+                )
+                simust_manual_coach.clear_command_files()
+            except Exception:
+                pass
         except Exception as e:
             logger.warning("Could not write players_fields.json: %s", e)
         try:
@@ -4085,11 +4127,34 @@ async def manual_coach_layout(request: Request):
     return {"status": "success", "layout": simust_manual_coach.layout_for_operator()}
 
 
+def _manual_coach_session_active() -> bool:
+    """True only while Manual Coach itself is active — not during normal A/B play."""
+    try:
+        status = simust_manual_coach.read_status() or {}
+    except Exception:
+        status = {}
+    if not status.get("active"):
+        return False
+    if not _realtime_is_running():
+        return False
+    try:
+        path = os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json")
+        if not os.path.isfile(path):
+            return True
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+        return bool(data.get("manual_coach"))
+    except Exception:
+        return True
+
+
 @app.get("/manual-coach/status")
 async def manual_coach_status(request: Request):
     _require_operator_staff(request)
     status = simust_manual_coach.read_status()
-    status["session_running"] = bool(_realtime_is_running())
+    # Do not treat normal Field A/B play as Manual Coach "running".
+    status["session_running"] = bool(_manual_coach_session_active())
+    status["active"] = bool(status.get("active")) and bool(status["session_running"])
     return {"status": "success", **status}
 
 
@@ -4239,7 +4304,7 @@ async def manual_coach_cue(request: Request):
     screen = simust_manual_coach.normalize_screen((data or {}).get("screen"))
     if not screen:
         raise HTTPException(400, "screen must be A1–A6 or B1–B6")
-    if not _realtime_is_running():
+    if not _manual_coach_session_active():
         raise HTTPException(400, "Start Manual coach first")
     cmd = simust_manual_coach.write_command("cue", screen=screen)
     prior = simust_manual_coach.read_status()
@@ -4265,6 +4330,8 @@ async def manual_coach_cue(request: Request):
 @app.post("/manual-coach/clear")
 async def manual_coach_clear(request: Request):
     _require_operator_staff(request)
+    if not _manual_coach_session_active():
+        raise HTTPException(400, "Start Manual coach first")
     cmd = simust_manual_coach.write_command("clear")
     return {"status": "success", "seq": cmd.get("seq")}
 
@@ -5456,7 +5523,25 @@ def _goal_lines_builtin() -> dict:
 
 
 def goal_lines_status_snapshot() -> dict:
-    return simust_goal_calibrate.public_status(_goal_lines_builtin())
+    snap = simust_goal_calibrate.public_status(_goal_lines_builtin())
+    try:
+        from simust_realtime import finish_cylinder_previews
+
+        # Match live finish_balls cylinder size on the selected goal mouths.
+        snap["cylinders"] = finish_cylinder_previews(
+            snap.get("screens") or {}, action="PASS"
+        )
+    except Exception:
+        snap["cylinders"] = {}
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        snap["cylinder_meshes"] = cylmesh.public_mesh_status(
+            (snap.get("screens") or {}).keys()
+        )
+    except Exception:
+        snap["cylinder_meshes"] = {"n_control": 200, "screens": {}, "sculpted_count": 0}
+    return snap
 
 
 def hip_zone_status_snapshot() -> dict:
@@ -5552,11 +5637,12 @@ _lab_tool_procs: Dict[str, Any] = {}
 _LAB_TOOL_SCRIPTS = {
     "screen_offset_gui": "screen_offset_gui.py",
     "rtsp": "rtsp.py",
+    "cylinder_sculpt": "simust_cylinder_sculpt.py",
 }
 
 
-def _popen_gui_tool(script_path: str) -> subprocess.Popen:
-    """Launch a visible PyQt/OpenCV tool (not hidden like camera helpers)."""
+def _popen_gui_tool(script_path: str, extra_args=None) -> subprocess.Popen:
+    """Launch a visible PyQt/OpenCV/PyVista tool (not hidden like camera helpers)."""
     script_dir = os.path.dirname(os.path.abspath(script_path)) or os.getcwd()
     kwargs = {
         "cwd": script_dir,
@@ -5572,12 +5658,17 @@ def _popen_gui_tool(script_path: str) -> subprocess.Popen:
         kwargs["stdout"] = subprocess.DEVNULL
         kwargs["stderr"] = subprocess.DEVNULL
         kwargs["close_fds"] = True
-    return subprocess.Popen([sys.executable, script_path], **kwargs)
+    cmd = [sys.executable, script_path]
+    for arg in (extra_args or []):
+        if arg is None:
+            continue
+        cmd.append(str(arg))
+    return subprocess.Popen(cmd, **kwargs)
 
 
 @app.post("/lab-tools/run")
 async def lab_tools_run(request: Request):
-    """Start screen_offset_gui.py or rtsp.py from Settings (lab PC only)."""
+    """Start screen_offset_gui / rtsp / cylinder_sculpt from Settings (lab PC only)."""
     _require_operator_staff(request)
     if PUBLIC_MODE:
         raise HTTPException(403, "Lab tools run on the training machine")
@@ -5590,7 +5681,7 @@ async def lab_tools_run(request: Request):
     if not script_name:
         raise HTTPException(
             400,
-            "Unknown tool — use screen_offset_gui or rtsp",
+            "Unknown tool — use screen_offset_gui, rtsp, or cylinder_sculpt",
         )
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(script_dir, script_name)
@@ -5598,7 +5689,23 @@ async def lab_tools_run(request: Request):
         script_path = os.path.join(os.getcwd(), script_name)
     if not os.path.isfile(script_path):
         raise HTTPException(404, f"{script_name} not found")
-    prev = _lab_tool_procs.get(tool)
+    # Cylinder sculpt needs a fresh window per screen (allow re-launch).
+    proc_key = tool
+    extra_args = []
+    if tool == "cylinder_sculpt":
+        screen = str((data or {}).get("screen") or "A3").strip().upper() or "A3"
+        extra_args = ["--screen", screen, "--load-saved"]
+        preview = (data or {}).get("preview") or {}
+        for key, flag in (
+            ("radius", "--radius"),
+            ("height", "--height"),
+            ("cx", "--cx"),
+            ("cy", "--cy"),
+        ):
+            if preview.get(key) is not None:
+                extra_args.extend([flag, str(preview.get(key))])
+        proc_key = f"{tool}:{screen}"
+    prev = _lab_tool_procs.get(proc_key)
     if prev is not None and getattr(prev, "poll", lambda: 0)() is None:
         return {
             "status": "success",
@@ -5608,19 +5715,186 @@ async def lab_tools_run(request: Request):
             "pid": getattr(prev, "pid", None),
         }
     try:
-        proc = _popen_gui_tool(script_path)
+        proc = _popen_gui_tool(script_path, extra_args=extra_args)
     except Exception as exc:
         logger.exception("Could not start lab tool %s", tool)
         raise HTTPException(500, f"Could not start {script_name}: {exc}") from exc
-    _lab_tool_procs[tool] = proc
-    logger.info("Started lab tool %s (pid %s)", script_name, getattr(proc, "pid", "?"))
+    _lab_tool_procs[proc_key] = proc
+    logger.info(
+        "Started lab tool %s %s (pid %s)",
+        script_name,
+        " ".join(extra_args),
+        getattr(proc, "pid", "?"),
+    )
     return {
         "status": "success",
         "tool": tool,
-        "message": f"Started {script_name}",
+        "message": f"Started {script_name}"
+        + (f" ({extra_args[1]})" if tool == "cylinder_sculpt" and len(extra_args) > 1 else ""),
         "already_running": False,
         "pid": getattr(proc, "pid", None),
     }
+
+
+@app.post("/goal-lines/preview")
+async def goal_lines_preview(req: Request):
+    """Return live cylinder size for a screen / optional temporary p0,p1."""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    screen = str((data or {}).get("screen") or "").strip().upper()
+    if not screen:
+        raise HTTPException(400, "screen is required")
+    p0 = (data or {}).get("p0")
+    p1 = (data or {}).get("p1")
+    try:
+        from simust_realtime import finish_cylinder_preview
+
+        preview = finish_cylinder_preview(
+            screen,
+            p0=p0,
+            p1=p1,
+            action=str((data or {}).get("action") or "PASS"),
+        )
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", "preview": preview, "cylinders": {screen: preview}}
+
+
+@app.post("/goal-lines/sculpt/mesh")
+async def goal_lines_sculpt_mesh(req: Request):
+    """Return editable mesh points for one goal (saved sculpt or current cylinder)."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Mesh edit runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    screen = str((data or {}).get("screen") or "").strip().upper()
+    if not screen:
+        raise HTTPException(400, "screen is required")
+    try:
+        import simust_cylinder_mesh as cylmesh
+        from simust_realtime import finish_cylinder_preview
+
+        p0 = (data or {}).get("p0")
+        p1 = (data or {}).get("p1")
+        preview = finish_cylinder_preview(screen, p0=p0, p1=p1, action="PASS")
+        saved = None if (data or {}).get("regenerate") else cylmesh.get_screen_mesh(screen)
+        if saved and isinstance(saved.get("points"), list) and len(saved["points"]) == cylmesh.N_CONTROL:
+            points = saved["points"]
+            sculpted = True
+            # Keep live line-based size metadata; geometry comes from saved points.
+            preview = dict(preview or {})
+            preview["sculpted"] = True
+            preview["n_points"] = cylmesh.N_CONTROL
+        else:
+            entry = cylmesh.entry_from_preview(screen, preview)
+            points = entry["points"]
+            sculpted = False
+            preview = dict(preview or {})
+            preview["sculpted"] = False
+            preview["n_points"] = cylmesh.N_CONTROL
+        n_theta = cylmesh.N_THETA
+        n_height = cylmesh.N_HEIGHT
+        preview["silhouette"] = cylmesh.silhouette_polyline(
+            points, n_theta=n_theta, n_height=n_height
+        )
+        preview["wire"] = [
+            [list(a), list(b)]
+            for a, b in cylmesh.wire_segments(points, n_theta=n_theta, n_height=n_height)
+        ]
+        return {
+            "status": "success",
+            "screen": screen,
+            "sculpted": sculpted,
+            "n_theta": n_theta,
+            "n_height": n_height,
+            "n_points": cylmesh.N_CONTROL,
+            "points": points,
+            "faces": cylmesh.faces_as_triangles(n_theta, n_height),
+            "preview": preview,
+        }
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+
+
+@app.post("/goal-lines/sculpt/save")
+async def goal_lines_sculpt_save(req: Request):
+    """Save Ctrl+drag edited cylinder mesh points for one screen."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Mesh save runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    screen = str((data or {}).get("screen") or "").strip().upper()
+    points = (data or {}).get("points")
+    if not screen or not isinstance(points, list):
+        raise HTTPException(400, "screen and points[] are required")
+    try:
+        import simust_cylinder_mesh as cylmesh
+        from simust_realtime import finish_cylinder_preview
+
+        preview = finish_cylinder_preview(
+            screen,
+            p0=(data or {}).get("p0"),
+            p1=(data or {}).get("p1"),
+            action="PASS",
+        )
+        for key in ("radius", "height", "cx", "cy"):
+            if (data or {}).get(key) is not None:
+                preview[key] = float((data or {}).get(key))
+        cylmesh.save_screen_points(
+            screen,
+            preview,
+            points,
+            smooth=bool((data or {}).get("smooth", True)),
+        )
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **goal_lines_status_snapshot()}
+
+
+@app.post("/goal-lines/sculpt/reload")
+async def goal_lines_sculpt_reload(req: Request):
+    """Re-read sculpted cylinder meshes after the PyVista tool saves."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Sculpt reload runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        cylmesh.reload_store()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **goal_lines_status_snapshot()}
+
+
+@app.post("/goal-lines/sculpt/clear")
+async def goal_lines_sculpt_clear(req: Request):
+    """Clear sculpted mesh for one screen (or all). Keeps line calibration."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Sculpt clear runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    try:
+        import simust_cylinder_mesh as cylmesh
+
+        screen = str((data or {}).get("screen") or "").strip().upper()
+        if screen:
+            cylmesh.clear_screen(screen)
+        else:
+            cylmesh.clear_all()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **goal_lines_status_snapshot()}
 
 
 @app.get("/hip-zone/status")
@@ -9894,6 +10168,12 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "goal-lines-capture",
     "goal-lines-save",
     "goal-lines-reset",
+    "goal-lines-preview",
+    "goal-lines-sculpt/mesh",
+    "goal-lines-sculpt/save",
+    "goal-lines-sculpt/reload",
+    "goal-lines-sculpt/clear",
+    "lab-tools/run",
     "hip-zone-capture",
     "hip-zone-save",
     "hip-zone-reset",

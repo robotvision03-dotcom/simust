@@ -23,7 +23,7 @@ object Prefs {
     const val DEFAULT_TEXT_ZOOM = 110
     const val MIN_TEXT_ZOOM = 80
     const val MAX_TEXT_ZOOM = 180
-    const val APP_VERSION = "1.3.8"
+    const val APP_VERSION = "1.3.14"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -108,12 +108,13 @@ object Prefs {
     }
 
     private fun defaultTextZoom(context: Context): Int {
+        // Keep small phones (Galaxy A6 ~360dp) readable without pushing Field B off-screen.
         val sw = context.resources.configuration.smallestScreenWidthDp
         return when {
-            sw >= 800 -> 120
-            sw >= 600 -> 115
-            sw >= 360 -> 105
-            else -> 100
+            sw >= 800 -> 112
+            sw >= 600 -> 108
+            sw >= 400 -> 100
+            else -> 92
         }
     }
 

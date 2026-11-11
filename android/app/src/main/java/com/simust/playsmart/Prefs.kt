@@ -126,12 +126,13 @@ object Prefs {
     }
 
     private fun defaultTextZoom(context: Context): Int {
+        // Keep small phones (Galaxy A6 ~360dp) readable without pushing Field B off-screen.
         val sw = context.resources.configuration.smallestScreenWidthDp
         return when {
-            sw >= 800 -> 115
-            sw >= 600 -> 110
-            sw >= 360 -> 105
-            else -> 100
+            sw >= 800 -> 112
+            sw >= 600 -> 108
+            sw >= 400 -> 100
+            else -> 92
         }
     }
 
@@ -145,7 +146,7 @@ object Prefs {
             .replace(Regex("""&v=[^&]*"""), "")
             .replace(Regex("""\?v=[^&]*&"""), "?")
             .replace(Regex("""\?v=[^&]*$"""), "")
-        out += if (out.contains("?")) "&v=2.17" else "?v=2.17"
+        out += if (out.contains("?")) "&v=2.23" else "?v=2.23"
         return out
     }
 }

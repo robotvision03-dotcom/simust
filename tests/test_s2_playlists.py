@@ -423,28 +423,30 @@ class Series2PlaylistTests(unittest.TestCase):
                         self.assertEqual({pair[0][0], pair[1][0]}, {"A", "B"})
 
     def test_elite_s3_t3_uses_varied_digit_colors(self):
-        """Elite S3.T1 one digit color; S3.T3+ different digit colors per answer."""
+        """Elite S3.T1 one digit color; S3.T3+ different digit colors + distractors."""
         t1 = player._build_elite_s3_playlist(1)[0]
         t3 = player._build_elite_s3_playlist(3)[0]
-        t1_fg = {
-            path.split(":")[3] for path in self._digit_paths(t1).values()
-        }
-        t3_fg = {
-            path.split(":")[3] for path in self._digit_paths(t3).values()
-        }
+        t1_digits = self._digit_paths(t1)
+        t3_digits = self._digit_paths(t3)
+        self.assertEqual(len(t1_digits), 6)
+        self.assertEqual(len(t3_digits), 12)
+        t1_fg = {path.split(":")[3] for path in t1_digits.values()}
+        t3_fg = {path.split(":")[3] for path in t3_digits.values()}
         self.assertEqual(len(t1_fg), 1)
         self.assertGreaterEqual(len(t3_fg), 6)
         self.assertEqual(t1.get("encode_ms"), 3000)
         self.assertEqual(t3.get("encode_ms"), 3000)
 
     def test_wc_s3_t3_uses_varied_screen_and_digit_colors(self):
-        """World Class S3 answers: multi-color fills + digit colors (no camo)."""
+        """World Class S3: multi-color fills/digits and distractors on all 12 screens."""
         t1 = player._build_world_class_s3_playlist(1)[0]
         t3 = player._build_world_class_s3_playlist(3)[0]
         self.assertFalse(bool(t1.get("motion_bg")))
         self.assertFalse(bool(t3.get("motion_bg")))
+        # T1–T5 answer phase: 6 goals + 6 random distractors (no empty cabinets).
+        self.assertEqual(len(self._digit_paths(t1)), 12)
         t3_digits = self._digit_paths(t3)
-        self.assertEqual(len(t3_digits), 6)
+        self.assertEqual(len(t3_digits), 12)
         t3_bg = {path.split(":")[2] for path in t3_digits.values()}
         t3_fg = {path.split(":")[3] for path in t3_digits.values()}
         self.assertGreaterEqual(len(t3_bg), 6)
@@ -479,7 +481,8 @@ class Series2PlaylistTests(unittest.TestCase):
         }
         self.assertEqual(encode_fg, {str(player.S3_REFERENCE_FG)})
         digits = self._digit_paths(first)
-        self.assertEqual(len(digits), 6)
+        # 6 answer digits + 6 random distractors on the remaining screens.
+        self.assertEqual(len(digits), 12)
         t1_bg = {path.split(":")[2] for path in digits.values()}
         t1_fg = {path.split(":")[3] for path in digits.values()}
         self.assertGreaterEqual(len(t1_bg), 6)
@@ -488,6 +491,24 @@ class Series2PlaylistTests(unittest.TestCase):
             g0 = int(first["screen_images"][pair[0]].split(":")[1])
             g1 = int(first["screen_images"][pair[1]].split(":")[1])
             self.assertEqual(g0 + g1, ref)
+        # Non-goal distractors must not form an extra A+B sum to the reference.
+        goal_set = {sid for pair in first["goal_pairs"] for sid in pair}
+        half = len(player._elite_screen_ids()) // 2
+        a_ids = player._elite_screen_ids()[:half]
+        b_ids = player._elite_screen_ids()[half:]
+        a_vals = [
+            int(first["screen_images"][sid].split(":")[1])
+            for sid in a_ids
+            if sid not in goal_set
+        ]
+        b_goal_vals = [
+            int(first["screen_images"][sid].split(":")[1])
+            for sid in b_ids
+            if sid in goal_set
+        ]
+        for av in a_vals:
+            for bv in b_goal_vals:
+                self.assertNotEqual(av + bv, ref)
         t2 = player._build_world_class_s3_playlist(2)[0]
         # S3.T2 answers: multi-color solids — no fruit motion camo.
         self.assertFalse(bool(t2.get("motion_bg")))
@@ -497,6 +518,7 @@ class Series2PlaylistTests(unittest.TestCase):
         self.assertEqual(t2.get("on_ms"), 10000)
         self.assertEqual(t2.get("budget_ms"), 120000)
         t2_digits = self._digit_paths(t2)
+        self.assertEqual(len(t2_digits), 12)
         t2_bg = {path.split(":")[2] for path in t2_digits.values()}
         t2_fg = {path.split(":")[3] for path in t2_digits.values()}
         self.assertGreaterEqual(len(t2_bg), 6)
