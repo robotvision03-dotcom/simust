@@ -214,7 +214,7 @@ def _image_cue_stale_sec(cue=None):
         return max(5.0, budget, on_sec) + 2.0
     return 5.0
 
-DETECTION_CONF = 0.12  # lower to keep blurred / distant balls (GOAL motion blur)
+DETECTION_CONF = 0.05  # lower = more ball hits (blurred / distant / Manual finish)
 MAX_PLAYERS = 2
 
 COLOR_BALL = (255, 0, 0)
@@ -789,6 +789,191 @@ def is_inside_polygon(pt, polygon):
     if not polygon:
         return True
     return cv2.pointPolygonTest(np.array(polygon, dtype=np.int32), (float(pt[0]), float(pt[1])), False) >= 0
+
+
+# Pass mouths A1–A6 / B1–B6: the goal hides on entry. Finish is decided by
+# ball heading inside the goal area only (no HIP / red-zone dependency).
+PASS_HIP_HOLD_FRAMES = 7  # legacy sim timing only; live Correct no longer waits
+# After a goal-area hit, lock inbound heading on the first step ≥ this length.
+PASS_DIR_MIN_STEP_PX = 3.0
+# Direction-change latch needs a real move inside goal paint.
+PASS_DIR_REVERSE_MIN_STEP_PX = 3.0
+# Huge leave jumps (ball disappears across the frame) look like big turns —
+# those must not Correct. Real screen bounces stay under this length.
+PASS_DIR_REVERSE_MAX_STEP_PX = 100.0
+# Hit screen and return: go→return heading change >15° while still in goal
+# paint → Correct. Straight through with no turn → Wrong on exit.
+PASS_DIR_CHANGE_DEG = 15.0
+
+
+def _heading_deg(dx: float, dy: float) -> float:
+    return math.degrees(math.atan2(float(dy), float(dx)))
+
+
+def _heading_delta_deg(a: float, b: float) -> float:
+    d = abs(float(a) - float(b)) % 360.0
+    return d if d <= 180.0 else 360.0 - d
+
+
+def _pass_heading_from_step(x0, y0, x1, y1, min_step=None):
+    """Degrees of travel from (x0,y0)→(x1,y1), or None if the step is too short."""
+    dx = float(x1) - float(x0)
+    dy = float(y1) - float(y0)
+    need = float(PASS_DIR_MIN_STEP_PX if min_step is None else min_step)
+    if math.hypot(dx, dy) < need:
+        return None
+    return _heading_deg(dx, dy)
+
+
+def _pass_reverse_latched(inbound_deg, prev_xy, next_xy, in_goal: bool, in_hip: bool = False) -> bool:
+    """True when heading changes >15° while the ball is still in the goal area.
+
+    Shared by live `_advance_pass_hip_watch` and offline `pass_hip_from_block`.
+    Correct detection uses goal paint only — red HIP zone is never required.
+    ``in_hip`` is accepted for call-site compatibility and ignored.
+    """
+    del in_hip
+    if not in_goal or inbound_deg is None or prev_xy is None or next_xy is None:
+        return False
+    try:
+        span = math.hypot(
+            float(next_xy[0]) - float(prev_xy[0]),
+            float(next_xy[1]) - float(prev_xy[1]),
+        )
+    except (TypeError, ValueError, IndexError):
+        return False
+    if span < float(PASS_DIR_REVERSE_MIN_STEP_PX):
+        return False
+    if span > float(PASS_DIR_REVERSE_MAX_STEP_PX):
+        return False
+    step_deg = _pass_heading_from_step(
+        prev_xy[0],
+        prev_xy[1],
+        next_xy[0],
+        next_xy[1],
+        min_step=PASS_DIR_REVERSE_MIN_STEP_PX,
+    )
+    if step_deg is None:
+        return False
+    return (
+        _heading_delta_deg(float(inbound_deg), float(step_deg))
+        >= float(PASS_DIR_CHANGE_DEG)
+    )
+
+
+def _pass_needs_hip_watch(action, sid, block=None) -> bool:
+    """PASS finish_balls / Manual mouths watch goal heading before Correct."""
+    if str(action or "").upper() != "PASS":
+        return False
+    shown = str(sid or "").strip().upper()
+    if not shown or shown.endswith("L") or shown.endswith("R"):
+        return False
+    if is_pass_main_goal(sid):
+        return True
+    block = block or {}
+    return bool(block.get("finish_balls") or block.get("manual_coach"))
+# A fast ball can cross most of a half between two processed frames.
+PASS_BALL_JUMP_PX = 640
+# A detection farther than this from the tracked ball is a different object.
+PASS_BALL_TRACK_PX = 320
+# Mode 1 only. The ball glides so it can be followed by eye, then the
+# next action starts. Mode 2 keeps the short travel.
+MODE1_APPROACH_S = 4.0
+MODE1_RETURN_S = 3.5
+MODE1_OTHER_TRAVEL_S = 4.5
+_PASS_MAIN_GOALS = {f"A{i}" for i in range(1, 7)} | {f"B{i}" for i in range(1, 7)}
+
+
+_PASS_MAIN_CABINETS = frozenset({
+    "12", "13", "14", "2", "3", "4",  # Field A mouths
+    "5", "6", "7", "9", "10", "11",  # Field B mouths
+})
+
+
+def is_pass_main_goal(screen) -> bool:
+    """True for pass goal mouths A1–A6 and B1–B6 (not L/R side goals).
+
+    Cabinet ids for those mouths also count so the Goal Area + HIP watch
+    still runs when a cue uses 12/5 instead of A1/B1.
+    """
+    shown = display_screen_id(screen).strip().upper()
+    if not shown or shown.endswith("L") or shown.endswith("R"):
+        return False
+    if shown in _PASS_MAIN_GOALS:
+        return True
+    body = shown.rstrip("LR")
+    if body in _PASS_MAIN_GOALS:
+        return True
+    return body in _PASS_MAIN_CABINETS
+
+
+_CABINET_HIP_FIELD = {
+    "12": "A", "13": "A", "14": "A", "2": "A", "3": "A", "4": "A",
+    "5": "B", "6": "B", "7": "B", "9": "B", "10": "B", "11": "B",
+}
+
+
+def hip_field_for_screen(screen, field=None) -> str:
+    """Field whose painted HIP loop is drawn for this goal (display / false-ball filter).
+
+    Correct finish no longer depends on this red zone.
+    """
+    if field:
+        fid = str(field).strip().upper()[:1]
+        if fid in ("A", "B"):
+            return fid
+    shown = display_screen_id(screen).strip().upper()
+    if shown.startswith("B"):
+        return "B"
+    if shown.startswith("A"):
+        return "A"
+    return _CABINET_HIP_FIELD.get(shown.rstrip("LR"), "A")
+
+
+def hip_polygon_for_screen(screen, field=None):
+    """Software HIP polygon. A saved pencil loop is checked before this."""
+    if hip_field_for_screen(screen, field) == "B":
+        return POLYGON_POINTS_B
+    return POLYGON_POINTS_A
+
+
+def ball_overlaps_hip(xy, screen, radius=0.0, field=None) -> bool:
+    """True when the ball center or its body still meets the HIP zone.
+
+    A painted loop is the zone. The old 17-point outline is used only when
+    that field has no saved paint. ``radius`` is the distance from the
+    bounding-box center to the box edge, so the edge can touch the loop
+    while the center is still outside.
+    """
+    if xy is None:
+        return False
+    fid = hip_field_for_screen(screen, field)
+    try:
+        import simust_hip_calibrate as _hip_paint
+
+        painted = _hip_paint.zone_contains(
+            fid,
+            float(xy[0]),
+            float(xy[1]),
+            radius,
+        )
+        if painted is not None:
+            return bool(painted)
+    except Exception:
+        pass
+    polygon = hip_polygon_for_screen(screen, fid)
+    if not polygon:
+        return True
+    try:
+        dist = cv2.pointPolygonTest(
+            np.array(polygon, dtype=np.int32),
+            (float(xy[0]), float(xy[1])),
+            True,
+        )
+        reach = max(0.0, float(radius))
+    except (TypeError, ValueError):
+        return False
+    return float(dist) >= -reach
 
 # ============================================================================
 # POSE DETECTOR CLASS (unchanged)
@@ -1439,7 +1624,7 @@ def search_goal_late(current_index: int, all_data: List[dict],
                     continue
                 eff_dist, proj_t = get_effective_distance((x, y), p0, p1)
                 threshold = get_goal_threshold(screen)
-                if not in_goal_area((x, y), p0, p1, threshold):
+                if not in_goal_area((x, y), p0, p1, threshold, screen=screen):
                     continue
                 if eff_dist <= threshold:
                     pos_abs_time = block_start + timedelta(seconds=t)
@@ -1626,7 +1811,7 @@ def _late_hit_on_send_side(filtered, screen, screens, action_type, thresh):
     first_side = None
     best_return = None
     for t, x, y in filtered:
-        if not in_goal_area((x, y), p0, p1, thresh, post_radius=post_r):
+        if not in_goal_area((x, y), p0, p1, thresh, post_radius=post_r, screen=screen):
             continue
         eff, proj = get_effective_distance((x, y), p0, p1)
         if on_origin_side((x, y), p0, p1, origin):
@@ -1743,7 +1928,7 @@ def search_late_across_blocks(current_index: int, all_data: List[dict],
                 if p0 is not None:
                     for t, x, y in filtered:
                         if in_goal_area(
-                            (x, y), p0, p1, thresh, post_radius=post_radius_for(action_type)
+                            (x, y), p0, p1, thresh, post_radius=post_radius_for(action_type), screen=screen
                         ):
                             hit = True
                             break
@@ -2035,6 +2220,56 @@ def _sculpted_mesh_for_screen(screen=None):
         return None
 
 
+def _sculpt_matches_live_line(sculpt, cx, cy, radius, height) -> bool:
+    """True when a saved sculpt still sits on the current goal-line cylinder.
+
+    Metadata alone is not enough — dragged control points can keep the stored
+    cx/cy while the silhouette no longer covers the live mouth (B6 Entry miss).
+    """
+    if not isinstance(sculpt, dict):
+        return False
+    try:
+        scx = float(sculpt.get("cx") or 0.0)
+        scy = float(sculpt.get("cy") or 0.0)
+        srad = float(sculpt.get("radius") or 0.0)
+        sh = float(sculpt.get("height") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    pts = sculpt.get("points")
+    if not isinstance(pts, list) or not pts:
+        return False
+    rad = max(4.0, float(radius) or 0.0)
+    # Stale sculpts (recalibrated line, wrong screen) must not override live play.
+    if abs(scx - float(cx)) > 10.0 or abs(scy - float(cy)) > 10.0:
+        return False
+    if abs(srad - rad) > max(5.0, 0.25 * rad):
+        return False
+    if sh > 0.0 and abs(sh - float(height)) > 10.0:
+        return False
+    try:
+        import simust_cylinder_mesh as cylmesh
+        import numpy as np
+
+        arr = np.asarray(pts, dtype=np.float64)
+        n_theta = int(sculpt.get("n_theta") or cylmesh.N_THETA)
+        n_height = int(sculpt.get("n_height") or cylmesh.N_HEIGHT)
+        # Live mouth center (and a point just above it) must stay inside.
+        if not cylmesh.point_inside_mesh(
+            (float(cx), float(cy)), arr, n_theta=n_theta, n_height=n_height
+        ):
+            return False
+        if not cylmesh.point_inside_mesh(
+            (float(cx), float(cy) - min(8.0, float(height) * 0.25)),
+            arr,
+            n_theta=n_theta,
+            n_height=n_height,
+        ):
+            return False
+    except Exception:
+        return False
+    return True
+
+
 def _finish_mesh_points_sim(
     screen=None,
     *,
@@ -2043,7 +2278,11 @@ def _finish_mesh_points_sim(
     radius: float = 0.0,
     height: float = FINISH_CYLINDER_HEIGHT_PX,
 ):
-    """Triangle-mesh control points in SIM 1280×360 (sculpted or default)."""
+    """Triangle-mesh control points in SIM 1280×360 (sculpted or default).
+
+    Live finish-balls uses the sculpt only when it still matches the current
+    goal line. Otherwise rebuild from the live line so display and hit agree.
+    """
     try:
         import simust_cylinder_mesh as cylmesh
         import numpy as np
@@ -2051,7 +2290,7 @@ def _finish_mesh_points_sim(
         n_theta = cylmesh.N_THETA
         n_height = cylmesh.N_HEIGHT
         sculpt = _sculpted_mesh_for_screen(screen)
-        if sculpt and isinstance(sculpt.get("points"), list):
+        if _sculpt_matches_live_line(sculpt, cx, cy, radius, height):
             pts = np.asarray(sculpt["points"], dtype=np.float64)
             n_theta = int(sculpt.get("n_theta") or n_theta)
             n_height = int(sculpt.get("n_height") or n_height)
@@ -2067,6 +2306,51 @@ def _finish_mesh_points_sim(
         return pts, n_theta, n_height, False
     except Exception:
         return None, 0, 0, False
+
+
+def _draw_goal_area_light(frame, screen, cx, cy, radius, height, scale_x, scale_y):
+    """Draw the goal zone without a triangle mesh.
+
+    Painted screens blit the cached mask. Others draw the plain cylinder outline.
+    """
+    try:
+        import simust_goal_paint as goal_paint
+
+        view = goal_paint.paint_view(screen)
+    except Exception:
+        view = None
+    if view and view.get("mask") is not None:
+        mask = view["mask"]
+        x0, y0, x1, y1 = view["bbox"]
+        sub = mask[y0:y1, x0:x1]
+        if sub.size == 0:
+            return
+        dx0 = int(round(x0 * scale_x))
+        dy0 = int(round(y0 * scale_y))
+        dw = max(1, int(round((x1 - x0) * scale_x)))
+        dh = max(1, int(round((y1 - y0) * scale_y)))
+        fh, fw = frame.shape[:2]
+        dx1 = min(fw, dx0 + dw)
+        dy1 = min(fh, dy0 + dh)
+        dx0 = max(0, dx0)
+        dy0 = max(0, dy0)
+        if dx1 <= dx0 or dy1 <= dy0:
+            return
+        patch = cv2.resize(sub, (dx1 - dx0, dy1 - dy0), interpolation=cv2.INTER_NEAREST)
+        roi = frame[dy0:dy1, dx0:dx1]
+        tint = roi.copy()
+        tint[patch > 0] = (255, 255, 255)
+        cv2.addWeighted(tint, 0.45, roi, 0.55, 0, roi)
+        return
+    cx_i = int(round(float(cx) * scale_x))
+    cy_i = int(round(float(cy) * scale_y))
+    rx = max(4, int(round(float(radius) * scale_x)))
+    ry = max(3, int(round(float(radius) * 0.35 * scale_y)))
+    hh = max(8, int(round(float(height) * scale_y)))
+    cv2.ellipse(frame, (cx_i, cy_i), (rx, rx), 0, 0, 360, (255, 255, 255), 1, lineType=cv2.LINE_AA)
+    cv2.ellipse(frame, (cx_i, cy_i - hh), (rx, ry), 0, 0, 360, (255, 255, 255), 1, lineType=cv2.LINE_AA)
+    cv2.line(frame, (cx_i - rx, cy_i), (cx_i - rx, cy_i - hh), (255, 255, 255), 1, lineType=cv2.LINE_AA)
+    cv2.line(frame, (cx_i + rx, cy_i), (cx_i + rx, cy_i - hh), (255, 255, 255), 1, lineType=cv2.LINE_AA)
 
 
 def draw_finish_cylinder(
@@ -2133,43 +2417,113 @@ def finish_cylinder_height_sim(p0=None, p1=None, screen=None):
     return height
 
 
-def in_finish_cylinder(point, p0, p1, depth, screen=None):
-    """True when the ball is inside the triangle-mesh goal volume.
+def _goal_hit_xy(point):
+    """Normalize a ball center / detection dict to (x, y) in the caller's space."""
+    if point is None:
+        return None
+    if isinstance(point, dict):
+        center = point.get("center")
+        if center is None:
+            return None
+        point = center
+    try:
+        if len(point) < 2:
+            return None
+        return float(point[0]), float(point[1])
+    except (TypeError, ValueError):
+        return None
 
-    Always uses the 3D mesh (saved sculpt when present, otherwise the default
-    triangulated cylinder sized from the goal line).
+
+def _disk_hits_mesh(xy, pts, n_theta, n_height, touch_radius=0.0) -> bool:
+    """True when the ball center or its body meets the drawn triangle mesh."""
+    import simust_cylinder_mesh as cylmesh
+
+    return bool(
+        cylmesh.ball_hits_mesh(
+            xy,
+            pts,
+            radius=touch_radius,
+            n_theta=n_theta,
+            n_height=n_height,
+        )
+    )
+
+
+def _classic_cylinder_contains(xy, p0, p1, depth, screen=None) -> bool:
+    """Cheap 2D body used only when this screen has no pencil paint."""
+    import simust_cylinder_mesh as cylmesh
+
+    cx, cy = goal_circle_center(p0, p1)
+    radius = goal_circle_radius(depth, p0, p1, screen=screen)
+    height = finish_cylinder_height_sim(p0, p1, screen=screen)
+    return bool(
+        cylmesh.point_on_classic_cylinder_xy(
+            xy[0], xy[1], cx, cy, radius, height
+        )
+    )
+
+
+def in_finish_cylinder(
+    point, p0, p1, depth, screen=None, touch_radius=0.0, radius_x=None, radius_y=None
+):
+    """True when the ball meets the goal area.
+
+    A painted screen uses the saved pencil area. The ball's bounding box
+    counts, so an edge can touch the paint while the center is still outside.
+    Screens with no paint use the plain cylinder outline.
     """
-    if p0 is None or p1 is None or point is None:
+    if p0 is None or p1 is None:
+        return False
+    xy = _goal_hit_xy(point)
+    if xy is None:
         return False
     try:
-        import simust_cylinder_mesh as cylmesh
+        rx = float(touch_radius if radius_x is None else radius_x)
+        ry = float(touch_radius if radius_y is None else radius_y)
+    except (TypeError, ValueError):
+        rx = ry = 0.0
+    try:
+        import simust_goal_paint as goal_paint
 
-        cx, cy = goal_circle_center(p0, p1)
-        radius = goal_circle_radius(depth, p0, p1, screen=screen)
-        height = finish_cylinder_height_sim(p0, p1, screen=screen)
-        pts, n_theta, n_height, _sculpted = _finish_mesh_points_sim(
-            screen, cx=cx, cy=cy, radius=radius, height=height
+        painted = goal_paint.contains(
+            screen, xy[0], xy[1], radius_x=rx, radius_y=ry
         )
-        if pts is None or len(pts) == 0:
-            return False
-        return bool(
-            cylmesh.point_inside_mesh(
-                point,
-                pts,
-                n_theta=n_theta,
-                n_height=n_height,
-            )
-        )
+        if painted is not None:
+            return bool(painted)
+    except Exception:
+        pass
+    try:
+        return _classic_cylinder_contains(xy, p0, p1, depth, screen=screen)
     except Exception:
         return False
 
 
-def in_goal_area(point, p0, p1, depth, post_radius=GOAL_POST_RADIUS):
-    """True when the ball is inside the displayed triangle-mesh goal volume.
+def in_goal_area(
+    point,
+    p0,
+    p1,
+    depth,
+    post_radius=GOAL_POST_RADIUS,
+    screen=None,
+    touch_radius=0.0,
+    radius_x=None,
+    radius_y=None,
+):
+    """True when the ball meets the goal area (paint, or the plain cylinder).
 
     A ball in that zone is a correct finish (no return required).
+    ``radius_x`` / ``radius_y`` are half the ball bounding box.
     """
-    return in_finish_cylinder(point, p0, p1, depth)
+    return in_finish_cylinder(
+        point,
+        p0,
+        p1,
+        depth,
+        screen=screen,
+        touch_radius=touch_radius,
+        radius_x=radius_x,
+        radius_y=radius_y,
+    )
 
 
 def finish_cylinder_preview(screen, p0=None, p1=None, action="PASS") -> dict:
@@ -2216,6 +2570,9 @@ def finish_cylinder_preview(screen, p0=None, p1=None, action="PASS") -> dict:
         n_theta = cylmesh.N_THETA
         n_height = cylmesh.N_HEIGHT
         sculpt = _sculpted_mesh_for_screen(sid)
+        # Calibration always shows the saved sculpt when present so operators can
+        # edit it. Live finish-balls draw/hit use _finish_mesh_points_sim, which
+        # rejects drifted sculpts that no longer cover the mouth.
         if sculpt and isinstance(sculpt.get("points"), list):
             pts = sculpt["points"]
             n_theta = int(sculpt.get("n_theta") or n_theta)
@@ -2280,7 +2637,7 @@ def first_arrival_time(positions, screen, goal_lines, depth, post_radius=GOAL_PO
     if p0 is None:
         return None
     for t, x, y in positions:
-        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius):
+        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius, screen=screen):
             return t
     return None
 
@@ -2295,7 +2652,7 @@ def best_arrival_in_positions(positions, screens, goal_lines, action_type, sessi
             continue
         depth = arrival_depth_for(screen, action_type, session_duration=session_duration)
         for t, x, y in positions:
-            if not in_goal_area((x, y), p0, p1, depth, post_radius=post_r):
+            if not in_goal_area((x, y), p0, p1, depth, post_radius=post_r, screen=screen):
                 continue
             eff, proj = get_effective_distance((x, y), p0, p1)
             if best is None or eff < best[0]:
@@ -2314,10 +2671,10 @@ def departed_goal_area(positions, screen, goal_lines, arrive_time, depth, post_r
     for t, x, y in positions:
         if t + 1e-6 < arrive_time:
             continue
-        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius):
+        if in_goal_area((x, y), p0, p1, depth, post_radius=post_radius, screen=screen):
             seen_in = True
             continue
-        if seen_in and t > arrive_time + 0.08 and not in_goal_area((x, y), p0, p1, leave_depth, post_radius=post_radius):
+        if seen_in and t > arrive_time + 0.08 and not in_goal_area((x, y), p0, p1, leave_depth, post_radius=post_radius, screen=screen):
             return True
     return False
 
@@ -2369,7 +2726,7 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
             i += 1
         if last_pt is None:
             # Prefer a point already in the goal band when starting the leave path.
-            in_pts = [g for g in group if in_goal_area((g[1], g[2]), p0, p1, depth, post_radius=post_radius)]
+            in_pts = [g for g in group if in_goal_area((g[1], g[2]), p0, p1, depth, post_radius=post_radius, screen=screen)]
             cand = in_pts[0] if in_pts else group[0]
         else:
             within = [
@@ -2386,13 +2743,13 @@ def returned_toward_origin(positions, screen, screens, goal_lines, arrive_time, 
     away = 0
     for t, x, y in path:
         pt = (x, y)
-        if in_goal_area(pt, p0, p1, depth, post_radius=post_radius):
+        if in_goal_area(pt, p0, p1, depth, post_radius=post_radius, screen=screen):
             seen_in = True
             away = 0
             continue
         if not seen_in or t <= float(arrive_time) + 0.08:
             continue
-        if in_goal_area(pt, p0, p1, leave_depth, post_radius=post_radius):
+        if in_goal_area(pt, p0, p1, leave_depth, post_radius=post_radius, screen=screen):
             continue
         if on_origin_side(pt, p0, p1, origin):
             away += 1
@@ -2650,6 +3007,96 @@ def compute_action_efficiency(action_type: str, result: str, finishing_time: flo
     ae = max(0, min(100, ae_raw))
     return ae
 
+def pass_hip_from_block(action_data, screen, p0, p1, depth):
+    """Watch frames after a pass ball enters A1–A6 / B1–B6.
+
+    Lock inbound heading on goal entry. Correct immediately when heading
+    changes >15° while still inside the goal area (screen bounce / return).
+    Wrong when the ball leaves the goal area without that turn (straight
+    through). No HIP / red-zone dependency. Missing detections are not exits.
+    None = unfinished.
+    """
+    if p0 is None or p1 is None or not is_pass_main_goal(screen):
+        return None
+    watching = False
+    failed = False
+    prev_xy = None
+    inbound_deg = None
+    dir_changed = False
+    last_seen = None
+    for row in (action_data or {}).get("data") or []:
+        points = []
+        for pos in (row or {}).get("b") or []:
+            if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+                continue
+            try:
+                radius = float(pos[2]) if len(pos) >= 3 else 12.0
+                points.append((float(pos[0]), float(pos[1]), max(0.0, radius)))
+            except (TypeError, ValueError):
+                continue
+        if not watching:
+            hit = None
+            for x, y, radius in points:
+                if not in_goal_area(
+                    (x, y), p0, p1, depth, screen=screen, radius_x=radius, radius_y=radius
+                ):
+                    continue
+                hit = (x, y, radius)
+                break
+            if hit is None:
+                if points:
+                    cx, cy = goal_circle_center(p0, p1)
+                    x, y, _r = min(
+                        points,
+                        key=lambda item: math.hypot(item[0] - cx, item[1] - cy),
+                    )
+                    last_seen = (x, y)
+                continue
+            x, y, _radius = hit
+            watching = True
+            prev_xy = (x, y)
+            inbound_deg = None
+            dir_changed = False
+            # Lock inbound from the approach frame → first goal touch.
+            if last_seen is not None:
+                inbound_deg = _pass_heading_from_step(
+                    last_seen[0], last_seen[1], x, y
+                )
+            last_seen = (x, y)
+            continue
+        if not points:
+            continue
+        cx, cy = goal_circle_center(p0, p1)
+        x, y, radius = min(
+            points,
+            key=lambda item: math.hypot(item[0] - cx, item[1] - cy),
+        )
+        in_goal = in_goal_area(
+            (x, y), p0, p1, depth, screen=screen, radius_x=radius, radius_y=radius
+        )
+        if prev_xy is not None:
+            step_deg = _pass_heading_from_step(prev_xy[0], prev_xy[1], x, y)
+            if step_deg is not None and inbound_deg is None:
+                inbound_deg = step_deg
+            elif _pass_reverse_latched(
+                inbound_deg, prev_xy, (x, y), in_goal, False
+            ):
+                dir_changed = True
+        prev_xy = (x, y)
+        last_seen = (x, y)
+        if dir_changed and in_goal:
+            return "Correct"
+        # Left goal paint without a direction change → Wrong / retry.
+        if not in_goal:
+            failed = True
+            watching = False
+            prev_xy = None
+            inbound_deg = None
+            dir_changed = False
+            continue
+    return "Wrong" if failed else None
+
+
 # ------------------------------------------------------------------
 # Updated analyze_action_with_context (GOAL uses dedicated late search)
 # Includes AE computation and fallback action_end_time
@@ -2795,7 +3242,31 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
             # is a goal. There is no late, miss, or return check.
             finish_balls = bool((action_data or {}).get("finish_balls"))
             late_by_time = (not finish_balls) and arrival_in_late_window(arrive_t, session_duration)
-            if finish_balls or bool((action_data or {}).get("cylinder_correct")):
+            hip_decision = None
+            if str(action_type or "").upper() == "PASS" and is_pass_main_goal(best_screen):
+                # The live camera watch is the decision that advances the screen.
+                # A saved track that disagrees must not turn that Correct into Wrong.
+                flagged = str((action_data or {}).get("pass_hip_result") or "").strip()
+                if flagged == "Correct":
+                    hip_decision = "Correct"
+                else:
+                    hip_decision = pass_hip_from_block(
+                        action_data, best_screen,
+                        *get_screen_info(best_screen, goal_lines),
+                        depth,
+                    )
+                    if hip_decision is None and flagged == "Wrong":
+                        hip_decision = flagged
+            pass_main = (
+                str(action_type or "").upper() == "PASS" and is_pass_main_goal(best_screen)
+            )
+            if hip_decision == "Wrong" or (pass_main and hip_decision != "Correct"):
+                result = "Wrong"
+                winning_screen = best_screen
+                display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
+                display_duration = f"{session_duration:.3f}"
+                min_dist_display = best_eff_dist
+            elif hip_decision == "Correct" or finish_balls or bool((action_data or {}).get("cylinder_correct")):
                 result = 'Correct'
                 winning_screen = best_screen
                 display_time = f"{(arrive_t if arrive_t is not None else best_min_time):.3f}"
@@ -2847,8 +3318,34 @@ def analyze_action_with_context(action_data, goal_lines, action_type, all_data, 
         else:
             # Live cylinder already cleared this finish-balls action, but the
             # sampled track never recorded an in-cylinder point.
-            if bool((action_data or {}).get("finish_balls")) and bool(
-                (action_data or {}).get("cylinder_correct")
+            hip_flag = str((action_data or {}).get("pass_hip_result") or "").strip()
+            finish_balls = bool((action_data or {}).get("finish_balls"))
+            if (
+                not hip_flag
+                and finish_balls
+                and str(action_type or "").upper() == "PASS"
+                and screens
+                and is_pass_main_goal(screens[0])
+            ):
+                # Static-filter can drop the in-goal samples; still honor the
+                # raw pass HIP watch on the stored ball track.
+                try:
+                    sid0 = str(screens[0])
+                    p0h, p1h = get_screen_info(sid0, goal_lines)
+                    depth_h = arrival_depth_for(sid0, "PASS")
+                    tracked = pass_hip_from_block(action_data, sid0, p0h, p1h, depth_h)
+                    if tracked in ("Correct", "Wrong"):
+                        hip_flag = tracked
+                except Exception:
+                    pass
+            if hip_flag == "Wrong":
+                result = "Wrong"
+                winning_screen = str(
+                    (action_data or {}).get("cylinder_screen")
+                    or ((screens or ["N/A"])[0] if screens else "N/A")
+                )
+            elif finish_balls and (
+                bool((action_data or {}).get("cylinder_correct")) or hip_flag == "Correct"
             ):
                 result = 'Correct'
                 winning_screen = str(
@@ -3297,6 +3794,9 @@ class ArenaSimulator:
                 self._finish_plan(test_num, action_in_set, actions_in_set)
                 if self.finish_balls else self._next_outcome(self.action)
             )
+            if getattr(self, "always_fail", False):
+                self.travel_s = MODE1_OTHER_TRAVEL_S
+                self.finish_travel_s = MODE1_OTHER_TRAVEL_S
             aim_as = "wrong" if self.intended == "wrong" else (
                 "correct" if self.finish_balls else self.intended
             )
@@ -3330,6 +3830,19 @@ class ArenaSimulator:
             # Recorded player point is the body center, above the anchor.
             xy = (xy[0], xy[1] + 29.0)
         self.target_xy = xy
+        if getattr(self, "always_fail", False):
+            # Mode 1: no simulated player. The operator drags the ball by hand.
+            self.intended = "manual"
+            self.aim_name = "manual"
+            self._sim_frame = 0
+            self._mode1_live = False
+            self._mode1_phase = None
+            self._mouse_grabbed = False
+            self.start_xy = self.BALL_HOME
+            self.last_ball = self.BALL_HOME
+            self.last_player = self.PLAYER_HOME
+            self.target_xy = self.BALL_HOME
+            tracked = self.BALL_HOME
         if getattr(self, "always_correct", False) and self.line_p0 and self.line_p1:
             # Mode 2 must score every action quickly and STAY in the goal.
             # Intended "correct" returns home after 0.7s and was burning the
@@ -3338,6 +3851,7 @@ class ArenaSimulator:
             self.intended = "finish"
             self.aim_name = "center"
             self.target_xy = self._center_inside_goal(40.0)
+            self._ensure_finish_target_in_goal()
             tracked = self.target_xy
             # Keep AET high enough that PASS Correct AE clears unlock gates.
             self.finish_travel_s = 0.40
@@ -3444,6 +3958,74 @@ class ArenaSimulator:
             nx, ny = -nx, -ny
         inset = min(float(dist), max(0.0, radius * 0.45))
         return (cx + nx * inset, cy + ny * inset)
+
+    # Mode 2 finish bounce: hold on target, then reverse far enough that a
+    # dropped camera/sim frame still shows a heading flip inside HIP.
+    FINISH_BOUNCE_HOLD_S = 0.10
+    FINISH_BOUNCE_BACK_PX = 28.0
+
+    def _finish_bounce_xy(self, target_xy, back_px=None):
+        """Point a short reverse from the finish target toward the send origin."""
+        origin = self.start_xy or self.BALL_HOME
+        tx, ty = float(target_xy[0]), float(target_xy[1])
+        dx = float(origin[0]) - tx
+        dy = float(origin[1]) - ty
+        span = math.hypot(dx, dy) or 1.0
+        back = float(self.FINISH_BOUNCE_BACK_PX if back_px is None else back_px)
+        return (tx + dx / span * back, ty + dy / span * back)
+
+    def _ensure_finish_target_in_goal(self):
+        """Nudge the finish target so inbound+turn can Correct inside goal paint.
+
+        Correct no longer depends on the red HIP zone — only goal area.
+        """
+        sid = str((self.screens or [""])[0] or "")
+        if not sid or not self.line_p0 or not self.line_p1:
+            return
+        tx, ty = float(self.target_xy[0]), float(self.target_xy[1])
+        depth = arrival_depth_for(sid, self.action or "PASS")
+        back = float(self.FINISH_BOUNCE_BACK_PX)
+        bounce = self._finish_bounce_xy((tx, ty), back)
+
+        def _ok(pt, radius=12.0):
+            return bool(
+                in_goal_area(
+                    pt,
+                    self.line_p0,
+                    self.line_p1,
+                    depth,
+                    screen=sid,
+                    radius_x=float(radius),
+                    radius_y=float(radius),
+                )
+            )
+
+        def _pick(radius):
+            if _ok((tx, ty), radius) and _ok(bounce, radius):
+                return (tx, ty)
+            cx, cy = goal_circle_center(self.line_p0, self.line_p1)
+            best = None
+            best_d = None
+            for ang in range(0, 360, 5):
+                rad = math.radians(ang)
+                for dist in range(8, 100, 2):
+                    x = cx + math.cos(rad) * float(dist)
+                    y = cy + math.sin(rad) * float(dist)
+                    pt = (x, y)
+                    if not _ok(pt, radius):
+                        continue
+                    if not _ok(self._finish_bounce_xy(pt, back), radius):
+                        continue
+                    d = math.hypot(x - tx, y - ty)
+                    if best_d is None or d < best_d:
+                        best_d = d
+                        best = pt
+            return best
+
+        # Prefer a center-in goal pocket; fall back to a 12px ball touch (B3).
+        chosen = _pick(0.0) or _pick(12.0)
+        if chosen is not None:
+            self.target_xy = chosen
 
     def _line_target(self, screens):
         # Prefer goal-mouth screens (1/7/8) so area 7 is not skipped for a side keypoint.
@@ -3675,6 +4257,27 @@ class ArenaSimulator:
             max(8.0, min(float(SIM_FRAME_HEIGHT - 8), y)),
         )
 
+    def _point_outside_hip(self, screen, goal):
+        """A frame point far enough outside the HIP zone that the ball body is out."""
+        try:
+            reload_hip_zone_calibration()
+        except Exception:
+            pass
+        gx, gy = float(goal[0]), float(goal[1])
+        candidates = (
+            (gx, 10.0),
+            (gx, float(SIM_FRAME_HEIGHT) - 10.0),
+            (16.0, 16.0),
+            (float(SIM_FRAME_WIDTH) - 16.0, 16.0),
+            (16.0, float(SIM_FRAME_HEIGHT) - 16.0),
+            (float(SIM_FRAME_WIDTH) - 16.0, float(SIM_FRAME_HEIGHT) - 16.0),
+        )
+        for raw_x, raw_y in candidates:
+            xy = self._clip(raw_x, raw_y)
+            if not ball_overlaps_hip(xy, screen, 36.0):
+                return xy
+        return self._clip(gx, 10.0)
+
     def _ball_player_for_outcome(self, t, now):
         target = self.target_xy
         is_press = self.action == "PRESS"
@@ -3741,6 +4344,32 @@ class ArenaSimulator:
                 px, py = self._lerp(stepped, self.PLAYER_HOME, u)
             return bx, by, px, py
 
+        if intended == "manual":
+            bx, by = self.last_ball or self.start_xy or self.BALL_HOME
+            px, py = self.PLAYER_HOME
+            return bx, by, px, py
+
+        if intended == "hip_out" and getattr(self, "_mode1_live", False):
+            return self._mode1_hip_position(now)
+
+        if intended == "hip_out":
+            # Touch the goal, spend the HIP hold outside the zone (Wrong, same
+            # screen), then come back and stay so the next try can finish Correct.
+            n = int(getattr(self, "_sim_frame", 1) or 1)
+            goal = self.target_xy
+            outside = getattr(self, "hip_exit_xy", None) or (float(goal[0]), 12.0)
+            origin = self.start_xy or self.BALL_HOME
+            # Frame 6 is the touch. The next PASS_HIP_HOLD_FRAMES sit outside.
+            back = 6 + int(PASS_HIP_HOLD_FRAMES)
+            if n < 6:
+                bx, by = self._lerp(origin, goal, (n / 6.0) * 0.55)
+            elif n == 6 or n > back:
+                bx, by = goal
+            else:
+                bx, by = outside
+            px, py = self._lerp(self.PLAYER_HOME, goal, 0.15)
+            return bx, by, px, py
+
         if intended in ("miss", "finish", "slow"):
             # Arrive in the goal area and stay. A slow ball still counts, but
             # it uses more of the shared clock. Mode 2 uses a shorter finish_travel_s.
@@ -3759,6 +4388,16 @@ class ArenaSimulator:
             else:
                 bx, by = self._lerp(self.start_xy, target, u)
                 px, py = self._lerp(self.PLAYER_HOME, target, u * 0.22)
+            # After arrival, reverse along the approach so the pass watch sees a
+            # heading change while the ball is still in the HIP zone.
+            # Hold on the target briefly (wall-clock frames can skip), then bounce
+            # far enough that approach→bounce still reads as a heading flip.
+            if not is_press and t >= travel:
+                dt = float(t) - float(travel)
+                if dt < float(self.FINISH_BOUNCE_HOLD_S):
+                    bx, by = float(target[0]), float(target[1])
+                else:
+                    bx, by = self._finish_bounce_xy(target)
             return bx, by, px, py
 
         if intended == "late":
@@ -3828,6 +4467,93 @@ class ArenaSimulator:
             p_miss = min(0.82, p_miss + 0.22)
         return self._goal_rng.random() > p_miss
 
+    def set_manual_ball_xy(self, x, y):
+        """Place the Mode 1 ball in SIM 1280×360 pixels."""
+        bx, by = self._clip(float(x), float(y))
+        self.last_ball = (bx, by)
+        self.start_xy = (bx, by)
+
+    def begin_mode1_return(self):
+        """After the missed HIP hold, glide back to the goal instead of jumping."""
+        if getattr(self, "intended", "") == "manual":
+            return
+        if getattr(self, "_mode1_phase", "") in ("return", "stay"):
+            return
+        self._mode1_phase = "return"
+        self._mode1_phase_t = time.time()
+        self._mode1_live = True
+
+    def _mode1_short_of_goal(self, origin, goal, u):
+        """Point along the pass, held outside the goal area."""
+        u = max(0.0, min(1.0, float(u)))
+        if not self.line_p0 or not self.line_p1:
+            return self._lerp(origin, goal, u * 0.55)
+        screen = self.screens[0] if self.screens else ""
+        depth = arrival_depth_for(screen, self.action or "PASS") if screen else float(FINISH_DIST)
+
+        def inside(pt):
+            return in_goal_area(
+                pt, self.line_p0, self.line_p1, depth, radius_x=18.0, radius_y=18.0
+            )
+
+        if not inside(self._lerp(origin, goal, u)):
+            return self._lerp(origin, goal, u)
+        lo, hi = 0.0, u
+        for _ in range(10):
+            mid = (lo + hi) * 0.5
+            if inside(self._lerp(origin, goal, mid)):
+                hi = mid
+            else:
+                lo = mid
+        return self._lerp(origin, goal, lo)
+
+    def _mode1_hip_position(self, now):
+        """Slow-motion pass: long approach, brief exit, long return, then hold."""
+        phase = getattr(self, "_mode1_phase", "approach")
+        origin = self.start_xy or self.BALL_HOME
+        goal = self.target_xy
+        outside = getattr(self, "hip_exit_xy", None) or (float(goal[0]), 12.0)
+        phase_t = getattr(self, "_mode1_phase_t", None)
+        elapsed = now - (now if phase_t is None else float(phase_t))
+        if phase == "approach":
+            u = min(1.0, max(0.0, elapsed) / MODE1_APPROACH_S)
+            # Glide up to the mouth and wait. The next phase is the one frame inside.
+            bx, by = self._mode1_short_of_goal(origin, goal, u)
+        elif phase == "touch":
+            bx, by = goal
+        elif phase == "out":
+            bx, by = outside
+        elif phase == "return":
+            u = min(1.0, max(0.0, elapsed) / MODE1_RETURN_S)
+            bx, by = self._lerp(outside, goal, u)
+        else:
+            bx, by = goal
+        px, py = self._lerp(self.PLAYER_HOME, (bx, by), 0.18)
+        return bx, by, px, py
+
+    def _advance_mode1_hip(self, now):
+        if not getattr(self, "_mode1_phase", None):
+            self._mode1_phase = "approach"
+            self._mode1_phase_t = now
+        phase = self._mode1_phase
+        phase_t = getattr(self, "_mode1_phase_t", None)
+        elapsed = now - (now if phase_t is None else float(phase_t))
+        if phase == "approach" and elapsed >= MODE1_APPROACH_S:
+            self._mode1_phase = "touch"
+            self._mode1_phase_t = now
+        elif phase == "touch":
+            self._mode1_phase = "out"
+            self._mode1_out_left = PASS_HIP_HOLD_FRAMES
+            self._mode1_phase_t = now
+        elif phase == "out":
+            self._mode1_out_left = int(getattr(self, "_mode1_out_left", PASS_HIP_HOLD_FRAMES) or 0) - 1
+            if self._mode1_out_left <= 0:
+                self._mode1_phase = "return"
+                self._mode1_phase_t = now
+        elif phase == "return" and elapsed >= MODE1_RETURN_S:
+            self._mode1_phase = "stay"
+            self._mode1_phase_t = now
+
     def step(self, frame_w, frame_h):
         if getattr(self, "parked", False):
             return [], [], (None, None)
@@ -3835,6 +4561,15 @@ class ArenaSimulator:
         sy = frame_h / float(SIM_FRAME_HEIGHT)
         now = time.time()
         t = now - self.start_ts if self.active else (now - self.late_start_ts if self.late_phase else 0.0)
+        manual = bool(getattr(self, "always_fail", False) or self.intended == "manual")
+        if self.active and self.intended == "hip_out" and not manual:
+            self._mode1_live = True
+            self._advance_mode1_hip(now)
+        elif self.active and not manual:
+            self._mode1_live = False
+            self._sim_frame = int(getattr(self, "_sim_frame", 0) or 0) + 1
+        else:
+            self._mode1_live = False
         bx, by, px, py = self._ball_player_for_outcome(t, now)
         bx, by = self._clip(bx, by)
         px, py = self._clip(px, py)
@@ -3901,13 +4636,15 @@ class ArenaSimulator:
                 "confidence": conf,
                 "simulated": True,
             })
-        players = [{
-            "center": [px_s, py_s - bh // 3],
-            "bbox": [x1, y1, x2, y2],
-            "confidence": 1.0,
-            "simulated": True,
-        }]
-        return balls, players, hip
+        players = []
+        if not (getattr(self, "always_fail", False) or self.intended == "manual"):
+            players = [{
+                "center": [px_s, py_s - bh // 3],
+                "bbox": [x1, y1, x2, y2],
+                "confidence": 1.0,
+                "simulated": True,
+            }]
+        return balls, players, hip if players else (None, None)
 
     def draw_on_frame(self, frame, balls, players):
         if getattr(self, "parked", False):
@@ -3942,6 +4679,9 @@ class ArenaSimulator:
                 f"ARENA SIM  {self.action} {self.intended.upper()}  r={self.last_ball_radius:.0f} "
                 f"blur={self.last_blur:.0f} {det}"
             )
+        elif self.intended == "manual" or getattr(self, "always_fail", False):
+            grabbed = "HOLD" if getattr(self, "_mouse_grabbed", False) else "DRAG"
+            label = f"MODE 1  hold left click to {grabbed.lower()} the ball"
         elif self.active or self.late_phase or self.hold_finish:
             if self.aim_name and self.line_p0 and self.line_p1:
                 dist, proj_t, _, _ = compute_projection(self.last_ball, self.line_p0, self.line_p1)
@@ -5512,14 +6252,18 @@ class SimustRealtimeCamera:
             result_entry["balls_clock_sec"] = clock
 
         ch.stats['results'].append(result_entry)
-        self._publish_live_result(
-            ch.field_id,
-            result_entry.get("result"),
-            result_entry.get("screens"),
-            result_entry.get("winning_screen"),
-            result_entry.get("id"),
-            seq=(ch.pending_analysis or {}).get("seq"),
-        )
+        # A pass that has not yet stayed in the HIP zone must not move the screen.
+        if self._pass_hip_watch_accepted(
+            action_type, result_entry.get("winning_screen"), action_data
+        ):
+            self._publish_live_result(
+                ch.field_id,
+                result_entry.get("result"),
+                result_entry.get("screens"),
+                result_entry.get("winning_screen"),
+                result_entry.get("id"),
+                seq=(ch.pending_analysis or {}).get("seq"),
+            )
         session_folder = ch.recording_subdir
         try:
             payload = {
@@ -5602,7 +6346,13 @@ class SimustRealtimeCamera:
             )
             # A ball still on the way is not a wrong finish. Wrong is published
             # only when the session track has actually ended.
+            # Pass mouths advance only after the live HIP watch says Correct.
+            # This background pass must not switch a real-test screen on its own.
             if str(preview.get("Result") or "").strip().lower() == "wrong":
+                return
+            if not self._pass_hip_watch_accepted(
+                action_type, preview.get("Winning Screen"), snap
+            ):
                 return
             self._publish_live_result(
                 field_id,
@@ -5619,7 +6369,28 @@ class SimustRealtimeCamera:
             if ch is not None:
                 ch._live_display_busy = False
 
-    def _publish_live_result(self, field, result, screens, winning_screen, block_id, seq=0):
+    def _pass_hip_watch_accepted(self, action_type, winning_screen, block) -> bool:
+        """finish_balls / Manual PASS advances only after the live goal-heading watch.
+
+        Camera and sim share that watch (goal paint + >15° turn). A background
+        analyze Correct must not switch the screen on goal entry alone (or when
+        winning_screen / screens are blank and the mouth check would otherwise
+        be skipped). Red HIP zone is not part of this gate.
+        """
+        if str(action_type or "").upper() != "PASS":
+            return True
+        if bool((block or {}).get("finish_balls") or (block or {}).get("manual_coach")):
+            return str((block or {}).get("pass_hip_result") or "").strip() == "Correct"
+        # Non-finish_balls mouths still need the live watch when identified.
+        screens = list((block or {}).get("screens") or [])
+        mouth = is_pass_main_goal(winning_screen) or any(
+            is_pass_main_goal(s) for s in screens
+        )
+        if mouth:
+            return str((block or {}).get("pass_hip_result") or "").strip() == "Correct"
+        return True
+
+    def _publish_live_result(self, field, result, screens, winning_screen, block_id, seq=0, finish_decided=False):
         """Latest finish for the gap screen. One entry per field, replaced in place."""
         path = LIVE_ACTION_RESULT_FILE
         try:
@@ -5659,6 +6430,8 @@ class SimustRealtimeCamera:
                 "ts": time.time(),
                 # Player clears the pass image as soon as this flag is seen.
                 "clear_now": str(result or "").strip().lower() == "correct",
+                # Leaving the HIP zone does not end the action. The same screen stays up.
+                "finish_decided": bool(finish_decided),
             }
             by_seq = existing.get("by_seq") if isinstance(existing.get("by_seq"), dict) else {}
             by_seq = dict(by_seq)
@@ -5725,6 +6498,10 @@ class SimustRealtimeCamera:
         # search still running can turn that into Correct or Late, so a cross
         # is not shown until that search has finished.
         if str(preview.get("Result") or "").strip().lower() == "wrong":
+            return
+        if not self._pass_hip_watch_accepted(
+            action_type, preview.get("Winning Screen"), action_data
+        ):
             return
         self._publish_live_result(
             ch.field_id,
@@ -5946,6 +6723,9 @@ class SimustRealtimeCamera:
         ch._gap_display_sent = False
         ch._cylinder_scored_screens = set()
         ch._cylinder_goal_seq = None
+        ch._goal_ball_trail = []
+        ch._pass_hip_pending = {}
+        ch._hidden_goal_lines = {}
         # t=0 is cue ON (teammate image appear), not keypoint paint delay.
         # Otherwise Session Duration ≈ On − delay (~0.72s when On=1.5).
         try:
@@ -5970,6 +6750,18 @@ class SimustRealtimeCamera:
             "end_time": "",
             "data": []
         }
+        # Goal Area + HIP watch (Entry Players/Numbers style) must arm for every
+        # finish_balls band — Elite / Activated / HP / WC included.
+        if p.get("finish_balls"):
+            ch.current_qr_block["finish_balls"] = True
+        if p.get("combined_field"):
+            ch.current_qr_block["combined_field"] = True
+        if p.get("action_in_set") is not None:
+            ch.current_qr_block["action_in_set"] = p.get("action_in_set")
+        if p.get("actions_in_set") is not None:
+            ch.current_qr_block["actions_in_set"] = p.get("actions_in_set")
+        if p.get("test_num") is not None:
+            ch.current_qr_block["test_num"] = p.get("test_num")
         saver = getattr(self, "video_saver", None)
         fps = float(getattr(saver, "_out_fps", 0) or SAVE_VIDEO_FPS) or float(SAVE_VIDEO_FPS)
         frames = int(getattr(saver, "frame_count", 0) or 0)
@@ -6009,20 +6801,10 @@ class SimustRealtimeCamera:
                 eff = 0.0
             if eff > 0:
                 ch.current_qr_block["efficiency_max_sec"] = eff
-            if p.get("finish_balls"):
-                ch.current_qr_block["finish_balls"] = True
             if p.get("budget_elapsed_sec") is not None:
                 ch.current_qr_block["budget_elapsed_sec"] = p.get("budget_elapsed_sec")
             if p.get("budget_total_sec") is not None:
                 ch.current_qr_block["budget_total_sec"] = p.get("budget_total_sec")
-            if p.get("action_in_set") is not None:
-                ch.current_qr_block["action_in_set"] = p.get("action_in_set")
-            if p.get("actions_in_set") is not None:
-                ch.current_qr_block["actions_in_set"] = p.get("actions_in_set")
-            if p.get("test_num") is not None:
-                ch.current_qr_block["test_num"] = p.get("test_num")
-            if p.get("combined_field"):
-                ch.current_qr_block["combined_field"] = True
             hold_frames = max(1, int(round(float(on_sec) * IMAGE_CUE_FPS)))
             ch.keypoint_hold_frames = hold_frames
             ch.keypoint_frames_shown = 0
@@ -6068,16 +6850,16 @@ class SimustRealtimeCamera:
                 height_sim = float(
                     finish_cylinder_height_sim((x1, y1), (x2, y2), screen=screen_name)
                 )
-                # White points + links drawn directly (no green fill / fade).
-                draw_finish_cylinder(
+                # Painted goal: one mask blit. No paint: a few ellipse calls.
+                _draw_goal_area_light(
                     frame,
+                    screen_name,
                     cx_sim,
                     cy_sim,
                     radius_sim,
-                    height=height_sim,
-                    screen=screen_name,
-                    scale_x=sx,
-                    scale_y=sy,
+                    height_sim,
+                    sx,
+                    sy,
                 )
                 line_marks.append((
                     action,
@@ -6122,6 +6904,7 @@ class SimustRealtimeCamera:
                 ch._pending_cue_info = None
                 ch._frame_sync_cue_raw = None
                 ch.pending_start = None
+                ch._next_goal_immediate = False
                 if ch.session_active or ch.active_goal_lines:
                     self._clear_goal_area_now(ch, current_timestamp)
             return
@@ -6391,13 +7174,21 @@ class SimustRealtimeCamera:
                             "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
                             "hold_frames": hold_frames,
                         }
-                        # Same appear delay as playlist actions (~0.85s). Manual
-                        # used appear=1 briefly and the cylinder beat the pass
-                        # image onto the wall; restore shared timing so both show
-                        # together (pre–Oct 28 Manual behaviour).
-                        appear = shift
-                        ch.kp_appear_frames_left = appear
-                        just_armed = True
+                        # A correct finish already switched the wall. Draw this
+                        # goal on the same frame the new cue is seen. The first
+                        # action of a test still waits the usual appear shift.
+                        if (
+                            bool((cue or {}).get("finish_balls"))
+                            and getattr(ch, "_next_goal_immediate", False)
+                        ):
+                            appear = 0
+                            ch._next_goal_immediate = False
+                            ch.kp_appear_frames_left = 0
+                            just_armed = False
+                        else:
+                            appear = shift
+                            ch.kp_appear_frames_left = appear
+                            just_armed = True
                         recover_note = " [recover after stale]" if recover_after_stale else ""
                         print(
                             f"[{ch.label}] cue ON -> keypoints in {appear}f, "
@@ -6525,9 +7316,20 @@ class SimustRealtimeCamera:
                     ch._live_display_busy = False
                     self._schedule_live_display(ch)
                 if ch.kp_clear_frames_left <= 0:
-                    # Manual coach holds until each lit screen gets a ball —
-                    # never tear cylinders down on the On countdown alone.
-                    if manual_coach or bool((cue or {}).get("manual_coach")):
+                    # Manual coach / finish_balls hold until each lit screen gets
+                    # a ball — never tear cylinders down on the On countdown alone.
+                    # Entry/Activated later actions were losing the mesh (or scoring
+                    # against a cleared zone) when sim On expired mid-wait.
+                    hold_for_ball = bool(
+                        manual_coach
+                        or bool((cue or {}).get("manual_coach"))
+                        or bool((cue or {}).get("finish_balls"))
+                        or bool(
+                            isinstance(ch.current_qr_block, dict)
+                            and ch.current_qr_block.get("finish_balls")
+                        )
+                    )
+                    if hold_for_ball:
                         ch.kp_clear_frames_left = max(
                             1, _on_hold_frames(_cue_on_sec(cue))
                         )
@@ -6590,13 +7392,33 @@ class SimustRealtimeCamera:
         frame = self.draw_goal_lines(frame)
 
         reload_hip_zone_calibration()
+        sx = w / float(SIM_FRAME_WIDTH) if w else 1.0
+        sy = h / float(SIM_FRAME_HEIGHT) if h else 1.0
         for fid, poly in (("A", POLYGON_POINTS_A), ("B", POLYGON_POINTS_B)):
             if fid not in active:
                 continue
+            color = (0, 0, 255) if fid == "A" else (0, 80, 255)
+            strokes = []
+            hidden = False
+            try:
+                import simust_hip_calibrate as _hip_paint
+
+                strokes = _hip_paint.zone_strokes(fid)
+                hidden = _hip_paint.zone_hidden(fid)
+            except Exception:
+                strokes = []
+                hidden = False
+            if strokes:
+                # Same pencil pixels saved in Settings, scaled onto this frame.
+                _hip_paint.draw_strokes(frame, strokes, sx, sy, color)
+                continue
+            if hidden:
+                continue
             if poly:
-                pts = np.array(poly, dtype=np.int32)
-                # Red outline = HIP person zone (17-point calibrated polygon)
-                color = (0, 0, 255) if fid == "A" else (0, 80, 255)
+                pts = np.array(
+                    [[int(round(p[0] * sx)), int(round(p[1] * sy))] for p in poly],
+                    dtype=np.int32,
+                )
                 cv2.polylines(frame, [pts], True, color, 2)
 
         any_active = any(
@@ -6723,9 +7545,24 @@ class SimustRealtimeCamera:
                 or (ch.field_id == "B" and b["center"][0] >= mid_x)
             ]
 
+        ball_rows = []
+        for ball in field_balls:
+            # Store the same SIM 1280×360 point the live goal / HIP test uses,
+            # so a real camera frame that is not already 1280 wide still scores
+            # the same way in the saved track.
+            body = self._ball_sim_body(ball)
+            if body is None:
+                continue
+            xy, half_w, half_h = body
+            radius = max(4.0, min(48.0, max(float(half_w), float(half_h))))
+            ball_rows.append([
+                round(float(xy[0]), 1),
+                round(float(xy[1]), 1),
+                round(radius, 1),
+            ])
         frame_data = {
             't': round(rel_time, 3),
-            'b': [[c[0], c[1]] for c in [ball['center'] for ball in field_balls]],
+            'b': ball_rows,
             'p': [[c[0], c[1]] for c in [player['center'] for player in field_players]],
             'hp': [sx, sy] if (sx is not None and sy is not None) else None,
             'field': ch.field_id,
@@ -6745,7 +7582,10 @@ class SimustRealtimeCamera:
         """Drop the goal line and cylinder on this frame (finish-balls screen change)."""
         ch.kp_clear_frames_left = None
         ch.active_goal_lines = {}
+        ch._hidden_goal_lines = {}
         ch.current_keypoints = []
+        ch._goal_ball_trail = []
+        ch._pass_hip_pending = {}
         now_str = get_current_time_ms()
         with self.session_lock:
             if ch.session_active:
@@ -6796,12 +7636,326 @@ class SimustRealtimeCamera:
             test_num=(ch.current_qr_block or {}).get("test_num") or 0,
         )
 
-    def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
-        """Finish-balls: as soon as the ball is in the cylinder, score Correct.
+    def _ball_sim_body(self, ball):
+        """Ball center and box reach in SIM 1280×360 pixels."""
+        center = ball.get("center") if isinstance(ball, dict) else None
+        if not center or len(center) < 2:
+            return None
+        try:
+            hit_xy = (float(center[0]), float(center[1]))
+        except (TypeError, ValueError):
+            return None
+        fw = float(getattr(self, "_live_frame_w", 0) or 0)
+        fh = float(getattr(self, "_live_frame_h", 0) or 0)
+        scale_x = scale_y = 1.0
+        if fw > 1.0 and fh > 1.0 and (
+            abs(fw - float(SIM_FRAME_WIDTH)) > 0.5
+            or abs(fh - float(SIM_FRAME_HEIGHT)) > 0.5
+        ):
+            scale_x = float(SIM_FRAME_WIDTH) / fw
+            scale_y = float(SIM_FRAME_HEIGHT) / fh
+            hit_xy = (hit_xy[0] * scale_x, hit_xy[1] * scale_y)
+        half_w, half_h = 9.0, 9.0
+        bbox = ball.get("bbox") if isinstance(ball, dict) else None
+        if bbox and len(bbox) >= 4:
+            try:
+                half_w = abs(float(bbox[2]) - float(bbox[0])) * 0.5 * scale_x
+                half_h = abs(float(bbox[3]) - float(bbox[1])) * 0.5 * scale_y
+            except (TypeError, ValueError):
+                half_w, half_h = 9.0, 9.0
+        half_w = max(4.0, min(48.0, float(half_w)))
+        half_h = max(4.0, min(48.0, float(half_h)))
+        return hit_xy, half_w, half_h
 
-        Multi-goal (HP S3): both cylinders stay lit until each is hit. The first
-        hit drops only that cylinder; the session keeps the remaining goal(s).
-        The last hit ends the session as before.
+    def _commit_goal_finish(self, ch, block, sid, result, seq, scored, current_timestamp):
+        """Close one goal. Pass mouths may already have waited out the HIP watch."""
+        ch._goal_ball_trail = []
+        ch._pass_hip_pending = {}
+        scored = set(scored or [])
+        scored.add(sid)
+        ch._cylinder_scored_screens = scored
+        decided_wrong = str(result or "").strip().lower() == "wrong"
+        block["cylinder_screen"] = sid
+        block["pass_hip_result"] = "Wrong" if decided_wrong else "Correct"
+        if not decided_wrong:
+            block["cylinder_correct"] = True
+        try:
+            hit_seq = int(seq) + len(scored) - 1
+        except (TypeError, ValueError):
+            hit_seq = seq
+        remaining_lines = {
+            name: data
+            for name, data in (ch.active_goal_lines or {}).items()
+            if str(name) not in scored
+        }
+        self._publish_live_result(
+            ch.field_id,
+            "Wrong" if decided_wrong else "Correct",
+            list(ch.current_screens or []),
+            sid,
+            ch.current_block_id,
+            seq=hit_seq,
+            finish_decided=decided_wrong,
+        )
+        if remaining_lines and not decided_wrong:
+            ch.active_goal_lines = remaining_lines
+            ch.current_screens = [
+                s for s in (ch.current_screens or [])
+                if str(s) not in scored
+            ]
+            if isinstance(ch.current_qr_block, dict):
+                ch.current_qr_block["screens"] = list(ch.current_screens)
+            if self._field_is_simulated(ch.field_id):
+                self._manual_or_finish_retarget_sim(
+                    ch.field_id,
+                    ch,
+                    list(ch.current_screens),
+                    scored,
+                    force=True,
+                )
+            print(
+                f"  [{ch.label}] cylinder hit {sid} — "
+                f"{len(remaining_lines)} goal(s) still lit"
+            )
+            return
+        if not decided_wrong:
+            ch._cylinder_goal_seq = seq
+            # Player is about to load the next action. Skip the 17-frame appear wait.
+            ch._next_goal_immediate = True
+        else:
+            print(f"  [{ch.label}] pass {sid} left the goal area — Wrong")
+        self._clear_goal_area_now(ch, current_timestamp)
+
+    def _retry_pass_after_hip_exit(self, ch, sid):
+        """Ball left goal without a ≥15° turn — Wrong try, same action stays up."""
+        ch._pass_hip_pending = {}
+        ch._goal_ball_trail = []
+        self._show_goal_area_again(ch, sid)
+        print(f"  [{ch.label}] pass {sid} left without direction change — Wrong, same screen, try again")
+        if not self._field_is_simulated(ch.field_id):
+            return
+        sim = (self.simulators or {}).get(ch.field_id)
+        if sim is None or getattr(sim, "intended", "") != "hip_out":
+            return
+        if getattr(sim, "_mode1_live", False):
+            sim.begin_mode1_return()
+            return
+        # Discrete script: jump to the stay-in-goal phase.
+        sim._sim_frame = max(int(getattr(sim, "_sim_frame", 0) or 0), 11)
+
+    def _hide_goal_area_for_watch(self, ch, sid):
+        """Stop drawing this goal the frame the ball enters. The session stays up."""
+        lines = dict(ch.active_goal_lines or {})
+        hidden = dict(getattr(ch, "_hidden_goal_lines", None) or {})
+        line = lines.pop(str(sid), None)
+        if isinstance(line, dict):
+            hidden[str(sid)] = line
+            ch.active_goal_lines = lines
+        ch._hidden_goal_lines = hidden
+
+    def _show_goal_area_again(self, ch, sid):
+        """Put the goal back after a failed HIP hold so the same action can be retried."""
+        hidden = dict(getattr(ch, "_hidden_goal_lines", None) or {})
+        line = hidden.pop(str(sid), None)
+        ch._hidden_goal_lines = hidden
+        if not isinstance(line, dict):
+            return
+        lines = dict(ch.active_goal_lines or {})
+        lines[str(sid)] = line
+        ch.active_goal_lines = lines
+
+    def _pass_goal_line(self, ch, sid):
+        """Active or hidden goal segment for this pass mouth."""
+        key = str(sid)
+        for bag in (
+            getattr(ch, "active_goal_lines", None),
+            getattr(ch, "_hidden_goal_lines", None),
+        ):
+            if isinstance(bag, dict) and key in bag:
+                line = bag.get(key)
+                if isinstance(line, dict):
+                    return line
+        return None
+
+    def _pass_in_goal(self, ch, sid, xy, radius) -> bool:
+        """True while the tracked ball still overlaps this pass mouth's goal paint."""
+        line = self._pass_goal_line(ch, sid)
+        if not isinstance(line, dict):
+            return False
+        p0, p1 = line.get("p0"), line.get("p1")
+        if p0 is None or p1 is None:
+            return False
+        reach = max(0.0, float(radius or 0.0))
+        action = str(getattr(ch, "current_action", None) or "PASS").upper()
+        return bool(
+            in_goal_area(
+                xy,
+                p0,
+                p1,
+                approach_finish_depth(str(sid), action),
+                screen=str(sid),
+                radius_x=reach,
+                radius_y=reach,
+            )
+        )
+
+    def _pass_stay_zone_ok(self, ch, sid, xy, radius) -> bool:
+        """True while finishing: ball still in the goal paint (no red-zone gate)."""
+        return self._pass_in_goal(ch, sid, xy, radius)
+
+    def _advance_pass_hip_watch(self, ch, block, field_balls, action, seq, scored, current_timestamp):
+        """After a goal-area hit, track heading every frame (goal paint only).
+
+        Frame 1 in goal locks inbound. Later frames update position. As soon as
+        heading changes >15° while still inside the goal area → Correct and
+        advance. Leaving the goal area without that turn → Wrong / retry.
+        No HIP / red-zone dependency. Missing detections are not exits.
+        """
+        pending = dict(getattr(ch, "_pass_hip_pending", None) or {})
+        if not pending or str(action or "").upper() != "PASS":
+            return False
+        bodies = []
+        for ball in field_balls or []:
+            if not isinstance(ball, dict):
+                continue
+            if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
+                continue
+            body = self._ball_sim_body(ball)
+            if body is not None:
+                bodies.append(body)
+        for sid, watch in list(pending.items()):
+            anchor = watch.get("anchor") or (0.0, 0.0)
+            radius = float(watch.get("radius") or 9.0)
+            seen = None
+            seen_r = radius
+            best_d = None
+            # Prefer a ball still in this goal; otherwise nearest tracked exit.
+            candidates = []
+            for xy, half_w, half_h in bodies:
+                reach = max(float(half_w), float(half_h))
+                dist = math.hypot(float(xy[0]) - float(anchor[0]), float(xy[1]) - float(anchor[1]))
+                if dist > float(PASS_BALL_TRACK_PX):
+                    continue
+                in_this_goal = self._pass_in_goal(ch, sid, xy, reach)
+                candidates.append((0 if in_this_goal else 1, dist, xy, reach))
+            if candidates:
+                candidates.sort(key=lambda item: (item[0], item[1]))
+                _rank, best_d, seen, seen_r = candidates[0]
+            tracked = seen is not None and best_d is not None
+            if not tracked:
+                ch._pass_hip_pending = pending
+                continue
+            prev = watch.get("prev_xy") or anchor
+            step_deg = _pass_heading_from_step(prev[0], prev[1], seen[0], seen[1])
+            in_goal = self._pass_in_goal(ch, sid, seen, seen_r)
+            inbound = watch.get("inbound_deg")
+            if step_deg is not None and inbound is None:
+                watch["inbound_deg"] = float(step_deg)
+            elif _pass_reverse_latched(
+                inbound, prev, seen, in_goal, False
+            ):
+                watch["dir_changed"] = True
+            watch["prev_xy"] = (float(seen[0]), float(seen[1]))
+            watch["anchor"] = seen
+            watch["radius"] = seen_r
+            ch._pass_hip_pending = pending
+            if watch.get("dir_changed") and in_goal:
+                self._commit_goal_finish(
+                    ch, block, sid, "Correct", seq, scored, current_timestamp
+                )
+                return True
+            # Left goal paint with no direction change → Wrong attempt, retry.
+            if not in_goal:
+                self._retry_pass_after_hip_exit(ch, sid)
+                return True
+        ch._pass_hip_pending = pending
+        return False
+
+    def _ball_hits_active_goal(self, ch, xy, half_w, half_h) -> bool:
+        """True when this detection already meets a lit goal area."""
+        action = str(getattr(ch, "current_action", None) or "PASS").upper()
+        reach = max(float(half_w or 0), float(half_h or 0), 9.0)
+        for sid, line in (getattr(ch, "active_goal_lines", None) or {}).items():
+            if not isinstance(line, dict):
+                continue
+            p0, p1 = line.get("p0"), line.get("p1")
+            if p0 is None or p1 is None:
+                continue
+            if in_goal_area(
+                xy,
+                p0,
+                p1,
+                approach_finish_depth(str(sid), action),
+                screen=str(sid),
+                radius_x=reach,
+                radius_y=reach,
+            ):
+                return True
+        return False
+
+    def _balls_in_play(self, ch, field_balls):
+        """Balls used for Correct finish — Goal Area first, no red-zone logic.
+
+        - If any detection is inside a lit Goal Area, only those balls count
+          (outside multi-ball noise is ignored).
+        - While a pass watch is pending, also keep the ball nearest each watch
+          anchor so leaving the goal can still register Wrong.
+        - Before any goal touch, keep normal detections so approach trail /
+          first entry still works.
+
+        Removed: red HIP / second-ball / moving-ball / false-spot selection.
+        """
+        pending = dict(getattr(ch, "_pass_hip_pending", None) or {})
+        anchors = []
+        for watch in pending.values():
+            if not isinstance(watch, dict):
+                continue
+            anchor = watch.get("anchor") or watch.get("prev_xy")
+            if anchor is None:
+                continue
+            try:
+                anchors.append((float(anchor[0]), float(anchor[1])))
+            except (TypeError, ValueError, IndexError):
+                continue
+        in_goal = []
+        outside = []
+        for ball in field_balls or []:
+            if not isinstance(ball, dict):
+                continue
+            if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
+                continue
+            body = self._ball_sim_body(ball)
+            if body is None:
+                continue
+            xy, half_w, half_h = body
+            if self._ball_hits_active_goal(ch, xy, half_w, half_h):
+                in_goal.append(ball)
+                continue
+            if anchors:
+                near = False
+                for ax, ay in anchors:
+                    if math.hypot(float(xy[0]) - ax, float(xy[1]) - ay) <= float(
+                        PASS_BALL_TRACK_PX
+                    ):
+                        near = True
+                        break
+                if near:
+                    in_goal.append(ball)
+                    continue
+            outside.append(ball)
+        if in_goal or pending:
+            return in_goal
+        return outside
+
+    def _publish_goal_if_in_cylinder(self, ch, field_balls, current_timestamp=None):
+        """Finish-balls: a ball in the goal scores Correct.
+
+        Pass mouths A1–A6 and B1–B6 hide the goal on entry, then track heading
+        every frame. Heading change >15° while still in goal paint → Correct
+        (no hold wait, no red HIP zone). Leaving goal paint without that turn
+        → Wrong / retry. Multi-goal (HP S3): both cylinders stay lit until each
+        is hit. The first hit drops only that cylinder; the session keeps the
+        remaining goal(s). The last hit ends the session as before.
         """
         if self.operator_paused or not ch.session_active:
             return
@@ -6810,6 +7964,7 @@ class SimustRealtimeCamera:
         block = ch.current_qr_block
         if not isinstance(block, dict) or not block.get("finish_balls"):
             return
+        field_balls = self._balls_in_play(ch, field_balls)
         try:
             seq = int(getattr(ch, "_display_seq", 0) or 0)
         except (TypeError, ValueError):
@@ -6817,6 +7972,10 @@ class SimustRealtimeCamera:
         scored = set(getattr(ch, "_cylinder_scored_screens", None) or set())
         action = str(ch.current_action or "PASS").upper()
         lines = dict(ch.active_goal_lines or {})
+        if self._advance_pass_hip_watch(
+            ch, block, field_balls, action, seq, scored, current_timestamp
+        ):
+            return
         for screen_name, line_data in list(lines.items()):
             if not isinstance(line_data, dict):
                 continue
@@ -6829,67 +7988,200 @@ class SimustRealtimeCamera:
             # Screens 1/6: require real cylinder entry. Other screens keep a
             # small approach band so display can clear ahead of camera lag.
             approach = approach_finish_depth(sid, action)
+            trail = list(getattr(ch, "_goal_ball_trail", None) or [])
+            next_trail = []
             for ball in field_balls or []:
                 center = ball.get("center") if isinstance(ball, dict) else None
                 if center is None:
                     continue
                 if not self._field_is_simulated(ch.field_id) and ball.get("simulated"):
                     continue
-                if not in_goal_area(center, p0, p1, approach):
+                # Ball detections are in live-frame pixels; mesh/line are SIM 1280×360.
+                hit_xy = (float(center[0]), float(center[1]))
+                fw = float(getattr(self, "_live_frame_w", 0) or 0)
+                fh = float(getattr(self, "_live_frame_h", 0) or 0)
+                scale_x = scale_y = 1.0
+                if fw > 1.0 and fh > 1.0 and (
+                    abs(fw - float(SIM_FRAME_WIDTH)) > 0.5
+                    or abs(fh - float(SIM_FRAME_HEIGHT)) > 0.5
+                ):
+                    scale_x = float(SIM_FRAME_WIDTH) / fw
+                    scale_y = float(SIM_FRAME_HEIGHT) / fh
+                    hit_xy = (hit_xy[0] * scale_x, hit_xy[1] * scale_y)
+                half_w, half_h = 9.0, 9.0
+                bbox = ball.get("bbox") if isinstance(ball, dict) else None
+                if bbox and len(bbox) >= 4:
+                    try:
+                        half_w = abs(float(bbox[2]) - float(bbox[0])) * 0.5 * scale_x
+                        half_h = abs(float(bbox[3]) - float(bbox[1])) * 0.5 * scale_y
+                    except (TypeError, ValueError):
+                        half_w, half_h = 9.0, 9.0
+                # Distance from the box center to each edge. Cap a broken box.
+                half_w = max(4.0, min(48.0, float(half_w)))
+                half_h = max(4.0, min(48.0, float(half_h)))
+                samples = [hit_xy]
+                nearest = None
+                nearest_d = 1e9
+                for prev in trail:
+                    try:
+                        dist = math.hypot(float(prev[0]) - hit_xy[0], float(prev[1]) - hit_xy[1])
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if dist < nearest_d:
+                        nearest, nearest_d = prev, dist
+                # Fast balls can cross the mesh between frames. Sample that flight.
+                if nearest is not None and 2.0 < nearest_d <= PASS_BALL_JUMP_PX:
+                    px, py = float(nearest[0]), float(nearest[1])
+                    for frac in (0.25, 0.5, 0.75):
+                        samples.append((
+                            px + frac * (hit_xy[0] - px),
+                            py + frac * (hit_xy[1] - py),
+                        ))
+                next_trail.append(hit_xy)
+                hit = False
+                for sample in samples:
+                    if in_goal_area(
+                        sample,
+                        p0,
+                        p1,
+                        approach,
+                        screen=sid,
+                        radius_x=half_w,
+                        radius_y=half_h,
+                    ):
+                        hit = True
+                        break
+                if not hit:
                     continue
-                scored.add(sid)
-                ch._cylinder_scored_screens = scored
-                # Stamp the block so final analysis matches the live Correct
-                # (track sampling can miss the cylinder and otherwise score Wrong → AAC 0%).
-                block["cylinder_correct"] = True
-                block["cylinder_screen"] = sid
-                # Unique seq per hit so the player can keep both Corrects.
-                try:
-                    hit_seq = int(seq) + len(scored) - 1
-                except (TypeError, ValueError):
-                    hit_seq = seq
-                remaining_lines = {
-                    name: data
-                    for name, data in (ch.active_goal_lines or {}).items()
-                    if str(name) not in scored
-                }
-                self._publish_live_result(
-                    ch.field_id,
-                    "Correct",
-                    list(ch.current_screens or []),
-                    sid,
-                    ch.current_block_id,
-                    seq=hit_seq,
-                )
-                if remaining_lines:
-                    # Keep the other cylinder(s) — do not clear/reappear.
-                    ch.active_goal_lines = remaining_lines
-                    ch.current_screens = [
-                        s for s in (ch.current_screens or [])
-                        if str(s) not in scored
-                    ]
-                    if isinstance(ch.current_qr_block, dict):
-                        ch.current_qr_block["screens"] = list(ch.current_screens)
-                    if self._field_is_simulated(ch.field_id):
-                        self._manual_or_finish_retarget_sim(
-                            ch.field_id,
-                            ch,
-                            list(ch.current_screens),
-                            scored,
-                            force=True,
+                if _pass_needs_hip_watch(action, sid, block):
+                    if sid in (getattr(ch, "_pass_hip_pending", None) or {}):
+                        break
+                    reach = max(half_w, half_h)
+                    contact = hit_xy
+                    for sample in samples:
+                        if not in_goal_area(
+                            sample,
+                            p0,
+                            p1,
+                            approach,
+                            screen=sid,
+                            radius_x=half_w,
+                            radius_y=half_h,
+                        ):
+                            continue
+                        contact = sample
+                        break
+                    # First recognized inbound heading (>=1 deg any angle) from approach.
+                    inbound_deg = None
+                    if nearest is not None:
+                        inbound_deg = _pass_heading_from_step(
+                            nearest[0], nearest[1], contact[0], contact[1]
                         )
-                    print(
-                        f"  [{ch.label}] cylinder hit {sid} — "
-                        f"{len(remaining_lines)} goal(s) still lit"
-                    )
-                    return
-                ch._cylinder_goal_seq = seq
-                self._clear_goal_area_now(ch, current_timestamp)
+                    pending = dict(getattr(ch, "_pass_hip_pending", None) or {})
+                    pending[sid] = {
+                        "anchor": contact,
+                        "prev_xy": (float(contact[0]), float(contact[1])),
+                        "radius": reach,
+                        "inbound_deg": (
+                            float(inbound_deg) if inbound_deg is not None else None
+                        ),
+                        "dir_changed": False,
+                    }
+                    ch._pass_hip_pending = pending
+                    ch._goal_ball_trail = []
+                    self._hide_goal_area_for_watch(ch, sid)
+                    break
+                self._commit_goal_finish(
+                    ch, block, sid, "Correct", seq, scored, current_timestamp
+                )
                 return
+            ch._goal_ball_trail = next_trail[-8:]
+
+    def _maybe_capture_sampling(self, raw_frame, balls):
+        """While Start Sample is on, save raw stitch frames (no labels / red overlays).
+
+        Start Sample also requests one immediate frame via force_save_once so a
+        test image always lands in data_samples even before a ball enters.
+        """
+        try:
+            import simust_sampling as samp
+        except Exception:
+            return
+        try:
+            active = samp.is_active()
+            force_once = samp.consume_force_save_once() if active else False
+        except Exception:
+            return
+        if not active and not force_once:
+            return
+        if raw_frame is None:
+            return
+        hit = bool(force_once)
+        if not hit:
+            try:
+                fh = float(getattr(self, "_live_frame_h", 0) or 0)
+                fw = float(getattr(self, "_live_frame_w", 0) or 0)
+            except (TypeError, ValueError):
+                fh = fw = 0.0
+            scale_x = scale_y = 1.0
+            if fw > 1.0 and fh > 1.0 and (
+                abs(fw - float(SIM_FRAME_WIDTH)) > 0.5
+                or abs(fh - float(SIM_FRAME_HEIGHT)) > 0.5
+            ):
+                scale_x = float(SIM_FRAME_WIDTH) / fw
+                scale_y = float(SIM_FRAME_HEIGHT) / fh
+            for ball in balls or []:
+                if not isinstance(ball, dict):
+                    continue
+                center = ball.get("center")
+                if not center or len(center) < 2:
+                    continue
+                try:
+                    x = float(center[0]) * scale_x
+                    y = float(center[1]) * scale_y
+                except (TypeError, ValueError):
+                    continue
+                reach = 9.0
+                bbox = ball.get("bbox")
+                if bbox and len(bbox) >= 4:
+                    try:
+                        reach = max(
+                            abs(float(bbox[2]) - float(bbox[0])) * 0.5 * scale_x,
+                            abs(float(bbox[3]) - float(bbox[1])) * 0.5 * scale_y,
+                            4.0,
+                        )
+                    except (TypeError, ValueError):
+                        reach = 9.0
+                if samp.point_in_any_zone(x, y, reach):
+                    hit = True
+                    break
+        if not hit:
+            return
+        try:
+            # Clean stitch only — never draw red zones, Field A/B text, or boxes.
+            path = samp.save_raw_frame(raw_frame)
+            if path:
+                n = int((samp.read_control() or {}).get("saved_count") or 0)
+                tag = "test" if force_once else "ball"
+                if force_once or n == 1 or n % 30 == 0:
+                    print(f"  [sampling:{tag}] saved {os.path.basename(path)} ({n} total)")
+        except Exception:
+            pass
 
     def process_dual_fields_frame(self, frame, current_timestamp):
         self.tracker.increment_frame_count()
+        try:
+            self._live_frame_h, self._live_frame_w = frame.shape[:2]
+        except Exception:
+            self._live_frame_w = float(SIM_FRAME_WIDTH)
+            self._live_frame_h = float(SIM_FRAME_HEIGHT)
+        # Copy before detection/overlays so data_samples stays label-free.
+        try:
+            raw_for_sample = frame.copy()
+        except Exception:
+            raw_for_sample = frame
         frame, balls, players, hips = self._detections_for_frame(frame, current_timestamp)
+        self._maybe_capture_sampling(raw_for_sample, balls)
 
         for fid, ch in self.channels.items():
             if not self._field_is_active(fid):
@@ -7443,6 +8735,7 @@ class SimustRealtimeCamera:
                 cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
                 cv2.resizeWindow(self.window_name, DISPLAY_WIDTH, DISPLAY_HEIGHT)
                 cv2.moveWindow(self.window_name, 100, 100)
+                cv2.setMouseCallback(self.window_name, self._on_viz_mouse)
                 self.window_created = True
                 self._viz_seen_visible = False
                 self._viz_open_grace_until = time.time() + 2.0
@@ -7460,6 +8753,15 @@ class SimustRealtimeCamera:
         x_offset = (DISPLAY_WIDTH - new_w) // 2
         y_offset = (DISPLAY_HEIGHT - new_h) // 2
         canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = display_frame
+        self._viz_layout = {
+            "frame_w": float(w),
+            "frame_h": float(h),
+            "scale": float(scale),
+            "x_offset": int(x_offset),
+            "y_offset": int(y_offset),
+            "new_w": int(new_w),
+            "new_h": int(new_h),
+        }
 
         try:
             cv2.imshow(self.window_name, canvas)
@@ -7469,6 +8771,95 @@ class SimustRealtimeCamera:
             return
         if self._viz_window_closed():
             self._on_viz_window_closed_by_user()
+
+    def _canvas_to_sim_xy(self, mx, my):
+        """Map OpenCV window pixels to SIM 1280×360 stitch coordinates."""
+        layout = getattr(self, "_viz_layout", None) or {}
+        try:
+            scale = float(layout.get("scale") or 0)
+            fw = float(layout.get("frame_w") or 0)
+            fh = float(layout.get("frame_h") or 0)
+            x0 = float(layout.get("x_offset") or 0)
+            y0 = float(layout.get("y_offset") or 0)
+        except (TypeError, ValueError):
+            return None
+        if scale <= 0 or fw <= 1 or fh <= 1:
+            return None
+        fx = (float(mx) - x0) / scale
+        fy = (float(my) - y0) / scale
+        if fx < 0 or fy < 0 or fx >= fw or fy >= fh:
+            return None
+        return (
+            fx * float(SIM_FRAME_WIDTH) / fw,
+            fy * float(SIM_FRAME_HEIGHT) / fh,
+        )
+
+    def _mode1_sim_at_xy(self, sim_x, sim_y, grab_only=False):
+        """Pick the Mode 1 field under the pointer, or the nearest grabbed ball."""
+        if int(getattr(self, "simulator_score_mode", SIM_SCORE_MODE_PASS) or 0) != SIM_SCORE_MODE_FAIL:
+            return None
+        mid = float(SIM_FRAME_WIDTH) * 0.5
+        fid = "A" if float(sim_x) < mid else "B"
+        if not self._field_is_simulated(fid):
+            return None
+        sim = (self.simulators or {}).get(fid)
+        if sim is None or not getattr(sim, "always_fail", False):
+            return None
+        if not (getattr(sim, "active", False) or getattr(sim, "late_phase", False)):
+            return None
+        if not grab_only:
+            return sim
+        bx, by = sim.last_ball or sim.BALL_HOME
+        if math.hypot(float(sim_x) - float(bx), float(sim_y) - float(by)) <= 48.0:
+            return sim
+        return None
+
+    def _on_viz_mouse(self, event, x, y, flags, param):
+        """Mode 1: hold left click near the ball to drag it; release leaves it still."""
+        point = self._canvas_to_sim_xy(x, y)
+        if point is None:
+            if event == cv2.EVENT_LBUTTONUP:
+                grabbed = getattr(self, "_mouse_grab_sim", None)
+                if grabbed is not None:
+                    grabbed._mouse_grabbed = False
+                self._mouse_grab_sim = None
+            return
+        sim_x, sim_y = point
+        if event == cv2.EVENT_LBUTTONDOWN:
+            sim = self._mode1_sim_at_xy(sim_x, sim_y, grab_only=True)
+            if sim is None:
+                return
+            self._mouse_grab_sim = sim
+            sim._mouse_grabbed = True
+            sim.set_manual_ball_xy(sim_x, sim_y)
+            return
+        if event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+            sim = getattr(self, "_mouse_grab_sim", None)
+            if sim is None:
+                sim = self._mode1_sim_at_xy(sim_x, sim_y, grab_only=True)
+                if sim is None:
+                    return
+                self._mouse_grab_sim = sim
+                sim._mouse_grabbed = True
+            # Keep the drag on the field that owns the ball.
+            mid = float(SIM_FRAME_WIDTH) * 0.5
+            if sim.field_id == "A":
+                sim_x = min(sim_x, mid - 1.0)
+            else:
+                sim_x = max(sim_x, mid)
+            sim.set_manual_ball_xy(sim_x, sim_y)
+            return
+        if event == cv2.EVENT_LBUTTONUP:
+            sim = getattr(self, "_mouse_grab_sim", None)
+            if sim is not None:
+                sim._mouse_grabbed = False
+                mid = float(SIM_FRAME_WIDTH) * 0.5
+                if sim.field_id == "A":
+                    sim_x = min(sim_x, mid - 1.0)
+                else:
+                    sim_x = max(sim_x, mid)
+                sim.set_manual_ball_xy(sim_x, sim_y)
+            self._mouse_grab_sim = None
 
     def _close_viz_window(self):
         """Force-close the OpenCV feed so it cannot stick on screen after stop."""

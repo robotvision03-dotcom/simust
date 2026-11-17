@@ -522,12 +522,75 @@ ACTIVATED_S0_OPPONENTS = (
     "Opponent-PL-06-B.png",
 )
 ACTIVATED_S0_ACTIONS_PER_TEST = 10
+# High Performance Players (operator C1): Elite-style passes + offside traps.
+HP_PLAYERS_IMAGE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "static", "players", "high_performance"
+)
+HP_PLAYERS_LEFT_POST = "left_post.jpeg"
+HP_PLAYERS_RIGHT_POST = "right_post.jpeg"
+HP_PLAYERS_PASS = "pass.png"
+HP_PLAYERS_TEAMMATE = "Teammate-PL-01-B.png"
+HP_PLAYERS_OPPONENTS = (
+    "Opponent-PL-01-B.png",
+    "Opponent-PL-02-B.png",
+    "Opponent-PL-03-B.png",
+)
+HP_PLAYERS_CROSS_RIGHT = "Cross-OffSide-Trap-Right-02-B.png"
+HP_PLAYERS_CROSS_LEFT = "Cross-OffSide-Trap-01-B.png"
+HP_PLAYERS_TRAP_TEAMMATE = "Teammate-PL-06-05-B.png"
+HP_PLAYERS_DEFEND_08 = "SIMUST-Defending-08-01-B.png"
+HP_PLAYERS_DEFEND_07 = "SIMUST-Defending-07-01-B.png"
+HP_PLAYERS_ACTIONS_PER_TEST = 10
+# Posts are always on screens 3 (left) and 4 (right).
+# Each row: Cross-Right-02, Cross-01, Teammate-06-05, Defending-08, Defending-07, pass_to.
+# None = that image is not shown on this action.
+HP_PLAYERS_OFFSIDE_TABLE = (
+    (5, None, 2, 6, 1, 2),
+    (None, 2, 5, 1, 6, 5),
+    (5, 2, 6, 1, None, 6),
+    (5, 2, 1, 6, None, 1),
+    (5, None, 2, 6, 1, 2),
+    (None, 2, 5, 1, 6, 5),
+)
+# Elite Players (operator C1): dual-field pass among Elite PNGs.
+ELITE_PLAYERS_IMAGE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "static", "players", "Elite"
+)
+ELITE_PLAYERS_PASS1 = "pass1.png"
+ELITE_PLAYERS_PASS2 = "pass2.png"
+ELITE_PLAYERS_PASS3 = "pass3.png"
+ELITE_PLAYERS_PASSES = (
+    ELITE_PLAYERS_PASS1,
+    ELITE_PLAYERS_PASS2,
+    ELITE_PLAYERS_PASS3,
+)
+ELITE_PLAYERS_OPPONENTS = (
+    "Opponent-PL-05-B.png",
+    "Opponent-PL-06-B.png",
+    "Opponent-PL-09-B.png",
+    "Opponent-PL-10-B.png",
+)
+ELITE_PLAYERS_DEFENDING = (
+    "SIMUST-Defending-01-02-B.png",
+    "SIMUST-Defending-06-02-B.png",
+    "SIMUST-Defending-07-02-B.png",
+    "SIMUST-Defending-08-01-B.png",
+    "SIMUST-Defending-09-01-B.png",
+)
+ELITE_PLAYERS_TEAMMATES = (
+    "Teammate-PL-01-B.png",
+    "Teammate-PL-02-B.png",
+)
+ELITE_PLAYERS_ACTIONS_PER_TEST = 10
+ELITE_PLAYERS_GOALS_T45 = 14
+# Lit screens per field: T1=6 total, T2=8 total, T3–T5=all 12.
+ELITE_PLAYERS_PER_FIELD = {1: 3, 2: 4, 3: 6, 4: 6, 5: 6}
 # Operator / beginning-info content names — same folders as the frontend picker.
 BAND_CONTENT_SET_LABELS = {
     "L01-Entry": {0: "Players", 1: "Numbers"},
     "L02-Activated": {0: "Players", 1: "Numbers", 2: "Divergent"},
-    "L03-HighPerformance": {1: "Numbers", 2: "Divergent", 3: "Sum"},
-    "L04-Elite": {1: "Numbers", 2: "Divergent", 3: "Sum"},
+    "L03-HighPerformance": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
+    "L04-Elite": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
     "L05-WorldClass": {1: "Numbers", 2: "Divergent", 3: "Sum"},
 }
 # Activated A-T1..A-T5: same 5 tests × 6 screens as Entry.
@@ -1164,6 +1227,17 @@ def _high_performance_series_num(*paths) -> Optional[int]:
     return _band_series_num(*paths, band=r"L03-HighPerformance|High[-_ ]?Performance")
 
 
+def _high_performance_s0_series_num(*paths) -> Optional[int]:
+    """High Performance S0.T1..S0.T5 (Players, operator C1) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(r"L03-HighPerformance|High[-_ ]?Performance", blob, re.I):
+        return None
+    match = re.search(r"S0[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _band_s2_series_num(*paths, band: str) -> Optional[int]:
     """S2.T1..S2.T5 inside a level band → series 1..5.
 
@@ -1206,6 +1280,17 @@ def _high_performance_s3_series_num(*paths) -> Optional[int]:
     return _band_s3_series_num(
         *paths, band=r"L03-HighPerformance|High[-_ ]?Performance"
     )
+
+
+def _elite_s0_series_num(*paths) -> Optional[int]:
+    """Elite S0.T1..S0.T5 (Players, operator C1) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(r"L04-Elite", blob, re.I):
+        return None
+    match = re.search(r"S0[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def _elite_series_num(*paths) -> Optional[int]:
@@ -1251,7 +1336,7 @@ COMBINED_PLAY_MESSAGE = (
 
 
 def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Optional[int]]:
-    """Return (series_group, set_num). Group 3=S3.T*, 2=S2.T*, 1=S1.T*."""
+    """Return (series_group, set_num). Group 3=S3.T*, 2=S2.T*, 1=S1.T*, 0=S0.T*."""
     if band == "world-class":
         s3 = _world_class_s3_series_num(text)
         if s3:
@@ -1261,6 +1346,9 @@ def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Opti
             return 2, s2
         s1 = _world_class_series_num(text)
         return (1, s1) if s1 else (None, None)
+    s0 = _elite_s0_series_num(text)
+    if s0:
+        return 0, s0
     s3 = _elite_s3_series_num(text)
     if s3:
         return 3, s3
@@ -1476,7 +1564,7 @@ def _build_number_band_playlist(
                 ),
                 "path": f"image://{label_prefix}/A-T{series_num}/test{test_num}/{action_in_set}",
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def finish_balls_sim_plan(test_num, action_in_set, actions_in_set) -> str:
@@ -3527,6 +3615,451 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
     return _stamp_finish_balls(playlist)
 
 
+def _hp_players_image_paths(names) -> Dict[str, str]:
+    paths = {}
+    for name in names or []:
+        path = os.path.join(HP_PLAYERS_IMAGE_DIR, name)
+        if not os.path.isfile(path):
+            logger.error("High Performance Players image missing: %s", path)
+            return {}
+        paths[name] = path
+    return paths
+
+
+def _hp_players_offside_seat(row) -> Tuple[Dict[int, str], int]:
+    """Build screen seats for one offside-trap row. Posts stay on 3 and 4."""
+    cross_r, cross_l, teammate, def08, def07, goal = row
+    seat = {
+        3: HP_PLAYERS_LEFT_POST,
+        4: HP_PLAYERS_RIGHT_POST,
+    }
+    if cross_r is not None:
+        seat[int(cross_r)] = HP_PLAYERS_CROSS_RIGHT
+    if cross_l is not None:
+        seat[int(cross_l)] = HP_PLAYERS_CROSS_LEFT
+    if teammate is not None:
+        seat[int(teammate)] = HP_PLAYERS_TRAP_TEAMMATE
+    if def08 is not None:
+        seat[int(def08)] = HP_PLAYERS_DEFEND_08
+    if def07 is not None:
+        seat[int(def07)] = HP_PLAYERS_DEFEND_07
+    return seat, int(goal)
+
+
+def _hp_players_offside_count(series_num: int) -> int:
+    """C1.T1–T2 use 4 traps. C1.T3–T5 use all 6 traps."""
+    return 4 if int(series_num or 1) <= 2 else 6
+
+
+def _hp_players_action_plan(series_num: int) -> List[dict]:
+    """10 actions: offside traps mixed with normal Elite-style passes."""
+    trap_count = _hp_players_offside_count(series_num)
+    rows = list(HP_PLAYERS_OFFSIDE_TABLE[:trap_count])
+    random.shuffle(rows)
+    plan = [{"kind": "offside", "row": row} for row in rows]
+    plan.extend({"kind": "pass"} for _ in range(HP_PLAYERS_ACTIONS_PER_TEST - trap_count))
+    random.shuffle(plan)
+    return plan
+
+
+def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[dict]:
+    """High Performance S0 Players (operator C1.T1–T5).
+
+    Same Elite-style pass game (pass + teammate + opponents), with offside
+    traps mixed in. Posts are always on screens 3 and 4. C1.T1–T2 have 4
+    traps from the table. C1.T3–T5 use all 6 traps. Field B mirrors Field A.
+    """
+    active = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not active:
+        return []
+    names = (
+        HP_PLAYERS_LEFT_POST,
+        HP_PLAYERS_RIGHT_POST,
+        HP_PLAYERS_PASS,
+        HP_PLAYERS_TEAMMATE,
+        *HP_PLAYERS_OPPONENTS,
+        HP_PLAYERS_CROSS_RIGHT,
+        HP_PLAYERS_CROSS_LEFT,
+        HP_PLAYERS_TRAP_TEAMMATE,
+        HP_PLAYERS_DEFEND_08,
+        HP_PLAYERS_DEFEND_07,
+    )
+    paths = _hp_players_image_paths(names)
+    if not paths:
+        return []
+    series = max(1, min(5, int(series_num or 1)))
+    on_ms, gap_ms = _entry_series_timing_ms(series)
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        plan = _hp_players_action_plan(series)
+        if len(plan) != HP_PLAYERS_ACTIONS_PER_TEST:
+            logger.error("High Performance Players needs 10 actions")
+            return []
+        for action_in_set, step in enumerate(plan, start=1):
+            images = {}
+            field_screens = {}
+            goal = 1
+            kind = str(step.get("kind") or "pass")
+            if kind == "offside":
+                seat_names, goal = _hp_players_offside_seat(step.get("row"))
+                seat = {screen: paths[name] for screen, name in seat_names.items()}
+                for fid in active:
+                    for screen, path in seat.items():
+                        sid = _hw_screen_for_field(fid, (screen, screen))
+                        if sid is not None:
+                            images[sid] = path
+                    goal_sid = _hw_screen_for_field(fid, (int(goal), int(goal)))
+                    if goal_sid is not None:
+                        field_screens[fid] = [goal_sid]
+            else:
+                assignment, goal = _activated_s0_screen_assignment(
+                    paths[HP_PLAYERS_PASS],
+                    paths[HP_PLAYERS_TEAMMATE],
+                    [paths[name] for name in HP_PLAYERS_OPPONENTS],
+                )
+                if not assignment:
+                    continue
+                for fid in active:
+                    for screen, path in assignment.items():
+                        sid = _hw_screen_for_field(fid, (screen, screen))
+                        if sid is not None:
+                            images[sid] = path
+                    goal_sid = _hw_screen_for_field(fid, (int(goal), int(goal)))
+                    if goal_sid is not None:
+                        field_screens[fid] = [goal_sid]
+            if not field_screens or not images:
+                continue
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": HP_PLAYERS_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == HP_PLAYERS_ACTIONS_PER_TEST,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "pass_image_scale": float(ACTIVATED_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
+                "arena_pair": (int(goal), int(goal)),
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "offside_trap": kind == "offside",
+                "label": (
+                    f"High Performance S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{HP_PLAYERS_ACTIONS_PER_TEST} "
+                    f"{kind} goal {goal} on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": (
+                    f"image://HighPerformance/S0.T{series}/"
+                    f"test{test_num}/{action_in_set}"
+                ),
+                "series_group": 0,
+                "series_num": int(series),
+            })
+    return _stamp_finish_balls(playlist)
+
+
+def _elite_players_image_paths(names) -> Dict[str, str]:
+    paths = {}
+    for name in names or []:
+        path = os.path.join(ELITE_PLAYERS_IMAGE_DIR, name)
+        if os.path.isfile(path):
+            paths[str(name)] = path
+        else:
+            logger.error("Elite Players image missing: %s", path)
+    return paths
+
+
+def _elite_players_distractor_pool(paths: Dict[str, str]) -> List[str]:
+    names = (
+        *ELITE_PLAYERS_OPPONENTS,
+        *ELITE_PLAYERS_DEFENDING,
+        *ELITE_PLAYERS_TEAMMATES,
+    )
+    return [paths[name] for name in names if name in paths]
+
+
+def _elite_players_goal_counts(series: int) -> List[int]:
+    """Per-action pass counts. T1–T3: one pass1 each. T4–T5: 14 goals over 10 actions."""
+    total = int(ELITE_PLAYERS_ACTIONS_PER_TEST)
+    if int(series) <= 3:
+        return [1] * total
+    # Six singles + four doubles = 14.
+    plan = [1] * 6 + [2] * 4
+    random.shuffle(plan)
+    return plan[:total]
+
+
+def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: bool) -> List[str]:
+    """Return unique pass image paths for this action."""
+    if single_only or int(count) <= 1:
+        path = paths.get(ELITE_PLAYERS_PASS1)
+        return [path] if path else []
+    pool = [paths[name] for name in ELITE_PLAYERS_PASSES if name in paths]
+    if not pool:
+        return []
+    need = max(1, min(int(count), len(pool)))
+    if need >= len(pool):
+        chosen = list(pool)
+        random.shuffle(chosen)
+        return chosen
+    return list(random.sample(pool, need))
+
+
+def _elite_players_assign_action(
+    series: int,
+    action_in_set: int,
+    pass_paths: List[str],
+    distractors: List[str],
+    first_action: bool = False,
+) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """Place unique images on A+B. Pass images are the only goal mouths.
+
+    T1: 6 images / 12 screens (3 per field). T2: 8 / 12. T3–T5: 12 / 12.
+    T1–T3: one pass1 alternating B→A→B…. T4–T5: 1–3 passes from pass1/2/3.
+    """
+    series = max(1, min(5, int(series or 1)))
+    screens_a = list(range(1, 7))
+    screens_b = list(range(1, 7))
+    images: Dict[str, str] = {}
+    field_screens: Dict[str, List[str]] = {}
+    used_paths = set()
+    pass_paths = [p for p in (pass_paths or []) if p]
+    if not pass_paths:
+        return {}, {}
+
+    def _sid(fid: str, arena: int) -> Optional[str]:
+        return _hw_screen_for_field(fid, (arena, arena))
+
+    def _place(fid: str, arena: int, path: str, is_goal: bool = False):
+        sid = _sid(fid, int(arena))
+        if sid is None or not path:
+            return
+        images[sid] = path
+        used_paths.add(path)
+        if is_goal:
+            field_screens.setdefault(fid, []).append(sid)
+
+    def _fill_free_seats(pool: List[str], limit: Optional[int] = None):
+        """Fill empty arenas with unique distractors until ``limit`` images or full."""
+        free = [
+            (fid, s)
+            for fid, seats in (("A", screens_a), ("B", screens_b))
+            for s in seats
+            if _sid(fid, s) not in images
+        ]
+        random.shuffle(free)
+        remaining = list(pool)
+        placed = 0
+        for fid, arena in free:
+            if limit is not None and len(images) >= int(limit):
+                break
+            if not remaining:
+                break
+            path = remaining.pop(0)
+            if path in used_paths:
+                continue
+            _place(fid, arena, path)
+            placed += 1
+        return remaining
+
+    total_images = int(ELITE_PLAYERS_PER_FIELD.get(series, 6)) * 2
+    # T3–T5 always fill the whole cabinet.
+    if series >= 3:
+        total_images = 12
+
+    # --- place pass goals ---
+    if series <= 3:
+        # Alternate pass1 field: action 1 on B, then A, then B...
+        pass_field = "B" if (int(action_in_set) % 2 == 1) else "A"
+        other = "A" if pass_field == "B" else "B"
+        per_field = int(ELITE_PLAYERS_PER_FIELD.get(series, 3))
+        arena_pass = random.choice(screens_a)
+        _place(pass_field, arena_pass, pass_paths[0], is_goal=True)
+
+        distractor_pool = [p for p in distractors if p not in used_paths]
+        random.shuffle(distractor_pool)
+
+        if first_action and series == 1:
+            # A: opponent + defending + teammate. B: opponent + defending + pass1.
+            opp = [p for p in distractor_pool if "Opponent" in os.path.basename(p)]
+            defend = [p for p in distractor_pool if "Defending" in os.path.basename(p)]
+            mate = [p for p in distractor_pool if "Teammate" in os.path.basename(p)]
+            pick_a = []
+            pick_b = []
+            if opp:
+                pick_a.append(opp.pop())
+            if defend:
+                pick_a.append(defend.pop())
+            if mate:
+                pick_a.append(mate.pop())
+            if opp:
+                pick_b.append(opp.pop())
+            if defend:
+                pick_b.append(defend.pop())
+            # Backfill from leftover distractors if a category ran short.
+            leftover = [
+                p for p in distractor_pool
+                if p not in pick_a and p not in pick_b
+            ]
+            while len(pick_a) < 2 and leftover:
+                pick_a.append(leftover.pop())
+            while len(pick_b) < 2 and leftover:
+                pick_b.append(leftover.pop())
+            if pass_field == "B":
+                seats_b = [s for s in screens_b if s != arena_pass]
+                random.shuffle(seats_b)
+                for arena, path in zip(seats_b[:2], pick_b[:2]):
+                    _place("B", arena, path)
+                seats_a = list(screens_a)
+                random.shuffle(seats_a)
+                for arena, path in zip(seats_a[:3], pick_a[:3]):
+                    _place("A", arena, path)
+            else:
+                seats_a = [s for s in screens_a if s != arena_pass]
+                random.shuffle(seats_a)
+                for arena, path in zip(seats_a[:2], pick_a[:2]):
+                    _place("A", arena, path)
+                seats_b = list(screens_b)
+                random.shuffle(seats_b)
+                for arena, path in zip(seats_b[:3], pick_b[:3]):
+                    _place("B", arena, path)
+            return images, field_screens
+
+        # Random distractors; unique across both fields; fill to per_field / 12.
+        need_pass_field = max(0, per_field - 1)
+        need_other = per_field
+        seats_pass = [s for s in (screens_a if pass_field == "A" else screens_b) if s != arena_pass]
+        seats_other = list(screens_a if other == "A" else screens_b)
+        random.shuffle(seats_pass)
+        random.shuffle(seats_other)
+        for arena, path in zip(seats_pass[:need_pass_field], distractor_pool):
+            _place(pass_field, arena, path)
+            distractor_pool = [p for p in distractor_pool if p not in used_paths]
+        for arena, path in zip(seats_other[:need_other], distractor_pool):
+            _place(other, arena, path)
+            distractor_pool = [p for p in distractor_pool if p not in used_paths]
+        if len(images) < total_images:
+            _fill_free_seats(
+                [p for p in distractors if p not in used_paths],
+                limit=total_images,
+            )
+        return images, field_screens
+
+    # T4–T5: scatter 1–3 passes across A/B, then fill every remaining screen.
+    arenas = [("A", s) for s in screens_a] + [("B", s) for s in screens_b]
+    random.shuffle(arenas)
+    for (fid, arena), path in zip(arenas, pass_paths):
+        _place(fid, arena, path, is_goal=True)
+    distractor_pool = [p for p in distractors if p not in used_paths]
+    random.shuffle(distractor_pool)
+    _fill_free_seats(distractor_pool, limit=12)
+    return images, field_screens
+
+
+def _build_elite_s0_playlist(series_num: int) -> List[dict]:
+    """Elite S0.T1–T5 Players (operator C1.T1–T5) on both fields together.
+
+    C1.T1: 6 images on 12 screens (3/field), pass1 alternating B/A, Entry timing.
+    C1.T2: 8 images on 12 screens, same pass1 game.
+    C1.T3–T5: 12 images on 12 screens. T3 uses pass1 only; T4–T5 use pass1/2/3
+    for 14 goals across 10 actions (all listed goals must score to advance).
+    """
+    names = (
+        *ELITE_PLAYERS_PASSES,
+        *ELITE_PLAYERS_OPPONENTS,
+        *ELITE_PLAYERS_DEFENDING,
+        *ELITE_PLAYERS_TEAMMATES,
+    )
+    paths = _elite_players_image_paths(names)
+    if ELITE_PLAYERS_PASS1 not in paths:
+        logger.error(
+            "Elite Players missing pass1.png under %s", ELITE_PLAYERS_IMAGE_DIR
+        )
+        return []
+    distractors = _elite_players_distractor_pool(paths)
+    if len(distractors) < 5:
+        logger.error("Elite Players need opponent/defending/teammate images")
+        return []
+    series = max(1, min(5, int(series_num or 1)))
+    on_ms, gap_ms = _entry_series_timing_ms(series)
+    single_only = series <= 3
+    playlist = []
+    for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        goal_counts = _elite_players_goal_counts(series)
+        if sum(goal_counts) != (
+            ELITE_PLAYERS_ACTIONS_PER_TEST if single_only else ELITE_PLAYERS_GOALS_T45
+        ):
+            # Keep T4/T5 at 14 even if shuffle is patched oddly.
+            if not single_only:
+                goal_counts = [1] * 6 + [2] * 4
+        for action_in_set, goal_n in enumerate(goal_counts, start=1):
+            pass_list = _elite_players_pick_passes(goal_n, paths, single_only)
+            if not pass_list:
+                continue
+            images, field_screens = _elite_players_assign_action(
+                series,
+                action_in_set,
+                pass_list,
+                distractors,
+                first_action=(series == 1 and action_in_set == 1),
+            )
+            if not field_screens or not images:
+                continue
+            goals = []
+            for fid in ("A", "B"):
+                goals.extend(field_screens.get(fid) or [])
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": ELITE_PLAYERS_ACTIONS_PER_TEST,
+                "is_last_in_set": action_in_set == ELITE_PLAYERS_ACTIONS_PER_TEST,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
+                "combined_field": True,
+                "require_all_goals": True,
+                "hold_full_on": True,
+                "arena_pair": (1, 1),
+                "field_screens": field_screens,
+                "screen_images": dict(images),
+                "gap_screen_images": dict(images),
+                "label": (
+                    f"Elite S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
+                    f"a{action_in_set}/{ELITE_PLAYERS_ACTIONS_PER_TEST} "
+                    f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": (
+                    f"image://Elite/S0.T{series}/"
+                    f"test{test_num}/{action_in_set}"
+                ),
+                "series_group": 0,
+                "series_num": int(series),
+            })
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["combined_field"] = True
+        entry["require_all_goals"] = True
+        entry["hold_full_on"] = True
+    return stamped
+
+
 def _build_entry_playlist(series_num: int, active_fields) -> List[dict]:
     """5 tests × 6 actions. Digits stay up; only the finished goal number is cleared."""
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
@@ -3988,7 +4521,7 @@ def _build_dual_field_playlist(
                 entry["rotation_fields"] = rotation_fields
                 entry["spin_arcs"] = _spin_arcs_for_fields(rotation_fields)
             playlist.append(entry)
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 # Gap images (gap_N) appear on these slices BEFORE action N
@@ -4142,7 +4675,8 @@ def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
 def _component_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
     """Wall / beginning-info Component label (C1.T1). Internal ids stay S*.
 
-    Entry S0→C1, Entry S1→C2; other bands keep the same index (S1→C1, …).
+    Entry, Activated, High Performance, and Elite add 1 (S0→C1, S1→C2).
+    World Class keeps the series index (S1→C1).
     """
     series = _series_set_label(level_id, subdirectory)
     if not series:
@@ -4154,7 +4688,7 @@ def _component_set_label(level_id: str, subdirectory: str = "") -> Optional[str]
     test_num = match.group(2)
     component = series_num
     band = _main_band_id(f"{level_id or ''} {subdirectory or ''}")
-    if band in ("L01-Entry", "L02-Activated"):
+    if band in ("L01-Entry", "L02-Activated", "L03-HighPerformance", "L04-Elite"):
         component = series_num + 1
     return f"C{component}.T{test_num}"
 
@@ -6398,7 +6932,7 @@ def _build_math_playlist(
                 "path": f"image://{op}/test{test_num}/{action_in_set}",
                 "foundation_sf": op,
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _spin_arcs_for_fields(field_ids) -> dict:
@@ -6712,7 +7246,7 @@ def _build_rotation_playlist(
                 "path": f"image://rotation/test{test_num}/{action_in_set}",
                 "foundation_sf": "rotation",
             })
-    return playlist
+    return _stamp_finish_balls(playlist)
 
 
 def _build_foundation_timed_playlist(
@@ -6981,13 +7515,17 @@ def _clear_image_action_cue(force_end=False):
         pass
 
 
-def _silence_image_action_cue_for_fields(field_ids):
+def _silence_image_action_cue_for_fields(field_ids, force_end=True):
     """Drop opening/idle fields from the live cue so leftover finish-balls cannot arm.
 
     Beginning-info logos last longer than a plain 5s cue window, and finish_balls
     cues stay valid for the whole shared clock. If a prior test left active=true,
     realtime would draw the green cylinder and the sim would shoot during logos.
     Keep any sibling that is still mid-action; clear entirely when none remain.
+
+    force_end=False: soft wipe used when the next finish-balls action is about to
+    rewrite the cue (goal advance). A sticky force_end here raced the next cue and
+    cancelled the appear countdown so later Entry actions never showed a goal mesh.
     """
     drop = {
         str(fid).upper()[:1]
@@ -7018,7 +7556,7 @@ def _silence_image_action_cue_for_fields(field_ids):
         if key not in drop and list(value.get("screens") or [])
     }
     if not keep:
-        _clear_image_action_cue(force_end=True)
+        _clear_image_action_cue(force_end=bool(force_end))
         return
     # Sibling still mid-action: rewrite without the silenced half. Realtime must
     # tear down that half's live finish_balls session when it disappears from
@@ -10415,7 +10953,14 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 pass
             _band, series_num = decision[1], decision[2]
             series_group = int(decision[3]) if len(decision) > 3 else 1
-            if series_group == 3:
+            if series_group == 0:
+                if _band != "elite":
+                    self._playlist_block_reason = COMBINED_PLAY_MESSAGE
+                    logger.error(self._playlist_block_reason)
+                    self._label_mode = False
+                    return []
+                playlist = _build_elite_s0_playlist(series_num)
+            elif series_group == 3:
                 playlist = (
                     _build_world_class_s3_playlist(series_num)
                     if _band == "world-class"
@@ -10481,6 +11026,27 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             getattr(self, "_phase_field_levels", None),
             active,
         )
+        hp_s0_num = _high_performance_s0_series_num(*level_bits)
+        if hp_s0_num:
+            playlist = _build_high_performance_s0_playlist(hp_s0_num, active)
+            if playlist:
+                self._label_mode = True
+                logger.info(
+                    "High Performance S0.T%s Players playlist: %s tests x %s actions, on=%sms gap=%sms",
+                    hp_s0_num,
+                    ENTRY_TEST_COUNT,
+                    HP_PLAYERS_ACTIONS_PER_TEST,
+                    playlist[0].get("on_ms"),
+                    playlist[0].get("gap_ms"),
+                )
+                return playlist
+            logger.error(
+                "High Performance S0.T%s playlist empty (check static/players/high_performance)",
+                hp_s0_num,
+            )
+            self._label_mode = False
+            return []
+
         hp_s3_num = _high_performance_s3_series_num(*level_bits)
         if hp_s3_num:
             playlist = _build_high_performance_s3_playlist(hp_s3_num, active)
@@ -12286,6 +12852,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 name = str(chosen.get("result") or "").strip().lower()
                 # Realtime sets clear_now with Correct — accept either so the wall
                 # drops the moment the ball is inside the cylinder.
+                # A pass that left the HIP zone stays on this screen.
                 if name != "correct" and not bool(chosen.get("clear_now")):
                     continue
                 win = str(chosen.get("winning_screen") or "").strip()
@@ -12344,12 +12911,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 continue
             self._goal_arrived = True
             self._stop_goal_advance_poll()
-            # Drop the pass image now so the next screen is not blocked by it.
-            self._clear_field_action_now(fid_key)
-            if entry.get("combined_field") and require_all:
-                # Clear the partner half too once the sum finish is scored.
+            # The next action paints in this same call. A black flush here
+            # would sit on the wall until those pictures load.
+            if not (entry.get("finish_balls") or entry.get("advance_on_goal")):
+                self._clear_field_action_now(fid_key, soft_cue=False)
+            if (
+                entry.get("combined_field")
+                and require_all
+                and not (entry.get("finish_balls") or entry.get("advance_on_goal"))
+            ):
                 partner = "B" if fid_key == "A" else "A"
-                self._clear_field_action_now(partner)
+                self._clear_field_action_now(partner, soft_cue=False)
             logger.info(
                 "Ball reached the goal on %s — next screen%s",
                 fid_key,
@@ -12362,9 +12934,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if entry.get("independent_fields") and arrived:
             # Each field moves on its own ball. The other field keeps this action.
             holds = dict(getattr(self, "_field_hold_until", None) or {})
+            soft = bool(entry.get("finish_balls") or entry.get("advance_on_goal"))
             for fid in arrived:
                 holds[fid] = 0.0
-                self._clear_field_action_now(fid)
+                self._clear_field_action_now(fid, soft_cue=soft)
             self._field_hold_until = holds
             self._stop_goal_advance_poll()
             logger.info("Ball reached the goal on %s — that field continues", ", ".join(sorted(arrived)))
@@ -12390,18 +12963,21 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def _clear_field_action_now(self, fid):
+    def _clear_field_action_now(self, fid, soft_cue: bool = False):
         """Wipe this field's pass/numbers immediately so the next action can paint.
 
         Paint solid black tiles (not an empty map): that keeps paintEvent from
         early-returning on a sibling field's opening-card summary, and the
         player sees the old content gone before the next screens load.
+
+        soft_cue=True: drop this field from the cue without force_end so a
+        finish-balls next-action rewrite can arm the new cylinder immediately.
         """
         fid = str(fid or "").upper()[:1]
         if fid not in ("A", "B"):
             return
         try:
-            _silence_image_action_cue_for_fields([fid])
+            _silence_image_action_cue_for_fields([fid], force_end=not soft_cue)
         except Exception:
             pass
         try:
@@ -15891,6 +16467,41 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 (time.perf_counter() - shown),
                 need_ms / 1000.0,
             )
+        # Finish-balls / advance_on_goal: keep waiting for the ball after On.
+        # Advancing on On alone cleared the cue and left later Entry actions
+        # without a goal mesh (or with a zone that no longer scored).
+        if (
+            isinstance(cur, dict)
+            and not goal_hit
+            and (cur.get("advance_on_goal") or cur.get("finish_balls"))
+            and cur.get("budget_ms")
+        ):
+            remain_budget = self._budget_remaining_ms(cur)
+            if remain_budget > 40:
+                self._stop_action_timer()
+                self.action_timer = QtCore.QTimer(singleShot=True)
+                self.action_timer.setTimerType(QtCore.Qt.PreciseTimer)
+                self.action_timer.timeout.connect(self._finish_label_action)
+                wait_ms = min(1000, int(remain_budget))
+                self.action_timer.start(wait_ms)
+                self._pass_on_ms = int(remain_budget)
+                self._pass_shown_at = time.perf_counter()
+                if cur.get("advance_on_goal"):
+                    self._start_goal_advance_poll()
+                logger.info(
+                    "Finish-balls still waiting for the ball — %.1fs left on test clock",
+                    remain_budget / 1000.0,
+                )
+                return
+            logger.info(
+                "Finish-balls test clock finished without a cylinder hit — closing remaining actions"
+            )
+            self._goal_arrived = False
+            self._stop_goal_advance_poll()
+            self._stop_action_timer()
+            self._cancel_next_screen_hint()
+            self._abandon_budget_rest()
+            return
         # S3 answers: never start the next action until both cylinders scored,
         # unless the shared test clock (encode excluded) is finished.
         if (

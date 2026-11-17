@@ -205,5 +205,31 @@ class ManualCoachHelpersTests(unittest.TestCase):
         self.assertEqual(cleared, ["A1"])
 
 
+class ManualCoachStopSavesVideoTests(unittest.TestCase):
+    def test_stop_uses_graceful_save_not_abort(self):
+        """Stop Manual must finalize/keep the MP4 — abort would delete folders."""
+        import asyncio
+        import app as simust_app
+
+        captured = {}
+
+        def fake_stop(data=None):
+            captured["data"] = dict(data or {})
+            return {"status": "success", "aborted": False, "discarded": []}
+
+        req = SimpleNamespace()
+        with patch.object(simust_app, "_require_operator_staff", return_value=None), patch.object(
+            simust_app, "apply_stop_realtime", side_effect=fake_stop
+        ), patch.object(manual, "write_command"), patch.object(
+            manual, "clear_command_files"
+        ), patch.object(manual, "write_status"):
+            result = asyncio.run(simust_app.manual_coach_stop(req))
+
+        self.assertFalse(captured["data"].get("abort"))
+        self.assertFalse(captured["data"].get("discard"))
+        self.assertTrue(captured["data"].get("operator_stop") or captured["data"].get("save"))
+        self.assertIn("video", str(result.get("message") or "").lower())
+
+
 if __name__ == "__main__":
     unittest.main()

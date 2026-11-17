@@ -409,6 +409,81 @@ def point_inside_mesh(
     return xmin - 0.5 <= px <= xmax + 0.5
 
 
+def _dist_point_segment(px, py, ax, ay, bx, by) -> float:
+    abx, aby = bx - ax, by - ay
+    length2 = abx * abx + aby * aby
+    if length2 <= 1e-12:
+        dx, dy = px - ax, py - ay
+        return math.hypot(dx, dy)
+    t = ((px - ax) * abx + (py - ay) * aby) / length2
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    dx = px - (ax + t * abx)
+    dy = py - (ay + t * aby)
+    return math.hypot(dx, dy)
+
+
+def distance_to_wire(
+    point: Sequence[float],
+    points,
+    *,
+    n_theta: int = N_THETA,
+    n_height: int = N_HEIGHT,
+) -> float:
+    """Pixels from (x, y) to the nearest drawn mesh link."""
+    _require_numpy()
+    if point is None:
+        return 1e9
+    px, py = float(point[0]), float(point[1])
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] != n_theta * n_height:
+        return 1e9
+    best = 1e9
+    for z in range(n_height):
+        row = z * n_theta
+        for t in range(n_theta):
+            a = pts[row + t]
+            b = pts[row + ((t + 1) % n_theta)]
+            dist = _dist_point_segment(px, py, float(a[0]), float(a[1]), float(b[0]), float(b[1]))
+            if dist < best:
+                best = dist
+    for t in range(n_theta):
+        for z in range(n_height - 1):
+            a = pts[z * n_theta + t]
+            b = pts[(z + 1) * n_theta + t]
+            dist = _dist_point_segment(px, py, float(a[0]), float(a[1]), float(b[0]), float(b[1]))
+            if dist < best:
+                best = dist
+    return best
+
+
+def ball_hits_mesh(
+    point: Sequence[float],
+    points,
+    *,
+    radius: float = 0.0,
+    n_theta: int = N_THETA,
+    n_height: int = N_HEIGHT,
+) -> bool:
+    """True when the ball overlaps the drawn triangle mesh.
+
+    Interior of the silhouette counts. So does the ball body touching a white
+    link — the silhouette test alone leaves gaps on the wires.
+    """
+    if point_inside_mesh(point, points, n_theta=n_theta, n_height=n_height):
+        return True
+    try:
+        reach = max(0.0, float(radius or 0.0))
+    except (TypeError, ValueError):
+        reach = 0.0
+    # Drawn links are about 2px wide; the ball extends ``radius`` beyond its center.
+    return distance_to_wire(
+        point, points, n_theta=n_theta, n_height=n_height
+    ) <= (reach + 2.0)
+
+
 def silhouette_polyline(
     points,
     *,

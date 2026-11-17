@@ -92,7 +92,7 @@ class IndependentComposeTests(unittest.TestCase):
             {"test_num": 3, "budget_ms": 54000, "actions_in_set": 12, "finish_balls": True},
             [],
         )
-        self.assertEqual(text.split("\n"), ["Numbers", "C1.T2", "12 Actions"])
+        self.assertEqual(text.split("\n"), ["Numbers", "C2.T2", "12 Actions"])
         self.assertNotIn("Elite", text)
         self.assertNotIn("54.00", text)
 

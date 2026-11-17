@@ -207,7 +207,7 @@ class RemoteOperatorLevelSim(unittest.TestCase):
                     )
             if set_name == "S2.T5":
                 next_after_s2 = {
-                    "L02-Activated": "L03-HighPerformance/S1.T1",
+                    "L02-Activated": "L03-HighPerformance/S0.T1",
                     "L03-HighPerformance": "L03-HighPerformance/S3.T1",
                     "L04-Elite": "L04-Elite/S3.T1",
                     "L05-WorldClass": "L05-WorldClass/S3.T1",
@@ -225,7 +225,7 @@ class RemoteOperatorLevelSim(unittest.TestCase):
                     )
             if set_name == "S3.T5":
                 next_after_s3 = {
-                    "L03-HighPerformance": "L04-Elite/S1.T1",
+                    "L03-HighPerformance": "L04-Elite/S0.T1",
                     "L04-Elite": "L05-WorldClass/S1.T1",
                 }.get(band)
                 if next_after_s3 and next_after_s3 not in progress["unlocked_levels"]:

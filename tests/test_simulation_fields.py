@@ -358,6 +358,77 @@ class PartnerPerfectAccuracyTests(unittest.TestCase):
         self.assertEqual(sim_b._next_outcome("PASS"), "miss")
         self.assertEqual(sim_a._next_outcome("GOAL"), "miss")
 
+    def test_mode1_ball_is_manual_and_has_no_player(self):
+        """Mode 1 leaves the ball still until the operator drags it."""
+        sim = rt.ArenaSimulator(field_id="A")
+        sim.always_fail = True
+        sim.always_correct = False
+        sim.start_action(
+            "PASS", ["A2"], finish_balls=True,
+            action_in_set=2, actions_in_set=10, test_num=2,
+        )
+        self.assertEqual(sim.intended, "manual")
+        home = sim.BALL_HOME
+        self.assertEqual(sim.last_ball, home)
+        balls, players, hip = sim.step(1280, 360)
+        self.assertEqual(players, [])
+        self.assertIsNone(hip[0])
+        self.assertEqual(len(balls), 1)
+        self.assertEqual(balls[0]["center"], [int(home[0]), int(home[1])])
+        sim.set_manual_ball_xy(520.0, 180.0)
+        balls, players, _hip = sim.step(1280, 360)
+        self.assertEqual(players, [])
+        self.assertEqual(balls[0]["center"], [520, 180])
+        mode2 = rt.ArenaSimulator(field_id="A")
+        mode2.always_fail = False
+        mode2.always_correct = True
+        mode2.start_action("PASS", ["A2"], finish_balls=True, action_in_set=2, actions_in_set=10, test_num=2)
+        self.assertEqual(mode2.intended, "finish")
+        self.assertLess(mode2.finish_travel_s, 1.0)
+
+    def test_mode1_pass_touches_goal_then_leaves_hip(self):
+        """No ≥15° turn until outside goal → Wrong. Turn in goal → Correct."""
+        line = rt.GOAL_LINES[rt.geometry_screen_id("A2")]
+        depth = rt.arrival_depth_for("A2", "PASS")
+        cx, cy = rt.goal_circle_center(line["p0"], line["p1"])
+        # Straight through goal (same heading), then outside → Wrong.
+        rows = [
+            {"b": [[cx, cy + 80.0, 12.0]]},
+            {"b": [[cx, cy + 40.0, 12.0]]},
+            {"b": [[cx, cy, 12.0]]},
+            {"b": [[cx, cy - 30.0, 12.0]]},
+            {"b": [[300.0, 20.0, 12.0]]},
+        ]
+        self.assertEqual(
+            rt.pass_hip_from_block({"data": rows}, "A2", line["p0"], line["p1"], depth),
+            "Wrong",
+        )
+        # Small jitter (<15°) while continuing inbound, then leave → Wrong.
+        rows_jitter = [
+            {"b": [[cx, cy + 60.0, 12.0]]},
+            {"b": [[cx, cy + 20.0, 12.0]]},
+            {"b": [[cx + 1.0, cy, 12.0]]},
+            {"b": [[cx + 2.0, cy - 20.0, 12.0]]},
+            {"b": [[cx + 2.0, cy - 40.0, 12.0]]},
+            {"b": [[300.0, 20.0, 12.0]]},
+        ]
+        self.assertEqual(
+            rt.pass_hip_from_block(
+                {"data": rows_jitter}, "A2", line["p0"], line["p1"], depth
+            ),
+            "Wrong",
+        )
+        # Fresh attempt: enter, lock inbound, then reverse while in goal → Correct.
+        rows2 = [
+            {"b": [[cx, cy, 12.0]]},
+            {"b": [[cx, cy - 24.0, 12.0]]},
+            {"b": [[cx, cy + 12.0, 12.0]]},
+        ]
+        self.assertEqual(
+            rt.pass_hip_from_block({"data": rows2}, "A2", line["p0"], line["p1"], depth),
+            "Correct",
+        )
+
     def test_mode1_only_simulated_field_fails(self):
         cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
         cam.active_fields = {"A", "B"}

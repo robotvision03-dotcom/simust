@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import tempfile
+import threading
+import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -199,6 +204,104 @@ class Mode2FinishBallsSimTests(unittest.TestCase):
         self.assertGreater(ae, 75.0)
         section = app_mod.summarize_results_section_metrics(rows)
         self.assertGreater(section["avg_ae"], 75.0)
+
+    def test_mode2_wallclock_continues_past_first_action(self):
+        """Regression: A1 Correct then A6 hung with no heading flip (dropped frames)."""
+        screens = ["A1", "A6", "A2", "A5"]
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+        tmp.close()
+        open(tmp.name, "w", encoding="utf-8").write(json.dumps({"fields": {}}))
+        cam = rt.SimustRealtimeCamera.__new__(rt.SimustRealtimeCamera)
+        cam.operator_paused = False
+        cam._paused_fields = set()
+        cam._live_file_lock = threading.Lock()
+        cam.session_lock = threading.Lock()
+        cam.simulation_fields = {"A": True, "B": False}
+        cam._live_frame_w = 1280.0
+        cam._live_frame_h = 360.0
+        sim = rt.ArenaSimulator(field_id="A")
+        sim.always_correct = True
+        cam.simulators = {"A": sim}
+        cam._field_is_simulated = lambda fid: True
+
+        ch = types.SimpleNamespace(
+            session_active=False,
+            current_qr_block=None,
+            _display_seq=0,
+            current_action="PASS",
+            active_goal_lines={},
+            current_screens=[],
+            current_block_id="S0",
+            field_id="A",
+            label="A",
+            current_keypoints=[],
+            kp_clear_frames_left=40,
+            _pass_hip_pending={},
+            _goal_ball_trail=[],
+            _hidden_goal_lines={},
+            _played_ball_xy=None,
+            _false_hip_spots=[],
+            _cylinder_scored_screens=set(),
+        )
+        cam.channels = {"A": ch}
+
+        def fake_end(_s, _t, channel=None):
+            target = channel or ch
+            target.session_active = False
+            target.active_goal_lines = {}
+            sim.end_action()
+
+        cam._end_session_locked = fake_end
+
+        try:
+            with patch.object(rt, "LIVE_ACTION_RESULT_FILE", tmp.name):
+                for i, name in enumerate(screens, start=1):
+                    line = rt.GOAL_LINES[rt.geometry_screen_id(name)]
+                    ch.session_active = True
+                    ch.current_action = "PASS"
+                    ch.current_screens = [name]
+                    ch.active_goal_lines = {name: {"p0": line["p0"], "p1": line["p1"]}}
+                    ch.current_block_id = f"S{i}"
+                    ch._display_seq = 300 + i
+                    ch._cylinder_scored_screens = set()
+                    ch._pass_hip_pending = {}
+                    ch._goal_ball_trail = []
+                    ch._hidden_goal_lines = {}
+                    ch._played_ball_xy = None
+                    ch._false_hip_spots = []
+                    ch.current_qr_block = {
+                        "finish_balls": True,
+                        "data": [],
+                        "id": f"S{i}",
+                        "action_in_set": i,
+                        "actions_in_set": 6,
+                        "test_num": 1,
+                    }
+                    sim.start_action(
+                        "PASS",
+                        [name],
+                        finish_balls=True,
+                        action_in_set=i,
+                        actions_in_set=6,
+                        test_num=1,
+                    )
+                    t0 = time.time()
+                    while time.time() - t0 < 2.5 and ch.session_active:
+                        balls, _p, _h = sim.step(1280, 360)
+                        for ball in balls:
+                            ball["simulated"] = True
+                            ball["field"] = "A"
+                        cam._publish_goal_if_in_cylinder(ch, balls)
+                        time.sleep(0.015)
+                    self.assertFalse(
+                        ch.session_active,
+                        msg=f"{name} stuck pending={ch._pass_hip_pending}",
+                    )
+        finally:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

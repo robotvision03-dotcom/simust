@@ -1209,6 +1209,11 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
@@ -1231,6 +1236,11 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
@@ -1341,10 +1351,10 @@ def get_main_level(level_id: str) -> str:
 def get_next_level(current_level_id: str) -> Optional[str]:
     """Return the next level to open after a pass.
 
-    Every listed sub-level is played in order (S1.T1…T5, then S2.T1…T5,
-    then S3.T1…T5 where the band has them). Passing the last set of a band
-    opens the next band's S1.T1 (Entry S1.T5 → Activated S1.T1, Activated
-    S2.T5 → High Performance S1.T1, High Performance S3.T5 → Elite S1.T1,
+    Every listed sub-level is played in order (S0/S1.T1…T5, then later
+    series where the band has them). Passing the last set of a band opens
+    the next band's first set (Entry S1.T5 → Activated S1.T1, Activated
+    S2.T5 → High Performance S0.T1, High Performance S3.T5 → Elite S0.T1,
     Elite S3.T5 → World Class S1.T1). World Class S3.T5 is the end.
     """
     cid = simust_progress.normalize_level_id(current_level_id)
@@ -3447,7 +3457,7 @@ def format_operator_component_label(level_id: str) -> str:
         return theme
     series = int(match.group(1))
     test_num = match.group(2)
-    if main in ("L01-Entry", "L02-Activated"):
+    if main in ("L01-Entry", "L02-Activated", "L03-HighPerformance"):
         component = series + 1
     else:
         component = series
@@ -4162,7 +4172,7 @@ async def manual_coach_status(request: Request):
 async def manual_coach_start(request: Request):
     """Start realtime camera + smart player in Manual coach mode (no playlist)."""
     global smart_player_process, realtime_camera_process, _realtime_session_active
-    global realtime_aborted
+    global realtime_aborted, _realtime_dirs_at_start, _realtime_session_started_at
     _require_operator_staff(request)
     if not read_cabinet_controls().get("system_on", True):
         raise HTTPException(400, "System is off — turn System on first")
@@ -4263,6 +4273,9 @@ async def manual_coach_start(request: Request):
             ],
             cwd=script_dir,
         )
+        # Same recording bookkeeping as Realtime Play so Stop keeps the MP4.
+        _realtime_dirs_at_start = _realtime_dir_names()
+        _realtime_session_started_at = time.time()
         _realtime_session_active = True
         await asyncio.sleep(0.12)
         if smart_player_process.poll() is not None:
@@ -4338,17 +4351,35 @@ async def manual_coach_clear(request: Request):
 
 @app.post("/manual-coach/stop")
 async def manual_coach_stop(request: Request):
+    """Stop Manual coach and keep the realtime session video (same as Play Stop)."""
     _require_operator_staff(request)
     try:
         simust_manual_coach.write_command("stop")
     except Exception:
         pass
-    result = apply_stop_realtime({"abort": True, "operator_stop": True})
+    # Graceful stop: finalize MP4 and keep recording folders (do not abort/discard).
+    result = apply_stop_realtime({"operator_stop": True, "save": True})
     try:
         simust_manual_coach.clear_command_files()
     except Exception:
         pass
-    return {"status": "success", "message": "Manual coach stopped", **result}
+    try:
+        simust_manual_coach.write_status(
+            active=False,
+            lit_screen=None,
+            lit_screens=[],
+            waiting_hit=False,
+            last_hit=None,
+            seq=0,
+            message="Manual stopped — session video saved",
+        )
+    except Exception:
+        pass
+    return {
+        "status": "success",
+        "message": "Manual coach stopped — session video saved",
+        **result,
+    }
 
 
 @app.post("/pause-realtime")
@@ -5511,6 +5542,7 @@ async def homography_test(req: Request):
 
 import simust_goal_calibrate  # noqa: E402
 import simust_hip_calibrate  # noqa: E402
+import simust_sampling  # noqa: E402
 
 
 def _goal_lines_builtin() -> dict:
@@ -5525,22 +5557,11 @@ def _goal_lines_builtin() -> dict:
 def goal_lines_status_snapshot() -> dict:
     snap = simust_goal_calibrate.public_status(_goal_lines_builtin())
     try:
-        from simust_realtime import finish_cylinder_previews
+        import simust_goal_paint as goal_paint
 
-        # Match live finish_balls cylinder size on the selected goal mouths.
-        snap["cylinders"] = finish_cylinder_previews(
-            snap.get("screens") or {}, action="PASS"
-        )
+        snap["paints"] = goal_paint.public_paints()
     except Exception:
-        snap["cylinders"] = {}
-    try:
-        import simust_cylinder_mesh as cylmesh
-
-        snap["cylinder_meshes"] = cylmesh.public_mesh_status(
-            (snap.get("screens") or {}).keys()
-        )
-    except Exception:
-        snap["cylinder_meshes"] = {"n_control": 200, "screens": {}, "sculpted_count": 0}
+        snap["paints"] = {"screens": {}, "painted_count": 0}
     return snap
 
 
@@ -5734,6 +5755,52 @@ async def lab_tools_run(request: Request):
         "already_running": False,
         "pid": getattr(proc, "pid", None),
     }
+
+
+@app.post("/goal-lines/paint/save")
+async def goal_lines_paint_save(req: Request):
+    """Save pencil strokes for one goal. The mask is built once, not per frame."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Paint save runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    screen = str((data or {}).get("screen") or "").strip().upper()
+    strokes = (data or {}).get("strokes")
+    if not screen or not isinstance(strokes, list):
+        raise HTTPException(400, "screen and strokes[] are required")
+    try:
+        import simust_goal_paint as goal_paint
+
+        paints = goal_paint.save_screen(screen, strokes)
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    snap = goal_lines_status_snapshot()
+    snap["paints"] = paints
+    return {"status": "success", **snap}
+
+
+@app.post("/goal-lines/paint/clear")
+async def goal_lines_paint_clear(req: Request):
+    """Clear pencil paint for one goal (or every goal when screen is omitted)."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Paint clear runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    try:
+        import simust_goal_paint as goal_paint
+
+        screen = str((data or {}).get("screen") or "").strip().upper()
+        if screen:
+            goal_paint.clear_screen(screen)
+        else:
+            goal_paint.save_all({})
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **goal_lines_status_snapshot()}
 
 
 @app.post("/goal-lines/preview")
@@ -5968,6 +6035,116 @@ async def hip_zone_reset(req: Request):
     except Exception as exc:
         raise HTTPException(500, str(exc))
     return {"status": "success", **hip_zone_status_snapshot()}
+
+
+# ============================================================
+# SAMPLING (stitched red zones → raw frames in data_samples)
+# ============================================================
+
+def sampling_status_snapshot() -> dict:
+    return simust_sampling.public_status()
+
+
+@app.get("/sampling/status")
+async def sampling_status():
+    if PUBLIC_MODE:
+        status = simust_remote.get_status() or {}
+        return status.get("sampling") or sampling_status_snapshot()
+    return sampling_status_snapshot()
+
+
+@app.post("/sampling/capture")
+async def sampling_capture(req: Request):
+    """Capture camera-1 + camera-8 stitch for drawing sampling zones."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Capture runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        preview = simust_sampling.capture_stitched_preview(force_live=True)
+    except Exception as exc:
+        raise HTTPException(503, str(exc))
+    return {"status": "success", "frame": preview, **sampling_status_snapshot()}
+
+
+@app.post("/sampling/save")
+async def sampling_save(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Save runs on the training lab")
+    fields = data.get("fields") or {}
+    try:
+        saved = simust_sampling.save_fields(fields)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", "calibration": saved, **sampling_status_snapshot()}
+
+
+@app.post("/sampling/reset")
+async def sampling_reset(req: Request):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Reset runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        simust_sampling.reset_store()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **sampling_status_snapshot()}
+
+
+@app.post("/sampling/start")
+async def sampling_start(req: Request):
+    """Start sampling and always write one clean 3840×1080 test image immediately."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Start Sample runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        ctrl = simust_sampling.start_sample()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    out = sampling_status_snapshot()
+    test_path = out.get("test_path") or ctrl.get("test_path") or out.get("last_path") or ""
+    if not test_path:
+        raise HTTPException(
+            503,
+            "Sampling started but no test image was written — check cameras / disk",
+        )
+    out["test_path"] = test_path
+    out["last_path"] = out.get("last_path") or test_path
+    if int(out.get("calibrated_count") or 0) < 1:
+        out["warning"] = (
+            "Test image saved, but no red zone is saved yet — "
+            "Save Zone for Field A/B so ball-in-area capture can run"
+        )
+    return {"status": "success", **out}
+
+
+@app.post("/sampling/stop")
+async def sampling_stop(req: Request):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Stop Sample runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        simust_sampling.stop_sample()
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **sampling_status_snapshot()}
 
 
 # ============================================================
@@ -10169,6 +10346,8 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "goal-lines-save",
     "goal-lines-reset",
     "goal-lines-preview",
+    "goal-lines-paint/save",
+    "goal-lines-paint/clear",
     "goal-lines-sculpt/mesh",
     "goal-lines-sculpt/save",
     "goal-lines-sculpt/reload",
@@ -10177,6 +10356,11 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "hip-zone-capture",
     "hip-zone-save",
     "hip-zone-reset",
+    "sampling-capture",
+    "sampling-save",
+    "sampling-reset",
+    "sampling-start",
+    "sampling-stop",
     "instagram-live",
     "cabinet-controls",
     "manual-coach/start",
@@ -10317,6 +10501,10 @@ def _publish_lab_status() -> None:
     except Exception:
         status["hip_zone"] = {"fields": {}, "frame": {}}
     try:
+        status["sampling"] = sampling_status_snapshot()
+    except Exception:
+        status["sampling"] = {"fields": {}, "frame": {}, "active": False}
+    try:
         status["cabinet-controls"] = read_cabinet_controls()
     except Exception:
         status["cabinet-controls"] = {
@@ -10367,6 +10555,9 @@ def _run_queued_operator_command(command: dict) -> None:
         elif action.startswith("hip-zone-"):
             suffix = action[len("hip-zone-"):]
             _lab_local_request("POST", f"/hip-zone/{suffix}", payload)
+        elif action.startswith("sampling-"):
+            suffix = action[len("sampling-"):]
+            _lab_local_request("POST", f"/sampling/{suffix}", payload)
         else:
             _lab_local_request("POST", f"/{action}", payload)
         logger.info("Ran remote operator command %s from %s", action, command.get("actor") or "tablet")

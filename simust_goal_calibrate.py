@@ -381,7 +381,9 @@ def _to_sim_frame(stitched):
 
 
 def capture_stitched_preview(
-    force_live: bool = True, goal_lines: Optional[dict] = None
+    force_live: bool = True,
+    goal_lines: Optional[dict] = None,
+    annotate: bool = True,
 ) -> dict:
     """Grab the same stitched 1280×360 frame Realtime uses for green cylinders.
 
@@ -430,34 +432,35 @@ def capture_stitched_preview(
 
     raw_h, raw_w = stitched.shape[:2]
     out, fit_mode = _to_sim_frame(stitched)
-    # Light field split only — cylinders are drawn live in the Settings overlay
-    # from the same GOAL_LINES the Realtime cylinder uses.
-    try:
-        mid = SIM_WIDTH // 2
-        cv2.line(out, (mid, 0), (mid, SIM_HEIGHT - 1), (0, 200, 255), 1)
-        cv2.putText(
-            out, "Field A", (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2
-        )
-        cv2.putText(
-            out,
-            "Field B",
-            (mid + 12, 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 200, 255),
-            2,
-        )
-        cv2.putText(
-            out,
-            f"{SIM_WIDTH}x{SIM_HEIGHT} stitched (same as cylinder)",
-            (12, SIM_HEIGHT - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (200, 200, 200),
-            1,
-        )
-    except Exception:
-        pass
+    # Optional guide labels for Goal/HIP Settings only. Sampling must stay clean
+    # (annotate=False) so saved data_samples never get Field A/B text.
+    if annotate:
+        try:
+            mid = SIM_WIDTH // 2
+            cv2.line(out, (mid, 0), (mid, SIM_HEIGHT - 1), (0, 200, 255), 1)
+            cv2.putText(
+                out, "Field A", (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2
+            )
+            cv2.putText(
+                out,
+                "Field B",
+                (mid + 12, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 200, 255),
+                2,
+            )
+            cv2.putText(
+                out,
+                f"{SIM_WIDTH}x{SIM_HEIGHT} stitched (same as cylinder)",
+                (12, SIM_HEIGHT - 12),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (200, 200, 200),
+                1,
+            )
+        except Exception:
+            pass
 
     os.makedirs(FRAME_DIR, exist_ok=True)
     path = os.path.join(FRAME_DIR, FRAME_NAME)
