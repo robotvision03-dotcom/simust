@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#06101f" />
     <title>SIMUST PLAY IT SMART · Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/static/coach_guide.css?v=20261114a" />
+    <link rel="stylesheet" href="/static/coach_guide.css?v=20261120a" />
     <style>
         .mesh-volume-wrap {
             border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
@@ -813,7 +813,7 @@
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/static/i18n.js?v=20260916a"></script>
-    <script src="/static/coach_guide.js?v=20261114a"></script>
+    <script src="/static/coach_guide.js?v=20261120b"></script>
 
     <script>
         // Replace all optional chaining (?.) with safe checks to avoid syntax errors
@@ -880,8 +880,7 @@
                 'hip-zone/save': true,
                 'hip-zone/reset': true,
                 'sampling/capture': true,
-                'sampling/save': true,
-                'sampling/reset': true,
+                'sampling/live': true,
                 'sampling/start': true,
                 'sampling/stop': true,
                 'cabinet-controls': true,
@@ -1303,22 +1302,22 @@
         // series = internal S# (Entry S0/S1; other bands S1/S2/S3).
         var BAND_CONTENT_SETS = {
             'L01-Entry': [
-                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass among player pictures' },
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: '4 lit screens; dual-goal AP/FAP (T1–T2 30% in order, T3–T5 50% random)' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Finish on the correct digit' }
             ],
             'L02-Activated': [
-                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass among teammate and opponents' },
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: '5 lit screens; dual-goal AP/FAP; center passes only (no side L/R)' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Number targets on the screens' },
                 { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out on each field' }
             ],
             'L03-HighPerformance': [
-                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass among players, with offside-trap goals mixed in' },
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: '6 lit screens; dual-goal AP/FAP; offside traps on other actions (never mixed with AP)' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Number targets, faster timing' },
                 { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out shapes and letters' },
                 { key: 'sum', series: 3, component: 4, label: 'Sum', blurb: 'Hit both numbers that add to the reference' }
             ],
             'L04-Elite': [
-                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Pass1 among teammates, opponents and defending on both fields' },
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Dual-field pass1; AP/FAP; pass-left/right from T3 (Elite only)' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Combined-field number targets' },
                 { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out across the cabinet' },
                 { key: 'sum', series: 3, component: 4, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
@@ -2547,7 +2546,7 @@
                         React.createElement('thead', null,
                             React.createElement('tr', null,
                                 ['Series ID', 'Action', 'Screens', 'Result', 'Winning Screen', 'Session Dur (s)',
-                                    'AEP', 'FAC', 'AE'
+                                    'AEP', 'FAP', 'AE'
                                 ].map(function(h) {
                                     return React.createElement('th', {
                                         key: h,
@@ -2708,8 +2707,8 @@
             var facRightPct = facTotal > 0 ? (facRight / facTotal * 100) : 0;
             var facLeftPct = facTotal > 0 ? (facLeft / facTotal * 100) : 0;
             var facDisplay = facTotal > 0 ?
-                "FAC: R " + facRightPct.toFixed(0) + "% / L " + facLeftPct.toFixed(0) + "%" :
-                'FAC: No data';
+                "FAP: R " + facRightPct.toFixed(0) + "% / L " + facLeftPct.toFixed(0) + "%" :
+                'FAP: No data';
 
             var aetColor = avgFinishingTime > 0 ?
                 (aetPercent >= 50 ? 'text-green-400' : aetPercent >= 25 ? 'text-yellow-400' :
@@ -2809,7 +2808,7 @@
                 facTotal > 0 ?
                 React.createElement('div', { className: "panel p-3 text-center mb-4" },
                     React.createElement('div', { className: "text-gray-400 text-xs uppercase" },
-                        "First Action Choice (FAC)"),
+                        "First Action Preference (FAP)"),
                     React.createElement('div', { className: "text-lg font-bold" },
                         React.createElement('span', { className: "text-red-400" }, facRightPct.toFixed(0) +
                             "% Right"),
@@ -4666,192 +4665,57 @@
         };
 
         // =====================================================================
-        // SAMPLING — red zones on full stitch; Start/Stop saves raw frames
+        // SAMPLING — Start/Stop records clean 3840×1080 stitch video
         // =====================================================================
         var SamplingCalibration = function() {
-            var fieldState = useState('A');
-            var field = fieldState[0];
-            var setField = fieldState[1];
-            var fieldsState = useState({ A: { points: [], strokes: [] }, B: { points: [], strokes: [] } });
-            var fields = fieldsState[0];
-            var setFields = fieldsState[1];
+            var liveState = useState(false);
+            var liveOn = liveState[0];
+            var setLiveOn = liveState[1];
             var frameUrlState = useState('');
             var frameUrl = frameUrlState[0];
             var setFrameUrl = frameUrlState[1];
-            var toolState = useState('pencil');
-            var tool = toolState[0];
-            var setTool = toolState[1];
-            var brushState = useState(18);
-            var brush = brushState[0];
-            var setBrush = brushState[1];
             var activeState = useState(false);
             var samplingActive = activeState[0];
             var setSamplingActive = activeState[1];
+            var frameCountState = useState(0);
+            var frameCount = frameCountState[0];
+            var setFrameCount = frameCountState[1];
             var savedCountState = useState(0);
             var savedCount = savedCountState[0];
             var setSavedCount = savedCountState[1];
             var samplesDirState = useState('');
             var samplesDir = samplesDirState[0];
             var setSamplesDir = samplesDirState[1];
+            var videoPathState = useState('');
+            var videoPath = videoPathState[0];
+            var setVideoPath = videoPathState[1];
+            var playlistScreenState = useState(0);
+            var playlistScreen = playlistScreenState[0];
+            var setPlaylistScreen = playlistScreenState[1];
+            var playlistContentState = useState('');
+            var playlistContent = playlistContentState[0];
+            var setPlaylistContent = playlistContentState[1];
             var msgState = useState('');
             var message = msgState[0];
             var setMessage = msgState[1];
             var busyState = useState(false);
             var busy = busyState[0];
             var setBusy = busyState[1];
-            var imgRef = useRef(null);
-            var canvasRef = useRef(null);
-            var fieldsRef = useRef(fields);
-            var paintingRef = useRef(false);
-            var fieldRef = useRef(field);
-            fieldRef.current = field;
-            var toolRef = useRef(tool);
-            toolRef.current = tool;
-            var brushRef = useRef(brush);
-            brushRef.current = brush;
-            var LOG_W = 1280;
-            var LOG_H = 360;
-            var FIELD_HALF = LOG_W / 2;
-
-            var distPointToSeg = function(px, py, ax, ay, bx, by) {
-                var dx = bx - ax;
-                var dy = by - ay;
-                var len2 = dx * dx + dy * dy;
-                if (len2 <= 1e-6) return Math.hypot(px - ax, py - ay);
-                var t = ((px - ax) * dx + (py - ay) * dy) / len2;
-                t = Math.max(0, Math.min(1, t));
-                return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-            };
-
-            var pointHitEraser = function(px, py, eraser) {
-                var pts = eraser.pts || [];
-                if (!pts.length) return false;
-                var radius = Math.max(2, (Number(eraser.brush) || 18) * 0.65);
-                var i;
-                for (i = 0; i < pts.length; i++) {
-                    if (Math.hypot(px - pts[i][0], py - pts[i][1]) <= radius) return true;
-                    if (i > 0 && distPointToSeg(
-                        px, py, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]
-                    ) <= radius) return true;
-                }
-                return false;
-            };
-
-            var bakeEraserStrokes = function(strokes) {
-                var list = strokes || [];
-                var erasers = [];
-                var pencils = [];
-                var i;
-                for (i = 0; i < list.length; i++) {
-                    if (list[i] && list[i].erase) erasers.push(list[i]);
-                    else if (list[i]) pencils.push(list[i]);
-                }
-                if (!erasers.length) return list.slice();
-                var out = [];
-                for (i = 0; i < pencils.length; i++) {
-                    var stroke = pencils[i];
-                    var b = stroke.brush || 18;
-                    var seg = [];
-                    var flush = function() {
-                        if (seg.length >= 2) out.push({ erase: false, brush: b, pts: seg.slice() });
-                        seg = [];
-                    };
-                    var pts = stroke.pts || [];
-                    var j;
-                    for (j = 0; j < pts.length; j++) {
-                        var pt = pts[j];
-                        var hit = false;
-                        var e;
-                        for (e = 0; e < erasers.length; e++) {
-                            if (pointHitEraser(pt[0], pt[1], erasers[e])) { hit = true; break; }
-                        }
-                        if (hit) flush();
-                        else seg.push([pt[0], pt[1]]);
-                    }
-                    flush();
-                }
-                return out;
-            };
-
-            var clampToField = function(x, y, fid) {
-                var xx = Math.max(0, Math.min(LOG_W, x));
-                var yy = Math.max(0, Math.min(LOG_H, y));
-                if ((fid || fieldRef.current) === 'B') {
-                    xx = Math.max(FIELD_HALF, Math.min(LOG_W, xx));
-                } else {
-                    xx = Math.max(0, Math.min(FIELD_HALF, xx));
-                }
-                return [xx, yy];
-            };
-
-            var canvasToLogic = function(ev) {
-                var canvas = canvasRef.current;
-                if (!canvas) return null;
-                var rect = canvas.getBoundingClientRect();
-                if (!rect.width || !rect.height) return null;
-                var x = ((ev.clientX - rect.left) / rect.width) * LOG_W;
-                var y = ((ev.clientY - rect.top) / rect.height) * LOG_H;
-                return clampToField(x, y, fieldRef.current);
-            };
-
-            var drawStroke = function(ctx, stroke, color) {
-                var pts = (stroke && stroke.pts) || [];
-                if (pts.length < 2) return;
-                ctx.strokeStyle = color;
-                ctx.lineWidth = Math.max(1, Number(stroke.brush) || 18);
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.beginPath();
-                ctx.moveTo(pts[0][0], pts[0][1]);
-                var i;
-                for (i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-                ctx.stroke();
-            };
-
-            var redrawOverlay = function() {
-                var canvas = canvasRef.current;
-                var img = imgRef.current;
-                if (!canvas || !img) return;
-                var w = img.clientWidth || img.naturalWidth || LOG_W;
-                var h = img.clientHeight || img.naturalHeight || LOG_H;
-                if (canvas.width !== LOG_W) canvas.width = LOG_W;
-                if (canvas.height !== LOG_H) canvas.height = LOG_H;
-                canvas.style.width = w + 'px';
-                canvas.style.height = h + 'px';
-                var ctx = canvas.getContext('2d');
-                if (!ctx) return;
-                ctx.clearRect(0, 0, LOG_W, LOG_H);
-                // Only the red pencil strokes — no Field A/B text, mid-line, or box.
-                var bag = fieldsRef.current || {};
-                ['A', 'B'].forEach(function(fid) {
-                    var strokes = bakeEraserStrokes(((bag[fid] || {}).strokes) || []);
-                    strokes.forEach(function(s) {
-                        if (s.erase) return;
-                        drawStroke(ctx, s, 'rgba(239,68,68,0.95)');
-                    });
-                });
-            };
 
             var applyStatus = function(data) {
-                var bag = (data && data.fields) || {};
-                var next = {
-                    A: {
-                        points: (bag.A && bag.A.points) || [],
-                        strokes: (bag.A && bag.A.strokes) || []
-                    },
-                    B: {
-                        points: (bag.B && bag.B.points) || [],
-                        strokes: (bag.B && bag.B.strokes) || []
-                    }
-                };
-                fieldsRef.current = next;
-                setFields(next);
+                var isLive = !!(data && data.live);
+                setLiveOn(isLive);
                 var frame = (data && data.frame) || {};
-                if (frame.data_url) setFrameUrl(frame.data_url);
+                if (isLive && frame.data_url) setFrameUrl(frame.data_url);
+                if (!isLive) setFrameUrl('');
                 setSamplingActive(!!(data && data.active));
+                setFrameCount(Number((data && data.frame_count) || 0));
                 setSavedCount(Number((data && data.saved_count) || 0));
+                setPlaylistScreen(Number((data && data.playlist_screen) || 0));
+                setPlaylistContent(String((data && data.playlist_content) || ''));
                 if (data && data.samples_dir) setSamplesDir(data.samples_dir);
-                setTimeout(redrawOverlay, 30);
+                var vp = (data && (data.video_path || data.last_path)) || '';
+                if (vp) setVideoPath(vp);
             };
 
             var loadStatus = function() {
@@ -4861,141 +4725,32 @@
             };
 
             useEffect(function() { loadStatus(); }, []);
-            useEffect(function() { fieldsRef.current = fields; redrawOverlay(); }, [fields, field, frameUrl]);
             useEffect(function() {
-                if (!samplingActive) return undefined;
+                if (!liveOn && !samplingActive) return undefined;
                 var id = setInterval(function() {
                     axios.get('/sampling/status').then(function(res) {
-                        var d = res.data || {};
-                        setSamplingActive(!!d.active);
-                        setSavedCount(Number(d.saved_count || 0));
-                        if (d.samples_dir) setSamplesDir(d.samples_dir);
+                        applyStatus(res.data || {});
                     }).catch(function() {});
-                }, 1500);
+                }, 300);
                 return function() { clearInterval(id); };
-            }, [samplingActive]);
+            }, [liveOn, samplingActive]);
 
-            var pushPoint = function(pt) {
-                if (!pt) return;
-                var fid = fieldRef.current;
-                var bag = Object.assign({}, fieldsRef.current || {});
-                var rec = Object.assign({}, bag[fid] || { points: [], strokes: [] });
-                var strokes = (rec.strokes || []).slice();
-                if (!paintingRef.current || !strokes.length) {
-                    strokes.push({
-                        erase: toolRef.current === 'eraser',
-                        brush: brushRef.current,
-                        pts: [pt]
-                    });
-                } else {
-                    var last = Object.assign({}, strokes[strokes.length - 1]);
-                    last.pts = (last.pts || []).concat([pt]);
-                    strokes[strokes.length - 1] = last;
-                }
-                rec.strokes = strokes;
-                bag[fid] = rec;
-                fieldsRef.current = bag;
-                setFields(bag);
-                paintingRef.current = true;
-                redrawOverlay();
-            };
-
-            var onCanvasMouseDown = function(ev) {
-                ev.preventDefault();
-                paintingRef.current = false;
-                pushPoint(canvasToLogic(ev));
-            };
-            var onCanvasMouseMove = function(ev) {
-                if (ev.buttons !== 1) return;
-                pushPoint(canvasToLogic(ev));
-            };
-            var onCanvasMouseUp = function() { paintingRef.current = false; };
-
-            var captureStitched = function() {
+            var toggleLive = function() {
+                var next = !liveOn;
                 setBusy(true);
-                setMessage('Capturing stitched camera-1 + camera-8 for sampling…');
-                var started = Date.now();
-                axios.post('/sampling/capture', {}).then(function(res) {
+                axios.post('/sampling/live', { on: next }).then(function(res) {
                     if (res.data && res.data.status === 'queued') {
-                        var poll = function() {
-                            axios.get('/sampling/status').then(function(st) {
-                                var frame = (st.data || {}).frame || {};
-                                var fresh = frame.data_url && (!frame.captured_at || (frame.captured_at * 1000) >= started - 8000);
-                                if (fresh) {
-                                    applyStatus(st.data || {});
-                                    setMessage('Frame ready. Draw a red sampling loop for Field A and/or B, then Save.');
-                                    setBusy(false);
-                                    return;
-                                }
-                                if (Date.now() - started > 25000) {
-                                    setMessage('Lab did not return a stitched frame. Check cameras and Lab online.');
-                                    setBusy(false);
-                                    return;
-                                }
-                                setTimeout(poll, 1000);
-                            }).catch(function(e) {
-                                setMessage((e.response && e.response.data && e.response.data.detail) || 'Could not read sampling status');
-                                setBusy(false);
-                            });
-                        };
-                        setTimeout(poll, 900);
+                        setMessage(next ? 'Turning live view On…' : 'Turning live view Off…');
+                        setTimeout(function() { loadStatus(); setBusy(false); }, 1200);
                         return;
                     }
                     applyStatus(res.data || {});
-                    setMessage('Frame ready. Draw a red sampling loop for Field A and/or B, then Save.');
+                    setMessage(next
+                        ? 'Live view ON — online video shows below. Press Start to record.'
+                        : 'Live view OFF.');
                     setBusy(false);
                 }).catch(function(e) {
-                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Capture failed');
-                    setBusy(false);
-                });
-            };
-
-            var fieldPayload = function(fid) {
-                var rec = ((fieldsRef.current || {})[fid]) || {};
-                return { strokes: rec.strokes || [], points: rec.points || [] };
-            };
-
-            var saveSampling = function() {
-                var fid = fieldRef.current;
-                var strokes = ((((fieldsRef.current || {})[fid] || {}).strokes) || []);
-                if (!strokes.length) {
-                    setMessage('Draw a red sampling loop for Field ' + fid + ' before saving.');
-                    return;
-                }
-                setBusy(true);
-                var payload = {};
-                payload[fid] = fieldPayload(fid);
-                axios.post('/sampling/save', { fields: payload }).then(function(res) {
-                    if (res.data && res.data.status === 'queued') {
-                        setMessage('Saving sampling zone on the training lab…');
-                        setTimeout(function() {
-                            loadStatus();
-                            setBusy(false);
-                            setMessage('Field ' + fid + ' sampling zone saved.');
-                        }, 2200);
-                        return;
-                    }
-                    applyStatus(res.data || {});
-                    setMessage('Field ' + fid + ' sampling zone saved.');
-                    setBusy(false);
-                }).catch(function(e) {
-                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Save failed');
-                    setBusy(false);
-                });
-            };
-
-            var clearSampling = function() {
-                var fid = fieldRef.current;
-                if (!window.confirm('Clear the sampling zone for Field ' + fid + '?')) return;
-                setBusy(true);
-                var payload = {};
-                payload[fid] = { clear: true };
-                axios.post('/sampling/save', { fields: payload }).then(function(res) {
-                    applyStatus(res.data || {});
-                    setMessage('Cleared sampling zone for Field ' + fid + '.');
-                    setBusy(false);
-                }).catch(function(e) {
-                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Clear failed');
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Live switch failed');
                     setBusy(false);
                 });
             };
@@ -5004,29 +4759,24 @@
                 setBusy(true);
                 axios.post('/sampling/start', {}).then(function(res) {
                     if (res.data && res.data.status === 'queued') {
-                        setMessage('Start Sample queued on the lab…');
+                        setMessage('Start queued on the lab…');
                         setTimeout(function() { loadStatus(); setBusy(false); }, 1500);
                         return;
                     }
                     applyStatus(res.data || {});
-                    var testName = '';
-                    var dirHint = '';
+                    var name = '';
                     try {
-                        var tp = (res.data || {}).test_path || (res.data || {}).last_path || '';
-                        testName = tp ? String(tp).split(/[/\\\\]/).pop() : '';
-                        dirHint = (res.data || {}).samples_dir || '';
-                    } catch (e) { testName = ''; }
-                    var warn = (res.data || {}).warning || '';
+                        var tp = (res.data || {}).video_path || (res.data || {}).last_path || '';
+                        name = tp ? String(tp).split(/[/\\\\]/).pop() : '';
+                    } catch (e) { name = ''; }
                     setMessage(
-                        'Sampling ON — test 3840×1080 image saved' +
-                        (testName ? (' as ' + testName) : '') +
-                        (dirHint ? (' in ' + dirHint) : '') +
-                        '. ' +
-                        (warn || 'Raw frames keep saving while a ball is inside a red zone. Keep Realtime Play running.')
+                        'Recording 3840×1080 + playlist screens 1→6 (A+B), 30s each, swap every 2s' +
+                        (name ? (' → ' + name) : '') +
+                        '. Auto-stops after screen 6 (or press Stop).'
                     );
                     setBusy(false);
                 }).catch(function(e) {
-                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Start Sample failed');
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Start failed');
                     setBusy(false);
                 });
             };
@@ -5039,102 +4789,78 @@
                         return;
                     }
                     applyStatus(res.data || {});
-                    setMessage('Sampling stopped. Saved ' + Number((res.data || {}).saved_count || savedCount) + ' frame(s).');
+                    var name = '';
+                    try {
+                        var tp = (res.data || {}).video_path || (res.data || {}).last_path || videoPath || '';
+                        name = tp ? String(tp).split(/[/\\\\]/).pop() : '';
+                    } catch (e) { name = ''; }
+                    setMessage(
+                        'Recording stopped. Saved' +
+                        (name ? (' ' + name) : '') +
+                        ' · ' + Number((res.data || {}).frame_count || frameCount) + ' frames' +
+                        (liveOn ? '. Live view still ON.' : '')
+                    );
                     setBusy(false);
                 }).catch(function(e) {
-                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Stop Sample failed');
+                    setMessage((e.response && e.response.data && e.response.data.detail) || 'Stop failed');
                     setBusy(false);
                 });
             };
 
-            var strokeCount = ((((fields[field] || {}).strokes) || []).length);
-
             return React.createElement('div', { className: 'panel p-5 mt-8' },
                 React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Sampling'),
                 React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
-                    'Capture the stitched cameras (Field A + B on one image). Draw a red sampling area for each field. Start Sample saves raw 3840×1080 frames (no labels) into data_samples while a ball is inside a red zone.'),
-                React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
+                    'Turn On for live camera view. Start records 3840×1080 (no overlays) and shows random pass / numbers / characters / divergent tiles on screens 1→6 (both Field A+B), 30s per screen, new image every 2s. After screen 6 it stops and saves automatically.'),
+                React.createElement('div', { className: 'flex flex-wrap items-center gap-3 mb-4' },
                     React.createElement('button', {
-                        className: 'btn-primary', disabled: busy, onClick: captureStitched
-                    }, 'Capture Stitched Camera'),
-                    React.createElement('button', {
-                        className: 'btn-realtime', disabled: busy || !strokeCount, onClick: saveSampling
-                    }, 'Save Zone'),
-                    React.createElement('button', {
-                        className: 'btn-danger', disabled: busy, onClick: clearSampling
-                    }, 'Clear Zone'),
+                        className: liveOn ? 'btn-resume' : 'refresh-btn',
+                        disabled: busy,
+                        onClick: toggleLive,
+                        title: liveOn ? 'Turn live view Off' : 'Turn live view On'
+                    }, liveOn ? 'On' : 'Off'),
+                    React.createElement('span', { className: 'text-sm text-gray-300' },
+                        liveOn ? 'Live video ON' : 'Live video OFF'
+                    ),
                     React.createElement('button', {
                         className: samplingActive ? 'refresh-btn' : 'btn-resume',
-                        disabled: busy || samplingActive,
+                        disabled: busy || samplingActive || !liveOn,
                         onClick: startSample
-                    }, 'Start Sample'),
+                    }, 'Start'),
                     React.createElement('button', {
                         className: 'btn-danger',
                         disabled: busy || !samplingActive,
                         onClick: stopSample
-                    }, 'Stop Sample')
+                    }, 'Stop')
                 ),
                 message ? React.createElement('p', { className: 'text-sm mb-3', style: { color: '#ead48f' } }, message) : null,
                 React.createElement('p', { className: 'text-xs text-gray-400 mb-3' },
-                    (samplingActive ? 'Sampling ON' : 'Sampling OFF') +
-                    ' · saved ' + savedCount +
-                    (samplesDir ? (' · ' + samplesDir) : '')
+                    (liveOn ? 'View ON' : 'View OFF') +
+                    ' · ' + (samplingActive ? 'Recording' : 'Idle') +
+                    (playlistScreen ? (' · screen ' + playlistScreen + '/6') : '') +
+                    (playlistContent ? (' · ' + playlistContent) : '') +
+                    ' · frames ' + frameCount +
+                    ' · videos ' + savedCount +
+                    (samplesDir ? (' · ' + samplesDir) : '') +
+                    (videoPath ? (' · ' + String(videoPath).split(/[/\\\\]/).pop()) : '')
                 ),
-                React.createElement('div', { className: 'flex flex-wrap items-center gap-3 mb-3' },
-                    React.createElement('span', { className: 'text-sm font-bold' }, 'Draw for'),
-                    ['A', 'B'].map(function(fid) {
-                        var done = !!((((fields[fid] || {}).strokes) || []).length) || !!((((fields[fid] || {}).points) || []).length);
-                        return React.createElement('button', {
-                            key: fid,
-                            className: field === fid ? 'btn-resume' : 'refresh-btn',
-                            style: done ? { borderColor: '#ef4444' } : null,
-                            onClick: function() { setField(fid); }
-                        }, 'Field ' + fid + (done ? ' ●' : ''));
-                    }),
-                    React.createElement('button', {
-                        className: tool === 'pencil' ? 'btn-primary' : 'refresh-btn',
-                        style: tool === 'pencil' ? { background: '#ef4444', borderColor: '#ef4444' } : { borderColor: '#ef4444', color: '#fca5a5' },
-                        onClick: function() { setTool('pencil'); }
-                    }, 'Red pencil'),
-                    React.createElement('button', {
-                        className: tool === 'eraser' ? 'btn-primary' : 'refresh-btn',
-                        onClick: function() { setTool('eraser'); }
-                    }, 'Eraser'),
-                    React.createElement('label', { className: 'text-sm text-gray-300' },
-                        'Size ' + brush,
-                        React.createElement('input', {
-                            type: 'range', min: 1, max: 40, step: 1, value: brush,
-                            onChange: function(ev) { setBrush(Number(ev.target.value) || 18); },
-                            style: { marginLeft: 8, verticalAlign: 'middle' }
-                        })
-                    )
-                ),
-                frameUrl ?
+                liveOn && frameUrl ?
                 React.createElement('div', { className: 'mb-2' },
                     React.createElement('div', {
                         className: 'calib-full-view mb-2',
-                        title: 'Both fields — red sampling zones'
+                        title: 'Live clean stitch preview'
                     },
                         React.createElement('img', {
                             src: frameUrl,
-                            alt: 'Sampling stitch Field A + B',
+                            alt: 'Sampling live stitch',
                             className: 'calib-stitch',
-                            ref: imgRef,
-                            onLoad: function() { redrawOverlay(); },
                             draggable: false
-                        }),
-                        React.createElement('canvas', {
-                            ref: canvasRef,
-                            onMouseDown: onCanvasMouseDown,
-                            onMouseMove: onCanvasMouseMove,
-                            onMouseUp: onCanvasMouseUp,
-                            onMouseLeave: onCanvasMouseUp,
-                            style: { cursor: tool === 'eraser' ? 'cell' : 'crosshair', touchAction: 'none' }
                         })
                     )
                 ) :
                 React.createElement('div', { className: 'panel p-8 text-center text-gray-400 mb-2' },
-                    'Press Capture Stitched Camera, then draw red sampling areas for Field A and Field B on the same image.'
+                    liveOn
+                        ? 'Connecting live video…'
+                        : 'Switch On to display the online video here. Then Start to record, Stop to finish.'
                 )
             );
         };

@@ -6038,7 +6038,7 @@ async def hip_zone_reset(req: Request):
 
 
 # ============================================================
-# SAMPLING (stitched red zones → raw frames in data_samples)
+# SAMPLING (Start/Stop → clean 3840×1080 video in data_samples)
 # ============================================================
 
 def sampling_status_snapshot() -> dict:
@@ -6055,7 +6055,7 @@ async def sampling_status():
 
 @app.post("/sampling/capture")
 async def sampling_capture(req: Request):
-    """Capture camera-1 + camera-8 stitch for drawing sampling zones."""
+    """Refresh live stitch preview (no overlays) for the Settings panel."""
     if PUBLIC_MODE:
         raise HTTPException(403, "Capture runs on the training lab")
     try:
@@ -6069,42 +6069,97 @@ async def sampling_capture(req: Request):
     return {"status": "success", "frame": preview, **sampling_status_snapshot()}
 
 
-@app.post("/sampling/save")
-async def sampling_save(req: Request):
+@app.post("/sampling/live")
+async def sampling_live(req: Request):
+    """On/Off switch for the live Sampling video view."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Live view runs on the training lab")
     try:
         data = await req.json()
     except Exception:
-        raise HTTPException(400, "Invalid JSON")
-    if PUBLIC_MODE:
-        raise HTTPException(403, "Save runs on the training lab")
-    fields = data.get("fields") or {}
+        data = {}
+    on = True
+    if isinstance(data, dict) and "on" in data:
+        on = bool(data.get("on"))
     try:
-        saved = simust_sampling.save_fields(fields)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    except Exception as exc:
-        raise HTTPException(500, str(exc))
-    return {"status": "success", "calibration": saved, **sampling_status_snapshot()}
-
-
-@app.post("/sampling/reset")
-async def sampling_reset(req: Request):
-    if PUBLIC_MODE:
-        raise HTTPException(403, "Reset runs on the training lab")
-    try:
-        await req.json()
-    except Exception:
-        pass
-    try:
-        simust_sampling.reset_store()
+        simust_sampling.set_live(on)
     except Exception as exc:
         raise HTTPException(500, str(exc))
     return {"status": "success", **sampling_status_snapshot()}
 
 
+def _ensure_sampling_display_player() -> None:
+    """Make sure smart player is up so Sampling can paint A1–B6 content."""
+    global smart_player_process
+    if smart_player_is_running():
+        return
+    if not read_cabinet_controls().get("system_on", True):
+        raise HTTPException(400, "System is off — turn System on first")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    smart_script = os.path.join(script_dir, "smart_simust_player.py")
+    if not os.path.exists(smart_script):
+        smart_script = os.path.join(os.getcwd(), "smart_simust_player.py")
+    if not os.path.exists(smart_script):
+        raise HTTPException(500, "smart_simust_player.py not found")
+    os.makedirs(SIMUST_PLAYER_DIRECTORY, exist_ok=True)
+    with open(
+        os.path.join(SIMUST_PLAYER_DIRECTORY, "players_fields.json"),
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(
+            {
+                "fields": {
+                    "A": {
+                        "player_id": "sampling",
+                        "player_name": "Sampling",
+                        "player_surname": "Record",
+                        "field": "A",
+                        "level": "Sampling",
+                        "directory": "",
+                        "simulated": False,
+                    },
+                    "B": {
+                        "player_id": "sampling",
+                        "player_name": "Sampling",
+                        "player_surname": "Record",
+                        "field": "B",
+                        "level": "Sampling",
+                        "directory": "",
+                        "simulated": False,
+                    },
+                },
+                "players": [],
+                "active": ["A", "B"],
+                "level": "Sampling",
+                "levels": {"A": "Sampling", "B": "Sampling"},
+                "separate_fields": False,
+                "score_field": "A",
+                "manual_coach": True,
+                "sampling_display": True,
+            },
+            handle,
+            indent=2,
+        )
+    screen_idx = player_screen_index()
+    smart_player_process = _popen_no_console(
+        [
+            sys.executable,
+            smart_script,
+            simust_manual_coach.MANUAL_COACH_ARG,
+            "1",
+            str(screen_idx),
+        ],
+    )
+    logger.info(
+        "Sampling: started smart player pid=%s for cabinet display",
+        getattr(smart_player_process, "pid", "?"),
+    )
+
+
 @app.post("/sampling/start")
 async def sampling_start(req: Request):
-    """Start sampling and always write one clean 3840×1080 test image immediately."""
+    """Start 3840×1080 recording + screens 1→6 content playlist on A+B."""
     if PUBLIC_MODE:
         raise HTTPException(403, "Start Sample runs on the training lab")
     try:
@@ -6112,23 +6167,18 @@ async def sampling_start(req: Request):
     except Exception:
         pass
     try:
+        _ensure_sampling_display_player()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Could not start display player: {exc}")
+    try:
         ctrl = simust_sampling.start_sample()
     except Exception as exc:
         raise HTTPException(500, str(exc))
     out = sampling_status_snapshot()
-    test_path = out.get("test_path") or ctrl.get("test_path") or out.get("last_path") or ""
-    if not test_path:
-        raise HTTPException(
-            503,
-            "Sampling started but no test image was written — check cameras / disk",
-        )
-    out["test_path"] = test_path
-    out["last_path"] = out.get("last_path") or test_path
-    if int(out.get("calibrated_count") or 0) < 1:
-        out["warning"] = (
-            "Test image saved, but no red zone is saved yet — "
-            "Save Zone for Field A/B so ball-in-area capture can run"
-        )
+    out["video_path"] = out.get("video_path") or ctrl.get("video_path") or ""
+    out["last_path"] = out.get("last_path") or out.get("video_path") or ""
     return {"status": "success", **out}
 
 
@@ -6819,6 +6869,263 @@ def get_aep_orientation(screens: List[str], winning_screen: Optional[str]) -> st
         else:
             return 'N/A'
 
+
+def _arena_screen_index(raw, field=None, screens=None) -> Optional[int]:
+    """Field-local screen number 1–6 from A3 / B5 / legacy HW ids.
+
+    Named seats (A5, B2R) use the digit directly. Bare cabinet numbers (12, 3,
+    5, …) go through ``canonical_screen`` — HW ``3`` is A5 (Right), not arena 3.
+    Bare 1–6 is only an arena index when sibling screens are already A1-style.
+    """
+    text = str(raw or "").strip()
+    if not text or text.upper() in ("N/A", "-", "NONE"):
+        return None
+    upper = text.upper()
+    if upper.endswith(("L", "R")) and len(upper) >= 2:
+        upper = upper[:-1]
+        text = text[:-1]
+    if len(upper) >= 2 and upper[0] in ("A", "B") and upper[1:].isdigit():
+        n = int(upper[1:])
+        return n if 1 <= n <= 6 else None
+    # Cabinet ids first (3 → A5, 12 → A1). Do not treat HW 3 as arena 3.
+    try:
+        import simust_fields
+
+        name = simust_fields.canonical_screen(text)
+        if name and len(name) >= 2 and name[0] in ("A", "B") and name[1:].isdigit():
+            arena = int(name[1:])
+            if 1 <= arena <= 6:
+                return arena
+    except Exception:
+        pass
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        n = int(digits)
+    except ValueError:
+        return None
+    named = False
+    for s in screens or []:
+        su = str(s or "").strip().upper()
+        if su.endswith(("L", "R")) and len(su) >= 2:
+            su = su[:-1]
+        if len(su) >= 2 and su[0] in ("A", "B") and su[1:].isdigit():
+            named = True
+            break
+    if named and 1 <= n <= 6:
+        return n
+    return None
+
+
+def _row_screens_list(row) -> list:
+    if not isinstance(row, dict):
+        return []
+    screens = row.get("screens")
+    if screens is None:
+        screens = row.get("Screens")
+    if isinstance(screens, str):
+        return [s.strip() for s in screens.split(",") if s.strip()]
+    return list(screens or [])
+
+
+def _screens_same_seat(a, b) -> bool:
+    """True when two screen ids refer to the same A1–A6 / B1–B6 seat."""
+    try:
+        import simust_fields
+
+        ca = simust_fields.canonical_screen(a)
+        cb = simust_fields.canonical_screen(b)
+        if ca and cb:
+            return ca == cb
+    except Exception:
+        pass
+    da = "".join(ch for ch in str(a or "") if ch.isdigit())
+    db = "".join(ch for ch in str(b or "") if ch.isdigit())
+    return bool(da and db and int(da) == int(db))
+
+
+def _row_is_ap_action(row) -> bool:
+    """AP actions: dual-goal flag, or exactly two goal screens.
+
+    Explicit False only rejects single-screen rows — Mode 2 used to stamp
+    ``aep_dual_pass: false`` on every cue (bool(None)) while still lighting
+    two goals; those rows must still count when ``screens`` has length 2.
+    """
+    if not isinstance(row, dict):
+        return False
+    if row.get("aep_dual_pass") or row.get("ap_action"):
+        return True
+    if len(_row_screens_list(row)) == 2:
+        return True
+    return False
+
+
+def _row_ap_side(row, *, correct_only: bool = True) -> str:
+    """Left/Right from Correct finish screen: 1–3 Left, 4–6 Right."""
+    if not isinstance(row, dict):
+        return ""
+    if correct_only:
+        result = str(row.get("result") or row.get("Result") or "").strip().lower()
+        if result != "correct":
+            return ""
+    # Timeout fillers must not dilute AP (Mode 2 leftover Wrongs flipped Correct).
+    try:
+        if _is_finish_balls_timeout_filler(row):
+            return ""
+    except Exception:
+        pass
+    win = row.get("winning_screen")
+    if win is None:
+        win = row.get("Winning Screen")
+    screens = _row_screens_list(row)
+    # Mode 2 sim often stamps Correct with winning_screen=N/A; the aimed goal
+    # is the first dual-goal / cue screen (sim always shoots screens[0]).
+    if win is None or str(win).strip().upper() in ("", "N/A", "-", "NONE"):
+        if row.get("mode2_sim") or row.get("mode2"):
+            win = screens[0] if screens else ""
+        else:
+            return ""
+    if win is None or str(win).strip().upper() in ("", "N/A", "-", "NONE"):
+        return ""
+    field = row.get("field") or row.get("Field")
+    # Prefer the matching goal seat from the action's dual screens.
+    matched = None
+    for s in screens:
+        if _screens_same_seat(s, win):
+            matched = s
+            break
+    arena = _arena_screen_index(matched or win, field=field, screens=screens)
+    if arena is None and matched is None:
+        try:
+            import simust_fields
+
+            field = field or simust_fields.field_for_screens(screens)
+        except Exception:
+            pass
+        arena = _arena_screen_index(win, field=field, screens=screens)
+    if arena is None:
+        return ""
+    if arena in (1, 2, 3):
+        return "Left"
+    if arena in (4, 5, 6):
+        return "Right"
+    return ""
+
+
+def _rl_pct_display(right_pct: float, left_pct: float) -> str:
+    """Compact AP ring text: R% / L%."""
+    return f"R{float(right_pct):.0f}% / L{float(left_pct):.0f}%"
+
+
+def _fac_side_display(fac_left_count: int, fac_right_count: int) -> str:
+    """FAP result text: Left or Right (majority across tests)."""
+    left_n = int(fac_left_count or 0)
+    right_n = int(fac_right_count or 0)
+    if left_n <= 0 and right_n <= 0:
+        return ""
+    if left_n > right_n:
+        return "FAP Left"
+    if right_n > left_n:
+        return "FAP Right"
+    return "FAP Left / Right"
+
+
+def compute_aep_fac_from_results(results_list) -> dict:
+    """Action Preference (AP) and First Action Preference (FAP).
+
+    AP: Correct finishes on AP actions only (dual-goal / ``aep_dual_pass``);
+    screens 1–3 = Left, 4–6 = Right. Percentages use raw Left/Right counts
+    (never an average of per-test percentages).
+
+    FAP: per test (``video_index``), the first AP action's Left/Right side.
+    """
+    rows = list(results_list or [])
+    aep_left = aep_right = 0
+    for row in rows:
+        if not _row_is_ap_action(row):
+            continue
+        side = _row_ap_side(row, correct_only=True)
+        if side == "Left":
+            aep_left += 1
+        elif side == "Right":
+            aep_right += 1
+    aep_total = aep_left + aep_right
+
+    by_video = {}
+    for idx, row in enumerate(rows):
+        try:
+            vid = int(row.get("video_index") or 0)
+        except (TypeError, ValueError):
+            vid = 0
+        if vid <= 0:
+            vid = (idx // 4) + 1
+        by_video.setdefault(vid, []).append((idx, row))
+
+    fac_left = fac_right = 0
+    for vid in sorted(by_video):
+        group = sorted(by_video[vid], key=lambda item: item[0])
+        side = ""
+        for _idx, row in group:
+            # First AP action of the test (e.g. C1.T1 first dual-goal action).
+            if not _row_is_ap_action(row):
+                continue
+            side = _row_ap_side(row, correct_only=True)
+            if side:
+                break
+            # First AP action existed but was not Correct — no FAP for this test.
+            side = ""
+            break
+        if side == "Left":
+            fac_left += 1
+        elif side == "Right":
+            fac_right += 1
+    fac_total = fac_left + fac_right
+
+    aep_left_pct = (aep_left / aep_total * 100.0) if aep_total else 0.0
+    aep_right_pct = (aep_right / aep_total * 100.0) if aep_total else 0.0
+    fac_left_pct = (fac_left / fac_total * 100.0) if fac_total else 0.0
+    fac_right_pct = (fac_right / fac_total * 100.0) if fac_total else 0.0
+    fac_side = ""
+    if fac_left > fac_right:
+        fac_side = "Left"
+    elif fac_right > fac_left:
+        fac_side = "Right"
+    elif fac_total > 0:
+        fac_side = "Left / Right"
+    # Show AP/FAP tiles whenever this section has dual-goal AP actions
+    # (even before a Correct stamp), so screens 3/4 are never blank.
+    ap_actions = sum(1 for row in rows if _row_is_ap_action(row))
+    show_ap_fac = bool(aep_total > 0 or fac_total > 0 or ap_actions > 0)
+    fac_display = (
+        _fac_side_display(fac_left, fac_right)
+        or ("FAP -" if show_ap_fac else "")
+    )
+    return {
+        "aep_left": float(aep_left_pct),
+        "aep_right": float(aep_right_pct),
+        "aep_left_n": int(aep_left),
+        "aep_right_n": int(aep_right),
+        "aep_total": int(aep_total),
+        "aep_display": (
+            _rl_pct_display(aep_right_pct, aep_left_pct)
+            if aep_total
+            else ("R0% / L0%" if show_ap_fac else "")
+        ),
+        "fac_left": float(fac_left_pct),
+        "fac_right": float(fac_right_pct),
+        "fac_left_n": int(fac_left),
+        "fac_right_n": int(fac_right),
+        "fac_total": int(fac_total),
+        "fac_side": fac_side,
+        "fac_display": fac_display,
+        "fap_display": fac_display,
+        "fap_side": fac_side,
+        "show_ap_fac": bool(show_ap_fac),
+        "ap_actions": int(ap_actions),
+    }
+
+
 # ---------- results-video metric helpers ----------
 SECTION_METRICS_FILENAME = "video_section_metrics.json"
 
@@ -6900,6 +7207,19 @@ def save_section_metrics_entry(session_folder: str, video_index: int, metrics: d
             "wrong": int(metrics.get("wrong") or 0),
             "miss": int(metrics.get("miss") or 0),
             "total_actions": int(metrics.get("total_actions") or 0),
+            "aep_left": float(metrics.get("aep_left") or 0.0),
+            "aep_right": float(metrics.get("aep_right") or 0.0),
+            "aep_left_n": int(metrics.get("aep_left_n") or 0),
+            "aep_right_n": int(metrics.get("aep_right_n") or 0),
+            "aep_total": int(metrics.get("aep_total") or 0),
+            "aep_display": metrics.get("aep_display") or "",
+            "fac_left": float(metrics.get("fac_left") or 0.0),
+            "fac_right": float(metrics.get("fac_right") or 0.0),
+            "fac_left_n": int(metrics.get("fac_left_n") or 0),
+            "fac_right_n": int(metrics.get("fac_right_n") or 0),
+            "fac_total": int(metrics.get("fac_total") or 0),
+            "fac_side": metrics.get("fac_side") or "",
+            "fac_display": metrics.get("fac_display") or "",
         }
         replaced = False
         for i, old in enumerate(sections):
@@ -7348,6 +7668,7 @@ def summarize_results_section_metrics(results_list):
             results_list, aet_percent, mode=score_mode_for_clock
         )
 
+    pref = compute_aep_fac_from_results(results_list)
     return {
         "total_distance": float(total_distance),
         "correct": correct,
@@ -7363,6 +7684,7 @@ def summarize_results_section_metrics(results_list):
         "aet_display": aet_display,
         "aet_session_display": aet_session_display,
         "finish_balls": bool(clock),
+        **pref,
     }
 
 
@@ -7417,6 +7739,72 @@ def _combine_section_metrics(section_metrics):
         aet_display = "-"
         aet_session_display = None
 
+    aep_boards = [m for m in section_metrics if int(m.get("aep_total") or 0) > 0]
+    fac_boards = [m for m in section_metrics if int(m.get("fac_total") or 0) > 0]
+    if aep_boards:
+        # Sum raw Left/Right counts — never average per-test percentages.
+        aep_left_n = 0
+        aep_right_n = 0
+        for m in aep_boards:
+            try:
+                ln = int(m.get("aep_left_n"))
+                rn = int(m.get("aep_right_n"))
+            except (TypeError, ValueError):
+                ln = rn = -1
+            if ln >= 0 and rn >= 0:
+                aep_left_n += ln
+                aep_right_n += rn
+                continue
+            # Recover counts from stored % × total when raw counts missing.
+            try:
+                tot = int(m.get("aep_total") or 0)
+                lp = float(m.get("aep_left") or 0.0)
+                rp = float(m.get("aep_right") or 0.0)
+            except (TypeError, ValueError):
+                tot = 0
+                lp = rp = 0.0
+            if tot > 0:
+                aep_left_n += int(round(tot * lp / 100.0))
+                aep_right_n += int(round(tot * rp / 100.0))
+        aep_total = aep_left_n + aep_right_n
+        aep_left = (aep_left_n / aep_total * 100.0) if aep_total else 0.0
+        aep_right = (aep_right_n / aep_total * 100.0) if aep_total else 0.0
+        aep_display = _rl_pct_display(aep_right, aep_left) if aep_total else ""
+    else:
+        aep_left = aep_right = 0.0
+        aep_left_n = aep_right_n = 0
+        aep_total = 0
+        aep_display = ""
+    if fac_boards:
+        fac_left_n = sum(int(m.get("fac_left_n") or 0) for m in fac_boards)
+        fac_right_n = sum(int(m.get("fac_right_n") or 0) for m in fac_boards)
+        if fac_left_n + fac_right_n <= 0:
+            # Fall back to per-board FAC side labels.
+            for m in fac_boards:
+                side = str(m.get("fac_side") or "").strip()
+                if side == "Left":
+                    fac_left_n += 1
+                elif side == "Right":
+                    fac_right_n += 1
+        fac_total = fac_left_n + fac_right_n
+        fac_left = (fac_left_n / fac_total * 100.0) if fac_total else 0.0
+        fac_right = (fac_right_n / fac_total * 100.0) if fac_total else 0.0
+        fac_display = _fac_side_display(fac_left_n, fac_right_n)
+        if fac_left_n > fac_right_n:
+            fac_side = "Left"
+        elif fac_right_n > fac_left_n:
+            fac_side = "Right"
+        elif fac_total > 0:
+            fac_side = "Left / Right"
+        else:
+            fac_side = ""
+    else:
+        fac_left = fac_right = 0.0
+        fac_left_n = fac_right_n = 0
+        fac_total = 0
+        fac_display = ""
+        fac_side = ""
+
     return {
         "total_distance": float(total_distance),
         "distance_m_display": int(distance_shown),
@@ -7432,6 +7820,24 @@ def _combine_section_metrics(section_metrics):
         "aet_percent": float(aet_percent),
         "aet_display": aet_display,
         "aet_session_display": aet_session_display,
+        "aep_left": float(aep_left),
+        "aep_right": float(aep_right),
+        "aep_left_n": int(aep_left_n),
+        "aep_right_n": int(aep_right_n),
+        "aep_total": int(aep_total),
+        "aep_display": aep_display,
+        "fac_left": float(fac_left),
+        "fac_right": float(fac_right),
+        "fac_left_n": int(fac_left_n),
+        "fac_right_n": int(fac_right_n),
+        "fac_total": int(fac_total),
+        "fac_side": fac_side,
+        "fac_display": fac_display,
+        "show_ap_fac": bool(
+            aep_total > 0
+            or fac_total > 0
+            or any(bool(m.get("show_ap_fac")) for m in section_metrics)
+        ),
         "section_metrics": section_metrics,
     }
 
@@ -7577,11 +7983,54 @@ def build_results_ring_panel(metrics, field="A"):
         total_actions = correct_n = late_n = 0
     if total_actions > 0 and (correct_n + late_n) > 0 and aac_val <= 0:
         aac_val = ((correct_n + late_n) / total_actions) * 100.0
+    try:
+        aep_total = int(metrics.get("aep_total") or 0)
+    except (TypeError, ValueError):
+        aep_total = 0
+    try:
+        fac_total = int(metrics.get("fac_total") or 0)
+    except (TypeError, ValueError):
+        fac_total = 0
+    aep_left = float(metrics.get("aep_left") or 0.0)
+    aep_right = float(metrics.get("aep_right") or 0.0)
+    fac_left = float(metrics.get("fac_left") or 0.0)
+    fac_right = float(metrics.get("fac_right") or 0.0)
+    show_ap_fac = bool(
+        metrics.get("show_ap_fac")
+        or aep_total > 0
+        or fac_total > 0
+        or int(metrics.get("ap_actions") or 0) > 0
+    )
+    aep_display = metrics.get("aep_display") or (
+        _rl_pct_display(aep_right, aep_left) if aep_total else ("R0% / L0%" if show_ap_fac else "")
+    )
+    fac_side = str(metrics.get("fac_side") or "").strip()
+    fac_display = str(metrics.get("fac_display") or "").strip()
+    if not fac_display and fac_total > 0:
+        if fac_side in ("Left", "Right"):
+            fac_display = f"FAP {fac_side}"
+        elif fac_right > fac_left:
+            fac_display = "FAP Right"
+            fac_side = "Right"
+        elif fac_left > fac_right:
+            fac_display = "FAP Left"
+            fac_side = "Left"
+        else:
+            fac_display = "FAP Left / Right"
+            fac_side = "Left / Right"
+    if not fac_display and show_ap_fac:
+        fac_display = "FAP -"
+    default_ap = "B3" if fid == "B" else "A3"
+    default_fac = "B4" if fid == "B" else "A4"
     return {
         "slice_aet": slices.get("aet") or "A1",
         "slice_acc": slices.get("accuracy") or "A2",
         "slice_ae": slices.get("efficiency") or "A5",
         "slice_disp": slices.get("displacement") or "A6",
+        "slice_ap": slices.get("ap") or slices.get("ap_fac") or default_ap,
+        "slice_fac": slices.get("fac") or default_fac,
+        "slice_ap_fac": slices.get("ap") or slices.get("ap_fac") or default_ap,
+        "show_ap_fac": bool(show_ap_fac),
         "aet_percent": float(metrics.get("aet_percent") or 0.0),
         "aet_display": metrics.get("aet_display") or "-",
         "aet_session_display": metrics.get("aet_session_display"),
@@ -7593,6 +8042,19 @@ def build_results_ring_panel(metrics, field="A"):
         "total_actions": total_actions,
         "economy_percent": economy_percent,
         "distance_shown": distance_shown,
+        "aep_left": aep_left,
+        "aep_right": aep_right,
+        "aep_left_n": int(metrics.get("aep_left_n") or 0),
+        "aep_right_n": int(metrics.get("aep_right_n") or 0),
+        "aep_total": aep_total,
+        "aep_display": aep_display,
+        "fac_left": fac_left,
+        "fac_right": fac_right,
+        "fac_left_n": int(metrics.get("fac_left_n") or 0),
+        "fac_right_n": int(metrics.get("fac_right_n") or 0),
+        "fac_total": fac_total,
+        "fac_side": fac_side,
+        "fac_display": fac_display,
     }
 
 
@@ -7712,11 +8174,16 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             avg_ae = float(metrics.get("avg_ae") or 0.0)
             ae_display = metrics.get("ae_display")
 
+        slice_ap = slices.get("ap") or slices.get("ap_fac") or ("B3" if field_id == "B" else "A3")
+        slice_fac = slices.get("fac") or ("B4" if field_id == "B" else "A4")
         ring_panels = [{
             "slice_aet": slice_aet,
             "slice_acc": slice_acc,
             "slice_ae": slice_ae,
             "slice_disp": slice_disp,
+            "slice_ap": slice_ap,
+            "slice_fac": slice_fac,
+            "slice_ap_fac": slice_ap,
             "aet_percent": aet_percent,
             "aet_display": aet_display,
             "aet_session_display": metrics.get("aet_session_display"),
@@ -7725,6 +8192,19 @@ def generate_results_video_from_results(results_list, output_path, duration_seco
             "aac": aac,
             "economy_percent": economy_percent,
             "distance_shown": distance_shown,
+            "aep_left": float(metrics.get("aep_left") or 0.0),
+            "aep_right": float(metrics.get("aep_right") or 0.0),
+            "aep_left_n": int(metrics.get("aep_left_n") or 0),
+            "aep_right_n": int(metrics.get("aep_right_n") or 0),
+            "aep_total": int(metrics.get("aep_total") or 0),
+            "aep_display": metrics.get("aep_display") or "",
+            "fac_left": float(metrics.get("fac_left") or 0.0),
+            "fac_right": float(metrics.get("fac_right") or 0.0),
+            "fac_left_n": int(metrics.get("fac_left_n") or 0),
+            "fac_right_n": int(metrics.get("fac_right_n") or 0),
+            "fac_total": int(metrics.get("fac_total") or 0),
+            "fac_side": metrics.get("fac_side") or "",
+            "fac_display": metrics.get("fac_display") or "",
         }]
         for panel in (extra_ring_panels or []):
             if isinstance(panel, dict) and panel.get("slice_aet") is not None:
@@ -10357,8 +10837,7 @@ REMOTE_STAFF_ONLY_ACTIONS = {
     "hip-zone-save",
     "hip-zone-reset",
     "sampling-capture",
-    "sampling-save",
-    "sampling-reset",
+    "sampling-live",
     "sampling-start",
     "sampling-stop",
     "instagram-live",

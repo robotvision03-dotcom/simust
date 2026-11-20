@@ -508,13 +508,15 @@ ENTRY_S0_T35_EXTRA = (
     "Opponent-PL-02-B.png",
     "Teammate-PL-01-B.png",
 )
-# Activated S0 Players — pass among teammate + opponents; T3–T5 use L/R side goals.
+# Activated S0 Players — center passes only (pass-left/right are Elite-only).
 ACTIVATED_S0_IMAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "static", "players", "Activated"
 )
 ACTIVATED_S0_PASS_CENTER = ("pass.png", "pass3.png")
 ACTIVATED_S0_PASS_LEFT = "pass-left.png"
 ACTIVATED_S0_PASS_RIGHT = "pass-right.png"
+# Second identical goal for AP / FAP (Left vs Right preference).
+ACTIVATED_S0_PASS_COPY = "pass-copy.png"
 ACTIVATED_S0_TEAMMATE = "Teammate-PL-04-B.png"
 ACTIVATED_S0_OPPONENTS = (
     "Opponent-PL-04-B.png",
@@ -522,6 +524,29 @@ ACTIVATED_S0_OPPONENTS = (
     "Opponent-PL-06-B.png",
 )
 ACTIVATED_S0_ACTIONS_PER_TEST = 10
+# Players C1 AP share (Entry / Activated / High Performance / Elite S0):
+# C1.T1–T2 → 30% dual-goal AP (in order); C1.T3–T5 → 50% (random mix).
+PLAYERS_AP_FRACTION_T12 = 0.30
+PLAYERS_AP_FRACTION_T35 = 0.50
+# Backward-compatible alias (series-aware helper is preferred).
+ACTIVATED_S0_AP_FRACTION = PLAYERS_AP_FRACTION_T12
+# Results rings: AP on screen 3, FAP (First Action Preference) on screen 4.
+ACTIVATED_S0_RESULTS_SCREEN = 3
+ACTIVATED_S0_FAC_RESULTS_SCREEN = 4
+PLAYERS_AP_RESULTS_SCREEN = ACTIVATED_S0_RESULTS_SCREEN
+PLAYERS_AP_FAC_RESULTS_SCREEN = ACTIVATED_S0_FAC_RESULTS_SCREEN
+PLAYERS_AP_FAP_RESULTS_SCREEN = ACTIVATED_S0_FAC_RESULTS_SCREEN
+# Lit stills per field during Players actions (no empty seats in the lit set).
+PLAYERS_LIT_SCREENS_ENTRY = 4
+PLAYERS_LIT_SCREENS_ACTIVATED = 5
+PLAYERS_LIT_SCREENS_HP = 6
+# Play may use any arena 1–6 (including 3/4). Results still paint AP/FAP on 3/4.
+ACTIVATED_S0_RESERVED_SCREENS = ()
+ENTRY_S0_PASS_COPY = "pass-copy.png"
+HP_PLAYERS_PASS_COPY = "pass-copy.png"
+# AP halves: 1–3 Left, 4–6 Right (matches scoring).
+ACTIVATED_S0_LEFT_ARENAS = (1, 2, 3)
+ACTIVATED_S0_RIGHT_ARENAS = (4, 5, 6)
 # High Performance Players (operator C1): Elite-style passes + offside traps.
 HP_PLAYERS_IMAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "static", "players", "high_performance"
@@ -583,6 +608,9 @@ ELITE_PLAYERS_TEAMMATES = (
 )
 ELITE_PLAYERS_ACTIONS_PER_TEST = 10
 ELITE_PLAYERS_GOALS_T45 = 14
+ELITE_PLAYERS_PASS_COPY = "pass-copy.png"
+ELITE_PLAYERS_PASS_LEFT = "pass-left.png"
+ELITE_PLAYERS_PASS_RIGHT = "pass-right.png"
 # Lit screens per field: T1=6 total, T2=8 total, T3–T5=all 12.
 ELITE_PLAYERS_PER_FIELD = {1: 3, 2: 4, 3: 6, 4: 6, 5: 6}
 # Operator / beginning-info content names — same folders as the frontend picker.
@@ -3325,9 +3353,8 @@ def _entry_s0_screen_assignment(
 def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
     """Entry S0.T1–T5: Foundation-style finish_balls with static player PNGs.
 
-    10 actions per test. S0.T1–T2: 3 unique images (pass + 2 opponents) on 3 of
-    6 screens with opponents never adjacent. S0.T3–T5: 5 unique images on 5 of
-    6 screens. Placement and image seats reshuffle every action per field.
+    Always 4 lit screens. C1.T1–T2: 30% dual-goal AP in order; C1.T3–T5: 50%
+    AP shuffled. AP uses pass + pass-copy on opposite halves (1–3 vs 4–6).
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
@@ -3336,29 +3363,49 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
     pass_path, distractors = _entry_s0_image_paths(series)
     if not pass_path or not distractors:
         return []
-    separate_opponents = series <= 2
+    copy_path = os.path.join(ENTRY_S0_IMAGE_DIR, ENTRY_S0_PASS_COPY)
+    if not os.path.isfile(copy_path):
+        logger.error("Entry S0 missing pass-copy under %s", ENTRY_S0_IMAGE_DIR)
+        return []
     actions_per_test = int(ENTRY_S0_ACTIONS_PER_TEST)
+    lit_count = int(PLAYERS_LIT_SCREENS_ENTRY)
     on_ms, gap_ms = _entry_series_timing_ms(series)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
+        ap_plan = _players_ap_plan(actions_per_test, series)
         for action_in_set in range(1, actions_per_test + 1):
+            use_ap = bool(ap_plan[action_in_set - 1])
             images = {}
             field_screens = {}
             labels = []
             for fid in active:
-                assignment, goal_screen = _entry_s0_screen_assignment(
+                assignment, goal_screen, copy_screen = _players_screen_assignment(
                     pass_path,
-                    distractors,
-                    separate_opponents=separate_opponents,
+                    copy_path if use_ap else "",
+                    list(distractors),
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
                 )
+                if not assignment or not goal_screen:
+                    continue
+                if use_ap and not copy_screen:
+                    continue
                 for screen, path in assignment.items():
                     sid = _hw_screen_for_field(fid, (screen, screen))
                     if sid is not None:
                         images[sid] = path
                 goal_sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
-                if goal_sid is not None:
+                if goal_sid is None:
+                    continue
+                if use_ap:
+                    copy_sid = _hw_screen_for_field(fid, (copy_screen, copy_screen))
+                    if copy_sid is None:
+                        continue
+                    field_screens[fid] = [goal_sid, copy_sid]
+                    labels.append(f"{fid}:pass@{goal_sid}+copy@{copy_sid}")
+                else:
                     field_screens[fid] = [goal_sid]
-                labels.append(f"{fid}:pass@{goal_screen}")
+                    labels.append(f"{fid}:pass@{goal_screen}")
             if not field_screens or not images:
                 continue
             playlist.append({
@@ -3381,9 +3428,15 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
+                "aep_dual_pass": bool(use_ap),
+                "ap_action": bool(use_ap),
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "label": (
                     f"Entry S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{actions_per_test} "
+                    f"{'AP ' if use_ap else ''}"
                     f"{' '.join(labels)} on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
@@ -3393,6 +3446,15 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "series_group": 0,
                 "series_num": int(series),
             })
+    ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
+    logger.info(
+        "Entry C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s)",
+        series,
+        len(playlist),
+        ap_n,
+        100.0 * _players_ap_fraction(series),
+        lit_count,
+    )
     return _stamp_finish_balls(playlist)
 
 
@@ -3427,61 +3489,122 @@ def _activated_s0_pass_arenas(side: str) -> List[int]:
     return list(range(1, ENTRY_S0_SCREEN_COUNT + 1))
 
 
+def _activated_s0_side_half(arena: int) -> str:
+    """Arena 1–3 → Left; 4–6 → Right (AP / FAP scoring)."""
+    try:
+        n = int(arena)
+    except (TypeError, ValueError):
+        return ""
+    if n in ACTIVATED_S0_LEFT_ARENAS:
+        return "L"
+    if n in ACTIVATED_S0_RIGHT_ARENAS:
+        return "R"
+    return ""
+
+
+def _activated_s0_reserved() -> set:
+    """Play no longer blanks 3/4; results still use those tiles after the test."""
+    return {int(n) for n in (ACTIVATED_S0_RESERVED_SCREENS or ())}
+
+
+def _players_screen_assignment(
+    pass_path: str,
+    pass_copy_path: str,
+    distractor_paths: List[str],
+    lit_count: int,
+    side: str = "",
+    dual_ap: bool = False,
+) -> Tuple[Dict[int, str], int, int]:
+    """Place pass (+ optional pass-copy) and fill exactly ``lit_count`` arenas.
+
+    dual_ap: two goals on opposite halves (1–3 vs 4–6). Any seat may light —
+    including 3 and 4 — so play is not stuck with those tiles always empty.
+    """
+    if not pass_path:
+        return {}, 0, 0
+    want = max(1, min(6, int(lit_count or 1)))
+    distractors = list(distractor_paths or [])
+    random.shuffle(distractors)
+    side = str(side or "").upper()[:1]
+    left_pool = list(ACTIVATED_S0_LEFT_ARENAS)
+    right_pool = list(ACTIVATED_S0_RIGHT_ARENAS)
+    if side == "L":
+        pass_pool = [n for n in _activated_s0_pass_arenas("L")]
+        primary_half = "L"
+    elif side == "R":
+        pass_pool = [n for n in _activated_s0_pass_arenas("R")]
+        primary_half = "R"
+    else:
+        pass_pool = list(left_pool) + list(right_pool)
+        primary_half = ""
+    if not pass_pool:
+        return {}, 0, 0
+    random.shuffle(pass_pool)
+    goal_screen = int(pass_pool[0])
+
+    copy_screen = 0
+    if dual_ap and pass_copy_path:
+        physical = _activated_s0_side_half(goal_screen) or primary_half or "L"
+        copy_pool = list(right_pool) if physical == "L" else list(left_pool)
+        copy_pool = [n for n in copy_pool if n != goal_screen]
+        if not copy_pool:
+            copy_pool = [
+                n for n in range(1, ENTRY_S0_SCREEN_COUNT + 1) if n != goal_screen
+            ]
+        if not copy_pool:
+            return {}, 0, 0
+        random.shuffle(copy_pool)
+        copy_screen = int(copy_pool[0])
+
+    used = {goal_screen}
+    if copy_screen:
+        used.add(copy_screen)
+    assignment = {int(goal_screen): pass_path}
+    if copy_screen and pass_copy_path:
+        assignment[int(copy_screen)] = pass_copy_path
+
+    leftover = [n for n in range(1, ENTRY_S0_SCREEN_COUNT + 1) if n not in used]
+    random.shuffle(leftover)
+    need = max(0, want - len(assignment))
+    # Prefer unique distractors; reuse if the pool is short so lit_count is met.
+    fill_paths = list(distractors)
+    while len(fill_paths) < need and distractors:
+        fill_paths.extend(distractors)
+    if len(fill_paths) < need and pass_path:
+        # Last resort: still fill seats (should be rare).
+        fill_paths.extend([pass_path] * need)
+    for screen, path in zip(leftover[:need], fill_paths[:need]):
+        if not path:
+            continue
+        assignment[int(screen)] = path
+    if len(assignment) < want:
+        return {}, 0, 0
+    return assignment, int(goal_screen), int(copy_screen)
+
+
 def _activated_s0_screen_assignment(
     pass_path: str,
-    teammate_path: str,
+    pass_copy_path: str,
     opponent_paths: List[str],
     side: str = "",
-) -> Tuple[Dict[int, str], int]:
-    """5 unique images on 5 of 6 screens; pass never beside the teammate.
-
-    When side is L/R, the pass seat is chosen from arenas that have that side goal.
-    """
-    screens = list(range(1, ENTRY_S0_SCREEN_COUNT + 1))
-    side = str(side or "").upper()[:1]
-    pass_pool = _activated_s0_pass_arenas(side) if side in ("L", "R") else list(screens)
-    if not pass_pool or not pass_path or not teammate_path:
-        return {}, 1
-    opponents = list(opponent_paths or [])[:3]
-    if len(opponents) < 3:
-        return {}, 1
-
-    random.shuffle(pass_pool)
-    preferred = []
-    fallback = []
-    for goal in pass_pool:
-        mate_choices = [
-            s for s in screens
-            if s != goal and not _entry_s0_screens_adjacent(s, goal)
-        ]
-        if mate_choices:
-            preferred.append((goal, mate_choices))
-        else:
-            leftover = [s for s in screens if s != goal]
-            if leftover:
-                fallback.append((goal, leftover))
-    choices = preferred or fallback
-    if not choices:
-        return {}, 1
-    goal_screen, mate_pool = random.choice(choices)
-    teammate_screen = int(random.choice(mate_pool))
-    leftover = [s for s in screens if s not in (goal_screen, teammate_screen)]
-    random.shuffle(leftover)
-    lit = leftover[:3]
-    if len(lit) < 3:
-        return {}, 1
-    random.shuffle(opponents)
-    assignment = {
-        int(goal_screen): pass_path,
-        int(teammate_screen): teammate_path,
-    }
-    for screen, path in zip(lit, opponents):
-        assignment[int(screen)] = path
-    return assignment, int(goal_screen)
+    dual_ap: bool = True,
+    lit_count: int = None,
+) -> Tuple[Dict[int, str], int, int]:
+    """Activated / shared Players seating (default 5 lit screens)."""
+    if lit_count is None:
+        lit_count = int(PLAYERS_LIT_SCREENS_ACTIVATED)
+    return _players_screen_assignment(
+        pass_path,
+        pass_copy_path,
+        opponent_paths,
+        lit_count=int(lit_count),
+        side=side,
+        dual_ap=bool(dual_ap),
+    )
 
 
 def _activated_s0_side_plan(actions_per_test: int) -> List[bool]:
-    """Per test: 5 center passes + 5 L/R side targets, shuffled."""
+    """Per test: half center / half L/R side targets among non-reserved seats."""
     total = max(1, int(actions_per_test or 10))
     side_count = total // 2
     plan = [False] * (total - side_count) + [True] * side_count
@@ -3489,33 +3612,66 @@ def _activated_s0_side_plan(actions_per_test: int) -> List[bool]:
     return plan
 
 
+def _players_ap_fraction(series_num: int) -> float:
+    """C1.T1–T2 → 30% AP actions; C1.T3–T5 → 50%."""
+    series = max(1, min(5, int(series_num or 1)))
+    return float(PLAYERS_AP_FRACTION_T12 if series <= 2 else PLAYERS_AP_FRACTION_T35)
+
+
+def _players_ap_count(actions_per_test: int, series_num: int) -> int:
+    total = max(1, int(actions_per_test or 10))
+    frac = _players_ap_fraction(series_num)
+    ap_count = int(round(total * frac))
+    if frac > 0 and ap_count < 1:
+        ap_count = 1
+    if ap_count > total:
+        ap_count = total
+    return int(ap_count)
+
+
+def _players_ap_plan(actions_per_test: int, series_num: int = 1) -> List[bool]:
+    """Per-test dual-goal AP seats (True) vs normal single-pass (False).
+
+    C1.T1–T2: AP actions run in order first, then normal actions.
+    C1.T3–T5: AP seats are shuffled randomly through the test.
+    """
+    total = max(1, int(actions_per_test or 10))
+    ap_count = _players_ap_count(total, series_num)
+    plan = [True] * ap_count + [False] * (total - ap_count)
+    if int(series_num or 1) >= 3:
+        random.shuffle(plan)
+    return plan
+
+
+def _activated_s0_ap_plan(actions_per_test: int, series_num: int = 1) -> List[bool]:
+    """Activated alias for shared Players AP seat plan."""
+    return _players_ap_plan(actions_per_test, series_num)
+
+
 def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
     """Activated S0.T1–T5 Players (operator C1.T1–T5).
 
-    C1.T1–T2: center pass (pass / pass3) + teammate + 3 opponents.
-    C1.T3–T5: every test includes pass-left/pass-right side targets — 5 center
-    + 5 L/R (A1L / A2L… / A6R) shuffled across the 10 actions.
+    Always 5 lit screens (any of 1–6). Center passes only — no pass-left/right
+    here (those belong on Elite). C1.T1–T2: 30% dual-goal AP in order;
+    C1.T3–T5: 50% AP shuffled. AP = pass + pass-copy on opposite halves.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
     series = max(1, min(5, int(series_num or 1)))
     center_passes = _activated_s0_existing(ACTIVATED_S0_PASS_CENTER)
-    left_paths = _activated_s0_existing([ACTIVATED_S0_PASS_LEFT])
-    right_paths = _activated_s0_existing([ACTIVATED_S0_PASS_RIGHT])
-    teammates = _activated_s0_existing([ACTIVATED_S0_TEAMMATE])
+    copy_paths = _activated_s0_existing([ACTIVATED_S0_PASS_COPY])
     opponents = _activated_s0_existing(ACTIVATED_S0_OPPONENTS)
-    if len(opponents) < 3 or not teammates:
+    teammate = _activated_s0_existing([ACTIVATED_S0_TEAMMATE])
+    if len(opponents) < 2:
         logger.error(
-            "Activated S0 Players missing teammate/opponents under %s",
+            "Activated S0 Players missing opponents under %s",
             ACTIVATED_S0_IMAGE_DIR,
         )
         return []
-    # Side targets need pass-left / pass-right assets (C1.T3–T5 and in-session T3–T5).
-    if (not left_paths or not right_paths) and series >= 3:
+    if not copy_paths:
         logger.error(
-            "Activated C1.T%s needs pass-left.png and pass-right.png in %s",
-            series,
+            "Activated S0 Players missing pass-copy under %s",
             ACTIVATED_S0_IMAGE_DIR,
         )
         return []
@@ -3525,38 +3681,30 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
             ACTIVATED_S0_IMAGE_DIR,
         )
         return []
-    can_side = bool(left_paths and right_paths)
+    distractors = list(opponents) + list(teammate)
     actions_per_test = int(ACTIVATED_S0_ACTIONS_PER_TEST)
+    lit_count = int(PLAYERS_LIT_SCREENS_ACTIVATED)
     on_ms, gap_ms = _entry_series_timing_ms(series)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
-        # C1.T3–T5 levels (series≥3): every test mixes L/R.
-        # Also each session's tests T3–T5 always include L/R side targets.
-        include_side_targets = bool(can_side and (series >= 3 or test_num >= 3))
-        side_plan = (
-            _activated_s0_side_plan(actions_per_test)
-            if include_side_targets
-            else [False] * actions_per_test
-        )
+        ap_plan = _players_ap_plan(actions_per_test, series)
         for action_in_set in range(1, actions_per_test + 1):
-            use_side = bool(side_plan[action_in_set - 1])
+            use_ap = bool(ap_plan[action_in_set - 1])
             images = {}
             field_screens = {}
             labels = []
             for fid in active:
-                if use_side:
-                    side = random.choice(("L", "R"))
-                    pass_path = left_paths[0] if side == "L" else right_paths[0]
-                else:
-                    side = ""
-                    pass_path = random.choice(center_passes)
-                assignment, goal_screen = _activated_s0_screen_assignment(
+                pass_path = random.choice(center_passes)
+                assignment, goal_screen, copy_screen = _players_screen_assignment(
                     pass_path,
-                    teammates[0],
-                    opponents,
-                    side=side,
+                    copy_paths[0] if use_ap else "",
+                    distractors,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
                 )
-                if not assignment:
+                if not assignment or not goal_screen:
+                    continue
+                if use_ap and not copy_screen:
                     continue
                 for screen, path in assignment.items():
                     sid = _hw_screen_for_field(fid, (screen, screen))
@@ -3565,10 +3713,20 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 goal_sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
                 if goal_sid is None:
                     continue
-                if side in ("L", "R"):
-                    goal_sid = f"{goal_sid}{side}"
-                field_screens[fid] = [goal_sid]
-                labels.append(f"{fid}:{os.path.basename(pass_path)}@{goal_sid}")
+                if use_ap:
+                    copy_sid = _hw_screen_for_field(fid, (copy_screen, copy_screen))
+                    if copy_sid is None:
+                        continue
+                    field_screens[fid] = [goal_sid, copy_sid]
+                    labels.append(
+                        f"{fid}:{os.path.basename(pass_path)}@{goal_sid}"
+                        f"+copy@{copy_sid}"
+                    )
+                else:
+                    field_screens[fid] = [goal_sid]
+                    labels.append(
+                        f"{fid}:{os.path.basename(pass_path)}@{goal_sid}"
+                    )
             if not field_screens or not images:
                 continue
             playlist.append({
@@ -3591,10 +3749,16 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
-                "side_goals": bool(use_side),
+                "side_goals": False,
+                "aep_dual_pass": bool(use_ap),
+                "ap_action": bool(use_ap),
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "label": (
                     f"Activated S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{actions_per_test} "
+                    f"{'AP ' if use_ap else ''}"
                     f"{' '.join(labels)} on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
@@ -3604,14 +3768,15 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "series_group": 0,
                 "series_num": int(series),
             })
-    sided = sum(1 for step in playlist if step.get("side_goals"))
-    if sided:
-        logger.info(
-            "Activated C1.T%s Players: %s actions (%s pass-left/right side targets)",
-            series,
-            len(playlist),
-            sided,
-        )
+    ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
+    logger.info(
+        "Activated C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s)",
+        series,
+        len(playlist),
+        ap_n,
+        100.0 * _players_ap_fraction(series),
+        lit_count,
+    )
     return _stamp_finish_balls(playlist)
 
 
@@ -3652,22 +3817,38 @@ def _hp_players_offside_count(series_num: int) -> int:
 
 
 def _hp_players_action_plan(series_num: int) -> List[dict]:
-    """10 actions: offside traps mixed with normal Elite-style passes."""
-    trap_count = _hp_players_offside_count(series_num)
+    """10 actions: AP dual-goal, offside traps, and normal passes (never AP+offside).
+
+    C1.T1–T2: AP actions first in order, then traps/normal shuffled.
+    C1.T3–T5: full mix shuffled (AP seats random through the test).
+    """
+    total = int(HP_PLAYERS_ACTIONS_PER_TEST)
+    ap_count = _players_ap_count(total, series_num)
+    trap_want = _hp_players_offside_count(series_num)
+    # Offside uses posts on 3/4 — never share an action with AP dual goals.
+    trap_count = min(int(trap_want), max(0, total - ap_count))
+    normal_count = max(0, total - ap_count - trap_count)
     rows = list(HP_PLAYERS_OFFSIDE_TABLE[:trap_count])
     random.shuffle(rows)
-    plan = [{"kind": "offside", "row": row} for row in rows]
-    plan.extend({"kind": "pass"} for _ in range(HP_PLAYERS_ACTIONS_PER_TEST - trap_count))
-    random.shuffle(plan)
+    ap_rows = [{"kind": "ap"} for _ in range(ap_count)]
+    rest = [{"kind": "offside", "row": row} for row in rows]
+    rest.extend({"kind": "pass"} for _ in range(normal_count))
+    if int(series_num or 1) >= 3:
+        plan = ap_rows + rest
+        random.shuffle(plan)
+    else:
+        random.shuffle(rest)
+        plan = ap_rows + rest
     return plan
 
 
 def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[dict]:
     """High Performance S0 Players (operator C1.T1–T5).
 
-    Same Elite-style pass game (pass + teammate + opponents), with offside
-    traps mixed in. Posts are always on screens 3 and 4. C1.T1–T2 have 4
-    traps from the table. C1.T3–T5 use all 6 traps. Field B mirrors Field A.
+    Elite-style pass game with offside traps and dual-goal AP (never on the
+    same action). C1.T1–T2: 30% AP + up to 4 traps; C1.T3–T5: 50% AP + traps
+    on the remaining seats (posts stay on 3/4 for offside only). Field B
+    mirrors Field A.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
@@ -3676,6 +3857,7 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
         HP_PLAYERS_LEFT_POST,
         HP_PLAYERS_RIGHT_POST,
         HP_PLAYERS_PASS,
+        HP_PLAYERS_PASS_COPY,
         HP_PLAYERS_TEAMMATE,
         *HP_PLAYERS_OPPONENTS,
         HP_PLAYERS_CROSS_RIGHT,
@@ -3686,6 +3868,12 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
     )
     paths = _hp_players_image_paths(names)
     if not paths:
+        return []
+    if HP_PLAYERS_PASS_COPY not in paths:
+        logger.error(
+            "High Performance Players missing pass-copy under %s",
+            HP_PLAYERS_IMAGE_DIR,
+        )
         return []
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
@@ -3699,7 +3887,9 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
             images = {}
             field_screens = {}
             goal = 1
+            copy_goal = 0
             kind = str(step.get("kind") or "pass")
+            use_ap = kind == "ap"
             if kind == "offside":
                 seat_names, goal = _hp_players_offside_seat(step.get("row"))
                 seat = {screen: paths[name] for screen, name in seat_names.items()}
@@ -3712,12 +3902,21 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                     if goal_sid is not None:
                         field_screens[fid] = [goal_sid]
             else:
-                assignment, goal = _activated_s0_screen_assignment(
+                # Always 6 lit screens. AP: pass + pass-copy on opposite halves.
+                # Normal: pass goal + teammate/opponents fill the wall (no side passes).
+                distractors = [paths[name] for name in HP_PLAYERS_OPPONENTS]
+                if HP_PLAYERS_TEAMMATE in paths:
+                    distractors.append(paths[HP_PLAYERS_TEAMMATE])
+                assignment, goal, copy_goal = _players_screen_assignment(
                     paths[HP_PLAYERS_PASS],
-                    paths[HP_PLAYERS_TEAMMATE],
-                    [paths[name] for name in HP_PLAYERS_OPPONENTS],
+                    paths[HP_PLAYERS_PASS_COPY] if use_ap else "",
+                    distractors,
+                    lit_count=int(PLAYERS_LIT_SCREENS_HP),
+                    dual_ap=use_ap,
                 )
-                if not assignment:
+                if not assignment or not goal:
+                    continue
+                if use_ap and not copy_goal:
                     continue
                 for fid in active:
                     for screen, path in assignment.items():
@@ -3725,7 +3924,16 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                         if sid is not None:
                             images[sid] = path
                     goal_sid = _hw_screen_for_field(fid, (int(goal), int(goal)))
-                    if goal_sid is not None:
+                    if goal_sid is None:
+                        continue
+                    if use_ap:
+                        copy_sid = _hw_screen_for_field(
+                            fid, (int(copy_goal), int(copy_goal))
+                        )
+                        if copy_sid is None:
+                            continue
+                        field_screens[fid] = [goal_sid, copy_sid]
+                    else:
                         field_screens[fid] = [goal_sid]
             if not field_screens or not images:
                 continue
@@ -3750,10 +3958,18 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
                 "offside_trap": kind == "offside",
+                "aep_dual_pass": bool(use_ap),
+                "ap_action": bool(use_ap),
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "label": (
                     f"High Performance S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{HP_PLAYERS_ACTIONS_PER_TEST} "
-                    f"{kind} goal {goal} on={on_ms}ms gap={gap_ms}ms"
+                    f"{'AP ' if use_ap else ''}"
+                    f"{kind} goal {goal}"
+                    f"{('+'+str(copy_goal)) if use_ap and copy_goal else ''} "
+                    f"on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
                     f"image://HighPerformance/S0.T{series}/"
@@ -3762,6 +3978,16 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                 "series_group": 0,
                 "series_num": int(series),
             })
+    ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
+    trap_n = sum(1 for step in playlist if step.get("offside_trap"))
+    logger.info(
+        "High Performance C1.T%s Players: %s actions (%s AP @%.0f%%, %s offside)",
+        series,
+        len(playlist),
+        ap_n,
+        100.0 * _players_ap_fraction(series),
+        trap_n,
+    )
     return _stamp_finish_balls(playlist)
 
 
@@ -3796,6 +4022,37 @@ def _elite_players_goal_counts(series: int) -> List[int]:
     return plan[:total]
 
 
+def _elite_players_action_goal_plan(
+    series: int, ap_plan: List[bool]
+) -> List[int]:
+    """Goal mouths per action. AP seats are always dual (2); others keep band rules."""
+    total = int(ELITE_PLAYERS_ACTIONS_PER_TEST)
+    flags = list(ap_plan or [])
+    if len(flags) < total:
+        flags = flags + [False] * (total - len(flags))
+    flags = flags[:total]
+    ap_count = sum(1 for f in flags if f)
+    non_ap = total - ap_count
+    if int(series) <= 3:
+        non_goals = [1] * non_ap
+    else:
+        # Keep similar density to the classic 14-goal T4–T5 mix on non-AP seats.
+        target = max(non_ap, int(round(float(ELITE_PLAYERS_GOALS_T45) * non_ap / float(total))))
+        doubles = min(non_ap, max(0, target - non_ap))
+        singles = max(0, non_ap - doubles)
+        non_goals = [1] * singles + [2] * doubles
+        random.shuffle(non_goals)
+    out = []
+    ni = 0
+    for use_ap in flags:
+        if use_ap:
+            out.append(2)
+        else:
+            out.append(int(non_goals[ni]) if ni < len(non_goals) else 1)
+            ni += 1
+    return out
+
+
 def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: bool) -> List[str]:
     """Return unique pass image paths for this action."""
     if single_only or int(count) <= 1:
@@ -3810,6 +4067,75 @@ def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: b
         random.shuffle(chosen)
         return chosen
     return list(random.sample(pool, need))
+
+
+def _elite_side_pass_path(name: str) -> str:
+    """Elite side passes live under Elite/; fall back to Activated art if needed."""
+    for base in (ELITE_PLAYERS_IMAGE_DIR, ACTIVATED_S0_IMAGE_DIR):
+        path = os.path.join(base, str(name or ""))
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def _elite_players_assign_ap_action(
+    series: int,
+    paths: Dict[str, str],
+    distractors: List[str],
+) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """Dual-goal AP on opposite halves across A+B (any seats 1–6 may light)."""
+    pass_path = paths.get(ELITE_PLAYERS_PASS1)
+    copy_path = paths.get(ELITE_PLAYERS_PASS_COPY) or paths.get(ELITE_PLAYERS_PASS2)
+    if not pass_path or not copy_path:
+        return {}, {}
+    left_seats = [
+        (fid, n) for fid in ("A", "B") for n in ACTIVATED_S0_LEFT_ARENAS
+    ]
+    right_seats = [
+        (fid, n) for fid in ("A", "B") for n in ACTIVATED_S0_RIGHT_ARENAS
+    ]
+    if not left_seats or not right_seats:
+        return {}, {}
+    random.shuffle(left_seats)
+    random.shuffle(right_seats)
+    left_fid, left_arena = left_seats[0]
+    right_fid, right_arena = right_seats[0]
+    images: Dict[str, str] = {}
+    field_screens: Dict[str, List[str]] = {}
+
+    def _sid(fid: str, arena: int) -> Optional[str]:
+        return _hw_screen_for_field(fid, (arena, arena))
+
+    def _place(fid: str, arena: int, path: str, is_goal: bool = False):
+        sid = _sid(fid, int(arena))
+        if sid is None or not path:
+            return
+        images[sid] = path
+        if is_goal:
+            field_screens.setdefault(fid, []).append(sid)
+
+    _place(left_fid, left_arena, pass_path, is_goal=True)
+    _place(right_fid, right_arena, copy_path, is_goal=True)
+    used = {pass_path, copy_path}
+    total_images = int(ELITE_PLAYERS_PER_FIELD.get(int(series), 6)) * 2
+    if int(series) >= 3:
+        total_images = 12
+    free = [
+        (fid, n)
+        for fid in ("A", "B")
+        for n in range(1, 7)
+        if _sid(fid, n) not in images
+    ]
+    random.shuffle(free)
+    pool = [p for p in (distractors or []) if p not in used]
+    random.shuffle(pool)
+    for (fid, arena), path in zip(free, pool):
+        if len(images) >= total_images:
+            break
+        _place(fid, arena, path)
+    if len(field_screens) < 1 or sum(len(v) for v in field_screens.values()) < 2:
+        return {}, {}
+    return images, field_screens
 
 
 def _elite_players_assign_action(
@@ -3968,19 +4294,33 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
 
     C1.T1: 6 images on 12 screens (3/field), pass1 alternating B/A, Entry timing.
     C1.T2: 8 images on 12 screens, same pass1 game.
-    C1.T3–T5: 12 images on 12 screens. T3 uses pass1 only; T4–T5 use pass1/2/3
-    for 14 goals across 10 actions (all listed goals must score to advance).
+    C1.T3–T5: 12 images; pass-left / pass-right side targets on non-AP seats
+    (Activated / HP do not use those). C1.T1–T2: 30% dual-goal AP in order;
+    C1.T3–T5: 50% AP shuffled. AP advances on the first finish.
     """
     names = (
         *ELITE_PLAYERS_PASSES,
+        ELITE_PLAYERS_PASS_COPY,
         *ELITE_PLAYERS_OPPONENTS,
         *ELITE_PLAYERS_DEFENDING,
         *ELITE_PLAYERS_TEAMMATES,
     )
     paths = _elite_players_image_paths(names)
+    left_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_LEFT)
+    right_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_RIGHT)
+    if left_path:
+        paths[ELITE_PLAYERS_PASS_LEFT] = left_path
+    if right_path:
+        paths[ELITE_PLAYERS_PASS_RIGHT] = right_path
     if ELITE_PLAYERS_PASS1 not in paths:
         logger.error(
             "Elite Players missing pass1.png under %s", ELITE_PLAYERS_IMAGE_DIR
+        )
+        return []
+    if ELITE_PLAYERS_PASS_COPY not in paths and ELITE_PLAYERS_PASS2 not in paths:
+        logger.error(
+            "Elite Players missing pass-copy (or pass2) under %s",
+            ELITE_PLAYERS_IMAGE_DIR,
         )
         return []
     distractors = _elite_players_distractor_pool(paths)
@@ -3990,31 +4330,60 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
     single_only = series <= 3
+    can_side = bool(left_path and right_path and series >= 3)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
-        goal_counts = _elite_players_goal_counts(series)
-        if sum(goal_counts) != (
-            ELITE_PLAYERS_ACTIONS_PER_TEST if single_only else ELITE_PLAYERS_GOALS_T45
-        ):
-            # Keep T4/T5 at 14 even if shuffle is patched oddly.
-            if not single_only:
-                goal_counts = [1] * 6 + [2] * 4
+        ap_plan = _players_ap_plan(ELITE_PLAYERS_ACTIONS_PER_TEST, series)
+        goal_counts = _elite_players_action_goal_plan(series, ap_plan)
+        side_plan = (
+            _activated_s0_side_plan(ELITE_PLAYERS_ACTIONS_PER_TEST)
+            if can_side
+            else [False] * ELITE_PLAYERS_ACTIONS_PER_TEST
+        )
         for action_in_set, goal_n in enumerate(goal_counts, start=1):
-            pass_list = _elite_players_pick_passes(goal_n, paths, single_only)
-            if not pass_list:
-                continue
-            images, field_screens = _elite_players_assign_action(
-                series,
-                action_in_set,
-                pass_list,
-                distractors,
-                first_action=(series == 1 and action_in_set == 1),
-            )
+            use_ap = bool(ap_plan[action_in_set - 1])
+            use_side = bool(not use_ap and side_plan[action_in_set - 1])
+            side = ""
+            if use_ap:
+                images, field_screens = _elite_players_assign_ap_action(
+                    series, paths, distractors
+                )
+            else:
+                if use_side:
+                    side = random.choice(("L", "R"))
+                    sided = left_path if side == "L" else right_path
+                    pass_list = [sided]
+                else:
+                    pass_list = _elite_players_pick_passes(goal_n, paths, single_only)
+                if not pass_list:
+                    continue
+                images, field_screens = _elite_players_assign_action(
+                    series,
+                    action_in_set,
+                    pass_list,
+                    distractors,
+                    first_action=(
+                        series == 1
+                        and action_in_set == 1
+                        and not any(ap_plan[: action_in_set - 1])
+                    ),
+                )
+                if use_side and side and field_screens:
+                    # Stamp L/R mouth tokens so realtime aims the sided cylinder.
+                    stamped = {}
+                    for fid, goals in field_screens.items():
+                        stamped[fid] = [
+                            (f"{g}{side}" if not str(g).upper().endswith(("L", "R")) else g)
+                            for g in (goals or [])
+                        ]
+                    field_screens = stamped
             if not field_screens or not images:
                 continue
             goals = []
             for fid in ("A", "B"):
                 goals.extend(field_screens.get(fid) or [])
+            # AP: first finish measures preference — do not wait for both mouths.
+            require_all = not use_ap
             playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
@@ -4032,15 +4401,23 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
                 "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
                 "uniform_player_stills": True,
                 "combined_field": True,
-                "require_all_goals": True,
+                "require_all_goals": bool(require_all),
                 "hold_full_on": True,
                 "arena_pair": (1, 1),
                 "field_screens": field_screens,
                 "screen_images": dict(images),
                 "gap_screen_images": dict(images),
+                "side_goals": bool(use_side),
+                "aep_dual_pass": bool(use_ap),
+                "ap_action": bool(use_ap),
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "label": (
                     f"Elite S0.T{series} T{test_num}/{ENTRY_TEST_COUNT} "
                     f"a{action_in_set}/{ELITE_PLAYERS_ACTIONS_PER_TEST} "
+                    f"{'AP ' if use_ap else ''}"
+                    f"{'side ' if use_side else ''}"
                     f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
@@ -4055,8 +4432,18 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
         if not isinstance(entry, dict):
             continue
         entry["combined_field"] = True
-        entry["require_all_goals"] = True
         entry["hold_full_on"] = True
+        # Preserve per-action require_all (False on AP dual-goal preference seats).
+        if "require_all_goals" not in entry:
+            entry["require_all_goals"] = not bool(entry.get("aep_dual_pass"))
+    ap_n = sum(1 for step in stamped if step.get("aep_dual_pass"))
+    logger.info(
+        "Elite C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%)",
+        series,
+        len(stamped),
+        ap_n,
+        100.0 * _players_ap_fraction(series),
+    )
     return stamped
 
 
@@ -5825,6 +6212,69 @@ def _result_ring_specs(panel) -> dict:
         [f"{metres}m" if metres > 0 else "-"],
         panel.get("economy_percent"),
     )
+    try:
+        aep_total = int(panel.get("aep_total") or 0)
+    except (TypeError, ValueError):
+        aep_total = 0
+    try:
+        fac_total = int(panel.get("fac_total") or 0)
+    except (TypeError, ValueError):
+        fac_total = 0
+    try:
+        aep_right = float(panel.get("aep_right") or 0.0)
+    except (TypeError, ValueError):
+        aep_right = 0.0
+    try:
+        aep_left = float(panel.get("aep_left") or 0.0)
+    except (TypeError, ValueError):
+        aep_left = 0.0
+    try:
+        fac_right = float(panel.get("fac_right") or 0.0)
+    except (TypeError, ValueError):
+        fac_right = 0.0
+    try:
+        fac_left = float(panel.get("fac_left") or 0.0)
+    except (TypeError, ValueError):
+        fac_left = 0.0
+    # Screen 3 = AP (R% / L%); screen 4 = FAP Left/Right.
+    show_ap_fac = bool(panel.get("show_ap_fac") or aep_total > 0 or fac_total > 0)
+    if show_ap_fac or aep_total > 0:
+        ap_line = str(panel.get("aep_display") or "").strip()
+        if not ap_line:
+            ap_line = (
+                f"R{aep_right:.0f}% / L{aep_left:.0f}%"
+                if aep_total > 0
+                else "R0% / L0%"
+            )
+        ap_slice = (
+            panel.get("slice_ap")
+            or panel.get("slice_ap_fac")
+            or "A3"
+        )
+        add(ap_slice, "AP", [ap_line], aep_right if aep_total > 0 else 0.0)
+    if show_ap_fac or fac_total > 0:
+        fac_line = str(
+            panel.get("fap_display") or panel.get("fac_display") or ""
+        ).strip()
+        fac_side = str(
+            panel.get("fap_side") or panel.get("fac_side") or ""
+        ).strip()
+        if not fac_line:
+            if fac_side in ("Left", "Right"):
+                fac_line = f"FAP {fac_side}"
+            elif fac_total > 0 and fac_right > fac_left:
+                fac_line = "FAP Right"
+            elif fac_total > 0 and fac_left > fac_right:
+                fac_line = "FAP Left"
+            elif fac_total > 0:
+                fac_line = "FAP Left / Right"
+            else:
+                fac_line = "FAP -"
+        fac_fill = 100.0 if fac_side == "Right" or (fac_total > 0 and fac_right > fac_left) else (
+            0.0 if fac_side == "Left" or (fac_total > 0 and fac_left > fac_right) else 50.0
+        )
+        fac_slice = panel.get("slice_fac") or panel.get("slice_fap") or "A4"
+        add(fac_slice, "FAP", [fac_line], fac_fill)
     return specs
 
 
@@ -7370,7 +7820,7 @@ def _read_image_action_cue_fields():
         return {}
 
 
-def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None, field_meta=None, field_seqs=None, keep_other_fields=True, manual_coach=False, combined_field=False):
+def _write_image_action_cue(active, field_screens, seq=0, force_end=False, action="PASS", on_sec=None, efficiency_max_sec=None, finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None, action_in_set=None, actions_in_set=None, test_num=None, field_meta=None, field_seqs=None, keep_other_fields=True, manual_coach=False, combined_field=False, aep_dual_pass=None, ap_action=None):
     """Tell simust_realtime which screens are lit (no QR on canvas).
 
     force_end=True: sequence finished — realtime must clear keypoints now.
@@ -7386,6 +7836,12 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
         "fields": {},
         "timestamp": time.time(),
     }
+    if aep_dual_pass is not None:
+        payload["aep_dual_pass"] = bool(aep_dual_pass)
+        payload["ap_action"] = bool(ap_action if ap_action is not None else aep_dual_pass)
+    elif ap_action is not None:
+        payload["ap_action"] = bool(ap_action)
+        payload["aep_dual_pass"] = bool(ap_action)
     if combined_field:
         payload["combined_field"] = True
     if manual_coach:
@@ -7450,6 +7906,14 @@ def _write_image_action_cue(active, field_screens, seq=0, force_end=False, actio
                 "action": action_name,
                 "screens": [str(s) for s in screens],
             }
+            # Per-field AP flag so realtime does not depend on top-level only
+            # (and never coerces a missing key to False via bool(None)).
+            if aep_dual_pass is not None or ap_action is not None:
+                dual = bool(
+                    aep_dual_pass if aep_dual_pass is not None else ap_action
+                )
+                field_payload["aep_dual_pass"] = dual
+                field_payload["ap_action"] = dual
             for key, fallback in (
                 ("action_in_set", action_in_set),
                 ("actions_in_set", actions_in_set),
@@ -9799,12 +10263,45 @@ class ResultsOverlay(QtWidgets.QWidget):
         self.panels = cleaned
         self.specs = specs
         self.active_slice_nums = set()
-        for fid in cleaned:
+        for fid, panel in cleaned.items():
+            show_ap_fac = bool(
+                (panel or {}).get("show_ap_fac")
+                or int((panel or {}).get("aep_total") or 0) > 0
+                or int((panel or {}).get("fac_total") or 0) > 0
+            )
+            # Force AP→3 and FAP→4 into specs whenever this field wants them.
+            if show_ap_fac:
+                ap_name = str(
+                    (panel or {}).get("slice_ap")
+                    or (panel or {}).get("slice_ap_fac")
+                    or f"{fid}3"
+                ).strip()
+                fac_name = str((panel or {}).get("slice_fac") or f"{fid}4").strip()
+                if ap_name and ap_name not in specs:
+                    specs[ap_name] = {
+                        "label": "AP",
+                        "lines": [str((panel or {}).get("aep_display") or "R0% / L0%")],
+                        "percent": float((panel or {}).get("aep_right") or 0.0),
+                    }
+                if fac_name and fac_name not in specs:
+                    specs[fac_name] = {
+                        "label": "FAP",
+                        "lines": [
+                            str(
+                                (panel or {}).get("fap_display")
+                                or (panel or {}).get("fac_display")
+                                or "FAP -"
+                            )
+                        ],
+                        "percent": 50.0,
+                    }
             for name in _field_all_screens(fid):
-                # Screens 3 and 4 play the logo and coach video under this overlay.
-                if str(name)[-1:] in ("3", "4"):
+                digit = str(name)[-1:]
+                # Screens 3/4 are logo by default; paint when AP/FAP specs exist.
+                if digit in ("3", "4") and name not in specs:
                     continue
                 self.active_slice_nums.add(name)
+        self.specs = specs
         self._apply_field_mask()
         self.update()
 
@@ -9865,10 +10362,26 @@ class ResultsOverlay(QtWidgets.QWidget):
                         int(round(-360.0 * (percent / 100.0) * 16)),
                     )
                 lines = list(spec.get("lines") or ["-"])
+                label = str(spec.get("label") or "")
                 text_color = self._level_fg(_field_for_screen(slice_num))
                 painter.setPen(text_color)
-                point = 12 if len(lines) > 1 else 16
+                # AP "R33% / L67%" is wide — start smaller and shrink to ring width.
+                if label == "AP":
+                    point = 10
+                elif label in ("FAP", "FAC"):
+                    point = 11
+                else:
+                    point = 12 if len(lines) > 1 else 16
+                max_w = max(8, int(2 * radius * 0.78))
                 font = QFont("Segoe UI", point, QFont.Bold)
+                metrics = painter.fontMetrics()
+                while point > 7:
+                    painter.setFont(font)
+                    metrics = painter.fontMetrics()
+                    if all(metrics.width(str(line)) <= max_w for line in lines):
+                        break
+                    point -= 1
+                    font = QFont("Segoe UI", point, QFont.Bold)
                 painter.setFont(font)
                 metrics = painter.fontMetrics()
                 spacing = max(1, metrics.lineSpacing())
@@ -9877,10 +10390,10 @@ class ResultsOverlay(QtWidgets.QWidget):
                 for n, line in enumerate(lines):
                     tw = metrics.width(str(line))
                     painter.drawText(cx - tw // 2, y0 + n * spacing, str(line))
-                label = str(spec.get("label") or "")
                 if label:
                     painter.setPen(text_color)
-                    painter.setFont(QFont("Segoe UI", 11, QFont.Bold))
+                    label_point = 9 if label in ("AP", "FAP", "FAC") else 11
+                    painter.setFont(QFont("Segoe UI", label_point, QFont.Bold))
                     label_metrics = painter.fontMetrics()
                     ly = cy + radius + 28
                     painter.drawText(
@@ -10175,6 +10688,12 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._begin_level_intro(0)
             self.speed_monitor_timer.start()
             self._show_playlist_status()
+        # Settings Sampling can drive A1–B6 content while a session or Manual is up.
+        self._sampling_display_seq = 0
+        self._sampling_display_timer = QtCore.QTimer(self)
+        self._sampling_display_timer.setTimerType(QtCore.Qt.PreciseTimer)
+        self._sampling_display_timer.timeout.connect(self._poll_sampling_display)
+        self._sampling_display_timer.start(100)
 
         atexit.register(self._force_cleanup)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -10284,6 +10803,82 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self._manual_coach_light(screen, seq, defer_paint=defer_paint)
         return False
 
+    def _sampling_display_path(self) -> str:
+        env = os.environ.get("SIMUST_SAMPLING_DISPLAY")
+        if env:
+            return env
+        return os.path.join(LOG_DIR, "sampling_display.json")
+
+    def _poll_sampling_display(self):
+        """Settings Sampling playlist: show random pass/number/character tiles on A+B."""
+        if self._is_closing or not self.image_canvas:
+            return
+        path = self._sampling_display_path()
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            seq = int(data.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+        active = bool(data.get("active"))
+        if not active:
+            if getattr(self, "_sampling_display_active", False):
+                self._sampling_display_active = False
+                self._sampling_display_seq = 0
+                try:
+                    # Only clear when Sampling owned the band.
+                    if self._manual_coach_mode and not (self._manual_coach_lit_screens or set()):
+                        self.image_canvas.clear()
+                    elif not self._manual_coach_mode and not self._idle_screensaver_mode:
+                        pass
+                    else:
+                        self.image_canvas.set_screen_images({}, scale=PASS_IMAGE_SCALE)
+                except Exception:
+                    pass
+            return
+        if seq and seq == int(getattr(self, "_sampling_display_seq", 0) or 0):
+            return
+        images = data.get("images") or {}
+        if not isinstance(images, dict):
+            return
+        cleaned = {}
+        for sid, img in images.items():
+            name = _sid(sid)
+            if not name or not img or not os.path.isfile(str(img)):
+                continue
+            cleaned[name] = str(img)
+        try:
+            scale = float(data.get("scale") or PASS_IMAGE_SCALE)
+        except (TypeError, ValueError):
+            scale = PASS_IMAGE_SCALE
+        # Match real tests: numbers/WC digits = 1.0; players = Entry/Elite still scale.
+        if scale <= 0:
+            scale = PASS_IMAGE_SCALE
+        uniform = bool(data.get("uniform_player_stills"))
+        try:
+            self.image_canvas._uniform_player_stills = uniform
+            self.image_canvas.set_screen_images(
+                cleaned,
+                scale=scale,
+                keep_videos=False,
+                replace_fields={"A", "B"},
+            )
+            self._sampling_display_seq = seq
+            self._sampling_display_active = True
+            if self._manual_coach_mode:
+                # Sampling owns the band while active — drop manual lit set.
+                self._manual_coach_lit_screens = set()
+                self._manual_coach_lit_at = {}
+        except Exception:
+            logger.exception("Sampling display paint failed")
+
     def _poll_manual_coach(self):
         if not self._manual_coach_mode or self._is_closing:
             return
@@ -10292,6 +10887,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self.operator_paused:
             return
         if not _manual_coach:
+            return
+        # Sampling playlist owns the band while its display file is active.
+        if getattr(self, "_sampling_display_active", False):
             return
         pending = []
         try:
@@ -13397,6 +13995,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 [fid for fid in field_screens if str(fid).upper()[:1] not in continuing]
             ),
             combined_field=bool(entry.get("combined_field")),
+            aep_dual_pass=entry.get("aep_dual_pass"),
+            ap_action=entry.get("ap_action", entry.get("aep_dual_pass")),
         )
         logger.info(
             "Labeled action %s %s ON screens %s (+%s fillers) for %sms [test %s scale=%.2f on=%.3fs]",
@@ -14872,6 +15472,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     field_seqs=seqs,
                     keep_other_fields=True,
                     combined_field=bool(entry.get("combined_field")),
+                    aep_dual_pass=entry.get("aep_dual_pass"),
+                    ap_action=entry.get("ap_action", entry.get("aep_dual_pass")),
                 )
             self._action_cue_wall = time.time()
             self._cue_heartbeat_at = time.time()
@@ -15048,6 +15650,37 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         elif phase == "final_wait" and ready:
             self._reveal_field_final(fid, stamp)
 
+    def _ensure_ap_fac_panel_slices(self, fid, panel):
+        """Guarantee AP→screen 3 and FAP→screen 4 for Activated Players results."""
+        if not isinstance(panel, dict):
+            return panel
+        out = dict(panel)
+        fid = str(fid or "A").upper()[:1]
+        if fid not in ("A", "B"):
+            fid = "A"
+        want = self._results_prefer_ap_fac_screens(fid)
+        out.setdefault("slice_ap", f"{fid}3")
+        out.setdefault("slice_fac", f"{fid}4")
+        out.setdefault("slice_ap_fac", f"{fid}3")
+        if want:
+            out["show_ap_fac"] = True
+            if not str(out.get("aep_display") or "").strip():
+                try:
+                    ar = float(out.get("aep_right") or 0.0)
+                    al = float(out.get("aep_left") or 0.0)
+                except (TypeError, ValueError):
+                    ar = al = 0.0
+                if int(out.get("aep_total") or 0) > 0:
+                    out["aep_display"] = f"R{ar:.0f}% / L{al:.0f}%"
+                else:
+                    out["aep_display"] = "R0% / L0%"
+            if not str(out.get("fac_display") or "").strip():
+                side = str(out.get("fac_side") or "").strip()
+                fap_line = f"FAP {side}" if side in ("Left", "Right") else "FAP -"
+                out["fac_display"] = fap_line
+                out["fap_display"] = fap_line
+        return out
+
     def _show_field_result_rings(self, fid, panel):
         """Draw this field's rings on its screens. The other field stays uncovered."""
         try:
@@ -15072,6 +15705,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             overlay.set_level_colors(self._opening_card_colors())
         except Exception:
             pass
+        panel = self._ensure_ap_fac_panel_slices(fid, panel)
         overlay.set_panels({fid: panel})
         overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
         overlay.show()
@@ -15093,10 +15727,58 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             return hit if os.path.isfile(hit) else _opening_logo_video_for_level(level, mode)
         return _opening_logo_video_for_level(level, mode) or _opening_logo_video_for_level(level)
 
+    def _results_prefer_ap_fac_screens(self, fid: str = "") -> bool:
+        """Entry / Activated / HP Players: AP on 3 + FAP on 4 (no logo)."""
+        entry = self._current_label_entry() if hasattr(self, "_current_label_entry") else {}
+        try:
+            screen_n = int((entry or {}).get("results_on_screen") or 0)
+        except (TypeError, ValueError):
+            screen_n = 0
+        try:
+            fac_n = int((entry or {}).get("fac_on_screen") or 0)
+        except (TypeError, ValueError):
+            fac_n = 0
+        if (
+            screen_n == int(PLAYERS_AP_RESULTS_SCREEN)
+            or fac_n == int(PLAYERS_AP_FAC_RESULTS_SCREEN)
+            or (entry or {}).get("aep_dual_pass")
+            or (entry or {}).get("ap_action")
+        ):
+            return True
+        levels = self._player_attr("_phase_field_levels") or {}
+        dirs = self._player_attr("_phase_field_directories") or {}
+        text = " ".join(
+            [
+                str(levels.get(str(fid or "").upper()[:1]) or ""),
+                str(dirs.get(str(fid or "").upper()[:1]) or ""),
+                str(getattr(self, "video_directory", "") or ""),
+                str(getattr(self, "_phase_subdirectory", "") or ""),
+                str((entry or {}).get("label") or ""),
+                str((entry or {}).get("path") or ""),
+            ]
+        )
+        return bool(
+            re.search(
+                r"L0[1234]-(Entry|Activated|HighPerformance|Elite)",
+                text,
+                re.I,
+            )
+            and re.search(
+                r"S0\.T|Players|C1\.T|/(Entry|Activated|HighPerformance|Elite)/S0",
+                text,
+                re.I,
+            )
+        )
+
+    def _results_prefer_screen_3(self, fid: str = "") -> bool:
+        """Backward-compatible alias for Activated AP/FAP result tiles."""
+        return self._results_prefer_ap_fac_screens(fid)
+
     def _play_result_side_videos(self, fid, panel):
         """Logo on screens 3 and 4. Final may also play the coach clip.
 
         Foundation: only logo_video_foundation.mp4 (no second logo / no coach overlay).
+        Activated Players: AP on 3 + FAP on 4 — skip logo animation on both.
         Never replaced by the coded screensaver.
         """
         canvas = getattr(self, "image_canvas", None)
@@ -15118,6 +15800,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 canvas._clear_field_summary({fid})
         except Exception:
             pass
+        ap_fac_tiles = self._results_prefer_ap_fac_screens(fid)
         screens = [f"{fid}3", f"{fid}4"]
         wanted = {_sid(name) for name in screens}
         # Drop any leftover saver scale on these logo tiles.
@@ -15132,7 +15815,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                     current.pop(name, None)
             setattr(canvas, attr, current)
         layers = []
-        logo = self._result_logo_for_field(fid)
+        logo = None if ap_fac_tiles else self._result_logo_for_field(fid)
         if logo:
             # Same size as the beginning-information logo (not full-bleed).
             layers.append(({name: logo for name in screens}, True, False))
@@ -15147,8 +15830,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             "",
             {},
         )
-        # Foundation results: one logo only — no coach / foundation.mp4 overlay.
-        allow_coach = brand != "foundation"
+        # Foundation / Activated AP+FAP tiles: no coach overlay on 3/4.
+        allow_coach = brand != "foundation" and not ap_fac_tiles
         coach = str((panel or {}).get("coach_video") or "")
         coach_base = os.path.basename(coach).lower()
         if coach_base in ("foundation.mp4", "logo_video_foundation.mp4"):
@@ -15237,11 +15920,16 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             overlay.set_level_colors(self._opening_card_colors())
         except Exception:
             pass
-        overlay.set_panels(panels)
+        fixed = {}
+        for fid, panel in (panels or {}).items():
+            key = str(fid or "").upper()[:1]
+            if key in ("A", "B") and isinstance(panel, dict):
+                fixed[key] = self._ensure_ap_fac_panel_slices(key, panel)
+        overlay.set_panels(fixed or panels)
         overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
         overlay.show()
         overlay.raise_()
-        for fid, panel in (panels or {}).items():
+        for fid, panel in (fixed or panels or {}).items():
             self._play_result_side_videos(fid, panel)
         return True
 
@@ -16268,6 +16956,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             field_seqs=seqs,
             keep_other_fields=False,
             combined_field=bool(entry.get("combined_field")),
+            aep_dual_pass=entry.get("aep_dual_pass"),
+            ap_action=entry.get("ap_action", entry.get("aep_dual_pass")),
         )
 
     def _place_on_display_screen(self, force: bool = False):

@@ -3718,7 +3718,12 @@ class ArenaSimulator:
         # Multi-goal cues (HP S3): both cylinders stay lit; aim the first screen
         # first. After that hit, realtime retargets this sim to the remainder.
         all_screens = [str(s) for s in (screens or [])]
-        self.screens = all_screens[:1] if (finish_balls and len(all_screens) > 1) else all_screens
+        # Dual-goal AP (exactly two screens): keep both mouths so L/R preference
+        # is measurable. Other finish_balls multi-cues still aim the first seat.
+        if finish_balls and len(all_screens) > 2:
+            self.screens = all_screens[:1]
+        else:
+            self.screens = all_screens
         self.finish_balls = bool(finish_balls)
         self.start_ts = time.time()
         self.active = True
@@ -5908,7 +5913,7 @@ class SimustRealtimeCamera:
                                paired_session_start=None, paired_offset_str=None, on_sec=None, efficiency_max_sec=None,
                                finish_balls=False, budget_elapsed_sec=None, budget_total_sec=None,
                                action_in_set=None, actions_in_set=None, test_num=None,
-                               combined_field=False):
+                               combined_field=False, aep_dual_pass=None, ap_action=None):
         offset_start_time_str = paired_offset_str or add_offset_to_time(detected_time_str, _start_offset_seconds())
         with self.session_lock:
             ch.pending_start = {
@@ -5923,6 +5928,12 @@ class SimustRealtimeCamera:
             }
             if combined_field:
                 ch.pending_start["combined_field"] = True
+            if aep_dual_pass is not None or ap_action is not None:
+                dual = bool(
+                    aep_dual_pass if aep_dual_pass is not None else ap_action
+                )
+                ch.pending_start["aep_dual_pass"] = dual
+                ch.pending_start["ap_action"] = dual
             if on_sec is not None:
                 try:
                     cap = 3600.0 if finish_balls else 60.0
@@ -6136,6 +6147,13 @@ class SimustRealtimeCamera:
             'ae': analysis_result.get('AE', 0.0),
             'video_start_sec': (action_data or {}).get('video_start_sec'),
         }
+        # Carry AP dual-goal flag so results rings only count ~40% AP actions.
+        if bool((action_data or {}).get("aep_dual_pass") or (action_data or {}).get("ap_action")):
+            result_entry["aep_dual_pass"] = True
+            result_entry["ap_action"] = True
+        elif "aep_dual_pass" in (action_data or {}) or "ap_action" in (action_data or {}):
+            result_entry["aep_dual_pass"] = False
+            result_entry["ap_action"] = False
         sim = (getattr(self, "simulators", None) or {}).get(ch.field_id)
         mode2_sim = bool(sim is not None and getattr(sim, "always_correct", False))
         qr_block = getattr(ch, "current_qr_block", None) or {}
@@ -6215,6 +6233,38 @@ class SimustRealtimeCamera:
                 # goal) so Execution Time is not stuck at action×0.4 / budget
                 # (e.g. always 2.40s / 60.00s on S3).
                 result_entry["result"] = "Correct"
+                # Analysis often leaves winning_screen=N/A when the sampled
+                # track misses the mouth — Mode 2 still finishes on the aimed
+                # goal (sim screens[0] / first cue screen). Without this AP/FAP
+                # stay at 0% on Activated Players.
+                win = str(result_entry.get("winning_screen") or "").strip()
+                # First cylinder hit is the AP choice — prefer it over a
+                # retargeted sim screens[0] after the dual pair was trimmed.
+                cylinder_win = str(
+                    (action_data or {}).get("cylinder_screen") or ""
+                ).strip()
+                if cylinder_win and cylinder_win.upper() not in ("", "N/A", "-", "NONE"):
+                    result_entry["winning_screen"] = cylinder_win
+                    win = cylinder_win
+                elif win.upper() in ("", "N/A", "-", "NONE"):
+                    aimed = None
+                    try:
+                        sim_screens = list(getattr(sim, "screens", None) or [])
+                        if sim_screens:
+                            aimed = sim_screens[0]
+                    except Exception:
+                        aimed = None
+                    cue_screens = list(result_entry.get("screens") or screens or [])
+                    result_entry["winning_screen"] = str(
+                        aimed or (cue_screens[0] if cue_screens else "N/A")
+                    )
+                try:
+                    result_entry["aep"] = get_aep_orientation(
+                        list(result_entry.get("screens") or screens or []),
+                        result_entry.get("winning_screen"),
+                    )
+                except Exception:
+                    pass
                 if arrive is None:
                     arrive = float(getattr(sim, "finish_travel_s", 0.40) or 0.40)
                 ideal_clock = mode2_finish_balls_clock_sec(
@@ -6643,9 +6693,21 @@ class SimustRealtimeCamera:
                 ch._last_session_duration = float(planned)
             else:
                 ch._last_session_duration = float(duration)
+            # Prefer the arm-time screen list for AP dual goals (current_screens
+            # may already be trimmed to the unscored copy after the first hit).
+            analysis_screens = list(ch.current_screens or [])
+            start_screens = list(getattr(ch, "_session_start_screens", None) or [])
+            if (
+                bool((ch.current_qr_block or {}).get("aep_dual_pass")
+                     or (ch.current_qr_block or {}).get("ap_action"))
+                and len(start_screens) >= 2
+            ):
+                analysis_screens = list(start_screens)
+                if isinstance(ch.current_qr_block, dict):
+                    ch.current_qr_block["screens"] = list(start_screens)
             ch.pending_analysis = {
                 'action_data': ch.current_qr_block,
-                'screens': ch.current_screens,
+                'screens': analysis_screens,
                 'action_type': ch.current_action,
                 'block_id': ch.current_block_id,
                 'video_index': video_index,
@@ -6716,6 +6778,9 @@ class SimustRealtimeCamera:
 
         ch.current_action = p["action"]
         ch.current_screens = p["screens"]
+        # Snapshot lit goals at arm time — cylinder hits trim current_screens,
+        # but AP dual-goal results must keep the original pair.
+        ch._session_start_screens = [str(s) for s in (p.get("screens") or [])]
         ch.current_keypoints = p["keypoints"]
         ch.current_block_id = p["block_id"]
         ch.active_goal_lines = p["goal_lines"]
@@ -6756,6 +6821,10 @@ class SimustRealtimeCamera:
             ch.current_qr_block["finish_balls"] = True
         if p.get("combined_field"):
             ch.current_qr_block["combined_field"] = True
+        if "aep_dual_pass" in p or "ap_action" in p:
+            dual = bool(p.get("aep_dual_pass") or p.get("ap_action"))
+            ch.current_qr_block["aep_dual_pass"] = dual
+            ch.current_qr_block["ap_action"] = dual
         if p.get("action_in_set") is not None:
             ch.current_qr_block["action_in_set"] = p.get("action_in_set")
         if p.get("actions_in_set") is not None:
@@ -7170,6 +7239,24 @@ class SimustRealtimeCamera:
                                 if hit.get("combined_field") is not None
                                 else (cue or {}).get("combined_field")
                             ),
+                            # Keep None when cue omits AP — do not bool(None)→False
+                            # (that stamped every Mode 2 row aep_dual_pass=False).
+                            "aep_dual_pass": (
+                                hit.get("aep_dual_pass")
+                                if hit.get("aep_dual_pass") is not None
+                                else (cue or {}).get("aep_dual_pass")
+                            ),
+                            "ap_action": (
+                                hit.get("ap_action")
+                                if hit.get("ap_action") is not None
+                                else (
+                                    hit.get("aep_dual_pass")
+                                    if hit.get("aep_dual_pass") is not None
+                                    else (cue or {}).get(
+                                        "ap_action", (cue or {}).get("aep_dual_pass")
+                                    )
+                                )
+                            ),
                             "raw": cue_raw,
                             "seq": hit.get("seq") if hit.get("seq") is not None else (cue or {}).get("seq", 0),
                             "hold_frames": hold_frames,
@@ -7286,6 +7373,8 @@ class SimustRealtimeCamera:
                         actions_in_set=info.get("actions_in_set"),
                         test_num=info.get("test_num"),
                         combined_field=bool(info.get("combined_field")),
+                        aep_dual_pass=info.get("aep_dual_pass"),
+                        ap_action=info.get("ap_action"),
                     )
                     with self.session_lock:
                         if ch.pending_start:
@@ -8097,77 +8186,6 @@ class SimustRealtimeCamera:
                 return
             ch._goal_ball_trail = next_trail[-8:]
 
-    def _maybe_capture_sampling(self, raw_frame, balls):
-        """While Start Sample is on, save raw stitch frames (no labels / red overlays).
-
-        Start Sample also requests one immediate frame via force_save_once so a
-        test image always lands in data_samples even before a ball enters.
-        """
-        try:
-            import simust_sampling as samp
-        except Exception:
-            return
-        try:
-            active = samp.is_active()
-            force_once = samp.consume_force_save_once() if active else False
-        except Exception:
-            return
-        if not active and not force_once:
-            return
-        if raw_frame is None:
-            return
-        hit = bool(force_once)
-        if not hit:
-            try:
-                fh = float(getattr(self, "_live_frame_h", 0) or 0)
-                fw = float(getattr(self, "_live_frame_w", 0) or 0)
-            except (TypeError, ValueError):
-                fh = fw = 0.0
-            scale_x = scale_y = 1.0
-            if fw > 1.0 and fh > 1.0 and (
-                abs(fw - float(SIM_FRAME_WIDTH)) > 0.5
-                or abs(fh - float(SIM_FRAME_HEIGHT)) > 0.5
-            ):
-                scale_x = float(SIM_FRAME_WIDTH) / fw
-                scale_y = float(SIM_FRAME_HEIGHT) / fh
-            for ball in balls or []:
-                if not isinstance(ball, dict):
-                    continue
-                center = ball.get("center")
-                if not center or len(center) < 2:
-                    continue
-                try:
-                    x = float(center[0]) * scale_x
-                    y = float(center[1]) * scale_y
-                except (TypeError, ValueError):
-                    continue
-                reach = 9.0
-                bbox = ball.get("bbox")
-                if bbox and len(bbox) >= 4:
-                    try:
-                        reach = max(
-                            abs(float(bbox[2]) - float(bbox[0])) * 0.5 * scale_x,
-                            abs(float(bbox[3]) - float(bbox[1])) * 0.5 * scale_y,
-                            4.0,
-                        )
-                    except (TypeError, ValueError):
-                        reach = 9.0
-                if samp.point_in_any_zone(x, y, reach):
-                    hit = True
-                    break
-        if not hit:
-            return
-        try:
-            # Clean stitch only — never draw red zones, Field A/B text, or boxes.
-            path = samp.save_raw_frame(raw_frame)
-            if path:
-                n = int((samp.read_control() or {}).get("saved_count") or 0)
-                tag = "test" if force_once else "ball"
-                if force_once or n == 1 or n % 30 == 0:
-                    print(f"  [sampling:{tag}] saved {os.path.basename(path)} ({n} total)")
-        except Exception:
-            pass
-
     def process_dual_fields_frame(self, frame, current_timestamp):
         self.tracker.increment_frame_count()
         try:
@@ -8175,13 +8193,7 @@ class SimustRealtimeCamera:
         except Exception:
             self._live_frame_w = float(SIM_FRAME_WIDTH)
             self._live_frame_h = float(SIM_FRAME_HEIGHT)
-        # Copy before detection/overlays so data_samples stays label-free.
-        try:
-            raw_for_sample = frame.copy()
-        except Exception:
-            raw_for_sample = frame
         frame, balls, players, hips = self._detections_for_frame(frame, current_timestamp)
-        self._maybe_capture_sampling(raw_for_sample, balls)
 
         for fid, ch in self.channels.items():
             if not self._field_is_active(fid):

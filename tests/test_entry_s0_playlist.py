@@ -1,4 +1,4 @@
-"""Entry S0.T1–T5: pass goal among static player PNGs on 6 screens."""
+"""Entry S0.T1–T5: pass goal among static player PNGs — 4 lit screens always."""
 
 from __future__ import annotations
 
@@ -79,66 +79,70 @@ class EntryS0PlaylistTests(unittest.TestCase):
         )
         self.assertTrue(playlist[0].get("uniform_player_stills"))
 
-    def test_playlist_pass_is_only_goal(self):
+    def test_ap_fraction_t1_30_t3_50(self):
+        for series, want in ((1, 3), (3, 5)):
+            playlist = player._build_entry_s0_playlist(series, ["A"])
+            by_test = {}
+            for step in playlist:
+                by_test.setdefault(int(step.get("test_num") or 0), []).append(step)
+            for test_num, steps in by_test.items():
+                ap_n = sum(1 for s in steps if s.get("aep_dual_pass"))
+                self.assertEqual(ap_n, want, f"C1.T{series} test {test_num}")
+
+    def test_t1_ap_actions_come_in_order(self):
+        playlist = player._build_entry_s0_playlist(1, ["A"])
+        by_test = {}
+        for step in playlist:
+            by_test.setdefault(int(step.get("test_num") or 0), []).append(step)
+        for test_num, steps in by_test.items():
+            flags = [bool(s.get("aep_dual_pass")) for s in steps]
+            self.assertEqual(flags[:3], [True, True, True], f"test {test_num}")
+            self.assertEqual(flags[3:], [False] * 7)
+
+    def test_always_four_lit_screens(self):
         playlist = player._build_entry_s0_playlist(1, ["A"])
         pass_path = os.path.join(player.ENTRY_S0_IMAGE_DIR, player.ENTRY_S0_PASS_NAME)
         for step in playlist:
             self.assertTrue(step.get("finish_balls"))
             self.assertFalse(step.get("entry_digits"))
+            self.assertEqual(int(step.get("results_on_screen") or 0), 3)
+            self.assertEqual(int(step.get("fac_on_screen") or 0), 4)
             goals = (step.get("field_screens") or {}).get("A") or []
-            self.assertEqual(len(goals), 1)
-            goal = goals[0]
             images = step.get("screen_images") or {}
-            # T1: 3 unique images → 3 lit screens, 3 unused.
-            self.assertEqual(len(images), 3)
-            paths = list(images.values())
-            self.assertEqual(len(paths), len({os.path.normcase(p) for p in paths}))
-            self.assertEqual(os.path.normcase(images[goal]), os.path.normcase(pass_path))
+            self.assertEqual(len(images), 4, step.get("label"))
+            if step.get("aep_dual_pass"):
+                self.assertEqual(len(goals), 2)
+                halves = {
+                    player._activated_s0_side_half(_arena_from_sid(goals[0])),
+                    player._activated_s0_side_half(_arena_from_sid(goals[1])),
+                }
+                self.assertEqual(halves, {"L", "R"})
+            else:
+                self.assertEqual(len(goals), 1)
+                goal = goals[0]
+                self.assertEqual(
+                    os.path.normcase(images[goal]),
+                    os.path.normcase(pass_path),
+                )
 
-    def test_t1_opponents_are_not_adjacent(self):
-        pass_path = os.path.join(player.ENTRY_S0_IMAGE_DIR, player.ENTRY_S0_PASS_NAME)
-        playlist = player._build_entry_s0_playlist(2, ["A"])
-        for step in playlist:
-            images = step.get("screen_images") or {}
-            goal = ((step.get("field_screens") or {}).get("A") or [None])[0]
-            goal_arena = _arena_from_sid(goal)
-            opp_screens = sorted(
-                _arena_from_sid(sid)
-                for sid, path in images.items()
-                if os.path.normcase(path) != os.path.normcase(pass_path)
-            )
-            self.assertEqual(len(opp_screens), 2)
-            self.assertGreaterEqual(abs(opp_screens[0] - opp_screens[1]), 2)
-            for opp in opp_screens:
-                self.assertGreaterEqual(abs(goal_arena - opp), 2)
+    def test_may_light_screens_3_and_4_during_play(self):
+        used = False
+        for series in (1, 3, 5):
+            playlist = player._build_entry_s0_playlist(series, ["A"])
+            for step in playlist:
+                images = step.get("screen_images") or {}
+                if "A3" in images or "A4" in images:
+                    used = True
+                    break
+            if used:
+                break
+        self.assertTrue(used)
 
-    def test_t5_uses_five_unique_images(self):
+    def test_t5_still_four_lit(self):
         playlist = player._build_entry_s0_playlist(5, ["A"])
         self.assertEqual(len(playlist), 50)
         for step in playlist:
-            images = step.get("screen_images") or {}
-            self.assertEqual(len(images), 5)
-            paths = [os.path.normcase(p) for p in images.values()]
-            self.assertEqual(len(paths), len(set(paths)))
-
-    def test_t5_pass_not_adjacent_to_teammate(self):
-        pass_path = os.path.join(player.ENTRY_S0_IMAGE_DIR, player.ENTRY_S0_PASS_NAME)
-        playlist = player._build_entry_s0_playlist(5, ["A"])
-        for step in playlist:
-            images = step.get("screen_images") or {}
-            goal = ((step.get("field_screens") or {}).get("A") or [None])[0]
-            goal_arena = _arena_from_sid(goal)
-            teammate_screens = [
-                _arena_from_sid(sid)
-                for sid, path in images.items()
-                if player._entry_s0_is_teammate_path(path)
-            ]
-            self.assertEqual(len(teammate_screens), 1)
-            self.assertGreaterEqual(abs(goal_arena - teammate_screens[0]), 2)
-            self.assertEqual(
-                os.path.normcase(images[goal]),
-                os.path.normcase(pass_path),
-            )
+            self.assertEqual(len(step.get("screen_images") or {}), 4)
 
     def test_dual_field_independent_goals(self):
         playlist = player._build_entry_s0_playlist(5, ["A", "B"])
@@ -146,8 +150,8 @@ class EntryS0PlaylistTests(unittest.TestCase):
         step = playlist[0]
         self.assertIn("A", step.get("field_screens") or {})
         self.assertIn("B", step.get("field_screens") or {})
-        # 5 unique images per field × 2 fields.
-        self.assertEqual(len(step.get("screen_images") or {}), 10)
+        # 4 lit screens per field × 2 fields.
+        self.assertEqual(len(step.get("screen_images") or {}), 8)
 
 
 if __name__ == "__main__":

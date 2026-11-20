@@ -908,6 +908,54 @@ class ResultRingTests(unittest.TestCase):
         })
         self.assertEqual(missing["A2"]["lines"], ["-"])
 
+    def test_ap_on_screen_3_fac_on_screen_4(self):
+        specs = player._result_ring_specs({
+            "slice_aet": "A1",
+            "slice_acc": "A2",
+            "slice_ae": "A5",
+            "slice_disp": "A6",
+            "slice_ap": "A3",
+            "slice_fac": "A4",
+            "aet_display": "1.00s",
+            "aet_percent": 50.0,
+            "aac": 100.0,
+            "ae_display": "80%",
+            "avg_ae": 80.0,
+            "economy_percent": 20.0,
+            "distance_shown": 15,
+            "aep_total": 4,
+            "aep_right": 75.0,
+            "aep_left": 25.0,
+            "aep_display": "R75% / L25%",
+            "fac_total": 1,
+            "fac_right": 100.0,
+            "fac_left": 0.0,
+            "fac_side": "Right",
+            "fac_display": "FAC Right",
+        })
+        self.assertEqual(specs["A3"]["label"], "AP")
+        self.assertEqual(specs["A3"]["lines"], ["R75% / L25%"])
+        self.assertAlmostEqual(specs["A3"]["percent"], 75.0)
+        self.assertEqual(specs["A4"]["label"], "FAC")
+        self.assertEqual(specs["A4"]["lines"], ["FAC Right"])
+        plain = player._result_ring_specs({
+            "slice_aet": "B1",
+            "slice_acc": "B2",
+            "slice_ae": "B5",
+            "slice_disp": "B6",
+            "slice_ap": "B3",
+            "slice_fac": "B4",
+            "aet_display": "1.00s",
+            "aet_percent": 50.0,
+            "aac": 100.0,
+            "ae_display": "80%",
+            "avg_ae": 80.0,
+            "economy_percent": 10.0,
+            "distance_shown": 8,
+        })
+        self.assertNotIn("B3", plain)
+        self.assertNotIn("B4", plain)
+
 
 class CombinedLevelTests(unittest.TestCase):
     def test_elite_and_world_class_stay_together(self):

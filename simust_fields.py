@@ -201,6 +201,9 @@ def field_config(field_id: str) -> Dict:
                 "accuracy": "B2",
                 "efficiency": "B5",
                 "displacement": "B6",
+                "ap": "B3",
+                "fac": "B4",
+                "ap_fac": "B3",
                 "integration": ("B3", "B4"),
             },
         }
@@ -219,6 +222,9 @@ def field_config(field_id: str) -> Dict:
             "accuracy": "A2",
             "efficiency": "A5",
             "displacement": "A6",
+            "ap": "A3",
+            "fac": "A4",
+            "ap_fac": "A3",
             "integration": ("A3", "A4"),
         },
     }

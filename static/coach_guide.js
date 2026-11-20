@@ -50,9 +50,64 @@
     { group: "Coach tools" },
     { id: "unlock", label: "Unlock & level-up" },
     { id: "timing", label: "Timing tables" },
+    { id: "ap-fac", label: "AP & FAP (Players)" },
     { id: "manual", label: "Manual Coach" },
     { id: "tips", label: "Quick tips" },
   ];
+
+  /** Shared AP / FAP coach copy used on Entry / Activated / HP / Elite Players pages. */
+  function playersApFacBlocks(opts) {
+    opts = opts || {};
+    var blocks = [
+      {
+        type: "h3",
+        text: "AP & FAP (preference rings)",
+      },
+      {
+        type: "p",
+        text:
+          "On Players C1, some actions light two legal pass goals at once — one on the Left half (screens 1–3) and one on the Right half (screens 4–6). Play may light any of the six screens (including 3 and 4). After the test, screen 3 shows AP and screen 4 shows FAP.",
+      },
+      {
+        type: "p",
+        text:
+          "Action Preference (AP) counts which side the athlete finishes first on those dual-goal actions only (Correct). First Action Preference (FAP) is the side of the first Correct dual-goal action in each test. Screen 3 shows AP as R% / L%; screen 4 shows FAP Left or FAP Right.",
+      },
+      {
+        type: "table",
+        headers: ["Set", "Dual-goal AP share", "AP seating", "Other actions"],
+        rows: [
+          [
+            "C1.T1–T2",
+            "30% of actions (3 of 10)",
+            "AP actions first, in order",
+            "Normal single-pass actions",
+          ],
+          [
+            "C1.T3–T5",
+            "50% of actions (5 of 10)",
+            "AP seats shuffled randomly",
+            "Normal single-pass actions",
+          ],
+        ],
+      },
+      {
+        type: "callout",
+        kind: "tip",
+        html:
+          "<strong>Coach cue.</strong> On a dual-goal action, tell the athlete either legal pass is Correct — we are measuring which side they choose first, not forcing Left or Right.",
+      },
+    ];
+    if (opts.hpOffside) {
+      blocks.push({
+        type: "callout",
+        kind: "",
+        html:
+          "<strong>Offside traps.</strong> An action is never both an offside trap and a dual-goal AP. Traps still place posts on screens 3 and 4; other HP actions fill all six screens.",
+      });
+    }
+    return blocks;
+  }
 
   function pageWelcome() {
     return {
@@ -326,16 +381,27 @@
         {
           type: "p",
           text:
-            "5 tests × 10 actions. Kick only the pass image. Other screens show opponents / teammates as distractors. Placement reshuffles every action.",
+            "5 tests × 10 actions. Always 4 lit screens per field. On most actions, kick only the single pass image — opponents / teammates are distractors. On a share of actions, two pass goals light at once (pass + pass-copy on opposite halves) so we can measure Left vs Right preference (AP / FAP).",
         },
         {
           type: "table",
-          headers: ["Set", "Images on field", "Coach focus"],
+          headers: ["Set", "Layout", "Dual-goal AP"],
           rows: [
-            ["C1.T1–T2", "3 stills on 3 of 6 screens", "Pass + 2 opponents; opponents not adjacent."],
-            ["C1.T3–T5", "5 stills on 5 of 6 screens", "More clutter — same rule: only the pass."],
+            [
+              "C1.T1–T2",
+              "4 lit screens; AP actions first in order",
+              "30% of actions — pass + pass-copy",
+            ],
+            [
+              "C1.T3–T5",
+              "4 lit screens; AP seats shuffled",
+              "50% of actions — same dual-goal rule",
+            ],
           ],
         },
+      ]
+        .concat(playersApFacBlocks())
+        .concat([
         {
           type: "grid",
           cards: [
@@ -343,6 +409,11 @@
               title: "Pass",
               text: "Correct target",
               image: img("/static/players/Entry/pass.png", "pass"),
+            },
+            {
+              title: "Pass-copy",
+              text: "Second AP goal",
+              image: img("/static/players/Entry/pass-copy.png", "pass-copy"),
             },
             {
               title: "Teammate",
@@ -397,7 +468,7 @@
           html:
             "<strong>Floor.</strong> On time never goes below ~1.8 s; gap never below ~0.5 s.",
         },
-      ],
+      ]),
     };
   }
 
@@ -406,7 +477,7 @@
       kicker: "L02 · Activated",
       title: "Activated band",
       lead:
-        "Activated adds side goals and odd-one-out thinking while keeping Entry-style timing.",
+        "Activated adds dual-goal AP/FAP preference work and odd-one-out thinking while keeping Entry-style timing. Pass-left / pass-right side goals stay on Elite only.",
       blocks: [
         {
           type: "h2",
@@ -415,16 +486,25 @@
         {
           type: "p",
           text:
-            "5 × 10 actions. Pass among teammate + opponents. Later sets add pass-left / pass-right side targets.",
+            "5 × 10 actions on 5 lit screens. Pass among teammate + opponents using center passes only (pass / pass3 / pass-copy). A share of actions are dual-goal AP (pass + pass-copy on opposite halves). No pass-left / pass-right here.",
         },
         {
           type: "table",
           headers: ["Set", "Scenario"],
           rows: [
-            ["C1.T1–T2", "Center pass (pass / pass3) + teammate + 3 opponents."],
-            ["C1.T3–T5", "Mix of center passes and pass-left / pass-right side goals."],
+            [
+              "C1.T1–T2",
+              "5 lit screens; center pass + distractors; 30% dual-goal AP in order.",
+            ],
+            [
+              "C1.T3–T5",
+              "5 lit screens; 50% dual-goal AP shuffled; remaining center single-pass.",
+            ],
           ],
         },
+      ]
+        .concat(playersApFacBlocks())
+        .concat([
         {
           type: "grid",
           cards: [
@@ -434,17 +514,9 @@
               image: img("/static/players/Activated/pass.png", "pass"),
             },
             {
-              title: "Pass left",
-              text: "Side goal L",
-              image: img("/static/players/Activated/pass-left.png", "pass left"),
-            },
-            {
-              title: "Pass right",
-              text: "Side goal R",
-              image: img(
-                "/static/players/Activated/pass-right.png",
-                "pass right"
-              ),
+              title: "Pass-copy",
+              text: "Second AP goal",
+              image: img("/static/players/Activated/pass-copy.png", "pass-copy"),
             },
             {
               title: "Opponent",
@@ -480,7 +552,7 @@
           html:
             "<strong>Timing.</strong> Same table as Entry (3.0 s → ~2.0 s). Completing Divergent C3.T5 opens High Performance Players C1.T1.",
         },
-      ],
+      ]),
     };
   }
 
@@ -489,7 +561,7 @@
       kicker: "L03 · High Performance",
       title: "High Performance band",
       lead:
-        "HP raises clutter, adds offside-trap pictures, and introduces Sum — encode a red reference, then find two numbers that add to it.",
+        "HP raises clutter, mixes dual-goal AP/FAP with offside-trap pictures, and introduces Sum — encode a red reference, then find two numbers that add to it. No pass-left / pass-right on HP.",
       blocks: [
         {
           type: "h2",
@@ -498,16 +570,29 @@
         {
           type: "p",
           text:
-            "Pass among HP stills. Goal posts sit on screens 3 and 4. Some actions are offside-trap crosses — teach athletes to recognise the trap image and still choose the legal pass.",
+            "Pass among HP stills on all 6 screens. Each test mixes three kinds of action: normal single-pass, dual-goal AP (pass + pass-copy), and offside-trap crosses. Offside traps put posts on screens 3 and 4; dual-goal AP never shares an action with a trap.",
         },
         {
           type: "table",
-          headers: ["Set", "Traps"],
+          headers: ["Set", "AP", "Offside traps", "Normal passes"],
           rows: [
-            ["C1.T1–T2", "4 trap patterns mixed in."],
-            ["C1.T3–T5", "All 6 trap patterns."],
+            [
+              "C1.T1–T2",
+              "30% (3 of 10) first, in order",
+              "Up to 4 trap patterns on the remaining seats",
+              "Fill the rest",
+            ],
+            [
+              "C1.T3–T5",
+              "50% (5 of 10) shuffled",
+              "Traps on the seats left after AP (never overlapping)",
+              "Fill any leftover",
+            ],
           ],
         },
+      ]
+        .concat(playersApFacBlocks({ hpOffside: true }))
+        .concat([
         {
           type: "grid",
           cards: [
@@ -520,6 +605,14 @@
               ),
             },
             {
+              title: "Pass-copy",
+              text: "Second AP goal",
+              image: img(
+                "/static/players/high_performance/pass-copy.png",
+                "HP pass-copy"
+              ),
+            },
+            {
               title: "Offside trap",
               text: "Cross trap still",
               image: img(
@@ -529,7 +622,7 @@
             },
             {
               title: "Left post",
-              text: "Post marker",
+              text: "Post marker (traps)",
               image: img(
                 "/static/players/high_performance/left_post.jpeg",
                 "left post"
@@ -576,6 +669,69 @@
             "Kick one of the correct pair mouths using Goal Area + HIP.",
           ],
         },
+      ]),
+    };
+  }
+
+  function pageApFac() {
+    return {
+      kicker: "Players metrics",
+      title: "AP & FAP",
+      lead:
+        "Action Preference and First Action Preference measure Left vs Right finishing choice on dual-goal Players actions (Entry, Activated, High Performance, and Elite C1).",
+      blocks: [
+        {
+          type: "h2",
+          text: "What the athlete sees",
+        },
+        {
+          type: "p",
+          text:
+            "On a dual-goal AP action, two legal pass pictures light at once — one on the Left half (arena screens 1–3) and one on the Right half (4–6). Any of the six screens may light during play. Either goal is Correct; we record which side they finish first.",
+        },
+        {
+          type: "h2",
+          text: "How much AP per test",
+        },
+        {
+          type: "table",
+          headers: ["Players set", "Dual-goal AP", "Seating", "Lit screens"],
+          rows: [
+            ["C1.T1–T2", "30% (3 of 10)", "AP first, in order", "Entry 4 · Activated 5 · HP 6"],
+            ["C1.T3–T5", "50% (5 of 10)", "AP shuffled", "Entry 4 · Activated 5 · HP 6"],
+          ],
+        },
+        {
+          type: "h2",
+          text: "Results rings",
+        },
+        {
+          type: "table",
+          headers: ["Screen", "Metric", "Meaning"],
+          rows: [
+            [
+              "3",
+              "AP (Action Preference)",
+              "Among Correct dual-goal finishes: share that went Right vs Left — shown as R% / L%",
+            ],
+            [
+              "4",
+              "FAP (First Action Preference)",
+              "Per test, the side of the first dual-goal action that was Correct — FAP Left or FAP Right",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          kind: "tip",
+          html:
+            "<strong>Bands.</strong> Same AP/FAP rules on Entry, Activated, High Performance, and Elite Players. Pass-left / pass-right side goals are Elite-only (not Activated or HP). On HP, offside-trap actions never run at the same time as dual-goal AP. On Elite, AP seats advance on the first finish (normal multi-goal seats still require every mouth).",
+        },
+        {
+          type: "p",
+          text:
+            "Simple single-pass actions still matter for Accuracy and Efficiency — they just do not move the AP or FAP rings.",
+        },
       ],
     };
   }
@@ -585,7 +741,7 @@
       kicker: "L04 · Elite",
       title: "Elite band",
       lead:
-        "Elite merges Field A and Field B into one 12-screen puzzle. Players C1 mirrors Entry’s dual-field pass game with Elite artwork; later Components use 12 actions per test.",
+        "Elite merges Field A and Field B into one 12-screen puzzle. Players C1 uses dual-goal AP/FAP preference seats and is the only Players band that mixes pass-left / pass-right side goals; later Components use 12 actions per test.",
       blocks: [
         {
           type: "h2",
@@ -594,18 +750,21 @@
         {
           type: "p",
           text:
-            "Both fields light together. Pass among Elite PNGs. All listed goals on an action must score before advance on denser sets.",
+            "Both fields light together. Pass among Elite PNGs. Normal multi-goal actions still require every listed mouth before advance. Dual-goal AP seats light pass1 + pass-copy on opposite halves and advance on the first finish so Left/Right preference is measured. From C1.T3, non-AP seats may use pass-left / pass-right side targets.",
         },
         {
           type: "table",
-          headers: ["Set", "Images", "Pass pool", "Actions"],
+          headers: ["Set", "Images", "Pass / AP", "Actions"],
           rows: [
-            ["C1.T1", "6 images on 12 screens (3 / field)", "pass1 only", "10 / test"],
-            ["C1.T2", "8 images on 12 screens", "pass1 only", "10 / test"],
-            ["C1.T3", "12 images on 12 screens", "pass1 only", "10 / test"],
-            ["C1.T4–T5", "12 images", "pass1 / pass2 / pass3 · 14 goals across 10 actions", "10 / test"],
+            ["C1.T1", "6 images on 12 screens (3 / field)", "pass1 · 30% dual-goal AP in order", "10 / test"],
+            ["C1.T2", "8 images on 12 screens", "pass1 · 30% dual-goal AP in order", "10 / test"],
+            ["C1.T3", "12 images on 12 screens", "pass1 · 50% AP shuffled · side L/R on some seats", "10 / test"],
+            ["C1.T4–T5", "12 images", "pass1/2/3 · 50% AP · side L/R on some seats", "10 / test"],
           ],
         },
+      ]
+        .concat(playersApFacBlocks())
+        .concat([
         {
           type: "grid",
           cards: [
@@ -613,6 +772,11 @@
               title: "pass1",
               text: "Primary pass",
               image: img("/static/players/Elite/pass1.png", "pass1"),
+            },
+            {
+              title: "pass-copy",
+              text: "Second AP goal",
+              image: img("/static/players/Elite/pass-copy.png", "pass-copy"),
             },
             {
               title: "pass2",
@@ -623,6 +787,16 @@
               title: "pass3",
               text: "T4–T5 target",
               image: img("/static/players/Elite/pass3.png", "pass3"),
+            },
+            {
+              title: "Pass left",
+              text: "Side goal L (T3+)",
+              image: img("/static/players/Elite/pass-left.png", "pass left"),
+            },
+            {
+              title: "Pass right",
+              text: "Side goal R (T3+)",
+              image: img("/static/players/Elite/pass-right.png", "pass right"),
             },
             {
               title: "Opponent",
@@ -690,7 +864,7 @@
           text:
             "Encode a red two-digit reference (&lt; 50) for 3 s, then 12 answer actions with a 120 s test budget. Find pair(s) that sum to the reference on the 12-screen field.",
         },
-      ],
+      ]),
     };
   }
 
@@ -916,11 +1090,18 @@
           type: "table",
           headers: ["Set type", "One sentence"],
           rows: [
-            ["Players", "Only kick the pass image — ignore everyone else."],
+            [
+              "Players (normal)",
+              "Only kick the pass image — ignore teammates and opponents.",
+            ],
+            [
+              "Players (dual-goal AP)",
+              "Two legal passes are lit — either is Correct; we measure Left vs Right preference.",
+            ],
             ["Numbers", "Always clear the lowest number left on the wall."],
             ["Divergent", "Kick the screen that does not belong."],
             ["Sum", "Remember the red number, then kick a pair that adds to it."],
-            ["Offside traps (HP)", "If you see the trap cross, stay disciplined — still pick the legal pass."],
+            ["Offside traps (HP)", "If you see the trap cross, stay disciplined — still pick the legal pass (never mixed with AP)."],
           ],
         },
         {
@@ -958,6 +1139,7 @@
     world: pageWorld,
     unlock: pageUnlock,
     timing: pageTiming,
+    "ap-fac": pageApFac,
     manual: pageManual,
     tips: pageTips,
   };
