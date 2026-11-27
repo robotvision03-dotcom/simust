@@ -1,4 +1,4 @@
-"""Entry S0.T1–T5: pass goal among static player PNGs — 4 lit screens always."""
+"""Entry S0.T1–T5: warehouse stills — rebound goals, unique person tags, 4 lit."""
 
 from __future__ import annotations
 
@@ -16,6 +16,11 @@ import smart_simust_player as player  # noqa: E402
 def _arena_from_sid(sid: str) -> int:
     match = re.search(r"(\d+)$", str(sid or ""))
     return int(match.group(1)) if match else 0
+
+
+def _under_warehouse(path: str) -> bool:
+    root = os.path.normcase(os.path.normpath(player.PLAYERS_IMAGE_WAREHOUSE_ROOT))
+    return os.path.normcase(os.path.normpath(path)).startswith(root)
 
 
 class EntryS0PlaylistTests(unittest.TestCase):
@@ -47,26 +52,42 @@ class EntryS0PlaylistTests(unittest.TestCase):
         )
         self.assertEqual(text.split("\n"), ["Players", "C1.T1", "10 Actions"])
 
-    def test_t1_pool_has_three_images(self):
+    def test_warehouse_catalog_roles(self):
+        cat = player._players_warehouse_catalog()
+        for role in (
+            "pass",
+            "pass_copy",
+            "rebound",
+            "opponent",
+            "teammate",
+            "cross_left",
+            "cross_right",
+            "asking",
+            "defender",
+        ):
+            self.assertGreater(len(cat.get(role) or []), 0, role)
+        root = os.path.normpath(player.PLAYERS_IMAGE_WAREHOUSE_ROOT)
+        self.assertTrue(root.replace("\\", "/").endswith("static/Players-Images"))
+
+    def test_t1_pool_uses_warehouse_rebound(self):
         pass_path, distractors = player._entry_s0_image_paths(1)
         self.assertTrue(pass_path and os.path.isfile(pass_path))
-        self.assertEqual(len(distractors), 2)
-        names = {os.path.basename(p) for p in distractors}
-        self.assertEqual(
-            names,
-            {
-                "Opponent-PL-01-B.png",
-                "Opponent-PL-03-B.png",
-            },
-        )
+        self.assertTrue(_under_warehouse(pass_path))
+        name = os.path.basename(pass_path).lower()
+        self.assertIn("teammate-pl-", name)
+        self.assertIn("-02-", name)
+        self.assertEqual(len(distractors), 3)
+        for path in distractors:
+            self.assertTrue(_under_warehouse(path))
+            self.assertIn("opponent-pl-", os.path.basename(path).lower())
 
-    def test_t3_pool_adds_extra_players(self):
+    def test_t3_pool_can_include_teammate_distractor(self):
         pass_path, distractors = player._entry_s0_image_paths(3)
         self.assertTrue(pass_path)
-        self.assertEqual(len(distractors), 4)
-        names = {os.path.basename(p) for p in distractors}
-        self.assertIn("Opponent-PL-02-B.png", names)
-        self.assertIn("Teammate-PL-01-B.png", names)
+        self.assertEqual(len(distractors), 3)
+        names = [os.path.basename(p).lower() for p in distractors]
+        self.assertTrue(any(n.startswith("teammate-pl-") for n in names))
+        self.assertTrue(any(n.startswith("opponent-pl-") for n in names))
 
     def test_playlist_has_ten_actions_and_larger_scale(self):
         playlist = player._build_entry_s0_playlist(1, ["A"])
@@ -78,6 +99,7 @@ class EntryS0PlaylistTests(unittest.TestCase):
             places=4,
         )
         self.assertTrue(playlist[0].get("uniform_player_stills"))
+        self.assertTrue(playlist[0].get("warehouse_images"))
 
     def test_ap_fraction_t1_30_t3_50(self):
         for series, want in ((1, 3), (3, 5)):
@@ -99,9 +121,8 @@ class EntryS0PlaylistTests(unittest.TestCase):
             self.assertEqual(flags[:3], [True, True, True], f"test {test_num}")
             self.assertEqual(flags[3:], [False] * 7)
 
-    def test_always_four_lit_screens(self):
+    def test_always_four_lit_screens_rebound_goals(self):
         playlist = player._build_entry_s0_playlist(1, ["A"])
-        pass_path = os.path.join(player.ENTRY_S0_IMAGE_DIR, player.ENTRY_S0_PASS_NAME)
         for step in playlist:
             self.assertTrue(step.get("finish_balls"))
             self.assertFalse(step.get("entry_digits"))
@@ -110,6 +131,9 @@ class EntryS0PlaylistTests(unittest.TestCase):
             goals = (step.get("field_screens") or {}).get("A") or []
             images = step.get("screen_images") or {}
             self.assertEqual(len(images), 4, step.get("label"))
+            for path in images.values():
+                self.assertTrue(_under_warehouse(path), path)
+                self.assertNotIn("pass.png", os.path.basename(path).lower())
             if step.get("aep_dual_pass"):
                 self.assertEqual(len(goals), 2)
                 halves = {
@@ -119,11 +143,39 @@ class EntryS0PlaylistTests(unittest.TestCase):
                 self.assertEqual(halves, {"L", "R"})
             else:
                 self.assertEqual(len(goals), 1)
-                goal = goals[0]
-                self.assertEqual(
-                    os.path.normcase(images[goal]),
-                    os.path.normcase(pass_path),
+            for sid in goals:
+                name = os.path.basename(images[sid]).lower()
+                self.assertTrue(
+                    name.startswith("teammate-pl-"),
+                    f"goal {sid} should be rebound teammate: {name}",
                 )
+                if step.get("aep_dual_pass"):
+                    self.assertTrue("-02-" in name or "-05-" in name, name)
+                else:
+                    self.assertIn("-02-", name)
+
+    def test_unique_person_ids_per_action(self):
+        for series in (1, 3, 5):
+            playlist = player._build_entry_s0_playlist(series, ["A", "B"])
+            for step in playlist:
+                people = list((step.get("person_ids") or {}).values())
+                self.assertEqual(
+                    len(people),
+                    len(set(people)),
+                    f"duplicate person in {step.get('label')}: {people}",
+                )
+                self.assertEqual(len(people), len(step.get("screen_images") or {}))
+
+    def test_goal_never_opponent_or_neutral_only(self):
+        playlist = player._build_entry_s0_playlist(2, ["A"])
+        for step in playlist:
+            images = step.get("screen_images") or {}
+            for sid in (step.get("field_screens") or {}).get("A") or []:
+                name = os.path.basename(images[sid]).lower()
+                self.assertFalse(name.startswith("opponent-pl-"), name)
+                # Neutral teammate without rebound suffix is not a goal.
+                if name.startswith("teammate-pl-") and name.count("-") <= 3:
+                    self.fail(f"neutral teammate used as goal: {name}")
 
     def test_may_light_screens_3_and_4_during_play(self):
         used = False

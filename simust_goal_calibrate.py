@@ -47,6 +47,9 @@ SCREEN_TO_CABINET = {
     "B4": "9",
     "B5": "10",
     "B6": "11",
+    # Paint-only goal mouths (not display cabinets).
+    "A7": "1",
+    "B7": "8",
 }
 
 # Activated Players T3–T5: screen 1 = left only, screen 6 = right only,
@@ -70,26 +73,40 @@ for _sid in SIDE_GOAL_IDS:
     _body, _side = _sid[:-1], _sid[-1]
     SCREEN_TO_CABINET[_sid] = SCREEN_TO_CABINET[_body] + _side
 
+# Elders Focus: Top / Bottom paint goals per screen (same pencil store as centers).
+# Share the parent cabinet id — hit-test uses paint, not a separate line.
+TB_GOAL_IDS = tuple(
+    f"{field}{n}{side}"
+    for field in ("A", "B")
+    for n in range(1, 7)
+    for side in ("T", "B")
+)
+for _sid in TB_GOAL_IDS:
+    _body = _sid[:-1]
+    SCREEN_TO_CABINET[_sid] = SCREEN_TO_CABINET[_body]
+
 FIELD_A_ORDER = [
-    "A1", "A1L",
-    "A2", "A2L", "A2R",
-    "A3", "A3L", "A3R",
-    "A4", "A4L", "A4R",
-    "A5", "A5L", "A5R",
-    "A6", "A6R",
+    "A1", "A1T", "A1B", "A1L",
+    "A2", "A2T", "A2B", "A2L", "A2R",
+    "A3", "A3T", "A3B", "A3L", "A3R",
+    "A4", "A4T", "A4B", "A4L", "A4R",
+    "A5", "A5T", "A5B", "A5L", "A5R",
+    "A6", "A6T", "A6B", "A6R",
+    "A7",
 ]
 FIELD_B_ORDER = [
-    "B1", "B1L",
-    "B2", "B2L", "B2R",
-    "B3", "B3L", "B3R",
-    "B4", "B4L", "B4R",
-    "B5", "B5L", "B5R",
-    "B6", "B6R",
+    "B1", "B1T", "B1B", "B1L",
+    "B2", "B2T", "B2B", "B2L", "B2R",
+    "B3", "B3T", "B3B", "B3L", "B3R",
+    "B4", "B4T", "B4B", "B4L", "B4R",
+    "B5", "B5T", "B5B", "B5L", "B5R",
+    "B6", "B6T", "B6B", "B6R",
+    "B7",
 ]
 ALL_SCREENS = FIELD_A_ORDER + FIELD_B_ORDER
 CENTER_SCREENS = [
-    "A1", "A2", "A3", "A4", "A5", "A6",
-    "B1", "B2", "B3", "B4", "B5", "B6",
+    "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+    "B1", "B2", "B3", "B4", "B5", "B6", "B7",
 ]
 
 _lock = threading.Lock()

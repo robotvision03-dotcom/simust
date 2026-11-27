@@ -100,9 +100,9 @@ except ImportError:
 
 
 def _screen_side_suffix(value) -> str:
-    """L / R side marker on A3R-style goal ids, else empty."""
+    """L / R (side mouth) or T / B (Elders Top/Bottom) marker, else empty."""
     text = str(value or "").strip().upper()
-    if len(text) >= 3 and text[0] in ("A", "B") and text[-1] in ("L", "R"):
+    if len(text) >= 3 and text[0] in ("A", "B") and text[-1] in ("L", "R", "T", "B"):
         body = text[:-1]
         if body[1:].isdigit() and 1 <= int(body[1:]) <= 6:
             return text[-1]
@@ -110,14 +110,15 @@ def _screen_side_suffix(value) -> str:
 
 
 def _sid(value):
-    """Screen name A1–A6 or B1–B6. Old cabinet numbers are accepted too.
+    """Screen name A1–A6 or B1–B6 (or paint mouth A7/B7). Old cabinets OK.
 
-    Side goals (A3R / A6L) resolve to the parent tile (A3 / A6) for painting.
+    Side goals (A3R / A6L) and Top/Bottom goals (A1T / A1B) resolve to the
+    parent tile (A3 / A1) for painting.
     """
     if value is None:
         return None
     text = str(value).strip().upper()
-    if len(text) >= 3 and text[0] in ("A", "B") and text[-1] in ("L", "R"):
+    if len(text) >= 3 and text[0] in ("A", "B") and text[-1] in ("L", "R", "T", "B"):
         body = text[:-1]
         if body[1:].isdigit():
             text = body
@@ -125,6 +126,9 @@ def _sid(value):
         number = int(text[1:])
         if 1 <= number <= 6:
             return f"{text[0]}{number}"
+        # Paint-only goal mouths (Settings white goal A7 / B7).
+        if number == 7:
+            return f"{text[0]}7"
         return None
     if simust_fields is not None:
         return simust_fields.canonical_screen(value)
@@ -150,7 +154,7 @@ def _named_screens(values):
 
 
 def _goal_sid(value):
-    """Goal id for cues/cylinders — keeps A2R / A6L side mouths (unlike _sid)."""
+    """Goal id for cues — keeps A2R/A6L sides and A1T/A1B Top/Bottom (unlike _sid)."""
     if value is None:
         return None
     text = str(value).strip().upper()
@@ -164,7 +168,7 @@ def _goal_sid(value):
 
 
 def _named_goal_screens(values):
-    """Canonical goal ids, preserving L/R side targets for finish cylinders."""
+    """Canonical goal ids, preserving L/R sides and T/B Top/Bottom regions."""
     names = []
     for value in values or []:
         name = _goal_sid(value)
@@ -356,6 +360,8 @@ except ImportError:
 SCREEN_SAVER_SCALE = 0.60
 # Key → candidate filenames (elite file is currently misspelled "eite.mp4").
 LEVEL_INTRO_FILES = {
+    # Elders uses the SIMUST still logo (no band intro video).
+    "elders": ("logo_simust.jpeg", "logo_simust.png"),
     "foundation": ("foundation.mp4",),
     "entry": ("entry.mp4",),
     "activated": ("activated.mp4",),
@@ -377,6 +383,8 @@ OPENING_LOGO_TEXT_LIFT_LINES = 3
 WC_TEXT_EDGE_MARGIN = 0.10
 WC_TEXT_BOTTOM_LIFT = 0.0
 LEVEL_OPENING_LOGO_FILES = {
+    # Elders: SIMUST brand logo (still), not the Foundation intro video.
+    "elders": ("logo_simust.jpeg", "logo_simust.png", "logo_image.png"),
     "foundation": ("logo_video_foundation.mp4",),
     "entry": ("logo_video_Entry.mp4",),
     "activated": ("logo_video_activated.mp4",),
@@ -390,6 +398,10 @@ ACTIVATED_LOGO_VIDEO = "logo_video_activated.mp4"
 ACTIVATED_LOGO_MAX_WIDTH = OPENING_LOGO_MAX_WIDTH
 ACTIVATED_LOGO_MAX_HEIGHT = OPENING_LOGO_MAX_HEIGHT
 _LEVEL_INTRO_PATH_RULES = (
+    (re.compile(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        re.I,
+    ), "elders"),
     (re.compile(r"L00-Foundation|Foundation-Challenge", re.I), "foundation"),
     (re.compile(r"L01-Entry", re.I), "entry"),
     (re.compile(r"L02-Activated", re.I), "activated"),
@@ -487,6 +499,25 @@ ENTRY_TIMING_DECAY = 0.90
 ENTRY_S0_IMAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "static", "players", "Entry"
 )
+# Shared still warehouse (Entry/Activated/HP/Elite). World Class uses videos.
+# Lives at static/Players-Images (not under static/players/).
+PLAYERS_IMAGE_WAREHOUSE_ROOT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static",
+    "Players-Images",
+)
+PLAYERS_IMAGE_WAREHOUSE_FOLDERS = {
+    "neutral": "Players neutral",
+    "crossball": "Players-Asking for ball-Crossball",
+    "rebound": "Players-Asking for ball-Pass and Rebound",
+    "defending": "Players-Defending",
+    "offside": "Players-OffSide-Trap",
+    "shooting": "Players-shooting the ball",
+    "running": "Players-Running-Left-Or-Right",
+}
+PLAYERS_WAREHOUSE_LEFT_POST = "left_post.jpeg"
+PLAYERS_WAREHOUSE_RIGHT_POST = "right_post.jpeg"
+PLAYERS_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 ENTRY_S0_PASS_NAME = "pass.png"
 ENTRY_S0_ACTIONS_PER_TEST = 10
 ENTRY_S0_SCREEN_COUNT = 6
@@ -615,11 +646,402 @@ ELITE_PLAYERS_PASS_RIGHT = "pass-right.png"
 ELITE_PLAYERS_PER_FIELD = {1: 3, 2: 4, 3: 6, 4: 6, 5: 6}
 # Operator / beginning-info content names — same folders as the frontend picker.
 BAND_CONTENT_SET_LABELS = {
+    "L00-Elders": {
+        0: "Focus",
+        1: "Remember",
+        2: "React",
+        3: "Think",
+        4: "Move",
+    },
     "L01-Entry": {0: "Players", 1: "Numbers"},
     "L02-Activated": {0: "Players", 1: "Numbers", 2: "Divergent"},
     "L03-HighPerformance": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
-    "L04-Elite": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
-    "L05-WorldClass": {1: "Numbers", 2: "Divergent", 3: "Sum"},
+    "L04-Elite": {
+        0: "Players 1",
+        1: "Numbers",
+        2: "Divergent",
+        3: "Sum",
+        4: "Players 2",
+    },
+    "L05-WorldClass": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
+}
+# Elite Players 2 (operator C5 / S4): scripted dual-field scenarios.
+ELITE_PLAYERS2_IMAGE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static",
+    "players",
+    "Elite",
+    "players2",
+)
+# Legacy alias (pack previously lived under world_class).
+WC_PLAYERS_IMAGE_DIR = ELITE_PLAYERS2_IMAGE_DIR
+WC_PLAYERS_PASS = "pass.png"
+WC_PLAYERS_ASKING = "SIMUST-ASking-Ball-03-06-B.png"
+WC_PLAYERS_RUNNING_LEFT = "Player-Running-To-Left-01.png"
+WC_PLAYERS_CROSS_RIGHT = "Teammate-Cross-Right-04-01-B.png"
+WC_PLAYERS_CROSS_LEFT = "Teammate-Cross-Left-03-01-B.png"
+WC_PLAYERS_TEAMMATE = "Teammate-PL-02-B.png"
+WC_PLAYERS_LEFT_POST = "left_post.jpeg"
+WC_PLAYERS_RIGHT_POST = "right_post.jpeg"
+WC_PLAYERS_OPPONENTS = (
+    "Opponent-PL-07-B.png",
+    "Opponent-PL-08-B.png",
+    "Opponent-PL-09-B.png",
+    "Opponent-PL-10-B.png",
+)
+WC_PLAYERS_DEFENDING = (
+    "SIMUST-Defending-01-01-B.png",
+    "SIMUST-Defending-05-01-B.png",
+)
+# Gray filler tiles removed — leave those seats empty instead.
+WC_PLAYERS_GRAY_RGB = (110, 110, 110)
+# Elite Players 2: 5 tests × 9 actions (=45) per sub-level; T2–T5 reuse layouts faster.
+WC_PLAYERS_T1_ACTIONS = 9
+WC_PLAYERS_TEST_COUNT = 5
+# Each later S4.Tn / WC S0.Tn shortens On/Gap by 5% vs T1 baseline.
+WC_PLAYERS_TIMING_DECAY = 0.95
+# World Class C1.T1 Players: 2× baseline, then +20% more (videos need longer).
+WC_PLAYERS_C1T1_TIME_SCALE = 2.4
+# Combined A+B ellipse ring (clockwise): A1→…→A6→B1→…→B6→A1.
+WC_ELLIPSE_RING = (
+    "A1", "A2", "A3", "A4", "A5", "A6",
+    "B1", "B2", "B3", "B4", "B5", "B6",
+)
+# World Class Players (S0 / C1): same layouts as Elite Players 2, short videos.
+# Video warehouse lives at static/Players-Videos (not under static/players/).
+WC_PLAYERS_VIDEO_ROOT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static",
+    "Players-Videos",
+)
+WC_PLAYERS_VIDEO_FOLDERS = {
+    "neutral": "01-Players in Neutral pose",
+    "asking": "02-Players asking for the ball",
+    "cross": "03-Players skaping for Cross ball",
+    "offside": "04-Players-OffSide-Trap",
+    "shooting": "05-Players-shooting the ball",
+    "running": "06-Players-Running-Left-Or-Right",
+}
+WC_PLAYERS_VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".webm")
+# Arena halves for CrossBall goals (ball arrives from that side).
+WC_CROSSBALL_LEFT_ARENAS = (1, 2, 3)
+WC_CROSSBALL_RIGHT_ARENAS = (4, 5, 6)
+# COGFIT Focus (Concentration & Attention) — alternate Field A / Field B.
+ELDERS_FOCUS_ACTIONS_PER_TEST = 10
+ELDERS_FOCUS_INSTRUCTION_MS = 5000
+# Per finished screen: Accuracy ring hold, then peer-field continue cue.
+ELDERS_FOCUS_RESULT_HOLD_MS = 5000
+# Destination screen: show number + "Screen N continue here" before next test.
+ELDERS_FOCUS_NEXT_FIELD_CUE_MS = 10000
+# Per-screen action countdown (top corner). Ends the screen on 0 if <10 hits.
+ELDERS_FOCUS_SCREEN_TIMER_SEC = 20
+# Instruction text between the two Top/Bottom shapes.
+ELDERS_FOCUS_INSTR_POINT = 14
+ELDERS_FOCUS_INSTR_POS = (0.5, 0.50)
+# Always-visible cabinet screen number (top center).
+ELDERS_FOCUS_NUM_POINT = 18
+ELDERS_FOCUS_NUM_POS = (0.5, 0.08)
+# Countdown timer (top-right corner).
+ELDERS_FOCUS_TIMER_POINT = 16
+ELDERS_FOCUS_TIMER_POS = (0.82, 0.08)
+# C1.T1 timing × this factor vs Entry baseline.
+ELDERS_FOCUS_C1T1_TIME_SCALE = 3.0
+ELDERS_FOCUS_SMALL_SCALE = 0.55
+ELDERS_FOCUS_COLORS = (
+    ("red", (220, 38, 38)),
+    ("blue", (37, 99, 235)),
+    ("green", (22, 163, 74)),
+    ("yellow", (234, 179, 8)),
+    ("purple", (147, 51, 234)),
+    ("orange", (249, 115, 22)),
+    ("cyan", (8, 145, 178)),
+    ("pink", (236, 72, 153)),
+)
+# C1.T1–T5: alternate fields + task (color / smaller shape).
+# T1 A red → T2 B small circle → T3 A small rectangle → T4 B small polygon → T5 A small ellipse.
+ELDERS_FOCUS_TEST_PLAN = {
+    1: {
+        "field": "A",
+        "task": "color",
+        "shape": "circle",
+        "target": "red",
+        "instruction": "Hit the Red Color\nusing ball",
+    },
+    2: {
+        "field": "B",
+        "task": "small",
+        "shape": "circle",
+        "target": "",
+        "instruction": "Hit the smaller circle\nusing ball",
+    },
+    3: {
+        "field": "A",
+        "task": "small",
+        "shape": "rectangle",
+        "target": "",
+        "instruction": "Hit the smaller rectangle\nusing ball",
+    },
+    4: {
+        "field": "B",
+        "task": "small",
+        "shape": "polygon",
+        "target": "",
+        "instruction": "Hit the smaller polygon\nusing ball",
+    },
+    5: {
+        "field": "A",
+        "task": "small",
+        "shape": "ellipse",
+        "target": "",
+        "instruction": "Hit the smaller ellipse\nusing ball",
+    },
+}
+# Legacy color-name map (T1 still uses red).
+ELDERS_FOCUS_TARGET_BY_TEST = {
+    1: "red",
+    2: "blue",
+    3: "green",
+    4: "orange",
+    5: "purple",
+}
+ELDERS_FOCUS_BG = (232, 213, 183)  # warm COGFIT brand fill
+# COGFIT Remember (Memory) — same field-wide A↔B flow as Focus (C2.T1–T5).
+ELDERS_REMEMBER_ACTIONS_PER_TEST = 10
+ELDERS_REMEMBER_INSTRUCTION_MS = 5000
+ELDERS_REMEMBER_RESULT_HOLD_MS = 5000
+ELDERS_REMEMBER_NEXT_FIELD_CUE_MS = 10000
+ELDERS_REMEMBER_SCREEN_TIMER_SEC = 20
+ELDERS_REMEMBER_C2T1_TIME_SCALE = 3.0
+ELDERS_REMEMBER_SMALL_SCALE = 0.55
+ELDERS_REMEMBER_BG = ELDERS_FOCUS_BG
+# C2.T1–T5: encode → blank → probe; alternate fields like Focus.
+ELDERS_REMEMBER_TEST_PLAN = {
+    1: {
+        "field": "A",
+        "task": "location",
+        "shape": "circle",
+        "encode_ms": 2000,
+        "blank_ms": 600,
+        "instruction": "Remember which half lights up\nthen hit that half",
+    },
+    2: {
+        "field": "B",
+        "task": "color",
+        "shape": "circle",
+        "encode_ms": 1600,
+        "blank_ms": 600,
+        "instruction": "Remember the color\nthen hit that color",
+    },
+    3: {
+        "field": "A",
+        "task": "shape",
+        "shape": "rectangle",
+        "encode_ms": 1400,
+        "blank_ms": 500,
+        "instruction": "Remember the shape\nthen hit that shape",
+    },
+    4: {
+        "field": "B",
+        "task": "size",
+        "shape": "circle",
+        "encode_ms": 1200,
+        "blank_ms": 500,
+        "instruction": "Remember which half was smaller\nthen hit that half",
+    },
+    5: {
+        "field": "A",
+        "task": "color_shape",
+        "shape": "ellipse",
+        "encode_ms": 1000,
+        "blank_ms": 400,
+        "instruction": "Remember the colored shape\nthen hit the match",
+    },
+}
+# COGFIT React (C3 / S2) — speeded choice + inhibition.
+ELDERS_REACT_TEST_PLAN = {
+    1: {
+        "field": "A",
+        "task": "flash",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the half that lights up\nas fast as you can",
+    },
+    2: {
+        "field": "B",
+        "task": "go_nogo",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "GREEN = hit that half\nRED = hit the other half",
+    },
+    3: {
+        "field": "A",
+        "task": "opposite",
+        "shape": "circle",
+        "encode_ms": 900,
+        "blank_ms": 350,
+        "instruction": "Watch the flash\nthen hit the opposite half",
+    },
+    4: {
+        "field": "B",
+        "task": "switch",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Actions 1–5: hit the lit half\nActions 6–10: hit the opposite",
+    },
+    5: {
+        "field": "A",
+        "task": "conflict",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit by the WORD (TOP/BOT)\nignore the color location",
+    },
+}
+# COGFIT Think (C4 / S3) — rules & odd-one-out decisions.
+ELDERS_THINK_TEST_PLAN = {
+    1: {
+        "field": "A",
+        "task": "odd_color",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the different color",
+    },
+    2: {
+        "field": "B",
+        "task": "odd_shape",
+        "shape": "rectangle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the different shape",
+    },
+    3: {
+        "field": "A",
+        "task": "rule_color",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the named color",
+    },
+    4: {
+        "field": "B",
+        "task": "quantity",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the larger shape",
+    },
+    5: {
+        "field": "A",
+        "task": "rule_combo",
+        "shape": "ellipse",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the matching\ncolor + shape",
+    },
+}
+# COGFIT Move (C5 / S4) — spatial / directional goals.
+ELDERS_MOVE_TEST_PLAN = {
+    1: {
+        "field": "A",
+        "task": "top",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Always hit the TOP half",
+    },
+    2: {
+        "field": "B",
+        "task": "bottom",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Always hit the BOTTOM half",
+    },
+    3: {
+        "field": "A",
+        "task": "alternate",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Odd actions → TOP\nEven actions → BOTTOM",
+    },
+    4: {
+        "field": "B",
+        "task": "follow",
+        "shape": "circle",
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "instruction": "Hit the half with the mark",
+    },
+    5: {
+        "field": "A",
+        "task": "far",
+        "shape": "circle",
+        "encode_ms": 700,
+        "blank_ms": 300,
+        "instruction": "See the cue\nthen hit the far half",
+    },
+}
+ELDERS_COGFIT_SHARED = {
+    "actions_per_test": 10,
+    "instruction_ms": 5000,
+    "result_hold_ms": 5000,
+    "peer_number_ms": 10000,
+    "screen_timer_sec": 20,
+    "t1_time_scale": 3.0,
+    "bg": ELDERS_FOCUS_BG,
+}
+# mode → series_group / component / playlist flags
+ELDERS_COGFIT_MODES = {
+    "focus": {
+        "component": "C1",
+        "series_group": 0,
+        "s_key": "S0",
+        "label": "Focus",
+        "title": "Concentration & Attention",
+        "flag": "elders_focus",
+        "plan": ELDERS_FOCUS_TEST_PLAN,
+    },
+    "remember": {
+        "component": "C2",
+        "series_group": 1,
+        "s_key": "S1",
+        "label": "Remember",
+        "title": "Memory / Remember",
+        "flag": "elders_remember",
+        "plan": ELDERS_REMEMBER_TEST_PLAN,
+    },
+    "react": {
+        "component": "C3",
+        "series_group": 2,
+        "s_key": "S2",
+        "label": "React",
+        "title": "Reaction / Inhibition",
+        "flag": "elders_react",
+        "plan": ELDERS_REACT_TEST_PLAN,
+    },
+    "think": {
+        "component": "C4",
+        "series_group": 3,
+        "s_key": "S3",
+        "label": "Think",
+        "title": "Decision / Think",
+        "flag": "elders_think",
+        "plan": ELDERS_THINK_TEST_PLAN,
+    },
+    "move": {
+        "component": "C5",
+        "series_group": 4,
+        "s_key": "S4",
+        "label": "Move",
+        "title": "Spatial / Move",
+        "flag": "elders_move",
+        "plan": ELDERS_MOVE_TEST_PLAN,
+    },
 }
 # Activated A-T1..A-T5: same 5 tests × 6 screens as Entry.
 # Tests 1, 2, 4 and 5 use this order on screens 1–6. Test 3 shuffles these numbers.
@@ -1191,6 +1613,87 @@ def _band_series_num(*paths, band: str) -> Optional[int]:
     return int(match.group(1))
 
 
+def _elders_focus_series_num(*paths) -> Optional[int]:
+    """COGFIT Focus S0.T1..S0.T5 (operator C1.T1..T5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        blob,
+        re.I,
+    ):
+        return None
+    if not re.search(r"S0[.-]T[1-5]|Focus|/S0\.|/Focus", blob, re.I):
+        if not re.search(r"S0[.-]T[1-5]", blob, re.I):
+            return None
+    match = re.search(r"S0[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _elders_remember_series_num(*paths) -> Optional[int]:
+    """COGFIT Remember S1.T1..S1.T5 (operator C2.T1..T5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        blob,
+        re.I,
+    ):
+        return None
+    if not re.search(r"S1[.-]T[1-5]|Remember|/S1\.|/Remember|/Memory", blob, re.I):
+        return None
+    # Prefer explicit S1.T#; avoid matching Focus S0.
+    match = re.search(r"S1[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _elders_react_series_num(*paths) -> Optional[int]:
+    """COGFIT React S2.T1..S2.T5 (operator C3.T1..T5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        blob,
+        re.I,
+    ):
+        return None
+    if not re.search(r"S2[.-]T[1-5]|React|/S2\.|/React", blob, re.I):
+        return None
+    match = re.search(r"S2[.-]T([1-5])", blob, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _elders_think_series_num(*paths) -> Optional[int]:
+    """COGFIT Think S3.T1..S3.T5 (operator C4.T1..T5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        blob,
+        re.I,
+    ):
+        return None
+    if not re.search(r"S3[.-]T[1-5]|Think|/S3\.|/Think", blob, re.I):
+        return None
+    match = re.search(r"S3[.-]T([1-5])", blob, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _elders_move_series_num(*paths) -> Optional[int]:
+    """COGFIT Move S4.T1..S4.T5 (operator C5.T1..T5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        blob,
+        re.I,
+    ):
+        return None
+    if not re.search(r"S4[.-]T[1-5]|Move|/S4\.|/Move", blob, re.I):
+        return None
+    match = re.search(r"S4[.-]T([1-5])", blob, re.I)
+    return int(match.group(1)) if match else None
+
+
 def _entry_s0_series_num(*paths) -> Optional[int]:
     """Entry S0.T1..S0.T5 (legacy A0-T / S0-T) → series 1..5."""
     blob = " ".join(str(p or "") for p in paths)
@@ -1333,6 +1836,28 @@ def _elite_s3_series_num(*paths) -> Optional[int]:
     return _band_s3_series_num(*paths, band=r"L04-Elite")
 
 
+def _elite_s4_series_num(*paths) -> Optional[int]:
+    """Elite S4.T1..S4.T5 (Players 2, operator C5) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(r"L04-Elite", blob, re.I):
+        return None
+    match = re.search(r"S4[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _world_class_s0_series_num(*paths) -> Optional[int]:
+    """World Class S0.T1..S0.T5 (Players, operator C1) → series 1..5."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(r"L05-WorldClass|World[-_ ]?Class", blob, re.I):
+        return None
+    match = re.search(r"S0[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _world_class_series_num(*paths) -> Optional[int]:
     return _band_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
 
@@ -1366,6 +1891,9 @@ COMBINED_PLAY_MESSAGE = (
 def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Optional[int]]:
     """Return (series_group, set_num). Group 3=S3.T*, 2=S2.T*, 1=S1.T*, 0=S0.T*."""
     if band == "world-class":
+        s0 = _world_class_s0_series_num(text)
+        if s0:
+            return 0, s0
         s3 = _world_class_s3_series_num(text)
         if s3:
             return 3, s3
@@ -1377,6 +1905,9 @@ def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Opti
     s0 = _elite_s0_series_num(text)
     if s0:
         return 0, s0
+    s4 = _elite_s4_series_num(text)
+    if s4:
+        return 4, s4
     s3 = _elite_s3_series_num(text)
     if s3:
         return 3, s3
@@ -3193,28 +3724,237 @@ def _hw_screen_for_field(fid: str, pair) -> Optional[str]:
     return _screen_name("B", b_arena)
 
 
-def _entry_s0_image_paths(series_num: int) -> Tuple[Optional[str], List[str]]:
-    """Pass goal path + distractor pool for Entry S0.T{series_num}."""
-    series = max(1, min(5, int(series_num or 1)))
-    names = [ENTRY_S0_PASS_NAME, *ENTRY_S0_T12_DISTRACTORS]
-    if series >= 3:
-        names.extend(ENTRY_S0_T35_EXTRA)
-    paths = []
-    for name in names:
-        path = os.path.join(ENTRY_S0_IMAGE_DIR, name)
+def _players_media_person_id(name: str) -> Optional[int]:
+    """Person tag from filename (first number). Same # = same player across roles."""
+    return _wc_video_person_id(name)
+
+
+def _players_warehouse_list(folder_key: str) -> List[str]:
+    folder = os.path.join(
+        PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        PLAYERS_IMAGE_WAREHOUSE_FOLDERS.get(folder_key) or "",
+    )
+    if not os.path.isdir(folder):
+        return []
+    out = []
+    for name in sorted(os.listdir(folder)):
+        low = name.lower()
+        if not low.endswith(PLAYERS_IMAGE_EXTS):
+            continue
+        path = os.path.join(folder, name)
         if os.path.isfile(path):
-            paths.append(path)
+            out.append(path)
+    return out
+
+
+def _players_warehouse_post_paths() -> Dict[str, str]:
+    """left_post / right_post stills at the warehouse root."""
+    root = PLAYERS_IMAGE_WAREHOUSE_ROOT
+    out = {}
+    for key, name in (
+        ("left_post", PLAYERS_WAREHOUSE_LEFT_POST),
+        ("right_post", PLAYERS_WAREHOUSE_RIGHT_POST),
+    ):
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            out[key] = path
         else:
-            logger.error("Entry S0 image missing: %s", path)
-    if not paths:
+            for alt in (name.replace(".jpeg", ".jpg"), name.replace(".jpeg", ".png")):
+                cand = os.path.join(root, alt)
+                if os.path.isfile(cand):
+                    out[key] = cand
+                    break
+    return out
+
+
+def _players_warehouse_catalog() -> Dict[str, List[Tuple[str, int]]]:
+    """Role → [(abspath, person_id)] from static/Players-Images warehouse.
+
+    pass / rebound = Teammate-PL-*-02-B (center goals; replaces pass.png).
+    pass_copy = any Teammate-PL in Pass-and-Rebound (AP second goal).
+    asking = SIMUST-ASking-Ball (replaces pass3).
+    cross_left/right = Crossball teammate stills (replaces pass-left/right).
+    """
+
+    def _pool(paths: List[str], pred) -> List[Tuple[str, int]]:
+        items = []
+        for path in paths:
+            base = os.path.basename(path).lower()
+            if not pred(base):
+                continue
+            pid = _players_media_person_id(path)
+            if pid is None:
+                continue
+            items.append((path, pid))
+        return items
+
+    neutral = _players_warehouse_list("neutral")
+    rebound = _players_warehouse_list("rebound")
+    cross = _players_warehouse_list("crossball")
+    defending = _players_warehouse_list("defending")
+    offside = _players_warehouse_list("offside")
+    pass_pool = _pool(
+        rebound,
+        lambda n: n.startswith("teammate-pl-") and "-02-" in n,
+    )
+    pass_copy_pool = _pool(rebound, lambda n: n.startswith("teammate-pl-"))
+    return {
+        # Center goals (old pass.png).
+        "pass": pass_pool,
+        "rebound": pass_pool,
+        # AP second goal / alternate Teammate-PL (old pass-copy.png).
+        "pass_copy": pass_copy_pool,
+        # Alternate center style (old pass3.png).
+        "asking": _pool(rebound, lambda n: "asking" in n),
+        "cross_left": _pool(
+            cross, lambda n: "left" in n and ("cross" in n or "crossball" in n)
+        ),
+        "cross_right": _pool(
+            cross, lambda n: "right" in n and ("cross" in n or "crossball" in n)
+        ),
+        # Neutral distractors (never goals).
+        "teammate": _pool(
+            neutral,
+            lambda n: (
+                n.startswith("teammate-pl-")
+                and "-02-" not in n
+                and "-05-" not in n
+            ),
+        ),
+        "opponent": _pool(neutral, lambda n: n.startswith("opponent-pl-")),
+        "defender": _pool(defending, lambda n: "defending" in n),
+        # HP offside traps.
+        "offside_left": _pool(
+            offside,
+            lambda n: "offside" in n and "right" not in n,
+        ),
+        "offside_right": _pool(
+            offside, lambda n: "offside" in n and "right" in n
+        ),
+        # Offside trap goal seat historically used Teammate-PL-*-05-B.
+        "trap_teammate": _pool(
+            rebound,
+            lambda n: n.startswith("teammate-pl-") and "-05-" in n,
+        ),
+    }
+
+
+def _players_warehouse_pick(
+    catalog: Dict[str, List[Tuple[str, int]]],
+    role: str,
+    used_people: set,
+    rng: random.Random,
+) -> Optional[Tuple[str, int]]:
+    pool = list(catalog.get(role) or [])
+    rng.shuffle(pool)
+    for path, pid in pool:
+        if pid in used_people:
+            continue
+        used_people.add(pid)
+        return path, pid
+    return None
+
+
+def _entry_s0_goal_role_for_arena(arena: int, side: str = "") -> str:
+    """Center pass → Teammate-PL-*-02; L/R sided pass → crossball left/right."""
+    side_u = str(side or "").upper()[:1]
+    if side_u == "L":
+        return "cross_left"
+    if side_u == "R":
+        return "cross_right"
+    half = _activated_s0_side_half(arena)
+    # Center-pass style stays pass (*-02); sided halves allow crossball
+    # when an explicit L/R pass action is requested via side=.
+    if half in ("L", "R") and side_u:
+        return "cross_left" if half == "L" else "cross_right"
+    return "pass"
+
+
+def _entry_s0_pick_field_media(
+    catalog: Dict[str, List[Tuple[str, int]]],
+    *,
+    series_num: int,
+    lit_count: int,
+    dual_ap: bool,
+    used_people: set,
+    rng: random.Random,
+    side: str = "",
+) -> Tuple[Optional[str], Optional[str], List[str]]:
+    """Pick warehouse goals + unique distractors for one field action."""
+    series = max(1, min(5, int(series_num or 1)))
+    want = max(1, min(6, int(lit_count or 1)))
+    # Choose goal seat first so L/R crossball can match the mouth if sided.
+    side_u = str(side or "").upper()[:1]
+    if side_u == "L":
+        pass_pool = list(_activated_s0_pass_arenas("L"))
+    elif side_u == "R":
+        pass_pool = list(_activated_s0_pass_arenas("R"))
+    else:
+        pass_pool = list(range(1, ENTRY_S0_SCREEN_COUNT + 1))
+    if not pass_pool:
+        return None, None, []
+    goal_arena = int(rng.choice(pass_pool))
+    goal_role = _entry_s0_goal_role_for_arena(goal_arena, side_u)
+    goal_pick = _players_warehouse_pick(catalog, goal_role, used_people, rng)
+    if not goal_pick and goal_role != "pass":
+        goal_pick = _players_warehouse_pick(catalog, "pass", used_people, rng)
+    if not goal_pick:
+        return None, None, []
+    pass_path = goal_pick[0]
+    copy_path = None
+    if dual_ap:
+        # Second AP goal: another Teammate-PL person (never same tag #).
+        copy_pick = _players_warehouse_pick(catalog, "pass_copy", used_people, rng)
+        if not copy_pick:
+            copy_pick = _players_warehouse_pick(catalog, "pass", used_people, rng)
+        if not copy_pick:
+            return None, None, []
+        copy_path = copy_pick[0]
+    need = max(0, want - (2 if dual_ap else 1))
+    distractors: List[str] = []
+    # T1–T2: opponents only. T3–T5: opponents + one teammate when possible.
+    roles = ["opponent"] * need
+    if series >= 3 and need >= 2:
+        roles[0] = "teammate"
+    # Mix defenders into denser walls (Activated/HP/Elite).
+    if need >= 4:
+        roles[1] = "defender"
+    rng.shuffle(roles)
+    for role in roles:
+        picked = _players_warehouse_pick(catalog, role, used_people, rng)
+        if not picked and role != "opponent":
+            picked = _players_warehouse_pick(catalog, "opponent", used_people, rng)
+        if not picked:
+            picked = _players_warehouse_pick(catalog, "defender", used_people, rng)
+        if not picked:
+            return None, None, []
+        distractors.append(picked[0])
+    return pass_path, copy_path, distractors
+
+
+def _entry_s0_image_paths(series_num: int) -> Tuple[Optional[str], List[str]]:
+    """Compatibility: one rebound goal + warehouse distractors for Entry S0.Tn."""
+    series = max(1, min(5, int(series_num or 1)))
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("rebound") or not catalog.get("opponent"):
+        logger.error(
+            "Entry S0 warehouse missing rebound/opponent under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
         return None, []
-    pass_path = os.path.join(ENTRY_S0_IMAGE_DIR, ENTRY_S0_PASS_NAME)
-    if not os.path.isfile(pass_path):
+    rng = random.Random(52000 + series)
+    used = set()
+    pass_path, _, distractors = _entry_s0_pick_field_media(
+        catalog,
+        series_num=series,
+        lit_count=int(PLAYERS_LIT_SCREENS_ENTRY),
+        dual_ap=False,
+        used_people=used,
+        rng=rng,
+    )
+    if not pass_path or len(distractors) < 2:
         return None, []
-    distractors = [p for p in paths if os.path.normcase(p) != os.path.normcase(pass_path)]
-    if not distractors:
-        return None, []
-    return pass_path, distractors
+    return pass_path, list(distractors)
 
 
 def _entry_s0_screens_adjacent(a: int, b: int) -> bool:
@@ -3350,22 +4090,1141 @@ def _entry_s0_screen_assignment(
     return assignment, goal_screen
 
 
-def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
-    """Entry S0.T1–T5: Foundation-style finish_balls with static player PNGs.
+def _elders_mix_rgb(a, b, t: float) -> Tuple[int, int, int]:
+    """Blend RGB ``a`` toward ``b`` by ``t`` (0=keep a, 1=full b)."""
+    t = max(0.0, min(1.0, float(t)))
+    return (
+        int(round(a[0] * (1.0 - t) + b[0] * t)),
+        int(round(a[1] * (1.0 - t) + b[1] * t)),
+        int(round(a[2] * (1.0 - t) + b[2] * t)),
+    )
 
-    Always 4 lit screens. C1.T1–T2: 30% dual-goal AP in order; C1.T3–T5: 50%
-    AP shuffled. AP uses pass + pass-copy on opposite halves (1–3 vs 4–6).
+
+def _elders_focus_target_name(test_num: int) -> str:
+    n = max(1, min(5, int(test_num or 1)))
+    plan = ELDERS_FOCUS_TEST_PLAN.get(n) or {}
+    return str(plan.get("target") or ELDERS_FOCUS_TARGET_BY_TEST.get(n) or "red")
+
+
+def _elders_focus_plan(test_num: int) -> dict:
+    n = max(1, min(5, int(test_num or 1)))
+    return dict(ELDERS_FOCUS_TEST_PLAN.get(n) or ELDERS_FOCUS_TEST_PLAN[1])
+
+
+def _elders_focus_pick_pair(
+    test_num: int = 1, target_name: str = "", shape: str = "circle",
+) -> Tuple[dict, dict, str]:
+    """Two Top/Bottom shapes; exactly one is the red (or named) target color."""
+    n = max(1, min(5, int(test_num or 1)))
+    similarity = (n - 1) / 4.0 * 0.82
+    want = str(target_name or _elders_focus_target_name(n)).strip().lower() or "red"
+    shape_n = str(shape or "circle").strip().lower() or "circle"
+    palette = list(ELDERS_FOCUS_COLORS)
+    target = next((c for c in palette if c[0] == want), palette[0])
+    others = [c for c in palette if c[0] != target[0]] or palette[1:]
+    if similarity < 0.25:
+        preferred = {
+            "red": ("yellow", "cyan", "green"),
+            "blue": ("yellow", "orange", "red"),
+            "green": ("red", "pink", "purple"),
+            "orange": ("blue", "cyan", "purple"),
+            "purple": ("yellow", "green", "cyan"),
+        }
+        names = preferred.get(target[0]) or tuple(c[0] for c in others)
+        pool = [c for c in others if c[0] in names] or others
+        other = random.choice(pool)
+        distractor_rgb = tuple(other[1])
+        distractor_name = other[0]
+    else:
+        other = random.choice(others)
+        distractor_rgb = _elders_mix_rgb(other[1], target[1], similarity)
+        distractor_name = other[0]
+    target_spec = {
+        "name": target[0], "rgb": tuple(target[1]), "scale": 1.0, "shape": shape_n,
+    }
+    other_spec = {
+        "name": distractor_name, "rgb": distractor_rgb, "scale": 1.0, "shape": shape_n,
+    }
+    goal_half = "T" if random.random() < 0.5 else "B"
+    if goal_half == "T":
+        return target_spec, other_spec, "T"
+    return other_spec, target_spec, "B"
+
+
+def _elders_focus_pick_size_pair(shape: str = "circle") -> Tuple[dict, dict, str]:
+    """Two same-color shapes; exactly one is smaller (hit the smaller one)."""
+    shape_n = str(shape or "circle").strip().lower() or "circle"
+    color = random.choice(list(ELDERS_FOCUS_COLORS))
+    small = float(ELDERS_FOCUS_SMALL_SCALE)
+    big_spec = {
+        "name": color[0], "rgb": tuple(color[1]), "scale": 1.0, "shape": shape_n,
+    }
+    small_spec = {
+        "name": color[0], "rgb": tuple(color[1]), "scale": small, "shape": shape_n,
+    }
+    goal_half = "T" if random.random() < 0.5 else "B"
+    if goal_half == "T":
+        return small_spec, big_spec, "T"
+    return big_spec, small_spec, "B"
+
+
+def _elders_focus_make_screen_colors(test_num: int, sid: str) -> Tuple[dict, str]:
+    """Build Top/Bottom paint + goal region id for one Focus screen."""
+    plan = _elders_focus_plan(test_num)
+    task = str(plan.get("task") or "color")
+    shape = str(plan.get("shape") or "circle")
+    target = str(plan.get("target") or "")
+    if task == "color":
+        top_c, bot_c, goal_half = _elders_focus_pick_pair(test_num, target, shape)
+    else:
+        top_c, bot_c, goal_half = _elders_focus_pick_size_pair(shape)
+    goal_rid = f"{sid}{goal_half}"
+    spec = {
+        "top": dict(top_c),
+        "bottom": dict(bot_c),
+        "red_half": goal_half,
+        "goal_region": goal_rid,
+        "task": task,
+        "shape": shape,
+        "target": target,
+        "test_num": int(test_num),
+    }
+    return spec, goal_rid
+
+
+def _elders_focus_instruction(test_num: int = 1, target: str = "") -> str:
+    plan = _elders_focus_plan(test_num)
+    text = str(plan.get("instruction") or "").strip()
+    if text:
+        return text
+    title = str(target or plan.get("target") or "red")
+    title = title[:1].upper() + title[1:]
+    return f"Hit the {title} Color\nusing ball"
+
+
+def _build_elders_focus_playlist(series_num: int, active_fields) -> List[dict]:
+    """COGFIT Focus: alternate Field A / B across C1.T1–T5.
+
+    T1 A red → T2 B smaller circle → T3 A smaller rectangle →
+    T4 B smaller polygon → T5 A smaller ellipse.
+    Always uses both cabinet halves (even if only Field A is booked) so the
+    player moves A→B→A→B→A. No final results film.
+    """
+    booked = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not booked:
+        return []
+    # Focus needs both halves for the go-to / alternate design.
+    active = ["A", "B"]
+    series = max(1, min(5, int(series_num or 1)))
+    on_ms, gap_ms = _entry_series_timing_ms(series)
+    if series == 1:
+        scale = float(ELDERS_FOCUS_C1T1_TIME_SCALE)
+        on_ms = max(1, int(round(on_ms * scale)))
+        gap_ms = max(0, int(round(gap_ms * scale)))
+    actions_per_test = int(ELDERS_FOCUS_ACTIONS_PER_TEST)
+    instr_ms = int(ELDERS_FOCUS_INSTRUCTION_MS)
+    if series == 1:
+        instr_ms = max(1, int(round(instr_ms * float(ELDERS_FOCUS_C1T1_TIME_SCALE))))
+    test_num = 1
+    plan = _elders_focus_plan(test_num)
+    play_fid = str(plan.get("field") or "A")
+    if play_fid not in active:
+        play_fid = "A"
+    next_fid = "B" if play_fid == "A" else "A"
+    target = str(plan.get("target") or "red")
+    field_screens = {}
+    screen_colors = {}
+    # Live goals only on the starting play field; peer field shows numbers only.
+    goals = []
+    for n in range(1, 7):
+        sid = f"{play_fid}{n}"
+        spec, goal_rid = _elders_focus_make_screen_colors(test_num, sid)
+        spec["countdown"] = int(ELDERS_FOCUS_SCREEN_TIMER_SEC)
+        spec["show_number"] = True
+        goals.append(goal_rid)
+        screen_colors[sid] = spec
+    field_screens[play_fid] = goals
+    for n in range(1, 7):
+        sid = f"{next_fid}{n}"
+        # Idle half stays empty until its test starts (no standby numbers).
+        screen_colors[sid] = {
+            "top": {"name": "bg", "rgb": ELDERS_FOCUS_BG, "scale": 1.0, "shape": "circle"},
+            "bottom": {"name": "bg", "rgb": ELDERS_FOCUS_BG, "scale": 1.0, "shape": "circle"},
+            "red_half": "",
+            "goal_region": "",
+            "task": "idle",
+            "shape": "circle",
+            "test_num": 0,
+            "show_number": False,
+            "empty": True,
+        }
+    field_screens[next_fid] = []
+    budget_ms = max(on_ms, actions_per_test * on_ms * ENTRY_TEST_COUNT)
+    playlist = [{
+        "kind": "labeled_action",
+        "index": 1,
+        "test_num": 1,
+        "action_in_set": 1,
+        "actions_in_set": actions_per_test,
+        "is_last_in_set": True,
+        "timing_scale": 1.0,
+        "fixed_timing": True,
+        "on_ms": on_ms,
+        "gap_ms": gap_ms,
+        "budget_ms": int(budget_ms),
+        "action_num": 1,
+        "action": "COLOR",
+        "no_fillers": True,
+        "elders_focus": True,
+        "elders_color_task": True,
+        "elders_independent_screens": True,
+        "elders_chain_tests": int(ENTRY_TEST_COUNT),
+        "elders_dual_field_chain": True,
+        # Whole field finishes → results → clear idle field → intro → other field.
+        "elders_field_wide_handoff": True,
+        "elders_lane_count": 6,
+        "elders_task": str(plan.get("task") or "color"),
+        "elders_shape": str(plan.get("shape") or "circle"),
+        "elders_target_color": target,
+        "elders_dual_round": True,
+        "screen_goal_tb": True,
+        "elders_accuracy_only": True,
+        "elders_no_final_results": True,
+        "elders_skip_per_video_results": True,
+        "elders_play_field": play_fid,
+        "elders_play_fields": list(active),
+        "elders_booked_fields": list(booked),
+        "elders_next_field": next_fid,
+        "elders_spawn_peer_on_done": False,
+        "elders_peer_task": str(_elders_focus_plan(2).get("task") or "small"),
+        "elders_show_screen_numbers": True,
+        "elders_force_both_fields": True,
+        "elders_screen_timer_sec": int(ELDERS_FOCUS_SCREEN_TIMER_SEC),
+        "elders_result_hold_ms": int(ELDERS_FOCUS_RESULT_HOLD_MS),
+        "elders_peer_number_ms": int(ELDERS_FOCUS_NEXT_FIELD_CUE_MS),
+        "require_all_goals": True,
+        "instruction_ms": int(instr_ms),
+        "instruction_text": _elders_focus_instruction(test_num, target),
+        "arena_pair": (1, 1),
+        "field_screens": field_screens,
+        "screen_colors": dict(screen_colors),
+        "gap_screen_images": {},
+        "screen_images": {},
+        "background_rgb": tuple(ELDERS_FOCUS_BG),
+        "label": (
+            f"COGFIT Focus C1.T1–T{ENTRY_TEST_COUNT} "
+            f"A/B alternate {actions_per_test}/screen "
+            f"booked={''.join(booked)} on={on_ms}ms"
+        ),
+        "path": f"image://COGFIT/Focus/S0.T{series}/C1.T1-T{ENTRY_TEST_COUNT}/AB",
+        "series_group": 0,
+        "series_num": int(series),
+    }]
+    logger.info(
+        "COGFIT Focus: A/B alternate C1.T1–T%s × %s actions start=%s next=%s booked=%s",
+        ENTRY_TEST_COUNT,
+        actions_per_test,
+        play_fid,
+        next_fid,
+        booked,
+    )
+    return _stamp_finish_balls(playlist)
+
+
+def _elders_remember_plan(test_num: int) -> dict:
+    n = max(1, min(5, int(test_num or 1)))
+    return dict(ELDERS_REMEMBER_TEST_PLAN.get(n) or ELDERS_REMEMBER_TEST_PLAN[1])
+
+
+def _elders_remember_instruction(test_num: int = 1) -> str:
+    plan = _elders_remember_plan(test_num)
+    return str(plan.get("instruction") or "Remember, then hit the match").strip()
+
+
+def _elders_react_plan(test_num: int) -> dict:
+    n = max(1, min(5, int(test_num or 1)))
+    return dict(ELDERS_REACT_TEST_PLAN.get(n) or ELDERS_REACT_TEST_PLAN[1])
+
+
+def _elders_think_plan(test_num: int) -> dict:
+    n = max(1, min(5, int(test_num or 1)))
+    return dict(ELDERS_THINK_TEST_PLAN.get(n) or ELDERS_THINK_TEST_PLAN[1])
+
+
+def _elders_move_plan(test_num: int) -> dict:
+    n = max(1, min(5, int(test_num or 1)))
+    return dict(ELDERS_MOVE_TEST_PLAN.get(n) or ELDERS_MOVE_TEST_PLAN[1])
+
+
+def _elders_cogfit_mode(entry) -> str:
+    e = entry or {}
+    if e.get("elders_remember") or e.get("elders_memory"):
+        return "remember"
+    if e.get("elders_react"):
+        return "react"
+    if e.get("elders_think"):
+        return "think"
+    if e.get("elders_move"):
+        return "move"
+    if e.get("elders_focus"):
+        return "focus"
+    return "focus"
+
+
+def _elders_cogfit_is_remember(entry) -> bool:
+    return _elders_cogfit_mode(entry) == "remember"
+
+
+def _elders_cogfit_uses_encode(entry) -> bool:
+    """True when trials may run encode→blank before probe (Remember / some React/Move)."""
+    return _elders_cogfit_mode(entry) in ("remember", "react", "move")
+
+
+def _elders_cogfit_plan(entry, test_num: int) -> dict:
+    mode = _elders_cogfit_mode(entry)
+    if mode == "remember":
+        return _elders_remember_plan(test_num)
+    if mode == "react":
+        return _elders_react_plan(test_num)
+    if mode == "think":
+        return _elders_think_plan(test_num)
+    if mode == "move":
+        return _elders_move_plan(test_num)
+    return _elders_focus_plan(test_num)
+
+
+def _elders_cogfit_instruction(entry, test_num: int = 1, target: str = "") -> str:
+    mode = _elders_cogfit_mode(entry)
+    plan = _elders_cogfit_plan(entry, test_num)
+    text = str(plan.get("instruction") or "").strip()
+    if text:
+        return text
+    if mode == "remember":
+        return _elders_remember_instruction(test_num)
+    return _elders_focus_instruction(test_num, target)
+
+
+def _elders_cogfit_component(entry) -> str:
+    meta = ELDERS_COGFIT_MODES.get(_elders_cogfit_mode(entry)) or {}
+    return str(meta.get("component") or "C1")
+
+
+def _elders_cogfit_title(entry) -> str:
+    meta = ELDERS_COGFIT_MODES.get(_elders_cogfit_mode(entry)) or {}
+    return str(meta.get("title") or "Concentration & Attention")
+
+
+def _elders_bg_half_spec(shape: str = "circle") -> dict:
+    return {
+        "name": "bg",
+        "rgb": tuple(ELDERS_REMEMBER_BG),
+        "scale": 1.0,
+        "shape": str(shape or "circle"),
+    }
+
+
+def _elders_remember_make_trial(test_num: int, sid: str) -> dict:
+    """Build encode / blank / probe Top/Bottom paints for one Remember action."""
+    plan = _elders_remember_plan(test_num)
+    task = str(plan.get("task") or "location")
+    shape = str(plan.get("shape") or "circle")
+    try:
+        encode_ms = int(plan.get("encode_ms") or 1500)
+    except (TypeError, ValueError):
+        encode_ms = 1500
+    try:
+        blank_ms = int(plan.get("blank_ms") or 500)
+    except (TypeError, ValueError):
+        blank_ms = 500
+    goal_half = "T" if random.random() < 0.5 else "B"
+    bg = _elders_bg_half_spec(shape)
+    palette = list(ELDERS_FOCUS_COLORS)
+    target = random.choice(palette)
+    distractors = [c for c in palette if c[0] != target[0]] or palette[1:]
+    distractor = random.choice(distractors)
+
+    def _half(name, rgb, scale=1.0, shp=None):
+        return {
+            "name": name,
+            "rgb": tuple(rgb),
+            "scale": float(scale),
+            "shape": str(shp or shape),
+        }
+
+    def _pack(top, bot, goal="", phase="probe", show_number=True):
+        return {
+            "top": dict(top),
+            "bottom": dict(bot),
+            "red_half": goal if phase == "probe" else "",
+            "goal_region": f"{sid}{goal}" if goal and phase == "probe" else "",
+            "task": task,
+            "shape": shape,
+            "target": str(target[0]),
+            "test_num": int(test_num),
+            "show_number": bool(show_number),
+            "mem_phase": phase,
+        }
+
+    if task == "location":
+        lit = _half(target[0], target[1], 1.0, "circle")
+        encode = _pack(
+            lit if goal_half == "T" else bg,
+            lit if goal_half == "B" else bg,
+            goal="",
+            phase="encode",
+        )
+        blank = _pack(bg, bg, goal="", phase="blank")
+        # Probe: identical fills — player must recall which half lit.
+        probe_fill = _half("mark", (180, 160, 130), 1.0, "circle")
+        probe = _pack(probe_fill, dict(probe_fill), goal=goal_half, phase="probe")
+    elif task == "color":
+        lit = _half(target[0], target[1], 1.0, "circle")
+        encode = _pack(
+            lit if goal_half == "T" else bg,
+            lit if goal_half == "B" else bg,
+            goal="",
+            phase="encode",
+        )
+        blank = _pack(bg, bg, goal="", phase="blank")
+        other = _half(distractor[0], distractor[1], 1.0, "circle")
+        if goal_half == "T":
+            probe = _pack(lit, other, goal="T", phase="probe")
+        else:
+            probe = _pack(other, lit, goal="B", phase="probe")
+    elif task == "shape":
+        shapes = ("circle", "rectangle", "polygon", "ellipse")
+        memorized = shape if shape in shapes else "rectangle"
+        other_shape = random.choice([s for s in shapes if s != memorized] or ["circle"])
+        lit = _half(target[0], target[1], 1.0, memorized)
+        encode = _pack(
+            lit if goal_half == "T" else bg,
+            lit if goal_half == "B" else bg,
+            goal="",
+            phase="encode",
+        )
+        blank = _pack(bg, bg, goal="", phase="blank")
+        other = _half(distractor[0], distractor[1], 1.0, other_shape)
+        if goal_half == "T":
+            probe = _pack(
+                _half(target[0], target[1], 1.0, memorized),
+                other,
+                goal="T",
+                phase="probe",
+            )
+        else:
+            probe = _pack(
+                other,
+                _half(target[0], target[1], 1.0, memorized),
+                goal="B",
+                phase="probe",
+            )
+    elif task == "size":
+        small = float(ELDERS_REMEMBER_SMALL_SCALE)
+        big = _half(target[0], target[1], 1.0, shape)
+        sm = _half(target[0], target[1], small, shape)
+        if goal_half == "T":
+            encode = _pack(sm, big, goal="", phase="encode")
+        else:
+            encode = _pack(big, sm, goal="", phase="encode")
+        blank = _pack(bg, bg, goal="", phase="blank")
+        # Probe: equal size — recall which half was smaller.
+        equal = _half(target[0], target[1], 1.0, shape)
+        probe = _pack(equal, dict(equal), goal=goal_half, phase="probe")
+    else:
+        # color_shape: remember color + shape together.
+        memorized = shape if shape else "ellipse"
+        other_shape = "circle" if memorized != "circle" else "rectangle"
+        lit = _half(target[0], target[1], 1.0, memorized)
+        encode = _pack(
+            lit if goal_half == "T" else bg,
+            lit if goal_half == "B" else bg,
+            goal="",
+            phase="encode",
+        )
+        blank = _pack(bg, bg, goal="", phase="blank")
+        match = _half(target[0], target[1], 1.0, memorized)
+        foil = _half(distractor[0], distractor[1], 1.0, other_shape)
+        if goal_half == "T":
+            probe = _pack(match, foil, goal="T", phase="probe")
+        else:
+            probe = _pack(foil, match, goal="B", phase="probe")
+
+    goal_rid = f"{sid}{goal_half}"
+    probe["goal_region"] = goal_rid
+    probe["red_half"] = goal_half
+    return {
+        "task": task,
+        "shape": shape,
+        "target": str(target[0]),
+        "encode_ms": encode_ms,
+        "blank_ms": blank_ms,
+        "encode": encode,
+        "blank": blank,
+        "probe": probe,
+        "goal_region": goal_rid,
+        "goal_half": goal_half,
+    }
+
+
+def _build_elders_remember_playlist(series_num: int, active_fields) -> List[dict]:
+    """COGFIT Remember: alternate Field A / B across C2.T1–T5 (memory).
+
+    Same field-wide handoff as Focus: results 5s → empty idle field →
+    beginning info + starting video → other field. Each action is
+    encode → blank → probe (Top/Bottom finish balls).
+    """
+    booked = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not booked:
+        return []
+    active = ["A", "B"]
+    series = max(1, min(5, int(series_num or 1)))
+    on_ms, gap_ms = _entry_series_timing_ms(series)
+    if series == 1:
+        scale = float(ELDERS_REMEMBER_C2T1_TIME_SCALE)
+        on_ms = max(1, int(round(on_ms * scale)))
+        gap_ms = max(0, int(round(gap_ms * scale)))
+    actions_per_test = int(ELDERS_REMEMBER_ACTIONS_PER_TEST)
+    instr_ms = int(ELDERS_REMEMBER_INSTRUCTION_MS)
+    if series == 1:
+        instr_ms = max(1, int(round(instr_ms * float(ELDERS_REMEMBER_C2T1_TIME_SCALE))))
+    test_num = 1
+    plan = _elders_remember_plan(test_num)
+    play_fid = str(plan.get("field") or "A")
+    if play_fid not in active:
+        play_fid = "A"
+    next_fid = "B" if play_fid == "A" else "A"
+    field_screens = {play_fid: [], next_fid: []}
+    screen_colors = {}
+    # Start in encode (no live goals until probe). Goals filled when armed.
+    for n in range(1, 7):
+        sid = f"{play_fid}{n}"
+        trial = _elders_remember_make_trial(test_num, sid)
+        spec = dict(trial["encode"])
+        spec["countdown"] = int(ELDERS_REMEMBER_SCREEN_TIMER_SEC)
+        spec["show_number"] = True
+        # Stash trial pieces on the color map for init (rebuilt on arm too).
+        spec["remember_trial"] = trial
+        screen_colors[sid] = spec
+        field_screens[play_fid].append("")  # placeholder; live goals set at probe
+    field_screens[play_fid] = []
+    for n in range(1, 7):
+        sid = f"{next_fid}{n}"
+        screen_colors[sid] = {
+            "top": _elders_bg_half_spec(),
+            "bottom": _elders_bg_half_spec(),
+            "red_half": "",
+            "goal_region": "",
+            "task": "idle",
+            "shape": "circle",
+            "test_num": 0,
+            "show_number": False,
+            "empty": True,
+        }
+    budget_ms = max(on_ms, actions_per_test * on_ms * ENTRY_TEST_COUNT)
+    playlist = [{
+        "kind": "labeled_action",
+        "index": 1,
+        "test_num": 1,
+        "action_in_set": 1,
+        "actions_in_set": actions_per_test,
+        "is_last_in_set": True,
+        "timing_scale": 1.0,
+        "fixed_timing": True,
+        "on_ms": on_ms,
+        "gap_ms": gap_ms,
+        "budget_ms": int(budget_ms),
+        "action_num": 1,
+        "action": "COLOR",
+        "no_fillers": True,
+        "elders_remember": True,
+        "elders_memory": True,
+        "elders_independent_screens": True,
+        "elders_chain_tests": int(ENTRY_TEST_COUNT),
+        "elders_dual_field_chain": True,
+        "elders_field_wide_handoff": True,
+        "elders_lane_count": 6,
+        "elders_task": str(plan.get("task") or "location"),
+        "elders_shape": str(plan.get("shape") or "circle"),
+        "elders_target_color": "",
+        "elders_dual_round": True,
+        "screen_goal_tb": True,
+        "elders_accuracy_only": True,
+        "elders_no_final_results": True,
+        "elders_skip_per_video_results": True,
+        "elders_play_field": play_fid,
+        "elders_play_fields": list(active),
+        "elders_booked_fields": list(booked),
+        "elders_next_field": next_fid,
+        "elders_spawn_peer_on_done": False,
+        "elders_show_screen_numbers": True,
+        "elders_force_both_fields": True,
+        "elders_screen_timer_sec": int(ELDERS_REMEMBER_SCREEN_TIMER_SEC),
+        "elders_result_hold_ms": int(ELDERS_REMEMBER_RESULT_HOLD_MS),
+        "elders_peer_number_ms": int(ELDERS_REMEMBER_NEXT_FIELD_CUE_MS),
+        "require_all_goals": True,
+        "instruction_ms": int(instr_ms),
+        "instruction_text": _elders_remember_instruction(test_num),
+        "arena_pair": (1, 1),
+        "field_screens": field_screens,
+        "screen_colors": dict(screen_colors),
+        "gap_screen_images": {},
+        "screen_images": {},
+        "background_rgb": tuple(ELDERS_REMEMBER_BG),
+        "label": (
+            f"COGFIT Remember C2.T1–T{ENTRY_TEST_COUNT} "
+            f"A/B alternate {actions_per_test}/screen "
+            f"booked={''.join(booked)} on={on_ms}ms"
+        ),
+        "path": f"image://COGFIT/Remember/S1.T{series}/C2.T1-T{ENTRY_TEST_COUNT}/AB",
+        "series_group": 1,
+        "series_num": int(series),
+    }]
+    logger.info(
+        "COGFIT Remember: A/B alternate C2.T1–T%s × %s actions start=%s next=%s booked=%s",
+        ENTRY_TEST_COUNT,
+        actions_per_test,
+        play_fid,
+        next_fid,
+        booked,
+    )
+    return _stamp_finish_balls(playlist)
+
+
+def _elders_half_spec(name, rgb, scale=1.0, shape="circle") -> dict:
+    return {
+        "name": str(name),
+        "rgb": tuple(rgb),
+        "scale": float(scale),
+        "shape": str(shape or "circle"),
+    }
+
+
+def _elders_pack_tb(sid, top, bot, goal="", phase="probe", task="", shape="circle", target=""):
+    return {
+        "top": dict(top),
+        "bottom": dict(bot),
+        "red_half": goal if phase == "probe" else "",
+        "goal_region": f"{sid}{goal}" if goal and phase == "probe" else "",
+        "task": task,
+        "shape": shape,
+        "target": target,
+        "show_number": True,
+        "mem_phase": phase,
+    }
+
+
+def _elders_react_make_trial(test_num: int, sid: str, action_n: int = 1) -> dict:
+    """React trial: flash / go-nogo / opposite / switch / conflict."""
+    plan = _elders_react_plan(test_num)
+    task = str(plan.get("task") or "flash")
+    shape = str(plan.get("shape") or "circle")
+    encode_ms = int(plan.get("encode_ms") or 0)
+    blank_ms = int(plan.get("blank_ms") or 0)
+    cue_half = "T" if random.random() < 0.5 else "B"
+    bg = _elders_bg_half_spec(shape)
+    green = _elders_half_spec("green", (22, 163, 74), 1.0, shape)
+    red = _elders_half_spec("red", (220, 38, 38), 1.0, shape)
+    lit = _elders_half_spec("lit", (234, 179, 8), 1.0, shape)
+    dim = _elders_half_spec("dim", (160, 145, 120), 0.7, shape)
+    mark = _elders_half_spec("mark", (180, 160, 130), 1.0, shape)
+
+    if task == "go_nogo":
+        is_go = random.random() < 0.5
+        cue = green if is_go else red
+        goal_half = cue_half if is_go else ("B" if cue_half == "T" else "T")
+        encode = _elders_pack_tb(
+            sid,
+            cue if cue_half == "T" else bg,
+            cue if cue_half == "B" else bg,
+            phase="encode",
+            task=task,
+            shape=shape,
+        )
+        # Immediate probe: both halves show cue color vs dim; goal follows rule.
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, cue, dim, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, dim, cue, goal="B", phase="probe", task=task, shape=shape
+            )
+        blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+        encode_ms = blank_ms = 0
+        goal_rid = f"{sid}{goal_half}"
+    elif task == "opposite":
+        goal_half = "B" if cue_half == "T" else "T"
+        encode = _elders_pack_tb(
+            sid,
+            lit if cue_half == "T" else bg,
+            lit if cue_half == "B" else bg,
+            phase="encode",
+            task=task,
+            shape=shape,
+        )
+        blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+        probe = _elders_pack_tb(
+            sid, mark, dict(mark), goal=goal_half, phase="probe", task=task, shape=shape
+        )
+        goal_rid = f"{sid}{goal_half}"
+    elif task == "switch":
+        # 1–5: hit cue; 6–10: hit opposite.
+        hit_same = int(action_n or 1) <= 5
+        goal_half = cue_half if hit_same else ("B" if cue_half == "T" else "T")
+        encode = blank = None
+        encode_ms = blank_ms = 0
+        if cue_half == "T":
+            probe = _elders_pack_tb(
+                sid, lit, dim, goal=goal_half, phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, dim, lit, goal=goal_half, phase="probe", task=task, shape=shape
+            )
+        goal_rid = f"{sid}{goal_half}"
+    elif task == "conflict":
+        # Word rule: TOP/BOT label implied by which half carries the bright "word" color.
+        # Color location may disagree; goal follows the named word half.
+        word_half = "T" if random.random() < 0.5 else "B"
+        color_half = "B" if word_half == "T" else "T"  # conflict
+        word_fill = _elders_half_spec(
+            "TOP" if word_half == "T" else "BOT", (37, 99, 235), 1.0, shape
+        )
+        color_fill = _elders_half_spec("color", (220, 38, 38), 1.0, shape)
+        encode = blank = None
+        encode_ms = blank_ms = 0
+        if word_half == "T":
+            # Top = word target, bottom = conflicting color splash
+            probe = _elders_pack_tb(
+                sid, word_fill, color_fill, goal="T", phase="probe",
+                task=task, shape=shape, target="TOP",
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, color_fill, word_fill, goal="B", phase="probe",
+                task=task, shape=shape, target="BOT",
+            )
+        goal_half = word_half
+        goal_rid = f"{sid}{goal_half}"
+        _ = color_half
+    else:
+        # flash — hit the lit half.
+        goal_half = cue_half
+        encode = blank = None
+        encode_ms = blank_ms = 0
+        if cue_half == "T":
+            probe = _elders_pack_tb(
+                sid, lit, dim, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, dim, lit, goal="B", phase="probe", task=task, shape=shape
+            )
+        goal_rid = f"{sid}{goal_half}"
+
+    if encode is None:
+        encode = dict(probe)
+        encode["mem_phase"] = "encode"
+        encode["goal_region"] = ""
+        encode["red_half"] = ""
+    if blank is None:
+        blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+    probe["goal_region"] = goal_rid
+    probe["red_half"] = goal_half
+    return {
+        "task": task,
+        "shape": shape,
+        "target": str(probe.get("target") or ""),
+        "encode_ms": int(encode_ms),
+        "blank_ms": int(blank_ms),
+        "encode": encode,
+        "blank": blank,
+        "probe": probe,
+        "goal_region": goal_rid,
+        "goal_half": goal_half,
+    }
+
+
+def _elders_think_make_trial(test_num: int, sid: str, action_n: int = 1) -> dict:
+    """Think trial: odd-one-out, named rule, quantity, combo."""
+    plan = _elders_think_plan(test_num)
+    task = str(plan.get("task") or "odd_color")
+    shape = str(plan.get("shape") or "circle")
+    goal_half = "T" if random.random() < 0.5 else "B"
+    palette = list(ELDERS_FOCUS_COLORS)
+    a = random.choice(palette)
+    b = random.choice([c for c in palette if c[0] != a[0]] or palette)
+    bg = _elders_bg_half_spec(shape)
+    shapes = ("circle", "rectangle", "polygon", "ellipse")
+
+    if task == "odd_shape":
+        main = shape if shape in shapes else "circle"
+        odd = random.choice([s for s in shapes if s != main] or ["rectangle"])
+        odd_half = _elders_half_spec(a[0], a[1], 1.0, odd)
+        same = _elders_half_spec(a[0], a[1], 1.0, main)
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, odd_half, same, goal="T", phase="probe", task=task, shape=odd
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, same, odd_half, goal="B", phase="probe", task=task, shape=odd
+            )
+    elif task == "rule_color":
+        want = a
+        other = b
+        w = _elders_half_spec(want[0], want[1], 1.0, shape)
+        o = _elders_half_spec(other[0], other[1], 1.0, shape)
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, w, o, goal="T", phase="probe", task=task, shape=shape,
+                target=want[0],
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, o, w, goal="B", phase="probe", task=task, shape=shape,
+                target=want[0],
+            )
+        # Instruction already says named color; stamp target for overlays.
+        probe["instruction_hint"] = f"Hit {want[0]}"
+    elif task == "quantity":
+        big = _elders_half_spec(a[0], a[1], 1.0, shape)
+        small = _elders_half_spec(a[0], a[1], float(ELDERS_REMEMBER_SMALL_SCALE), shape)
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, big, small, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, small, big, goal="B", phase="probe", task=task, shape=shape
+            )
+    elif task == "rule_combo":
+        want_shape = shape if shape in shapes else "ellipse"
+        foil_shape = "circle" if want_shape != "circle" else "rectangle"
+        match = _elders_half_spec(a[0], a[1], 1.0, want_shape)
+        foil = _elders_half_spec(b[0], b[1], 1.0, foil_shape)
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, match, foil, goal="T", phase="probe", task=task,
+                shape=want_shape, target=a[0],
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, foil, match, goal="B", phase="probe", task=task,
+                shape=want_shape, target=a[0],
+            )
+    else:
+        # odd_color
+        odd = _elders_half_spec(a[0], a[1], 1.0, shape)
+        same = _elders_half_spec(b[0], b[1], 1.0, shape)
+        # Two same + one different: top/bottom only — different color is the odd one.
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, odd, same, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, same, odd, goal="B", phase="probe", task=task, shape=shape
+            )
+
+    goal_rid = f"{sid}{goal_half}"
+    probe["goal_region"] = goal_rid
+    probe["red_half"] = goal_half
+    encode = dict(probe)
+    encode["mem_phase"] = "encode"
+    encode["goal_region"] = ""
+    encode["red_half"] = ""
+    blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+    return {
+        "task": task,
+        "shape": shape,
+        "target": str(probe.get("target") or ""),
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "encode": encode,
+        "blank": blank,
+        "probe": probe,
+        "goal_region": goal_rid,
+        "goal_half": goal_half,
+    }
+
+
+def _elders_move_make_trial(test_num: int, sid: str, action_n: int = 1) -> dict:
+    """Move trial: fixed half, alternate, follow mark, far half."""
+    plan = _elders_move_plan(test_num)
+    task = str(plan.get("task") or "top")
+    shape = str(plan.get("shape") or "circle")
+    encode_ms = int(plan.get("encode_ms") or 0)
+    blank_ms = int(plan.get("blank_ms") or 0)
+    bg = _elders_bg_half_spec(shape)
+    fill = _elders_half_spec("move", (37, 99, 235), 1.0, shape)
+    mark = _elders_half_spec("mark", (234, 179, 8), 1.0, shape)
+    dim = _elders_half_spec("dim", (160, 145, 120), 0.75, shape)
+
+    if task == "bottom":
+        goal_half = "B"
+        probe = _elders_pack_tb(
+            sid, dim, fill, goal="B", phase="probe", task=task, shape=shape
+        )
+        encode = blank = None
+        encode_ms = blank_ms = 0
+    elif task == "alternate":
+        goal_half = "T" if (int(action_n or 1) % 2) == 1 else "B"
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, fill, dim, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, dim, fill, goal="B", phase="probe", task=task, shape=shape
+            )
+        encode = blank = None
+        encode_ms = blank_ms = 0
+    elif task == "follow":
+        goal_half = "T" if random.random() < 0.5 else "B"
+        if goal_half == "T":
+            probe = _elders_pack_tb(
+                sid, mark, dim, goal="T", phase="probe", task=task, shape=shape
+            )
+        else:
+            probe = _elders_pack_tb(
+                sid, dim, mark, goal="B", phase="probe", task=task, shape=shape
+            )
+        encode = blank = None
+        encode_ms = blank_ms = 0
+    elif task == "far":
+        cue_half = "T" if random.random() < 0.5 else "B"
+        goal_half = "B" if cue_half == "T" else "T"
+        encode = _elders_pack_tb(
+            sid,
+            mark if cue_half == "T" else bg,
+            mark if cue_half == "B" else bg,
+            phase="encode",
+            task=task,
+            shape=shape,
+        )
+        blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+        probe = _elders_pack_tb(
+            sid, fill, dict(fill), goal=goal_half, phase="probe", task=task, shape=shape
+        )
+    else:
+        # top
+        goal_half = "T"
+        probe = _elders_pack_tb(
+            sid, fill, dim, goal="T", phase="probe", task=task, shape=shape
+        )
+        encode = blank = None
+        encode_ms = blank_ms = 0
+
+    goal_rid = f"{sid}{goal_half}"
+    if encode is None:
+        encode = dict(probe)
+        encode["mem_phase"] = "encode"
+        encode["goal_region"] = ""
+        encode["red_half"] = ""
+    if blank is None:
+        blank = _elders_pack_tb(sid, bg, bg, phase="blank", task=task, shape=shape)
+    probe["goal_region"] = goal_rid
+    probe["red_half"] = goal_half
+    return {
+        "task": task,
+        "shape": shape,
+        "target": "",
+        "encode_ms": int(encode_ms),
+        "blank_ms": int(blank_ms),
+        "encode": encode,
+        "blank": blank,
+        "probe": probe,
+        "goal_region": goal_rid,
+        "goal_half": goal_half,
+    }
+
+
+def _elders_cogfit_make_trial(mode: str, test_num: int, sid: str, action_n: int = 1) -> dict:
+    mode = str(mode or "focus").lower()
+    if mode == "remember":
+        return _elders_remember_make_trial(test_num, sid)
+    if mode == "react":
+        return _elders_react_make_trial(test_num, sid, action_n)
+    if mode == "think":
+        return _elders_think_make_trial(test_num, sid, action_n)
+    if mode == "move":
+        return _elders_move_make_trial(test_num, sid, action_n)
+    spec, goal_rid = _elders_focus_make_screen_colors(test_num, sid)
+    return {
+        "task": str(spec.get("task") or "color"),
+        "shape": str(spec.get("shape") or "circle"),
+        "target": str(spec.get("target") or ""),
+        "encode_ms": 0,
+        "blank_ms": 0,
+        "encode": dict(spec),
+        "blank": dict(spec),
+        "probe": dict(spec),
+        "goal_region": goal_rid,
+        "goal_half": goal_rid[-1] if goal_rid else "T",
+    }
+
+
+def _build_elders_cogfit_mode_playlist(
+    mode: str, series_num: int, active_fields
+) -> List[dict]:
+    """Shared A↔B field-wide playlist for React / Think / Move (and similar)."""
+    meta = ELDERS_COGFIT_MODES.get(mode)
+    if not meta:
+        return []
+    booked = [f for f in ("A", "B") if f in set(active_fields or [])]
+    if not booked:
+        return []
+    active = ["A", "B"]
+    series = max(1, min(5, int(series_num or 1)))
+    shared = ELDERS_COGFIT_SHARED
+    on_ms, gap_ms = _entry_series_timing_ms(series)
+    if series == 1:
+        scale = float(shared["t1_time_scale"])
+        on_ms = max(1, int(round(on_ms * scale)))
+        gap_ms = max(0, int(round(gap_ms * scale)))
+    actions_per_test = int(shared["actions_per_test"])
+    instr_ms = int(shared["instruction_ms"])
+    if series == 1:
+        instr_ms = max(1, int(round(instr_ms * float(shared["t1_time_scale"]))))
+    test_num = 1
+    plan = _elders_cogfit_plan({meta["flag"]: True}, test_num)
+    play_fid = str(plan.get("field") or "A")
+    if play_fid not in active:
+        play_fid = "A"
+    next_fid = "B" if play_fid == "A" else "A"
+    field_screens = {play_fid: [], next_fid: []}
+    screen_colors = {}
+    bg = tuple(shared["bg"])
+    for n in range(1, 7):
+        sid = f"{play_fid}{n}"
+        trial = _elders_cogfit_make_trial(mode, test_num, sid, 1)
+        # Start paint: encode frame if timed, else probe.
+        if int(trial.get("encode_ms") or 0) > 0:
+            spec = dict(trial["encode"])
+        else:
+            spec = dict(trial["probe"])
+        spec["countdown"] = int(shared["screen_timer_sec"])
+        spec["show_number"] = True
+        screen_colors[sid] = spec
+    for n in range(1, 7):
+        sid = f"{next_fid}{n}"
+        screen_colors[sid] = {
+            "top": _elders_bg_half_spec(),
+            "bottom": _elders_bg_half_spec(),
+            "red_half": "",
+            "goal_region": "",
+            "task": "idle",
+            "shape": "circle",
+            "test_num": 0,
+            "show_number": False,
+            "empty": True,
+        }
+    budget_ms = max(on_ms, actions_per_test * on_ms * ENTRY_TEST_COUNT)
+    flag = str(meta["flag"])
+    entry = {
+        "kind": "labeled_action",
+        "index": 1,
+        "test_num": 1,
+        "action_in_set": 1,
+        "actions_in_set": actions_per_test,
+        "is_last_in_set": True,
+        "timing_scale": 1.0,
+        "fixed_timing": True,
+        "on_ms": on_ms,
+        "gap_ms": gap_ms,
+        "budget_ms": int(budget_ms),
+        "action_num": 1,
+        "action": "COLOR",
+        "no_fillers": True,
+        flag: True,
+        "elders_independent_screens": True,
+        "elders_chain_tests": int(ENTRY_TEST_COUNT),
+        "elders_dual_field_chain": True,
+        "elders_field_wide_handoff": True,
+        "elders_lane_count": 6,
+        "elders_task": str(plan.get("task") or ""),
+        "elders_shape": str(plan.get("shape") or "circle"),
+        "elders_target_color": str(plan.get("target") or ""),
+        "elders_dual_round": True,
+        "screen_goal_tb": True,
+        "elders_accuracy_only": True,
+        "elders_no_final_results": True,
+        "elders_skip_per_video_results": True,
+        "elders_play_field": play_fid,
+        "elders_play_fields": list(active),
+        "elders_booked_fields": list(booked),
+        "elders_next_field": next_fid,
+        "elders_spawn_peer_on_done": False,
+        "elders_show_screen_numbers": True,
+        "elders_force_both_fields": True,
+        "elders_screen_timer_sec": int(shared["screen_timer_sec"]),
+        "elders_result_hold_ms": int(shared["result_hold_ms"]),
+        "elders_peer_number_ms": int(shared["peer_number_ms"]),
+        "require_all_goals": True,
+        "instruction_ms": int(instr_ms),
+        "instruction_text": _elders_cogfit_instruction({flag: True}, test_num),
+        "arena_pair": (1, 1),
+        "field_screens": field_screens,
+        "screen_colors": dict(screen_colors),
+        "gap_screen_images": {},
+        "screen_images": {},
+        "background_rgb": bg,
+        "label": (
+            f"COGFIT {meta['label']} {meta['component']}.T1–T{ENTRY_TEST_COUNT} "
+            f"A/B alternate {actions_per_test}/screen "
+            f"booked={''.join(booked)} on={on_ms}ms"
+        ),
+        "path": (
+            f"image://COGFIT/{meta['label']}/{meta['s_key']}.T{series}/"
+            f"{meta['component']}.T1-T{ENTRY_TEST_COUNT}/AB"
+        ),
+        "series_group": int(meta["series_group"]),
+        "series_num": int(series),
+    }
+    logger.info(
+        "COGFIT %s: A/B alternate %s.T1–T%s × %s actions start=%s next=%s booked=%s",
+        meta["label"],
+        meta["component"],
+        ENTRY_TEST_COUNT,
+        actions_per_test,
+        play_fid,
+        next_fid,
+        booked,
+    )
+    return _stamp_finish_balls([entry])
+
+
+def _build_elders_react_playlist(series_num: int, active_fields) -> List[dict]:
+    return _build_elders_cogfit_mode_playlist("react", series_num, active_fields)
+
+
+def _build_elders_think_playlist(series_num: int, active_fields) -> List[dict]:
+    return _build_elders_cogfit_mode_playlist("think", series_num, active_fields)
+
+
+def _build_elders_move_playlist(series_num: int, active_fields) -> List[dict]:
+    return _build_elders_cogfit_mode_playlist("move", series_num, active_fields)
+
+
+def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
+    """Entry S0.T1–T5 Players from Players-Images warehouse.
+
+    Goals: rebound teammate stills (old pass.png). AP second goal: another
+    rebound person. Distractors: neutral opponents (+ teammate from T3).
+    Person tag numbers are unique across all lit screens in the action.
+    Always 4 lit screens. C1.T1–T2: 30% dual-goal AP in order; C1.T3–T5: 50%.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
     series = max(1, min(5, int(series_num or 1)))
-    pass_path, distractors = _entry_s0_image_paths(series)
-    if not pass_path or not distractors:
-        return []
-    copy_path = os.path.join(ENTRY_S0_IMAGE_DIR, ENTRY_S0_PASS_COPY)
-    if not os.path.isfile(copy_path):
-        logger.error("Entry S0 missing pass-copy under %s", ENTRY_S0_IMAGE_DIR)
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("rebound") or not catalog.get("opponent"):
+        logger.error(
+            "Entry S0 Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
         return []
     actions_per_test = int(ENTRY_S0_ACTIONS_PER_TEST)
     lit_count = int(PLAYERS_LIT_SCREENS_ENTRY)
@@ -3378,7 +5237,28 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
             images = {}
             field_screens = {}
             labels = []
+            person_ids = {}
+            used_people = set()
+            rng = random.Random(
+                53000
+                + series * 1000
+                + test_num * 100
+                + action_in_set * 10
+                + (1 if use_ap else 0)
+            )
             for fid in active:
+                pass_path, copy_path, distractors = _entry_s0_pick_field_media(
+                    catalog,
+                    series_num=series,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
+                    used_people=used_people,
+                    rng=rng,
+                )
+                if not pass_path or not distractors:
+                    continue
+                if use_ap and not copy_path:
+                    continue
                 assignment, goal_screen, copy_screen = _players_screen_assignment(
                     pass_path,
                     copy_path if use_ap else "",
@@ -3392,8 +5272,12 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                     continue
                 for screen, path in assignment.items():
                     sid = _hw_screen_for_field(fid, (screen, screen))
-                    if sid is not None:
-                        images[sid] = path
+                    if sid is None:
+                        continue
+                    images[sid] = path
+                    pid = _players_media_person_id(path)
+                    if pid is not None:
+                        person_ids[sid] = pid
                 goal_sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
                 if goal_sid is None:
                     continue
@@ -3402,12 +5286,21 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                     if copy_sid is None:
                         continue
                     field_screens[fid] = [goal_sid, copy_sid]
-                    labels.append(f"{fid}:pass@{goal_sid}+copy@{copy_sid}")
+                    labels.append(f"{fid}:rebound@{goal_sid}+@{copy_sid}")
                 else:
                     field_screens[fid] = [goal_sid]
-                    labels.append(f"{fid}:pass@{goal_screen}")
+                    labels.append(f"{fid}:rebound@{goal_screen}")
             if not field_screens or not images:
                 continue
+            # Guard: no duplicate person tags on the action.
+            pids = list(person_ids.values())
+            if len(pids) != len(set(pids)):
+                logger.warning(
+                    "Entry S0 duplicate person tags on T%s a%s: %s",
+                    test_num,
+                    action_in_set,
+                    person_ids,
+                )
             playlist.append({
                 "kind": "labeled_action",
                 "index": len(playlist) + 1,
@@ -3430,6 +5323,8 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "gap_screen_images": dict(images),
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "person_ids": dict(person_ids),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -3448,7 +5343,7 @@ def _build_entry_s0_playlist(series_num: int, active_fields) -> List[dict]:
             })
     ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
     logger.info(
-        "Entry C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s)",
+        "Entry C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s, warehouse)",
         series,
         len(playlist),
         ap_n,
@@ -3649,39 +5544,23 @@ def _activated_s0_ap_plan(actions_per_test: int, series_num: int = 1) -> List[bo
 
 
 def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
-    """Activated S0.T1–T5 Players (operator C1.T1–T5).
+    """Activated S0.T1–T5 Players from static/Players-Images warehouse.
 
-    Always 5 lit screens (any of 1–6). Center passes only — no pass-left/right
-    here (those belong on Elite). C1.T1–T2: 30% dual-goal AP in order;
-    C1.T3–T5: 50% AP shuffled. AP = pass + pass-copy on opposite halves.
+    Always 5 lit screens (any of 1–6). Center goals only — Teammate-PL-*-02-B
+    (no pass-left/right here; those belong on Elite). AP second goal uses another
+    Teammate-PL from Pass-and-Rebound. Unique person # per action.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
     series = max(1, min(5, int(series_num or 1)))
-    center_passes = _activated_s0_existing(ACTIVATED_S0_PASS_CENTER)
-    copy_paths = _activated_s0_existing([ACTIVATED_S0_PASS_COPY])
-    opponents = _activated_s0_existing(ACTIVATED_S0_OPPONENTS)
-    teammate = _activated_s0_existing([ACTIVATED_S0_TEAMMATE])
-    if len(opponents) < 2:
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("pass") or not catalog.get("opponent"):
         logger.error(
-            "Activated S0 Players missing opponents under %s",
-            ACTIVATED_S0_IMAGE_DIR,
+            "Activated S0 Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    if not copy_paths:
-        logger.error(
-            "Activated S0 Players missing pass-copy under %s",
-            ACTIVATED_S0_IMAGE_DIR,
-        )
-        return []
-    if not center_passes:
-        logger.error(
-            "Activated S0 missing center pass images in %s",
-            ACTIVATED_S0_IMAGE_DIR,
-        )
-        return []
-    distractors = list(opponents) + list(teammate)
     actions_per_test = int(ACTIVATED_S0_ACTIONS_PER_TEST)
     lit_count = int(PLAYERS_LIT_SCREENS_ACTIVATED)
     on_ms, gap_ms = _entry_series_timing_ms(series)
@@ -3693,12 +5572,32 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
             images = {}
             field_screens = {}
             labels = []
+            person_ids = {}
+            used_people = set()
+            rng = random.Random(
+                54000
+                + series * 1000
+                + test_num * 100
+                + action_in_set * 10
+                + (1 if use_ap else 0)
+            )
             for fid in active:
-                pass_path = random.choice(center_passes)
+                pass_path, copy_path, distractors = _entry_s0_pick_field_media(
+                    catalog,
+                    series_num=series,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
+                    used_people=used_people,
+                    rng=rng,
+                )
+                if not pass_path or not distractors:
+                    continue
+                if use_ap and not copy_path:
+                    continue
                 assignment, goal_screen, copy_screen = _players_screen_assignment(
                     pass_path,
-                    copy_paths[0] if use_ap else "",
-                    distractors,
+                    copy_path if use_ap else "",
+                    list(distractors),
                     lit_count=lit_count,
                     dual_ap=use_ap,
                 )
@@ -3708,8 +5607,12 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                     continue
                 for screen, path in assignment.items():
                     sid = _hw_screen_for_field(fid, (screen, screen))
-                    if sid is not None:
-                        images[sid] = path
+                    if sid is None:
+                        continue
+                    images[sid] = path
+                    pid = _players_media_person_id(path)
+                    if pid is not None:
+                        person_ids[sid] = pid
                 goal_sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
                 if goal_sid is None:
                     continue
@@ -3752,6 +5655,8 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "side_goals": False,
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "person_ids": dict(person_ids),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -3770,7 +5675,7 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
             })
     ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
     logger.info(
-        "Activated C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s)",
+        "Activated C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s, warehouse)",
         series,
         len(playlist),
         ap_n,
@@ -3781,33 +5686,98 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
 
 
 def _hp_players_image_paths(names) -> Dict[str, str]:
+    """Legacy helper: resolve names under the shared Players-Images warehouse."""
     paths = {}
+    posts = _players_warehouse_post_paths()
+    catalog = _players_warehouse_catalog()
+    role_first = {
+        HP_PLAYERS_PASS: "pass",
+        HP_PLAYERS_PASS_COPY: "pass_copy",
+        HP_PLAYERS_TEAMMATE: "teammate",
+        HP_PLAYERS_CROSS_RIGHT: "offside_right",
+        HP_PLAYERS_CROSS_LEFT: "offside_left",
+        HP_PLAYERS_TRAP_TEAMMATE: "trap_teammate",
+        HP_PLAYERS_DEFEND_08: "defender",
+        HP_PLAYERS_DEFEND_07: "defender",
+    }
     for name in names or []:
-        path = os.path.join(HP_PLAYERS_IMAGE_DIR, name)
-        if not os.path.isfile(path):
-            logger.error("High Performance Players image missing: %s", path)
+        if name in (HP_PLAYERS_LEFT_POST, PLAYERS_WAREHOUSE_LEFT_POST):
+            path = posts.get("left_post")
+        elif name in (HP_PLAYERS_RIGHT_POST, PLAYERS_WAREHOUSE_RIGHT_POST):
+            path = posts.get("right_post")
+        elif name in role_first:
+            pool = catalog.get(role_first[name]) or []
+            path = pool[0][0] if pool else ""
+        else:
+            # Fall back to warehouse root / known folders by basename.
+            path = ""
+            for folder_key in ("", "neutral", "rebound", "defending", "offside"):
+                base = (
+                    PLAYERS_IMAGE_WAREHOUSE_ROOT
+                    if not folder_key
+                    else os.path.join(
+                        PLAYERS_IMAGE_WAREHOUSE_ROOT,
+                        PLAYERS_IMAGE_WAREHOUSE_FOLDERS[folder_key],
+                    )
+                )
+                cand = os.path.join(base, name)
+                if os.path.isfile(cand):
+                    path = cand
+                    break
+        if not path or not os.path.isfile(path):
+            logger.error("High Performance Players image missing: %s", name)
             return {}
         paths[name] = path
     return paths
 
 
-def _hp_players_offside_seat(row) -> Tuple[Dict[int, str], int]:
-    """Build screen seats for one offside-trap row. Posts stay on 3 and 4."""
+def _hp_players_offside_seat(
+    row,
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    posts: Optional[Dict[str, str]] = None,
+    rng: Optional[random.Random] = None,
+) -> Tuple[Dict[int, str], int]:
+    """Build screen seats for one offside-trap row. Posts stay on 3 and 4.
+
+    Returns arena→abspath using warehouse stills (unique person tags).
+    """
+    catalog = catalog or _players_warehouse_catalog()
+    posts = posts or _players_warehouse_post_paths()
+    rng = rng or random.Random()
+    used: set = set()
     cross_r, cross_l, teammate, def08, def07, goal = row
-    seat = {
-        3: HP_PLAYERS_LEFT_POST,
-        4: HP_PLAYERS_RIGHT_POST,
+    left = posts.get("left_post")
+    right = posts.get("right_post")
+    if not left or not right:
+        return {}, int(goal or 1)
+    seat: Dict[int, str] = {
+        3: left,
+        4: right,
     }
-    if cross_r is not None:
-        seat[int(cross_r)] = HP_PLAYERS_CROSS_RIGHT
-    if cross_l is not None:
-        seat[int(cross_l)] = HP_PLAYERS_CROSS_LEFT
-    if teammate is not None:
-        seat[int(teammate)] = HP_PLAYERS_TRAP_TEAMMATE
-    if def08 is not None:
-        seat[int(def08)] = HP_PLAYERS_DEFEND_08
-    if def07 is not None:
-        seat[int(def07)] = HP_PLAYERS_DEFEND_07
+
+    def _put(arena, role: str, fallback: str = ""):
+        if arena is None:
+            return
+        picked = _players_warehouse_pick(catalog, role, used, rng)
+        if not picked and fallback:
+            picked = _players_warehouse_pick(catalog, fallback, used, rng)
+        if picked:
+            seat[int(arena)] = picked[0]
+
+    _put(cross_r, "offside_right")
+    _put(cross_l, "offside_left")
+    # Goal seat = trap teammate (*-05); also place on teammate column when set.
+    goal_pick = _players_warehouse_pick(catalog, "trap_teammate", used, rng)
+    if not goal_pick:
+        goal_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    if goal_pick:
+        seat[int(goal)] = goal_pick[0]
+        if teammate is not None and int(teammate) != int(goal):
+            _put(teammate, "teammate", "opponent")
+    elif teammate is not None:
+        _put(teammate, "trap_teammate", "pass")
+    _put(def08, "defender")
+    _put(def07, "defender")
     return seat, int(goal)
 
 
@@ -3843,40 +5813,32 @@ def _hp_players_action_plan(series_num: int) -> List[dict]:
 
 
 def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[dict]:
-    """High Performance S0 Players (operator C1.T1–T5).
+    """High Performance S0 Players from static/Players-Images warehouse.
 
-    Elite-style pass game with offside traps and dual-goal AP (never on the
-    same action). C1.T1–T2: 30% AP + up to 4 traps; C1.T3–T5: 50% AP + traps
-    on the remaining seats (posts stay on 3/4 for offside only). Field B
-    mirrors Field A.
+    Pass / AP / offside-trap mix. Goals = Teammate-PL-*-02-B; AP second =
+    another Teammate-PL; traps use OffSide-Trap stills + posts from warehouse
+    root. Field B mirrors Field A. Unique person # within each action.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
-    names = (
-        HP_PLAYERS_LEFT_POST,
-        HP_PLAYERS_RIGHT_POST,
-        HP_PLAYERS_PASS,
-        HP_PLAYERS_PASS_COPY,
-        HP_PLAYERS_TEAMMATE,
-        *HP_PLAYERS_OPPONENTS,
-        HP_PLAYERS_CROSS_RIGHT,
-        HP_PLAYERS_CROSS_LEFT,
-        HP_PLAYERS_TRAP_TEAMMATE,
-        HP_PLAYERS_DEFEND_08,
-        HP_PLAYERS_DEFEND_07,
-    )
-    paths = _hp_players_image_paths(names)
-    if not paths:
-        return []
-    if HP_PLAYERS_PASS_COPY not in paths:
+    catalog = _players_warehouse_catalog()
+    posts = _players_warehouse_post_paths()
+    if not catalog.get("pass") or not catalog.get("opponent"):
         logger.error(
-            "High Performance Players missing pass-copy under %s",
-            HP_PLAYERS_IMAGE_DIR,
+            "High Performance Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
+        return []
+    if not posts.get("left_post") or not posts.get("right_post"):
+        logger.error(
+            "High Performance Players missing posts under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
+    lit_count = int(PLAYERS_LIT_SCREENS_HP)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
         plan = _hp_players_action_plan(series)
@@ -3890,9 +5852,19 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
             copy_goal = 0
             kind = str(step.get("kind") or "pass")
             use_ap = kind == "ap"
+            rng = random.Random(
+                56000 + series * 1000 + test_num * 100 + action_in_set * 10
+            )
+            used_people: set = set()
             if kind == "offside":
-                seat_names, goal = _hp_players_offside_seat(step.get("row"))
-                seat = {screen: paths[name] for screen, name in seat_names.items()}
+                seat, goal = _hp_players_offside_seat(
+                    step.get("row"),
+                    catalog=catalog,
+                    posts=posts,
+                    rng=rng,
+                )
+                if not seat:
+                    continue
                 for fid in active:
                     for screen, path in seat.items():
                         sid = _hw_screen_for_field(fid, (screen, screen))
@@ -3902,16 +5874,23 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                     if goal_sid is not None:
                         field_screens[fid] = [goal_sid]
             else:
-                # Always 6 lit screens. AP: pass + pass-copy on opposite halves.
-                # Normal: pass goal + teammate/opponents fill the wall (no side passes).
-                distractors = [paths[name] for name in HP_PLAYERS_OPPONENTS]
-                if HP_PLAYERS_TEAMMATE in paths:
-                    distractors.append(paths[HP_PLAYERS_TEAMMATE])
+                pass_path, copy_path, distractors = _entry_s0_pick_field_media(
+                    catalog,
+                    series_num=series,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
+                    used_people=used_people,
+                    rng=rng,
+                )
+                if not pass_path or not distractors:
+                    continue
+                if use_ap and not copy_path:
+                    continue
                 assignment, goal, copy_goal = _players_screen_assignment(
-                    paths[HP_PLAYERS_PASS],
-                    paths[HP_PLAYERS_PASS_COPY] if use_ap else "",
-                    distractors,
-                    lit_count=int(PLAYERS_LIT_SCREENS_HP),
+                    pass_path,
+                    copy_path if use_ap else "",
+                    list(distractors),
+                    lit_count=lit_count,
                     dual_ap=use_ap,
                 )
                 if not assignment or not goal:
@@ -3960,6 +5939,7 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                 "offside_trap": kind == "offside",
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -3981,7 +5961,7 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
     ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
     trap_n = sum(1 for step in playlist if step.get("offside_trap"))
     logger.info(
-        "High Performance C1.T%s Players: %s actions (%s AP @%.0f%%, %s offside)",
+        "High Performance C1.T%s Players: %s actions (%s AP @%.0f%%, %s offside, warehouse)",
         series,
         len(playlist),
         ap_n,
@@ -3992,23 +5972,72 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
 
 
 def _elite_players_image_paths(names) -> Dict[str, str]:
+    """Resolve legacy Elite filenames from the shared Players-Images warehouse."""
+    catalog = _players_warehouse_catalog()
+    role_map = {
+        ELITE_PLAYERS_PASS1: "pass",
+        ELITE_PLAYERS_PASS2: "pass_copy",
+        ELITE_PLAYERS_PASS3: "asking",
+        ELITE_PLAYERS_PASS_COPY: "pass_copy",
+        ELITE_PLAYERS_PASS_LEFT: "cross_left",
+        ELITE_PLAYERS_PASS_RIGHT: "cross_right",
+    }
     paths = {}
+    used: set = set()
+    rng = random.Random(58001)
     for name in names or []:
-        path = os.path.join(ELITE_PLAYERS_IMAGE_DIR, name)
-        if os.path.isfile(path):
-            paths[str(name)] = path
+        role = role_map.get(str(name))
+        if role:
+            picked = _players_warehouse_pick(catalog, role, used, rng)
+            if picked:
+                paths[str(name)] = picked[0]
+                continue
+        # Named opponent / defending / teammate stills from warehouse folders.
+        low = str(name or "").lower()
+        if "opponent" in low:
+            role = "opponent"
+        elif "defend" in low:
+            role = "defender"
+        elif "teammate" in low:
+            role = "teammate"
         else:
-            logger.error("Elite Players image missing: %s", path)
+            role = ""
+        if role:
+            picked = _players_warehouse_pick(catalog, role, used, rng)
+            if picked:
+                paths[str(name)] = picked[0]
+                continue
+        logger.error("Elite Players warehouse image missing for %s", name)
     return paths
 
 
-def _elite_players_distractor_pool(paths: Dict[str, str]) -> List[str]:
-    names = (
-        *ELITE_PLAYERS_OPPONENTS,
-        *ELITE_PLAYERS_DEFENDING,
-        *ELITE_PLAYERS_TEAMMATES,
-    )
-    return [paths[name] for name in names if name in paths]
+def _elite_players_distractor_pool(paths: Dict[str, str] = None) -> List[str]:
+    """Unique opponent / defender / teammate stills from the warehouse.
+
+    Uniqueness is by file path (Opponent-PL-01 and Teammate-PL-01 may both appear).
+    """
+    catalog = _players_warehouse_catalog()
+    out = []
+    used_paths: set = set()
+    rng = random.Random(58002)
+    for role, count in (("opponent", 8), ("defender", 8), ("teammate", 6)):
+        pool = list(catalog.get(role) or [])
+        rng.shuffle(pool)
+        taken = 0
+        for path, _pid in pool:
+            if path in used_paths:
+                continue
+            used_paths.add(path)
+            out.append(path)
+            taken += 1
+            if taken >= count:
+                break
+    if paths:
+        for path in paths.values():
+            if path and path not in used_paths:
+                used_paths.add(path)
+                out.append(path)
+    return out
 
 
 def _elite_players_goal_counts(series: int) -> List[int]:
@@ -4053,8 +6082,34 @@ def _elite_players_action_goal_plan(
     return out
 
 
-def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: bool) -> List[str]:
-    """Return unique pass image paths for this action."""
+def _elite_players_pick_passes(
+    count: int,
+    paths: Dict[str, str] = None,
+    single_only: bool = False,
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    used_people: Optional[set] = None,
+    rng: Optional[random.Random] = None,
+) -> List[str]:
+    """Return unique warehouse pass paths for this action.
+
+    1 goal → Teammate-PL-*-02-B; 2 → + pass_copy Teammate-PL; 3 → + asking.
+    """
+    catalog = catalog or _players_warehouse_catalog()
+    used_people = used_people if used_people is not None else set()
+    rng = rng or random.Random()
+    need = 1 if single_only or int(count) <= 1 else max(1, int(count))
+    roles = ["pass", "pass_copy", "asking"]
+    out = []
+    for role in roles[:need]:
+        picked = _players_warehouse_pick(catalog, role, used_people, rng)
+        if not picked and role != "pass":
+            picked = _players_warehouse_pick(catalog, "pass", used_people, rng)
+        if picked:
+            out.append(picked[0])
+    if out:
+        return out
+    # Legacy fallback from a pre-built paths map.
+    paths = paths or {}
     if single_only or int(count) <= 1:
         path = paths.get(ELITE_PLAYERS_PASS1)
         return [path] if path else []
@@ -4070,11 +6125,13 @@ def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: b
 
 
 def _elite_side_pass_path(name: str) -> str:
-    """Elite side passes live under Elite/; fall back to Activated art if needed."""
-    for base in (ELITE_PLAYERS_IMAGE_DIR, ACTIVATED_S0_IMAGE_DIR):
-        path = os.path.join(base, str(name or ""))
-        if path and os.path.isfile(path):
-            return path
+    """Elite side passes = Crossball teammate stills from Players-Images."""
+    catalog = _players_warehouse_catalog()
+    low = str(name or "").lower()
+    role = "cross_left" if "left" in low else "cross_right"
+    pool = catalog.get(role) or []
+    if pool:
+        return pool[0][0]
     return ""
 
 
@@ -4082,10 +6139,23 @@ def _elite_players_assign_ap_action(
     series: int,
     paths: Dict[str, str],
     distractors: List[str],
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    rng: Optional[random.Random] = None,
 ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """Dual-goal AP on opposite halves across A+B (any seats 1–6 may light)."""
-    pass_path = paths.get(ELITE_PLAYERS_PASS1)
-    copy_path = paths.get(ELITE_PLAYERS_PASS_COPY) or paths.get(ELITE_PLAYERS_PASS2)
+    catalog = catalog or _players_warehouse_catalog()
+    rng = rng or random.Random()
+    used: set = set()
+    pass_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    copy_pick = _players_warehouse_pick(catalog, "pass_copy", used, rng)
+    if not copy_pick:
+        copy_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    pass_path = (pass_pick or (None, None))[0] or paths.get(ELITE_PLAYERS_PASS1)
+    copy_path = (
+        (copy_pick or (None, None))[0]
+        or paths.get(ELITE_PLAYERS_PASS_COPY)
+        or paths.get(ELITE_PLAYERS_PASS2)
+    )
     if not pass_path or not copy_path:
         return {}, {}
     left_seats = [
@@ -4290,42 +6360,47 @@ def _elite_players_assign_action(
 
 
 def _build_elite_s0_playlist(series_num: int) -> List[dict]:
-    """Elite S0.T1–T5 Players (operator C1.T1–T5) on both fields together.
+    """Elite S0.T1–T5 Players from static/Players-Images warehouse.
 
-    C1.T1: 6 images on 12 screens (3/field), pass1 alternating B/A, Entry timing.
-    C1.T2: 8 images on 12 screens, same pass1 game.
-    C1.T3–T5: 12 images; pass-left / pass-right side targets on non-AP seats
-    (Activated / HP do not use those). C1.T1–T2: 30% dual-goal AP in order;
-    C1.T3–T5: 50% AP shuffled. AP advances on the first finish.
+    C1.T1: 6 images on 12 screens (3/field), center pass alternating B/A.
+    C1.T2: 8 images / 12. C1.T3–T5: 12 images; Crossball L/R on non-AP seats.
+    Goals = Teammate-PL-*-02-B; AP second = another Teammate-PL; asking =
+    SIMUST-ASking-Ball; side goals = Cross-Left/Right. Unique person # / action.
     """
-    names = (
-        *ELITE_PLAYERS_PASSES,
-        ELITE_PLAYERS_PASS_COPY,
-        *ELITE_PLAYERS_OPPONENTS,
-        *ELITE_PLAYERS_DEFENDING,
-        *ELITE_PLAYERS_TEAMMATES,
-    )
-    paths = _elite_players_image_paths(names)
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("pass") or not catalog.get("opponent"):
+        logger.error(
+            "Elite Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
+        return []
     left_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_LEFT)
     right_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_RIGHT)
+    paths = {
+        ELITE_PLAYERS_PASS1: (catalog.get("pass") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS_COPY: (catalog.get("pass_copy") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS2: (catalog.get("pass_copy") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS3: (catalog.get("asking") or [(None, None)])[0][0],
+    }
     if left_path:
         paths[ELITE_PLAYERS_PASS_LEFT] = left_path
     if right_path:
         paths[ELITE_PLAYERS_PASS_RIGHT] = right_path
-    if ELITE_PLAYERS_PASS1 not in paths:
+    if not paths.get(ELITE_PLAYERS_PASS1):
         logger.error(
-            "Elite Players missing pass1.png under %s", ELITE_PLAYERS_IMAGE_DIR
+            "Elite Players missing Teammate-PL-*-02-B under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    if ELITE_PLAYERS_PASS_COPY not in paths and ELITE_PLAYERS_PASS2 not in paths:
+    if not paths.get(ELITE_PLAYERS_PASS_COPY):
         logger.error(
-            "Elite Players missing pass-copy (or pass2) under %s",
-            ELITE_PLAYERS_IMAGE_DIR,
+            "Elite Players missing Teammate-PL pass-copy pool under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    distractors = _elite_players_distractor_pool(paths)
+    distractors = _elite_players_distractor_pool()
     if len(distractors) < 5:
-        logger.error("Elite Players need opponent/defending/teammate images")
+        logger.error("Elite Players need opponent/defending/teammate warehouse images")
         return []
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
@@ -4344,24 +6419,42 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             use_ap = bool(ap_plan[action_in_set - 1])
             use_side = bool(not use_ap and side_plan[action_in_set - 1])
             side = ""
+            rng = random.Random(
+                59000 + series * 1000 + test_num * 100 + action_in_set * 10
+            )
+            used_people: set = set()
             if use_ap:
                 images, field_screens = _elite_players_assign_ap_action(
-                    series, paths, distractors
+                    series, paths, distractors, catalog=catalog, rng=rng
                 )
             else:
                 if use_side:
-                    side = random.choice(("L", "R"))
-                    sided = left_path if side == "L" else right_path
-                    pass_list = [sided]
+                    side = rng.choice(("L", "R"))
+                    role = "cross_left" if side == "L" else "cross_right"
+                    sided_pick = _players_warehouse_pick(
+                        catalog, role, used_people, rng
+                    )
+                    sided = (sided_pick or (None, None))[0] or (
+                        left_path if side == "L" else right_path
+                    )
+                    pass_list = [sided] if sided else []
                 else:
-                    pass_list = _elite_players_pick_passes(goal_n, paths, single_only)
+                    pass_list = _elite_players_pick_passes(
+                        goal_n,
+                        paths,
+                        single_only,
+                        catalog=catalog,
+                        used_people=used_people,
+                        rng=rng,
+                    )
                 if not pass_list:
                     continue
+                action_distractors = _elite_players_distractor_pool()
                 images, field_screens = _elite_players_assign_action(
                     series,
                     action_in_set,
                     pass_list,
-                    distractors,
+                    action_distractors,
                     first_action=(
                         series == 1
                         and action_in_set == 1
@@ -4369,7 +6462,6 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
                     ),
                 )
                 if use_side and side and field_screens:
-                    # Stamp L/R mouth tokens so realtime aims the sided cylinder.
                     stamped = {}
                     for fid, goals in field_screens.items():
                         stamped[fid] = [
@@ -4382,7 +6474,6 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             goals = []
             for fid in ("A", "B"):
                 goals.extend(field_screens.get(fid) or [])
-            # AP: first finish measures preference — do not wait for both mouths.
             require_all = not use_ap
             playlist.append({
                 "kind": "labeled_action",
@@ -4410,6 +6501,7 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
                 "side_goals": bool(use_side),
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -4433,16 +6525,1154 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             continue
         entry["combined_field"] = True
         entry["hold_full_on"] = True
-        # Preserve per-action require_all (False on AP dual-goal preference seats).
         if "require_all_goals" not in entry:
             entry["require_all_goals"] = not bool(entry.get("aep_dual_pass"))
     ap_n = sum(1 for step in stamped if step.get("aep_dual_pass"))
     logger.info(
-        "Elite C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%)",
+        "Elite C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, warehouse)",
         series,
         len(stamped),
         ap_n,
         100.0 * _players_ap_fraction(series),
+    )
+    return stamped
+
+
+def _wc_players_image_paths() -> Dict[str, str]:
+    """Resolve Elite Players 2 PNGs under static/players/Elite/players2."""
+    names = (
+        WC_PLAYERS_PASS,
+        WC_PLAYERS_ASKING,
+        WC_PLAYERS_RUNNING_LEFT,
+        WC_PLAYERS_CROSS_RIGHT,
+        WC_PLAYERS_CROSS_LEFT,
+        WC_PLAYERS_TEAMMATE,
+        WC_PLAYERS_LEFT_POST,
+        WC_PLAYERS_RIGHT_POST,
+        *WC_PLAYERS_OPPONENTS,
+        *WC_PLAYERS_DEFENDING,
+    )
+    out = {}
+    for name in names:
+        path = os.path.join(ELITE_PLAYERS2_IMAGE_DIR, name)
+        if os.path.isfile(path):
+            out[name] = path
+        else:
+            logger.warning("Elite Players 2 missing image: %s", path)
+    return out
+
+
+def _wc_players_take(
+    pool: List[str], used: set, n: int = 1, *, allow_reuse: bool = False
+) -> List[str]:
+    """Take n filenames from pool. Prefer unused; optionally reuse when short."""
+    picked = []
+    for name in pool:
+        if name in used:
+            continue
+        picked.append(name)
+        used.add(name)
+        if len(picked) >= n:
+            break
+    if allow_reuse and len(picked) < n:
+        for name in pool:
+            picked.append(name)
+            used.add(name)
+            if len(picked) >= n:
+                break
+    return picked
+
+
+def _wc_players_build_t1_action(action_n: int, paths: Dict[str, str]) -> Optional[dict]:
+    """Elite Players 2 base layouts (actions 1–9).
+
+    Returns dict with screen_images, field_screens, action (PASS),
+    and require_all_goals (False when any one of several mouths finishes).
+    No running-player stills; former PRESS gray goals use pass.png.
+    Posts stay on Field B (actions 8–9).
+    """
+    used = set()
+    images = {}
+
+    def _put(sid: str, name: str):
+        path = paths.get(name)
+        if not path:
+            return False
+        used.add(name)
+        images[sid] = path
+        return True
+
+    action = "PASS"
+    goals = {"A": [], "B": []}
+    require_all = True
+
+    if action_n == 1:
+        # A: empty, opp, def, opp, pass(goal), empty
+        # B: empty, opp, teammate, def, empty, opp
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 4)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 2)
+        if len(opps) < 4 or len(defs) < 2:
+            return None
+        if WC_PLAYERS_PASS not in paths or WC_PLAYERS_TEAMMATE not in paths:
+            return None
+        _put("A2", opps[0])
+        _put("A3", defs[0])
+        _put("A4", opps[1])
+        _put("A5", WC_PLAYERS_PASS)
+        _put("B2", opps[2])
+        _put("B3", WC_PLAYERS_TEAMMATE)
+        _put("B4", defs[1])
+        _put("B6", opps[3])
+        goals = {"A": ["A5"], "B": []}
+    elif action_n == 2:
+        # A: opp, teammate, def, empty, cross-right(goal right), opp
+        # B: empty, def, empty, opp, empty, empty
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 3)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 2)
+        if (
+            len(opps) < 3
+            or len(defs) < 2
+            or WC_PLAYERS_CROSS_RIGHT not in paths
+            or WC_PLAYERS_TEAMMATE not in paths
+        ):
+            return None
+        _put("A1", opps[0])
+        _put("A2", WC_PLAYERS_TEAMMATE)
+        _put("A3", defs[0])
+        _put("A5", WC_PLAYERS_CROSS_RIGHT)
+        _put("A6", opps[1])
+        _put("B2", defs[1])
+        _put("B4", opps[2])
+        goals = {"A": ["A5R"], "B": []}
+    elif action_n == 3:
+        # A: empty, opp, empty, def, empty, opp
+        # B: teammate, empty, opp, empty, def, pass(goal)
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 3)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 2)
+        if (
+            len(opps) < 3
+            or len(defs) < 2
+            or WC_PLAYERS_TEAMMATE not in paths
+            or WC_PLAYERS_PASS not in paths
+        ):
+            return None
+        _put("A2", opps[0])
+        _put("A4", defs[0])
+        _put("A6", opps[1])
+        _put("B1", WC_PLAYERS_TEAMMATE)
+        _put("B3", opps[2])
+        _put("B5", defs[1])
+        _put("B6", WC_PLAYERS_PASS)
+        goals = {"A": [], "B": ["B6"]}
+    elif action_n == 4:
+        # A: teammate, empty, opp, empty, def, empty
+        # B: opp, asking(goal), empty, def, empty, empty
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 2)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 2)
+        if (
+            len(opps) < 2
+            or len(defs) < 2
+            or WC_PLAYERS_TEAMMATE not in paths
+            or WC_PLAYERS_ASKING not in paths
+        ):
+            return None
+        _put("A1", WC_PLAYERS_TEAMMATE)
+        _put("A3", opps[0])
+        _put("A5", defs[0])
+        _put("B1", opps[1])
+        _put("B2", WC_PLAYERS_ASKING)
+        _put("B4", defs[1])
+        goals = {"A": [], "B": ["B2"]}
+    elif action_n == 5:
+        # A: teammate, cross-left(goal left), empty, opp, def, empty
+        # B: empty, empty, opp, empty, def, empty
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 2)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 2)
+        if (
+            len(opps) < 2
+            or len(defs) < 2
+            or WC_PLAYERS_TEAMMATE not in paths
+            or WC_PLAYERS_CROSS_LEFT not in paths
+        ):
+            return None
+        _put("A1", WC_PLAYERS_TEAMMATE)
+        _put("A2", WC_PLAYERS_CROSS_LEFT)
+        _put("A4", opps[0])
+        _put("A5", defs[0])
+        _put("B3", opps[1])
+        _put("B5", defs[1])
+        goals = {"A": ["A2L"], "B": []}
+    elif action_n == 6:
+        # A: opp, empty, pass(goal), def, empty, empty
+        # B: def, empty, opp, empty, def, empty
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 2)
+        defs = _wc_players_take(
+            list(WC_PLAYERS_DEFENDING), used, 3, allow_reuse=True
+        )
+        if len(opps) < 2 or len(defs) < 3 or WC_PLAYERS_PASS not in paths:
+            return None
+        _put("A1", opps[0])
+        _put("A3", WC_PLAYERS_PASS)
+        _put("A4", defs[0])
+        _put("B1", defs[1])
+        _put("B3", opps[1])
+        _put("B5", defs[2])
+        goals = {"A": ["A3"], "B": []}
+    elif action_n == 7:
+        # A: pass(goal), opp, empty, opp, asking(goal), empty
+        # B: def, teammate, opp, empty, opp, empty — both A1+A5 required
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 4)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 1)
+        if (
+            len(opps) < 4
+            or len(defs) < 1
+            or WC_PLAYERS_PASS not in paths
+            or WC_PLAYERS_ASKING not in paths
+            or WC_PLAYERS_TEAMMATE not in paths
+        ):
+            return None
+        _put("A1", WC_PLAYERS_PASS)
+        _put("A2", opps[0])
+        _put("A4", opps[1])
+        _put("A5", WC_PLAYERS_ASKING)
+        _put("B1", defs[0])
+        _put("B2", WC_PLAYERS_TEAMMATE)
+        _put("B3", opps[2])
+        _put("B5", opps[3])
+        goals = {"A": ["A1", "A5"], "B": []}
+        require_all = True
+    elif action_n == 8:
+        # A: pass(goal), empty, opp, teammate, opp, empty
+        # B: empty, def, left-post, right-post, asking, empty
+        # Finish A1 OR B7 (first success advances)
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 2)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 1)
+        if (
+            len(opps) < 2
+            or len(defs) < 1
+            or WC_PLAYERS_PASS not in paths
+            or WC_PLAYERS_TEAMMATE not in paths
+            or WC_PLAYERS_ASKING not in paths
+            or WC_PLAYERS_LEFT_POST not in paths
+            or WC_PLAYERS_RIGHT_POST not in paths
+        ):
+            return None
+        _put("A1", WC_PLAYERS_PASS)
+        _put("A3", opps[0])
+        _put("A4", WC_PLAYERS_TEAMMATE)
+        _put("A5", opps[1])
+        _put("B2", defs[0])
+        _put("B3", WC_PLAYERS_LEFT_POST)
+        _put("B4", WC_PLAYERS_RIGHT_POST)
+        _put("B5", WC_PLAYERS_ASKING)
+        goals = {"A": ["A1"], "B": ["B7"]}
+        require_all = False
+    elif action_n == 9:
+        # A: empty, teammate, opp, teammate, opp, empty
+        # B: def, opp, left-post, right-post, empty, opp — ball to B7
+        opps = _wc_players_take(list(WC_PLAYERS_OPPONENTS), used, 4)
+        defs = _wc_players_take(list(WC_PLAYERS_DEFENDING), used, 1)
+        if (
+            len(opps) < 4
+            or len(defs) < 1
+            or WC_PLAYERS_TEAMMATE not in paths
+            or WC_PLAYERS_LEFT_POST not in paths
+            or WC_PLAYERS_RIGHT_POST not in paths
+        ):
+            return None
+        _put("A2", WC_PLAYERS_TEAMMATE)
+        _put("A3", opps[0])
+        _put("A4", WC_PLAYERS_TEAMMATE)
+        _put("A5", opps[1])
+        _put("B1", defs[0])
+        _put("B2", opps[2])
+        _put("B3", WC_PLAYERS_LEFT_POST)
+        _put("B4", WC_PLAYERS_RIGHT_POST)
+        _put("B6", opps[3])
+        goals = {"A": [], "B": ["B7"]}
+    else:
+        return None
+
+    # Drop accidental empties if any slipped in.
+    for sid in list(images.keys()):
+        if not images[sid]:
+            images.pop(sid, None)
+
+    return _wc_sync_crossball_goal_sides({
+        "screen_images": images,
+        "field_screens": goals,
+        "action": action,
+        "require_all_goals": bool(require_all),
+        "used_names": sorted(used),
+    })
+
+
+def _wc_ellipse_next(sid: str, steps: int = 1) -> Optional[str]:
+    """Next cabinet on the A1…A6→B1…B6 ellipse (clockwise when steps>0)."""
+    name = _sid(sid)
+    if not name or name in ("A7", "B7"):
+        return None
+    ring = list(WC_ELLIPSE_RING)
+    try:
+        idx = ring.index(name)
+    except ValueError:
+        return None
+    n = len(ring)
+    return ring[(idx + int(steps)) % n]
+
+
+def _wc_flip_field_sid(sid: str) -> Optional[str]:
+    """Swap Field A ↔ Field B (A3→B3, B7→A7)."""
+    text = str(sid or "").strip().upper()
+    if not text:
+        return None
+    side = ""
+    if len(text) >= 3 and text[-1] in ("L", "R", "T", "B") and text[1:-1].isdigit():
+        side = text[-1]
+        text = text[:-1]
+    if text in ("A7", "B7"):
+        return ("B7" if text == "A7" else "A7") + side
+    if len(text) >= 2 and text[0] in ("A", "B") and text[1:].isdigit():
+        other = "B" if text[0] == "A" else "A"
+        return f"{other}{text[1:]}{side}"
+    return None
+
+
+def _wc_crossball_side_from_path(path: str) -> Optional[str]:
+    """R/L from CrossBall / Cross-* filename (goal mouth side)."""
+    name = os.path.basename(str(path or "")).lower()
+    if "crossball-right" in name or "cross-right" in name:
+        return "R"
+    if "crossball-left" in name or "cross-left" in name:
+        return "L"
+    return None
+
+
+def _wc_sync_crossball_goal_sides(built: dict) -> dict:
+    """CrossBall-Right → right-half seat + *R mouth; Left → left-half + *L.
+
+    After ellipse remaps, move the clip if it landed on the wrong half.
+    """
+    if not isinstance(built, dict):
+        return built
+    images = dict(built.get("screen_images") or {})
+    people = dict(built.get("person_ids") or {})
+    old_goals = built.get("field_screens") or {}
+    new_goals = {"A": [], "B": []}
+
+    def _goal_parents() -> set:
+        out = set()
+        for fid in ("A", "B"):
+            for sid in (old_goals.get(fid) or []) + (new_goals.get(fid) or []):
+                parent = _sid(sid)
+                if parent:
+                    out.add(parent)
+        return out
+
+    for fid in ("A", "B"):
+        for sid in old_goals.get(fid) or []:
+            parent = _sid(sid)
+            if not parent:
+                continue
+            if parent in ("A7", "B7"):
+                if sid not in new_goals[fid]:
+                    new_goals[fid].append(sid)
+                continue
+            path = images.get(parent) or ""
+            side = _wc_crossball_side_from_path(path)
+            if not side:
+                keep = _goal_sid(sid) or parent
+                if keep not in new_goals[fid]:
+                    new_goals[fid].append(keep)
+                continue
+            try:
+                arena = int(parent[1:])
+            except ValueError:
+                new_goals[fid].append(parent)
+                continue
+            want = (
+                WC_CROSSBALL_LEFT_ARENAS
+                if side == "L"
+                else WC_CROSSBALL_RIGHT_ARENAS
+            )
+            dest = parent
+            if arena not in want:
+                field = parent[0]
+                occupied = _goal_parents()
+                for n in want:
+                    cand = f"{field}{n}"
+                    if cand in occupied and cand != parent:
+                        continue
+                    dest = cand
+                    break
+                if dest != parent:
+                    other = images.get(dest)
+                    images[dest] = path
+                    if other:
+                        images[parent] = other
+                    else:
+                        images.pop(parent, None)
+                    if parent in people:
+                        people[dest] = people.pop(parent)
+            stamped = f"{dest}{side}"
+            dest_fid = dest[0] if dest[:1] in ("A", "B") else fid
+            if stamped not in new_goals[dest_fid]:
+                new_goals[dest_fid].append(stamped)
+    built["screen_images"] = images
+    built["field_screens"] = new_goals
+    built["person_ids"] = people
+    return built
+
+
+def _wc_remap_action_layout(
+    built: dict, remap_sid
+) -> Optional[dict]:
+    """Apply screen remapping to images + goals; keep action / require_all."""
+    if not isinstance(built, dict):
+        return None
+    images = {}
+    for sid, path in (built.get("screen_images") or {}).items():
+        parent = _sid(sid) or sid
+        nxt = remap_sid(parent)
+        if not nxt or not path:
+            continue
+        images[nxt] = path
+    goals = {"A": [], "B": []}
+    for fid in ("A", "B"):
+        for sid in (built.get("field_screens") or {}).get(fid) or []:
+            parent = _sid(sid)
+            if not parent:
+                continue
+            # Keep paint mouths A7/B7; strip L/R — sync restores CrossBall sides.
+            if parent in ("A7", "B7"):
+                nxt = parent
+            else:
+                nxt = remap_sid(parent)
+            if not nxt:
+                continue
+            dest = nxt[0] if nxt[:1] in ("A", "B") else fid
+            if nxt not in goals[dest]:
+                goals[dest].append(nxt)
+    remapped = {
+        "screen_images": images,
+        "field_screens": goals,
+        "action": str(built.get("action") or "PASS"),
+        "require_all_goals": bool(built.get("require_all_goals", True)),
+        "used_names": list(built.get("used_names") or []),
+        "person_ids": dict(built.get("person_ids") or {}),
+    }
+    return _wc_sync_crossball_goal_sides(remapped)
+
+
+def _wc_players_series_timing_ms(series_num: int) -> Tuple[int, int]:
+    """C1.T1 uses Entry T1 On/Gap; each later Tn is 5% shorter (floored)."""
+    on0, gap0 = _entry_series_timing_ms(1)
+    decay = float(WC_PLAYERS_TIMING_DECAY) ** (max(1, int(series_num or 1)) - 1)
+    on = max(float(ENTRY_ON_MIN_MS), float(on0) * decay)
+    gap = max(float(ENTRY_GAP_MIN_MS), float(gap0) * decay)
+    on_ms, _ = _snap_ms_to_display_fps(on)
+    gap_ms, _ = _snap_ms_to_display_fps(gap)
+    if on_ms < ENTRY_ON_MIN_MS:
+        on_ms, _ = _snap_ms_to_display_fps(ENTRY_ON_MIN_MS)
+    if gap_ms < ENTRY_GAP_MIN_MS:
+        gap_ms, _ = _snap_ms_to_display_fps(ENTRY_GAP_MIN_MS)
+    return on_ms, gap_ms
+
+
+def _wc_players_build_t2_action(action_n: int, paths: Dict[str, str]) -> Optional[dict]:
+    """Layout for in-set test 2 (clockwise +1 on a1–7). Kept for callers/tests."""
+    return _wc_players_build_layout_action(2, action_n, paths)
+
+
+def _wc_players_build_layout_action(
+    layout_step: int, action_n: int, paths: Dict[str, str]
+) -> Optional[dict]:
+    """One of the five in-set layout steps for Elite Players 2.
+
+    Step 1 = base layouts. Steps 2–5:
+      actions 1–7 → clockwise +(step−1) on the A1…A6→B1…B6 ellipse
+      actions 8–9 → always the base (test-1) layout; posts stay on Field B
+    """
+    step = max(1, min(5, int(layout_step or 1)))
+    base = _wc_players_build_t1_action(action_n, paths)
+    if not base:
+        return None
+    n = int(action_n or 0)
+    # Actions 8–9 never rotate/flip — always version-one (posts stay on B).
+    if n in (8, 9) or step == 1:
+        return base
+    steps = step - 1
+    if 1 <= n <= 7:
+        return _wc_remap_action_layout(
+            base, lambda sid, s=steps: _wc_ellipse_next(sid, s) or sid
+        )
+    return None
+
+
+# Back-compat alias used by older helpers/tests.
+_wc_players_build_series_action = _wc_players_build_layout_action
+
+
+def _build_elite_players2_playlist(series_num: int) -> List[dict]:
+    """Elite Players 2 (S4 / operator C5) — 5 tests × 9 actions (=45).
+
+    Layouts: test 1 = base; tests 2–5 clockwise +1 on actions 1–7 only
+    (actions 8–9 always match test 1; posts stay on Field B).
+    S4.T2–T5 repeat the same 45 layouts with On/Gap −5% per sub-level.
+    """
+    series = max(1, min(5, int(series_num or 1)))
+    paths = _wc_players_image_paths()
+    if WC_PLAYERS_PASS not in paths:
+        logger.error(
+            "Elite Players 2 missing pass.png under %s", ELITE_PLAYERS2_IMAGE_DIR
+        )
+        return []
+    on_ms, gap_ms = _wc_players_series_timing_ms(series)
+    actions_n = int(WC_PLAYERS_T1_ACTIONS)
+    tests_n = int(WC_PLAYERS_TEST_COUNT)
+    playlist = []
+    for test_num in range(1, tests_n + 1):
+        for action_in_set in range(1, actions_n + 1):
+            built = _wc_players_build_layout_action(test_num, action_in_set, paths)
+            if not built:
+                logger.error(
+                    "Elite Players 2 C5.T%s test %s action %s layout failed",
+                    series,
+                    test_num,
+                    action_in_set,
+                )
+                continue
+            images = dict(built["screen_images"])
+            field_screens = dict(built["field_screens"])
+            action_name = str(built.get("action") or "PASS")
+            require_all = bool(built.get("require_all_goals", True))
+            goals = []
+            for fid in ("A", "B"):
+                goals.extend(field_screens.get(fid) or [])
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions_n,
+                "is_last_in_set": action_in_set == actions_n,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": action_name,
+                "no_fillers": True,
+                "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
+                "combined_field": True,
+                "require_all_goals": require_all,
+                "hold_full_on": True,
+                "arena_pair": (1, 1),
+                "field_screens": field_screens,
+                "screen_images": images,
+                "gap_screen_images": dict(images),
+                "wc_players_scenario": True,
+                "elite_players2_scenario": True,
+                "wc_players_press_goal": False,
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "label": (
+                    f"Elite S4.T{series} Players2 T{test_num}/{tests_n} "
+                    f"a{action_in_set}/{actions_n} {action_name} "
+                    f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": (
+                    f"image://Elite/S4.T{series}/"
+                    f"players2/test{test_num}/{action_in_set}"
+                ),
+                "series_group": 4,
+                "series_num": int(series),
+            })
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["combined_field"] = True
+        entry["hold_full_on"] = True
+        if "require_all_goals" not in entry:
+            entry["require_all_goals"] = True
+    logger.info(
+        "Elite Players 2 C5.T%s: %s actions (%s tests × %s) on=%sms gap=%sms",
+        series,
+        len(stamped),
+        tests_n,
+        actions_n,
+        on_ms,
+        gap_ms,
+    )
+    return stamped
+
+
+def _wc_video_person_id(name: str) -> Optional[int]:
+    """Person tag from filename (first number). Same # = same player across roles."""
+    nums = re.findall(r"\d+", os.path.basename(str(name or "")))
+    if not nums:
+        return None
+    try:
+        return int(nums[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _wc_players_video_catalog() -> Dict[str, List[Tuple[str, int]]]:
+    """Role → [(abspath, person_id), ...] under static/Players-Videos."""
+    root = WC_PLAYERS_VIDEO_ROOT
+    folders = WC_PLAYERS_VIDEO_FOLDERS
+
+    def _list(folder_key: str, *, allow_duo: bool = False) -> List[str]:
+        folder = os.path.join(root, folders.get(folder_key) or "")
+        if not os.path.isdir(folder):
+            return []
+        out = []
+        for name in sorted(os.listdir(folder)):
+            low = name.lower()
+            if (not allow_duo) and "duo" in low:
+                continue
+            if not low.endswith(WC_PLAYERS_VIDEO_EXTS):
+                continue
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                out.append(path)
+        return out
+
+    def _pool(paths: List[str], pred) -> List[Tuple[str, int]]:
+        items = []
+        for path in paths:
+            if not pred(os.path.basename(path).lower()):
+                continue
+            pid = _wc_video_person_id(path)
+            if pid is None:
+                continue
+            items.append((path, pid))
+        return items
+
+    neutral = _list("neutral")
+    neutral_duo = _list("neutral", allow_duo=True)
+    asking = _list("asking")
+    cross = _list("cross")
+    offside = _list("offside")
+    shooting = _list("shooting")
+    defender_pool = _pool(neutral, lambda n: n.startswith("defender-neutral"))
+    defender_06 = [
+        item
+        for item in defender_pool
+        if "defender-neutral-06" in os.path.basename(item[0]).lower()
+    ]
+    return {
+        "teammate": _pool(neutral, lambda n: "teammate-neutral" in n),
+        "defender": defender_pool,
+        "defender_06": defender_06,
+        "duo": _pool(neutral_duo, lambda n: "players-neutral-duo" in n),
+        "opponent": _pool(asking, lambda n: n.startswith("opponent-asking")),
+        # Center goals (folder 02): teammate asking only — never opponents.
+        "asking": _pool(asking, lambda n: n.startswith("teammate-asking")),
+        "pass": _pool(asking, lambda n: n.startswith("teammate-asking")),
+        # Folder 03: any Left / Right clip is a sided goal (Cross + CrossBall).
+        "cross_left": _pool(cross, lambda n: "left" in n),
+        "cross_right": _pool(cross, lambda n: "right" in n),
+        "cross_escape_left": _pool(
+            cross, lambda n: "cross-left" in n and "crossball" not in n
+        ),
+        "cross_escape_right": _pool(
+            cross, lambda n: "cross-right" in n and "crossball" not in n
+        ),
+        # Action 8 trap seat: Cross-OffSide-Trap-Right only.
+        "offside_right": _pool(
+            offside, lambda n: "cross-offside-trap-right" in n
+        ),
+        "offside": _pool(offside, lambda n: "cross-offside-trap" in n),
+        "shooting": _pool(shooting, lambda n: "striking" in n),
+    }
+
+
+def _wc_video_pick(
+    catalog: Dict[str, List[Tuple[str, int]]],
+    role: str,
+    used_people: set,
+    rng: random.Random,
+    used_paths: Optional[set] = None,
+) -> Optional[Tuple[str, int]]:
+    """Pick one video: unique person in-action; prefer unused paths across actions."""
+    pool = list(catalog.get(role) or [])
+    rng.shuffle(pool)
+    used_paths = used_paths if used_paths is not None else set()
+    fresh = [(path, pid) for path, pid in pool if path not in used_paths]
+    reuse = [(path, pid) for path, pid in pool if path in used_paths]
+    for path, pid in fresh + reuse:
+        if pid in used_people:
+            continue
+        if path in used_paths and fresh:
+            # Prefer a different file when any unused alternative remains.
+            continue
+        used_people.add(pid)
+        used_paths.add(path)
+        return path, pid
+    # Last resort: allow same path only if person is free (should be rare).
+    for path, pid in pool:
+        if pid in used_people:
+            continue
+        used_people.add(pid)
+        used_paths.add(path)
+        return path, pid
+    return None
+
+
+def _wc_players_t1_role_layout(action_n: int) -> Optional[dict]:
+    """Elite Players 2 seat plan as roles (World Class fills with videos)."""
+    n = int(action_n or 0)
+    if n == 1:
+        return {
+            "slots": [
+                ("A2", "opponent"),
+                ("A3", "defender"),
+                ("A4", "opponent"),
+                ("A5", "pass"),
+                ("B2", "opponent"),
+                ("B3", "teammate"),
+                ("B4", "defender"),
+                ("B6", "opponent"),
+            ],
+            "goals": {"A": ["A5"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 2:
+        # CrossBall-Right → goal on right half (A5R), ball arrives from the right.
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A2", "teammate"),
+                ("A3", "defender"),
+                ("A5", "cross_right"),
+                ("A6", "opponent"),
+                ("B2", "defender"),
+                ("B4", "opponent"),
+            ],
+            "goals": {"A": ["A5R"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 3:
+        return {
+            "slots": [
+                ("A2", "opponent"),
+                ("A4", "defender"),
+                ("A6", "opponent"),
+                ("B1", "teammate"),
+                ("B3", "opponent"),
+                ("B5", "defender"),
+                ("B6", "pass"),
+            ],
+            "goals": {"A": [], "B": ["B6"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 4:
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A3", "opponent"),
+                ("A5", "defender"),
+                ("B1", "opponent"),
+                ("B2", "asking"),
+                ("B4", "defender"),
+            ],
+            "goals": {"A": [], "B": ["B2"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 5:
+        # CrossBall-Left → goal on left half (A2L), ball arrives from the left.
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A2", "cross_left"),
+                ("A4", "opponent"),
+                ("A5", "defender"),
+                ("B3", "opponent"),
+                ("B5", "defender"),
+            ],
+            "goals": {"A": ["A2L"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 6:
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A3", "pass"),
+                ("A4", "defender"),
+                ("B1", "defender"),
+                ("B3", "opponent"),
+                ("B5", "defender"),
+            ],
+            "goals": {"A": ["A3"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 7:
+        return {
+            "slots": [
+                ("A1", "pass"),
+                ("A2", "opponent"),
+                ("A4", "opponent"),
+                ("A5", "asking"),
+                ("B1", "defender"),
+                ("B2", "teammate"),
+                ("B3", "opponent"),
+                ("B5", "opponent"),
+            ],
+            "goals": {"A": ["A1", "A5"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 8:
+        # A1 or B7 (either). B5 = OffSide-Trap-Right; B2 = Neutral-Duo.
+        return {
+            "slots": [
+                ("A1", "pass"),
+                ("A3", "opponent"),
+                ("A4", "teammate"),
+                ("A5", "opponent"),
+                ("B2", "duo"),
+                ("B5", "offside_right"),
+            ],
+            "goals": {"A": ["A1"], "B": ["B7"]},
+            "require_all": False,
+            "gray": [],
+            "posts": [("B3", "left"), ("B4", "right")],
+        }
+    if n == 9:
+        # B7 only. B1 = Neutral-Duo; B6 = defender-Neutral-06.
+        # Fixed defender_06 first so Duo cannot claim person #6.
+        return {
+            "slots": [
+                ("B6", "defender_06"),
+                ("B1", "duo"),
+                ("A2", "teammate"),
+                ("A3", "opponent"),
+                ("A4", "teammate"),
+                ("A5", "opponent"),
+                ("B2", "opponent"),
+            ],
+            "goals": {"A": [], "B": ["B7"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [("B3", "left"), ("B4", "right")],
+        }
+    return None
+
+
+def _wc_players_still_paths() -> Dict[str, str]:
+    """Stills under Players-Videos: left/right posts (pass.png unused for WC goals)."""
+    root = WC_PLAYERS_VIDEO_ROOT
+    wanted = {
+        "left_post": (WC_PLAYERS_LEFT_POST, "left_post.jpg", "left_post.png"),
+        "right_post": (WC_PLAYERS_RIGHT_POST, "right_post.jpg", "right_post.png"),
+        # Kept for reference / Elite stills tooling; WC goals use asking videos.
+        "pass": (WC_PLAYERS_PASS, "pass.jpg", "pass.jpeg"),
+    }
+    out = {}
+    for key, names in wanted.items():
+        for name in names:
+            path = os.path.join(root, name)
+            if os.path.isfile(path):
+                out[key] = path
+                break
+        if key not in out and key != "pass":
+            logger.warning(
+                "World Class Players missing still '%s' under %s (expected %s)",
+                key,
+                root,
+                names[0],
+            )
+    return out
+
+
+def _wc_players_build_video_t1_action(
+    action_n: int,
+    catalog: Dict[str, List[Tuple[str, int]]],
+    still_paths: Dict[str, str],
+    *,
+    series_num: int = 1,
+    used_paths: Optional[set] = None,
+) -> Optional[dict]:
+    """Fill one base layout with videos; unique person + file within the action.
+
+    Center goals (role pass/asking) use Teammate-AskingForBall from folder 02.
+    Cross L/R goals use any Left/Right clip from folder 03.
+    Posts stay as static images. used_paths prefers fresh clips vs prior actions.
+    """
+    plan = _wc_players_t1_role_layout(action_n)
+    if not plan:
+        return None
+    rng = random.Random(41000 + int(series_num or 1) * 100 + int(action_n or 0))
+    used_people = set()
+    action_paths = set()
+    shared_paths = used_paths if used_paths is not None else set()
+    media = {}
+    person_by_sid = {}
+    for sid, role in plan.get("slots") or []:
+        # Prefer unused across actions; never reuse the same file in this action.
+        pick_paths = set(shared_paths) | set(action_paths)
+        picked = _wc_video_pick(catalog, role, used_people, rng, used_paths=pick_paths)
+        if not picked:
+            logger.error(
+                "World Class Players a%s: no free person for role %s",
+                action_n,
+                role,
+            )
+            return None
+        path, pid = picked
+        media[sid] = path
+        person_by_sid[sid] = pid
+        action_paths.add(path)
+        shared_paths.add(path)
+    for sid, which in plan.get("posts") or []:
+        key = "left_post" if which == "left" else "right_post"
+        path = still_paths.get(key)
+        if not path:
+            logger.error(
+                "World Class Players missing %s still under %s",
+                key,
+                WC_PLAYERS_VIDEO_ROOT,
+            )
+            return None
+        media[sid] = path
+    built = {
+        "screen_images": media,
+        "field_screens": dict(plan.get("goals") or {"A": [], "B": []}),
+        "action": "PASS",
+        "require_all_goals": bool(plan.get("require_all", True)),
+        "person_ids": person_by_sid,
+        "used_people": sorted(used_people),
+    }
+    return _wc_sync_crossball_goal_sides(built)
+
+
+def _wc_players_build_video_layout_action(
+    layout_step: int,
+    action_n: int,
+    catalog: Dict[str, List[Tuple[str, int]]],
+    still_paths: Dict[str, str],
+    *,
+    series_num: int = 1,
+    used_paths: Optional[set] = None,
+) -> Optional[dict]:
+    """Tests 2–5: clockwise +(step−1) on a1–7; a8–9 always base (posts on B)."""
+    step = max(1, min(5, int(layout_step or 1)))
+    base = _wc_players_build_video_t1_action(
+        action_n,
+        catalog,
+        still_paths,
+        series_num=series_num,
+        used_paths=used_paths,
+    )
+    if not base:
+        return None
+    n = int(action_n or 0)
+    if n in (8, 9) or step == 1:
+        return _wc_sync_crossball_goal_sides(base)
+    steps = step - 1
+    remapped = _wc_remap_action_layout(
+        base, lambda sid, s=steps: _wc_ellipse_next(sid, s) or sid
+    )
+    if not remapped:
+        return None
+    # Remap person tags with screens.
+    people = {}
+    for sid, pid in (base.get("person_ids") or {}).items():
+        nxt = _wc_ellipse_next(sid, steps) or sid
+        people[nxt] = pid
+    remapped["person_ids"] = people
+    remapped["used_people"] = list(base.get("used_people") or [])
+    return _wc_sync_crossball_goal_sides(remapped)
+
+
+def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
+    """World Class Players (S0 / C1) — Elite Players 2 layouts with short videos.
+
+    Same 5×9 seat plans; media from static/Players-Videos.
+    Center goals: Teammate-AskingForBall (folder 02) — never pass.png / opponents.
+    Cross L/R goals: any Left/Right clip from folder 03 (enter goal = correct).
+    Person tags + file paths unique within an action; prefer fresh clips next action.
+    Tests 2–5 reuse the same video files as test 1 (seats rotate on a1–7).
+    """
+    series = max(1, min(5, int(series_num or 1)))
+    catalog = _wc_players_video_catalog()
+    still_paths = _wc_players_still_paths()
+    if not catalog.get("opponent") or not catalog.get("teammate"):
+        logger.error(
+            "World Class Players missing video catalog under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    if not catalog.get("pass"):
+        logger.error(
+            "World Class Players missing Teammate-AskingForBall videos under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    if not catalog.get("cross_left") or not catalog.get("cross_right"):
+        logger.error(
+            "World Class Players missing Cross Left/Right videos under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    if not still_paths.get("left_post") or not still_paths.get("right_post"):
+        logger.error(
+            "World Class Players missing left/right post stills under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    on_ms, gap_ms = _wc_players_series_timing_ms(series)
+    # C1.T1 only: double On/Gap for every in-set test (1–5).
+    if series == 1:
+        scale = float(WC_PLAYERS_C1T1_TIME_SCALE)
+        on_ms, _ = _snap_ms_to_display_fps(float(on_ms) * scale)
+        gap_ms, _ = _snap_ms_to_display_fps(float(gap_ms) * scale)
+    actions_n = int(WC_PLAYERS_T1_ACTIONS)
+    tests_n = int(WC_PLAYERS_TEST_COUNT)
+    # Build base a1–a9 once so every in-set test shares the same video files.
+    used_paths = set()
+    bases = []
+    for action_in_set in range(1, actions_n + 1):
+        built = _wc_players_build_video_t1_action(
+            action_in_set,
+            catalog,
+            still_paths,
+            series_num=series,
+            used_paths=used_paths,
+        )
+        if not built:
+            logger.error(
+                "World Class Players C1.T%s base action %s layout failed",
+                series,
+                action_in_set,
+            )
+            return []
+        bases.append(built)
+    playlist = []
+    for test_num in range(1, tests_n + 1):
+        for action_in_set in range(1, actions_n + 1):
+            base = bases[action_in_set - 1]
+            if action_in_set in (8, 9) or test_num == 1:
+                built = _wc_sync_crossball_goal_sides({
+                    "screen_images": dict(base.get("screen_images") or {}),
+                    "field_screens": {
+                        "A": list((base.get("field_screens") or {}).get("A") or []),
+                        "B": list((base.get("field_screens") or {}).get("B") or []),
+                    },
+                    "action": base.get("action") or "PASS",
+                    "require_all_goals": bool(base.get("require_all_goals", True)),
+                    "person_ids": dict(base.get("person_ids") or {}),
+                    "used_people": list(base.get("used_people") or []),
+                })
+            else:
+                steps = test_num - 1
+                remapped = _wc_remap_action_layout(
+                    base, lambda sid, s=steps: _wc_ellipse_next(sid, s) or sid
+                )
+                if not remapped:
+                    logger.error(
+                        "World Class Players C1.T%s test %s action %s remap failed",
+                        series,
+                        test_num,
+                        action_in_set,
+                    )
+                    continue
+                people = {}
+                for sid, pid in (base.get("person_ids") or {}).items():
+                    nxt = _wc_ellipse_next(sid, steps) or sid
+                    people[nxt] = pid
+                remapped["person_ids"] = people
+                remapped["used_people"] = list(base.get("used_people") or [])
+                built = _wc_sync_crossball_goal_sides(remapped)
+            images = dict(built["screen_images"])
+            field_screens = dict(built["field_screens"])
+            action_name = str(built.get("action") or "PASS")
+            require_all = bool(built.get("require_all_goals", True))
+            goals = []
+            for fid in ("A", "B"):
+                goals.extend(field_screens.get(fid) or [])
+            # Gap: posts stills only; videos stay off between actions.
+            gap_images = {
+                sid: path
+                for sid, path in images.items()
+                if not str(path or "").lower().endswith(WC_PLAYERS_VIDEO_EXTS)
+            }
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions_n,
+                "is_last_in_set": action_in_set == actions_n,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": action_name,
+                "no_fillers": True,
+                "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
+                "combined_field": True,
+                "require_all_goals": require_all,
+                "hold_full_on": True,
+                "arena_pair": (1, 1),
+                "field_screens": field_screens,
+                "screen_images": images,
+                "gap_screen_images": gap_images,
+                "wc_players_scenario": True,
+                "wc_players_video": True,
+                "wc_players_press_goal": False,
+                "person_ids": dict(built.get("person_ids") or {}),
+                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
+                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "label": (
+                    f"WorldClass S0.T{series} Players T{test_num}/{tests_n} "
+                    f"a{action_in_set}/{actions_n} {action_name} "
+                    f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": (
+                    f"image://WorldClass/S0.T{series}/"
+                    f"players/test{test_num}/{action_in_set}"
+                ),
+                "series_group": 0,
+                "series_num": int(series),
+            })
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["combined_field"] = True
+        entry["hold_full_on"] = True
+        if "require_all_goals" not in entry:
+            entry["require_all_goals"] = True
+    logger.info(
+        "World Class Players C1.T%s: %s actions (%s tests × %s) video on=%sms gap=%sms",
+        series,
+        len(stamped),
+        tests_n,
+        actions_n,
+        on_ms,
+        gap_ms,
     )
     return stamped
 
@@ -5030,19 +8260,22 @@ def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
     opening card / operator stamp look like S1.T2 while progress was S2.T2.
     """
     primary = str(level_id or "")
-    s0 = re.search(r"S0[.-]T([1-5])", primary, re.I)
+    blob = f"{primary} {subdirectory or ''}"
+    s0 = re.search(r"S0[.-]T([1-5])", blob, re.I)
     if s0:
         return f"S0.T{s0.group(1)}"
-    s3 = re.search(r"S3[.-]T([1-5])", primary, re.I)
+    s4 = re.search(r"S4[.-]T([1-5])", blob, re.I)
+    if s4:
+        return f"S4.T{s4.group(1)}"
+    s3 = re.search(r"S3[.-]T([1-5])", blob, re.I)
     if s3:
         return f"S3.T{s3.group(1)}"
-    s2 = re.search(r"S2[.-]T([1-5])", primary, re.I)
+    s2 = re.search(r"S2[.-]T([1-5])", blob, re.I)
     if s2:
         return f"S2.T{s2.group(1)}"
-    s1 = re.search(r"S1[.-]T([1-5])", primary, re.I)
+    s1 = re.search(r"S1[.-]T([1-5])", blob, re.I)
     if s1:
         return f"S1.T{s1.group(1)}"
-    blob = f"{primary} {subdirectory or ''}"
     a0 = re.search(r"A0[-.]T([1-5])", blob, re.I)
     if a0:
         return f"S0.T{a0.group(1)}"
@@ -5062,8 +8295,7 @@ def _series_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
 def _component_set_label(level_id: str, subdirectory: str = "") -> Optional[str]:
     """Wall / beginning-info Component label (C1.T1). Internal ids stay S*.
 
-    Entry, Activated, High Performance, and Elite add 1 (S0→C1, S1→C2).
-    World Class keeps the series index (S1→C1).
+    Entry / Activated / HP / Elite / World Class / COGFIT: S0→C1, S1→C2, …
     """
     series = _series_set_label(level_id, subdirectory)
     if not series:
@@ -5075,7 +8307,14 @@ def _component_set_label(level_id: str, subdirectory: str = "") -> Optional[str]
     test_num = match.group(2)
     component = series_num
     band = _main_band_id(f"{level_id or ''} {subdirectory or ''}")
-    if band in ("L01-Entry", "L02-Activated", "L03-HighPerformance", "L04-Elite"):
+    if band in (
+        "L00-Elders",
+        "L01-Entry",
+        "L02-Activated",
+        "L03-HighPerformance",
+        "L04-Elite",
+        "L05-WorldClass",
+    ):
         component = series_num + 1
     return f"C{component}.T{test_num}"
 
@@ -5110,6 +8349,12 @@ def _level_display_parts(level_id: str, subdirectory: str = "") -> Tuple[str, Op
         return "High Performance", series_label
     if re.search(r"L02-Activated", text, re.I):
         return "Activated", series_label
+    if re.search(
+        r"L00-Elders|L00-COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+        text,
+        re.I,
+    ):
+        return "COGFIT", series_label
     if re.search(r"L01-Entry", text, re.I):
         return "Entry", series_label
     if sf:
@@ -5248,6 +8493,7 @@ def _gap_result_mark(result) -> str:
 
 # Brand fills as CURRENT DEVELOPMENT LEVEL on the My SIMUST player page.
 _LEVEL_BRAND_RGB = {
+    "elders": (232, 213, 183),
     "foundation": (125, 255, 168),
     "entry": (241, 243, 245),
     "activated": (175, 195, 213),
@@ -5257,6 +8503,7 @@ _LEVEL_BRAND_RGB = {
 }
 # Legacy pair kept for any caller that still expects (bg, fg) page fills.
 _LEVEL_PAGE_BG = {
+    "elders": ((232, 213, 183), (59, 47, 30)),
     "foundation": ((125, 255, 168), (12, 28, 18)),
     "entry": ((241, 243, 245), (40, 44, 48)),
     "activated": ((175, 195, 213), (12, 22, 36)),
@@ -5298,6 +8545,8 @@ def _level_brand_key(level_id: str, subdirectory: str = "", entry: dict = None) 
             key = "activated"
         elif re.search(r"\bEntry\b", text, re.I):
             key = "entry"
+        elif re.search(r"(?<![A-Za-z])Elders(?![A-Za-z])", text, re.I):
+            key = "elders"
         elif re.search(r"Foundation|SF-\d+N", text, re.I):
             key = "foundation"
     return key or "foundation"
@@ -5318,6 +8567,8 @@ def _level_intro_key_from_id(level_id: str) -> Optional[str]:
     main = raw.split("/")[0].strip()
     low = main.lower().replace("_", "-").replace(" ", "-")
     aliases = {
+        "l00-elders": "elders",
+        "elders": "elders",
         "l00-foundation": "foundation",
         "foundation": "foundation",
         "l01-entry": "entry",
@@ -5432,6 +8683,7 @@ def _opening_logo_video_for_level(level_id: str = "", subdirectory: str = "") ->
 
 # Development band order for continue / level-up detection (L00 → L05).
 _MAIN_BAND_ORDER = (
+    "L00-Elders",
     "L00-Foundation",
     "L01-Entry",
     "L02-Activated",
@@ -5456,6 +8708,7 @@ def _main_band_id(value) -> Optional[str]:
         ),
         (r"L02[-_]?Activated|(?<![A-Za-z])Activated(?![A-Za-z])", "L02-Activated"),
         (r"L01[-_]?Entry|(?<![A-Za-z])Entry(?![A-Za-z])", "L01-Entry"),
+        (r"L00[-_]?Elders|L00[-_]?COGFIT|(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])", "L00-Elders"),
         (
             r"L00[-_]?Foundation|(?<![A-Za-z])Foundation(?![A-Za-z])|"
             r"SF-?(?:30|60|110|180)N",
@@ -6165,6 +9418,21 @@ def _result_ring_specs(panel) -> dict:
             "lines": shown[:2],
             "percent": max(0.0, min(100.0, value)),
         }
+
+    # Elders Focus: one Accuracy ring per screen (A1=70%, A2=…), nothing else.
+    per_screen = panel.get("screen_accuracy")
+    if isinstance(per_screen, dict) and per_screen:
+        hints = panel.get("screen_hints") if isinstance(panel.get("screen_hints"), dict) else {}
+        for sid, pct in per_screen.items():
+            try:
+                value = float(pct)
+            except (TypeError, ValueError):
+                value = 0.0
+            add(sid, "Accuracy", [f"{value:.0f}%"], value)
+            hint = str(hints.get(sid) or "").strip()
+            if hint and sid in specs:
+                specs[sid]["hint"] = hint
+        return specs
 
     add(
         panel.get("slice_aet"),
@@ -8110,6 +11378,9 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._text_overlay_positions = {}
         self._text_overlay_color = (245, 240, 220)
         self._image_overlays = {}
+        # Elders Focus: Top/Bottom color circles per screen.
+        self._screen_color_halves = {}
+        self._color_half_bg = tuple(ELDERS_FOCUS_BG)
         # Live bouncing sprites (flowers / fruits / …) — reseeded every action.
         self._bounce_timer = None
         self._bounce_fleet = None
@@ -8157,6 +11428,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._stop_bounce_motion()
         self.active_screens = set()
         self._screen_pixmaps = {}
+        self._screen_color_halves = {}
         self._content_scale = 1.0
         self._uniform_player_stills = False
         self._summary_lines = []
@@ -8271,8 +11543,8 @@ class ImageActionCanvas(QtWidgets.QWidget):
             controller.stop(fields=field_ids)
             self.update()
 
-    def set_text_overlays(self, screen_to_text, color=None, positions=None):
-        """Draw camouflage digits / K2 on top of motion backgrounds."""
+    def set_text_overlays(self, screen_to_text, color=None, positions=None, point_size=None):
+        """Draw camouflage digits / K2 / COGFIT instructions on screens."""
         overlays = {}
         for sid, text in (screen_to_text or {}).items():
             name = _sid(sid)
@@ -8292,6 +11564,13 @@ class ImageActionCanvas(QtWidgets.QWidget):
         self._text_overlay_positions = pos_map
         if color is not None:
             self._text_overlay_color = tuple(int(v) for v in color[:3])
+        if point_size is not None:
+            try:
+                self._text_overlay_point_size = max(8, int(point_size))
+            except (TypeError, ValueError):
+                self._text_overlay_point_size = None
+        elif not overlays:
+            self._text_overlay_point_size = None
         self.update()
 
     def set_image_overlays(self, screen_to_path):
@@ -8376,7 +11655,10 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self.update()
 
     def _start_summary_logos(self, screen_to_path):
-        """Loop small logo clip(s) while the opening information stays visible."""
+        """Loop small logo clip(s) while the opening information stays visible.
+
+        Still images (.png / .jpg / .jpeg) are supported for Elders (SIMUST logo).
+        """
         groups = {}
         for sid, video_path in (screen_to_path or {}).items():
             name = _sid(sid)
@@ -8400,6 +11682,34 @@ class ImageActionCanvas(QtWidgets.QWidget):
             saver.discard(name)
         self._logo_scale_screens = logo_scale
         self._screensaver_scale_screens = saver
+        still_ext = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+        still_groups = {
+            path: screens for path, screens in groups.items()
+            if os.path.splitext(path)[1].lower() in still_ext
+        }
+        video_groups = {
+            path: screens for path, screens in groups.items()
+            if path not in still_groups
+        }
+        if still_groups and not video_groups:
+            # Static SIMUST / band logo: one pixmap stamp per screen.
+            pixmaps = {}
+            for path, screens in still_groups.items():
+                pix = QtGui.QPixmap(path)
+                if pix.isNull():
+                    continue
+                for sid in screens:
+                    pixmaps[sid] = pix
+            if pixmaps:
+                self._screen_pixmaps = dict(
+                    getattr(self, "_screen_pixmaps", None) or {}
+                )
+                self._screen_pixmaps.update(pixmaps)
+                self.active_screens = set(self._screen_pixmaps) | set(
+                    getattr(self, "active_screens", None) or set()
+                )
+            self.update()
+            return
         try:
             import cv2
         except Exception as exc:
@@ -8408,7 +11718,7 @@ class ImageActionCanvas(QtWidgets.QWidget):
             return
         fps = 25.0
         opened = []
-        for path, screens in groups.items():
+        for path, screens in video_groups.items():
             cap = cv2.VideoCapture(path)
             if not cap.isOpened():
                 logger.warning("Could not open opening logo video: %s", path)
@@ -8461,9 +11771,72 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 self._screen_pixmaps[sid] = self._fallback
         self.update()
 
+    def set_screen_color_halves(self, screen_colors, background_rgb=None):
+        """Elders Focus: paint Top/Bottom filled circles on each screen.
+
+        ``screen_colors`` maps A1 → {top:{name,rgb,scale}, bottom:{…}, red_half:'T'|'B'}.
+        ``scale`` < 1 draws a smaller circle (C1.T2 hit-small task).
+        """
+        cleaned = {}
+        for sid, spec in (screen_colors or {}).items():
+            name = _sid(sid)
+            if not name or not isinstance(spec, dict):
+                continue
+
+            def _half(raw):
+                out = dict(raw or {})
+                try:
+                    out["scale"] = float(out.get("scale") or 1.0)
+                except (TypeError, ValueError):
+                    out["scale"] = 1.0
+                return out
+
+            try:
+                countdown = int(spec.get("countdown"))
+            except (TypeError, ValueError):
+                countdown = None
+            cleaned[name] = {
+                "top": _half(spec.get("top")),
+                "bottom": _half(spec.get("bottom")),
+                "red_half": str(spec.get("red_half") or "").upper()[:1],
+                "goal_region": str(spec.get("goal_region") or ""),
+                "task": str(spec.get("task") or ""),
+                "shape": str(spec.get("shape") or "").strip().lower(),
+                "show_number": bool(spec.get("show_number", True)),
+                "countdown": countdown,
+                "cue_from": str(spec.get("cue_from") or ""),
+            }
+        self._screen_color_halves = cleaned
+        if background_rgb is not None:
+            try:
+                self._color_half_bg = tuple(int(v) for v in background_rgb[:3])
+            except (TypeError, ValueError):
+                self._color_half_bg = tuple(ELDERS_FOCUS_BG)
+        elif cleaned:
+            self._color_half_bg = tuple(ELDERS_FOCUS_BG)
+        # Clear pixmaps so paintEvent draws circles on brand fill.
+        if cleaned:
+            self._screen_pixmaps = {
+                sid: QtGui.QPixmap() for sid in cleaned
+            }
+            self.active_screens = set(cleaned)
+        self.update()
+
+    def clear_screen_color_halves(self):
+        self._screen_color_halves = {}
+        self.update()
+
     def set_screen_images(self, screen_to_path, scale=1.0, keep_videos=False, replace_fields=None):
         """Map screen id → image path (action, filler, or gap)."""
         replace = {str(fid).upper()[:1] for fid in (replace_fields or set()) if str(fid).upper()[:1] in ("A", "B")}
+        # Stills replace Elders Focus color circles.
+        if getattr(self, "_screen_color_halves", None):
+            if replace:
+                for sid in list(self._screen_color_halves or {}):
+                    if _field_for_screen(sid) in replace:
+                        self._screen_color_halves.pop(sid, None)
+            else:
+                self._screen_color_halves = {}
         if replace:
             bounce = {
                 name for name in (getattr(self, "_bounce_screens", None) or set())
@@ -9071,6 +12444,34 @@ class ImageActionCanvas(QtWidgets.QWidget):
         else:
             self._tick_screen_video()
         return True
+
+    def _release_screens_from_videos(self, screens):
+        """Stop clips only on these seats; other seats keep playing."""
+        drop = {_sid(s) for s in (screens or []) if _sid(s)}
+        if not drop:
+            return
+        kept = []
+        for group in list(getattr(self, "_video_groups", None) or []):
+            seats = {_sid(sid) for sid in (group.get("screens") or set()) if _sid(sid)}
+            remain = seats - drop
+            if not remain:
+                try:
+                    group["cap"].release()
+                except Exception:
+                    pass
+                continue
+            if remain != seats:
+                group = dict(group)
+                group["screens"] = remain
+            kept.append(group)
+        self._video_groups = kept
+        self._video_screens = {
+            sid for group in kept for sid in (group.get("screens") or set())
+        }
+        fill = set(getattr(self, "_video_fill_screens", None) or set())
+        for name in drop:
+            fill.discard(name)
+        self._video_fill_screens = fill
 
     def _release_field_videos(self, field_ids):
         """Stop this field's clips. The other field's clip keeps playing."""
@@ -9694,6 +13095,130 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 painter.drawText(rect, QtCore.Qt.AlignCenter, label)
             painter.setClipping(False)
 
+    def _paint_focus_shape(self, painter, shape, cx, cy, size, brush, pen):
+        """Draw one Focus Top/Bottom mark (circle / rectangle / polygon / ellipse)."""
+        painter.setBrush(brush)
+        painter.setPen(pen)
+        kind = str(shape or "circle").strip().lower() or "circle"
+        half = max(8, int(size // 2))
+        if kind == "rectangle":
+            painter.drawRect(cx - half, cy - half, half * 2, half * 2)
+            return
+        if kind == "polygon":
+            # Regular pentagon — reads clearly vs circle/rect/ellipse.
+            pts = []
+            for i in range(5):
+                ang = -math.pi / 2 + i * (2 * math.pi / 5)
+                pts.append(
+                    QtCore.QPoint(
+                        int(round(cx + half * math.cos(ang))),
+                        int(round(cy + half * math.sin(ang))),
+                    )
+                )
+            painter.drawPolygon(QtGui.QPolygon(pts))
+            return
+        if kind == "ellipse":
+            # Wider oval so it differs from a circle.
+            painter.drawEllipse(cx - half, cy - int(half * 0.62), half * 2, int(half * 1.24))
+            return
+        painter.drawEllipse(cx - half, cy - half, half * 2, half * 2)
+
+    def _paint_color_halves(self, painter, name, spec):
+        """COGFIT Focus: brand fill + two Top/Bottom shapes + always-on screen #."""
+        if name not in SLICE_ORDER:
+            return
+        index = SLICE_ORDER.index(name)
+        left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
+        dy = int(screen_content_offset_y(name) or 0)
+        placed = QtCore.QRect(left, 0, rect_w, self.height())
+        painter.setClipRect(placed)
+        bg = getattr(self, "_color_half_bg", None) or ELDERS_FOCUS_BG
+        painter.fillRect(placed, QtGui.QColor(int(bg[0]), int(bg[1]), int(bg[2])))
+        task = str((spec or {}).get("task") or "").strip().lower()
+        default_shape = str((spec or {}).get("shape") or "circle").strip().lower() or "circle"
+        # Ball-sized mark ≈ 42% of the narrower screen edge.
+        base_diameter = max(36, int(min(rect_w, self.height()) * 0.42))
+        cx = left + rect_w // 2
+        top_cy = max(base_diameter // 2 + 8, self.height() // 4 + dy)
+        bot_cy = min(self.height() - base_diameter // 2 - 8, (3 * self.height()) // 4 + dy)
+        if task not in ("idle", "cue", "number"):
+            for half, cy in (("top", top_cy), ("bottom", bot_cy)):
+                color_spec = (spec or {}).get(half) or {}
+                rgb = color_spec.get("rgb") or (180, 180, 180)
+                try:
+                    r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+                except (TypeError, ValueError, IndexError):
+                    r, g, b = 180, 180, 180
+                try:
+                    scale = float(color_spec.get("scale") or 1.0)
+                except (TypeError, ValueError):
+                    scale = 1.0
+                scale = max(0.35, min(1.0, scale))
+                diameter = max(22, int(round(base_diameter * scale)))
+                shape = str(color_spec.get("shape") or default_shape or "circle")
+                self._paint_focus_shape(
+                    painter,
+                    shape,
+                    cx,
+                    cy,
+                    diameter,
+                    QtGui.QColor(r, g, b),
+                    QtGui.QPen(QtGui.QColor(20, 20, 20), 3),
+                )
+        # Always paint the cabinet screen number so players can find A/B tiles.
+        if (spec or {}).get("show_number", True):
+            digit = name[1:] if len(str(name)) >= 2 else str(name)
+            try:
+                num_pt = int(ELDERS_FOCUS_NUM_POINT)
+            except (TypeError, ValueError):
+                num_pt = 18
+            font = QtGui.QFont("Segoe UI", max(10, num_pt), QtGui.QFont.Bold)
+            painter.setFont(font)
+            painter.setPen(QtGui.QColor(59, 47, 30))
+            metrics = painter.fontMetrics()
+            fy = float(ELDERS_FOCUS_NUM_POS[1]) if ELDERS_FOCUS_NUM_POS else 0.08
+            num_y = int(round(fy * self.height())) + dy
+            num_rect = QtCore.QRect(
+                left,
+                max(4, num_y - metrics.height() // 2),
+                rect_w,
+                metrics.height() + 4,
+            )
+            painter.drawText(num_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, str(digit))
+        # Live action countdown in the top-right corner.
+        try:
+            countdown = (spec or {}).get("countdown")
+            countdown = int(countdown) if countdown is not None else None
+        except (TypeError, ValueError):
+            countdown = None
+        if countdown is not None and task not in ("idle", "cue", "number"):
+            try:
+                t_pt = int(ELDERS_FOCUS_TIMER_POINT)
+            except (TypeError, ValueError):
+                t_pt = 16
+            t_font = QtGui.QFont("Segoe UI", max(10, t_pt), QtGui.QFont.Bold)
+            painter.setFont(t_font)
+            # Warn when under 5s.
+            if countdown <= 5:
+                painter.setPen(QtGui.QColor(185, 28, 28))
+            else:
+                painter.setPen(QtGui.QColor(59, 47, 30))
+            tm = painter.fontMetrics()
+            fx = float(ELDERS_FOCUS_TIMER_POS[0]) if ELDERS_FOCUS_TIMER_POS else 0.82
+            fy = float(ELDERS_FOCUS_TIMER_POS[1]) if ELDERS_FOCUS_TIMER_POS else 0.08
+            tx = left + int(round(fx * rect_w))
+            ty = int(round(fy * self.height())) + dy
+            label = f"{max(0, countdown)}s"
+            tw = tm.width(label)
+            t_rect = QtCore.QRect(
+                tx - tw // 2,
+                max(4, ty - tm.height() // 2),
+                max(tw + 4, 24),
+                tm.height() + 2,
+            )
+            painter.drawText(t_rect, QtCore.Qt.AlignCenter, label)
+        painter.setClipping(False)
+
     def _paint_band_slice(self, painter, pix, name):
         """Put a results frame on the same slice the video was drawn for."""
         index = SLICE_ORDER.index(name)
@@ -9735,8 +13260,10 @@ class ImageActionCanvas(QtWidgets.QWidget):
             self._paint_level_summary(painter)
             painter.end()
             return
+        color_halves = getattr(self, "_screen_color_halves", None) or {}
         if (
             not self._screen_pixmaps
+            and not color_halves
             and not getattr(self, "_result_badges", None)
             and not overlays
             and not image_overlays
@@ -9747,11 +13274,20 @@ class ImageActionCanvas(QtWidgets.QWidget):
             painter.end()
             return
         band_screens = set(getattr(self, "_band_screens", None) or set())
+        for name, spec in color_halves.items():
+            sid = _sid(name)
+            if not sid or sid not in SLICE_ORDER:
+                continue
+            if summary_screens and sid in summary_screens:
+                continue
+            self._paint_color_halves(painter, sid, spec)
         for sid, pix in self._screen_pixmaps.items():
             name = _sid(sid)
             if not name or name not in SLICE_ORDER:
                 continue
             if summary_screens and name in summary_screens:
+                continue
+            if name in color_halves:
                 continue
             if name in band_screens:
                 self._paint_band_slice(painter, pix, name)
@@ -9854,7 +13390,14 @@ class ImageActionCanvas(QtWidgets.QWidget):
             painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
             color = getattr(self, "_text_overlay_color", (245, 240, 220)) or (245, 240, 220)
             painter.setPen(QtGui.QColor(int(color[0]), int(color[1]), int(color[2])))
-            font = QtGui.QFont("Segoe UI", 50, QtGui.QFont.Bold)
+            try:
+                base_pt = int(getattr(self, "_text_overlay_point_size", None) or 42)
+            except (TypeError, ValueError):
+                base_pt = 42
+            base_pt = max(8, base_pt)
+            # Allow COGFIT mid-circle cues (≈14pt) to stay small; default digits floor at 14.
+            shrink_floor = 8 if base_pt <= 18 else 14
+            font = QtGui.QFont("Segoe UI", base_pt, QtGui.QFont.Bold)
             painter.setFont(font)
             positions = getattr(self, "_text_overlay_positions", None) or {}
             for name, text in overlays.items():
@@ -9864,29 +13407,44 @@ class ImageActionCanvas(QtWidgets.QWidget):
                 left, _right, rect_w = content_x_box(index, name, self.width(), len(SLICE_ORDER))
                 placed = QtCore.QRect(left, 0, rect_w, self.height())
                 painter.setClipRect(placed)
+                raw = str(text or "")
+                lines = [ln for ln in raw.replace("\\n", "\n").split("\n") if ln.strip()] or [raw]
                 metrics = painter.fontMetrics()
-                while metrics.width(str(text)) > rect_w - 12 and font.pointSize() > 18:
+                widest = max((metrics.width(ln) for ln in lines), default=0)
+                while widest > rect_w - 12 and font.pointSize() > shrink_floor:
                     font.setPointSize(font.pointSize() - 2)
                     painter.setFont(font)
                     metrics = painter.fontMetrics()
+                    widest = max((metrics.width(ln) for ln in lines), default=0)
+                line_h = metrics.height()
+                block_h = line_h * len(lines)
                 pos = positions.get(name)
                 if pos and len(pos) >= 2:
-                    # Same vertical line as Elite/Entry digits (ring-value center).
                     fx = min(0.92, max(0.08, float(pos[0])))
-                    fy = float(_ring_value_center_frac(max(1, self.height())))
+                    try:
+                        fy = float(pos[1])
+                    except (TypeError, ValueError):
+                        fy = float(_ring_value_center_frac(max(1, self.height())))
+                    # Explicit Y (e.g. Elders instruction below the color circles).
+                    if not (0.05 <= fy <= 0.95):
+                        fy = float(_ring_value_center_frac(max(1, self.height())))
                     cx = left + int(round(fx * rect_w))
                     cy = int(round(fy * self.height())) + int(screen_content_offset_y(name) or 0)
-                    line = QtCore.QRect(
-                        cx - metrics.width(str(text)) // 2,
-                        cy - metrics.height() // 2,
-                        max(metrics.width(str(text)), 8),
-                        metrics.height(),
-                    )
-                    painter.drawText(line, QtCore.Qt.AlignCenter, str(text))
+                    top = cy - block_h // 2
+                    for i, ln in enumerate(lines):
+                        line = QtCore.QRect(
+                            cx - metrics.width(ln) // 2,
+                            top + i * line_h,
+                            max(metrics.width(ln), 8),
+                            line_h,
+                        )
+                        painter.drawText(line, QtCore.Qt.AlignCenter, ln)
                 else:
                     cy = _ring_value_center_y(self.height()) + int(screen_content_offset_y(name) or 0)
-                    line = QtCore.QRect(left, cy - metrics.height() // 2, rect_w, metrics.height())
-                    painter.drawText(line, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, str(text))
+                    top = cy - block_h // 2
+                    for i, ln in enumerate(lines):
+                        line = QtCore.QRect(left, top + i * line_h, rect_w, line_h)
+                        painter.drawText(line, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, ln)
                 painter.setClipping(False)
         if self._summary_lines:
             self._paint_level_summary(painter)
@@ -10295,8 +13853,17 @@ class ResultsOverlay(QtWidgets.QWidget):
                         ],
                         "percent": 50.0,
                     }
+            elders_per_screen = bool(
+                isinstance((panel or {}).get("screen_accuracy"), dict)
+                and (panel or {}).get("screen_accuracy")
+            )
             for name in _field_all_screens(fid):
                 digit = str(name)[-1:]
+                # Elders: every screen shows its own Accuracy ring.
+                if elders_per_screen:
+                    if name in specs:
+                        self.active_slice_nums.add(name)
+                    continue
                 # Screens 3/4 are logo by default; paint when AP/FAP specs exist.
                 if digit in ("3", "4") and name not in specs:
                     continue
@@ -10401,6 +13968,22 @@ class ResultsOverlay(QtWidgets.QWidget):
                         ly,
                         label,
                     )
+                hint = str(spec.get("hint") or "").strip()
+                if hint:
+                    painter.setPen(text_color)
+                    hint_point = 12
+                    max_hint_w = max(24, int(rect_w * 0.88))
+                    hint_font = QFont("Segoe UI", hint_point, QFont.Bold)
+                    while hint_point > 8:
+                        painter.setFont(hint_font)
+                        if painter.fontMetrics().width(hint) <= max_hint_w:
+                            break
+                        hint_point -= 1
+                        hint_font = QFont("Segoe UI", hint_point, QFont.Bold)
+                    painter.setFont(hint_font)
+                    hm = painter.fontMetrics()
+                    hy = cy + radius + (52 if label else 28)
+                    painter.drawText(cx - hm.width(hint) // 2, hy, hint)
             painter.setClipping(False)
 
 
@@ -11552,12 +15135,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             _band, series_num = decision[1], decision[2]
             series_group = int(decision[3]) if len(decision) > 3 else 1
             if series_group == 0:
-                if _band != "elite":
+                if _band == "elite":
+                    playlist = _build_elite_s0_playlist(series_num)
+                elif _band == "world-class":
+                    playlist = _build_world_class_s0_playlist(series_num)
+                else:
                     self._playlist_block_reason = COMBINED_PLAY_MESSAGE
                     logger.error(self._playlist_block_reason)
                     self._label_mode = False
                     return []
-                playlist = _build_elite_s0_playlist(series_num)
+            elif series_group == 4:
+                if _band == "elite":
+                    playlist = _build_elite_players2_playlist(series_num)
+                else:
+                    self._playlist_block_reason = (
+                        "Players 2 scripted dual-field play is Elite only."
+                    )
+                    logger.error(self._playlist_block_reason)
+                    self._label_mode = False
+                    return []
             elif series_group == 3:
                 playlist = (
                     _build_world_class_s3_playlist(series_num)
@@ -11755,6 +15351,92 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 )
                 return playlist
             logger.error("Activated A-T%s playlist empty", activated_num)
+            self._label_mode = False
+            return []
+
+        elders_focus_num = _elders_focus_series_num(*level_bits)
+        if elders_focus_num:
+            playlist = _build_elders_focus_playlist(elders_focus_num, active)
+            if playlist:
+                self._label_mode = True
+                # Focus always shows both cabinet halves (A play + B standby numbers).
+                self._phase_active = ["A", "B"]
+                try:
+                    _write_players_fields_active(["A", "B"])
+                except Exception:
+                    pass
+                try:
+                    self._elders_ensure_both_sim_fields()
+                except Exception:
+                    logger.exception("COGFIT could not enable Field B simulation")
+                logger.info(
+                    "COGFIT Focus S0.T%s playlist: A/B visible, %s actions/screen, timer=%ss",
+                    elders_focus_num,
+                    ELDERS_FOCUS_ACTIONS_PER_TEST,
+                    ELDERS_FOCUS_SCREEN_TIMER_SEC,
+                )
+                return playlist
+            logger.error("Elders Focus S0.T%s playlist empty", elders_focus_num)
+            self._label_mode = False
+            return []
+
+        elders_remember_num = _elders_remember_series_num(*level_bits)
+        if elders_remember_num:
+            playlist = _build_elders_remember_playlist(elders_remember_num, active)
+            if playlist:
+                self._label_mode = True
+                self._phase_active = ["A", "B"]
+                try:
+                    _write_players_fields_active(["A", "B"])
+                except Exception:
+                    pass
+                try:
+                    self._elders_ensure_both_sim_fields()
+                except Exception:
+                    logger.exception("COGFIT Remember could not enable Field B simulation")
+                logger.info(
+                    "COGFIT Remember S1.T%s playlist: A/B visible, %s actions/screen, timer=%ss",
+                    elders_remember_num,
+                    ELDERS_REMEMBER_ACTIONS_PER_TEST,
+                    ELDERS_REMEMBER_SCREEN_TIMER_SEC,
+                )
+                return playlist
+            logger.error("Elders Remember S1.T%s playlist empty", elders_remember_num)
+            self._label_mode = False
+            return []
+
+        for _mode_key, _series_fn, _build_fn in (
+            ("react", _elders_react_series_num, _build_elders_react_playlist),
+            ("think", _elders_think_series_num, _build_elders_think_playlist),
+            ("move", _elders_move_series_num, _build_elders_move_playlist),
+        ):
+            _series_n = _series_fn(*level_bits)
+            if not _series_n:
+                continue
+            playlist = _build_fn(_series_n, active)
+            if playlist:
+                self._label_mode = True
+                self._phase_active = ["A", "B"]
+                try:
+                    _write_players_fields_active(["A", "B"])
+                except Exception:
+                    pass
+                try:
+                    self._elders_ensure_both_sim_fields()
+                except Exception:
+                    logger.exception(
+                        "COGFIT %s could not enable Field B simulation", _mode_key
+                    )
+                meta = ELDERS_COGFIT_MODES.get(_mode_key) or {}
+                logger.info(
+                    "COGFIT %s %s.T%s playlist: A/B visible, %s actions/screen",
+                    meta.get("label") or _mode_key,
+                    meta.get("s_key") or "?",
+                    _series_n,
+                    ELDERS_COGFIT_SHARED.get("actions_per_test"),
+                )
+                return playlist
+            logger.error("COGFIT %s playlist empty for series %s", _mode_key, _series_n)
             self._label_mode = False
             return []
 
@@ -12210,7 +15892,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             key = _level_intro_key_from_id(level)
             # Foundation beginning-info already loops logo_video_foundation.mp4.
             # Playing static/foundation.mp4 next was a second, darker logo on top.
-            if key == "foundation":
+            # Foundation / Elders beginning-info already shows the band logo
+            # (Foundation video loop, Elders SIMUST still). Skip a second intro.
+            if key in ("foundation", "elders"):
                 return None
             hit = _intro_video_for_key(key)
             if hit:
@@ -12221,13 +15905,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if directory:
             for pat, key in _LEVEL_INTRO_PATH_RULES:
                 if pat.search(directory):
-                    if key == "foundation":
+                    if key in ("foundation", "elders"):
                         return None
                     hit = _intro_video_for_key(key)
                     if hit:
                         return hit
         root = directory or self.video_directory or self._level_root
-        if _detect_level_intro_key(root) == "foundation":
+        if _detect_level_intro_key(root) in ("foundation", "elders"):
             return None
         return _find_level_intro_video(root)
 
@@ -13223,6 +16907,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         cabinet_map = {
             "A1": "12", "A2": "13", "A3": "14", "A4": "2", "A5": "3", "A6": "4",
             "B1": "5", "B2": "6", "B3": "7", "B4": "9", "B5": "10", "B6": "11",
+            # Paint-only mouths (World Class A7 / B7).
+            "A7": "1", "B7": "8",
         }
         if cabinet_map.get(goal_base) == win_base or cabinet_map.get(win_base) == goal_base:
             return True
@@ -13268,6 +16954,678 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 return False
         return True
 
+    def _elders_screen_timer_sec(self, entry) -> float:
+        try:
+            sec = float(
+                (entry or {}).get("elders_screen_timer_sec")
+                or ELDERS_FOCUS_SCREEN_TIMER_SEC
+            )
+        except (TypeError, ValueError):
+            sec = float(ELDERS_FOCUS_SCREEN_TIMER_SEC)
+        return max(5.0, sec)
+
+    def _elders_stamp_screen_deadline(self, info, entry):
+        """Start / refresh the visible per-screen countdown deadline."""
+        if not isinstance(info, dict):
+            return info
+        now = time.perf_counter()
+        sec = self._elders_screen_timer_sec(entry)
+        info["started_at"] = now
+        info["deadline_at"] = now + sec
+        info["countdown"] = int(round(sec))
+        return info
+
+    def _elders_fill_screen_trial(self, entry, info, sid, test_num, action_n):
+        """Load Focus/Think immediate probes or Remember/React/Move encode trials."""
+        sid = _sid(sid)
+        try:
+            test_n = int(test_num or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        try:
+            action_n = int(action_n or 1)
+        except (TypeError, ValueError):
+            action_n = 1
+        info = dict(info or {})
+        info["action"] = action_n
+        info["test_num"] = test_n
+        info["done"] = False
+        info["idle_empty"] = False
+        info["go_to_cue"] = False
+        mode = _elders_cogfit_mode(entry)
+        trial = _elders_cogfit_make_trial(mode, test_n, sid, action_n)
+        encode_ms = int(trial.get("encode_ms") or 0)
+        blank_ms = int(trial.get("blank_ms") or 0)
+        if encode_ms > 0:
+            now = time.perf_counter()
+            encode_s = max(0.2, encode_ms / 1000.0)
+            blank_s = max(0.1, blank_ms / 1000.0) if blank_ms > 0 else 0.15
+            info.update({
+                "mem_phase": "encode",
+                "encode_until": now + encode_s,
+                "blank_until": now + encode_s + blank_s,
+                "goal_region": "",
+                "probe_goal": str(trial.get("goal_region") or ""),
+                "colors": dict(trial.get("encode") or {}),
+                "blank_colors": dict(trial.get("blank") or {}),
+                "probe_colors": dict(trial.get("probe") or {}),
+                "task": str(trial.get("task") or ""),
+                "target": str(trial.get("target") or ""),
+                "shape": str(trial.get("shape") or "circle"),
+            })
+        else:
+            probe = dict(trial.get("probe") or {})
+            goal_rid = str(trial.get("goal_region") or probe.get("goal_region") or "")
+            info.update({
+                "mem_phase": "probe",
+                "encode_until": 0.0,
+                "blank_until": 0.0,
+                "goal_region": goal_rid,
+                "probe_goal": goal_rid,
+                "colors": probe,
+                "blank_colors": {},
+                "probe_colors": {},
+                "task": str(trial.get("task") or probe.get("task") or ""),
+                "target": str(trial.get("target") or ""),
+                "shape": str(trial.get("shape") or "circle"),
+            })
+        self._elders_stamp_screen_deadline(info, entry)
+        return info
+
+    def _elders_init_independent_progress(self, entry):
+        """Per-screen action counters for COGFIT Focus/Remember independent T1→T5."""
+        if not isinstance(entry, dict) or not entry.get("elders_independent_screens"):
+            return
+        # Always keep both halves lit for Focus/Remember.
+        if entry.get("elders_force_both_fields") or entry.get("elders_dual_field_chain"):
+            self._phase_active = ["A", "B"]
+            try:
+                for fid in ("A", "B"):
+                    self._stop_field_screensaver(fid)
+            except Exception:
+                pass
+        progress = {}
+        colors = dict(entry.get("screen_colors") or {})
+        task = str(entry.get("elders_task") or "color").strip().lower() or "color"
+        try:
+            start_test = int(entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            start_test = 1
+        target0 = str(entry.get("elders_target_color") or _elders_focus_target_name(start_test))
+        self._elders_peer_done = {}
+        play_fid = str(entry.get("elders_play_field") or "").upper()[:1]
+        # Field-wide Focus/Remember: arm all 6 play-field screens even when
+        # goals are empty during Remember encode.
+        if entry.get("elders_field_wide_handoff") and play_fid in ("A", "B"):
+            for n in range(1, 7):
+                parent = f"{play_fid}{n}"
+                info = {
+                    "field": play_fid,
+                    "correct": 0,
+                    "total": 0,
+                    "chain_done": False,
+                    "lane_id": parent,
+                    "go_to": "",
+                    "armed_seq": int(getattr(self, "_flash_seq", 0) or 0),
+                }
+                progress[parent] = self._elders_fill_screen_trial(
+                    entry, info, parent, start_test, 1
+                )
+        else:
+            for fid, goals in (entry.get("field_screens") or {}).items():
+                fid_u = str(fid).upper()[:1]
+                for goal in goals or []:
+                    parent = _sid(goal)
+                    if not parent:
+                        continue
+                    spec = colors.get(parent) or {}
+                    try:
+                        test_n = int(spec.get("test_num") or start_test)
+                    except (TypeError, ValueError):
+                        test_n = start_test
+                    info = {
+                        "field": fid_u,
+                        "correct": 0,
+                        "total": 0,
+                        "chain_done": False,
+                        "test_num": test_n,
+                        "target": str(spec.get("target") or target0),
+                        "goal_region": str(goal),
+                        "colors": dict(spec),
+                        "task": str(spec.get("task") or task),
+                        "lane_id": parent,
+                        "go_to": "",
+                        "armed_seq": int(getattr(self, "_flash_seq", 0) or 0),
+                    }
+                    progress[parent] = self._elders_fill_screen_trial(
+                        entry, info, parent, test_n, 1
+                    )
+        self._elders_screen_progress = progress
+        self._elders_screen_stats = {
+            sid: {"correct": 0, "total": 0} for sid in progress
+        }
+        self._elders_handoff_active = False
+        # Invalidate any delayed next-test / peer timers from a previous set.
+        self._elders_peer_gen = int(getattr(self, "_elders_peer_gen", 0) or 0) + 1
+        self._goal_hits_by_field = {}
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            pass
+        self._elders_start_screen_timer_tick()
+
+    def _elders_live_field_screens(self, entry) -> dict:
+        """Goal ids still waiting for a hit (not finished with 10 actions)."""
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        fields = {
+            str(f).upper()[:1]
+            for f in (entry.get("elders_play_fields") or [])
+            if str(f).upper()[:1] in ("A", "B")
+        }
+        for fid in (entry.get("field_screens") or {}):
+            if str(fid).upper()[:1] in ("A", "B"):
+                fields.add(str(fid).upper()[:1])
+        for info in progress.values():
+            if not isinstance(info, dict):
+                continue
+            fid_u = str(info.get("field") or "").upper()[:1]
+            if fid_u in ("A", "B"):
+                fields.add(fid_u)
+        out = {}
+        for fid_u in sorted(fields):
+            goals = []
+            for sid, info in progress.items():
+                if not isinstance(info, dict):
+                    continue
+                if info.get("field") != fid_u or info.get("done") or info.get("go_to_cue"):
+                    continue
+                rid = str(info.get("goal_region") or "")
+                if rid:
+                    goals.append(rid)
+            out[fid_u] = goals
+        return out
+
+    def _elders_stop_screen_timer_tick(self):
+        timer = getattr(self, "_elders_timer_tick", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.deleteLater()
+            except Exception:
+                pass
+        self._elders_timer_tick = None
+
+    def _elders_start_screen_timer_tick(self):
+        """Refresh per-screen countdown paints and expire timed-out screens."""
+        self._elders_stop_screen_timer_tick()
+        timer = QtCore.QTimer(self)
+        timer.setTimerType(QtCore.Qt.PreciseTimer)
+        timer.timeout.connect(self._elders_tick_screen_timers)
+        timer.start(200)
+        self._elders_timer_tick = timer
+        self._elders_tick_screen_timers()
+
+    def _elders_tick_screen_timers(self):
+        if self.operator_paused:
+            return
+        entry = self._current_label_entry()
+        if not isinstance(entry, dict) or not entry.get("elders_independent_screens"):
+            return
+        if getattr(self, "display_phase", "") != "action":
+            return
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        if not progress:
+            return
+        now = time.perf_counter()
+        changed = False
+        expired = []
+        for sid, info in list(progress.items()):
+            if not isinstance(info, dict) or info.get("done") or info.get("go_to_cue"):
+                continue
+            if info.get("idle_empty"):
+                continue
+            # Remember / React opposite / Move far: encode → blank → probe.
+            if _elders_cogfit_uses_encode(entry) and not info.get("goal_region"):
+                phase = str(info.get("mem_phase") or "encode")
+                try:
+                    encode_until = float(info.get("encode_until") or 0)
+                except (TypeError, ValueError):
+                    encode_until = 0.0
+                try:
+                    blank_until = float(info.get("blank_until") or 0)
+                except (TypeError, ValueError):
+                    blank_until = 0.0
+                if phase == "encode" and encode_until > 0 and now >= encode_until:
+                    info["mem_phase"] = "blank"
+                    info["colors"] = dict(info.get("blank_colors") or info.get("colors") or {})
+                    info["goal_region"] = ""
+                    progress[sid] = info
+                    changed = True
+                    phase = "blank"
+                if phase == "blank" and blank_until > 0 and now >= blank_until:
+                    probe = dict(info.get("probe_colors") or {})
+                    goal = str(info.get("probe_goal") or probe.get("goal_region") or "")
+                    info["mem_phase"] = "probe"
+                    info["colors"] = probe
+                    info["goal_region"] = goal
+                    progress[sid] = info
+                    changed = True
+            # Countdown on every live screen (encode/blank/probe).
+            try:
+                deadline = float(info.get("deadline_at") or 0)
+            except (TypeError, ValueError):
+                deadline = 0.0
+            if deadline <= 0:
+                continue
+            left = max(0, int(math.ceil(deadline - now)))
+            if int(info.get("countdown") or -1) != left:
+                info["countdown"] = left
+                colors = dict(info.get("colors") or {})
+                colors["countdown"] = left
+                info["colors"] = colors
+                progress[sid] = info
+                changed = True
+            if left <= 0:
+                expired.append(sid)
+        if changed:
+            self._elders_screen_progress = progress
+            try:
+                self._elders_resync_cue(entry)
+            except Exception:
+                pass
+        for sid in expired:
+            try:
+                self._elders_finish_screen_by_timeout(entry, sid)
+            except Exception:
+                logger.exception("COGFIT screen timeout finish failed for %s", sid)
+
+    def _elders_finish_screen_by_timeout(self, entry, sid):
+        """Countdown hit 0 → Accuracy (current hits/10) then go-to next field."""
+        parent = _sid(sid)
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        info = progress.get(parent)
+        if not info or info.get("done") or info.get("chain_done"):
+            return
+        try:
+            chain_n = int(entry.get("elders_chain_tests") or ENTRY_TEST_COUNT)
+        except (TypeError, ValueError):
+            chain_n = int(ENTRY_TEST_COUNT)
+        try:
+            test_n = int(info.get("test_num") or entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        info["done"] = True
+        info["goal_region"] = ""
+        info["done_at"] = time.perf_counter()
+        info["countdown"] = 0
+        info["timed_out"] = True
+        info["test_num"] = test_n
+        if test_n >= chain_n:
+            info["chain_done"] = True
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        fid_u = str(info.get("field") or parent[:1]).upper()[:1]
+        logger.info(
+            "COGFIT Focus %s C1.T%s timer end (%s/%s) → results",
+            parent,
+            test_n,
+            info.get("correct"),
+            info.get("total"),
+        )
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            pass
+        try:
+            self._elders_show_done_screen_results(fid_u, entry)
+        except Exception:
+            logger.exception("COGFIT timeout Accuracy failed for %s", parent)
+        if entry.get("elders_field_wide_handoff"):
+            if self._elders_play_field_screens_done(entry, fid_u):
+                try:
+                    self._elders_on_play_field_complete(entry, fid_u)
+                except Exception:
+                    logger.exception("COGFIT field-wide timeout switch failed for %s", fid_u)
+            return
+        if info.get("chain_done"):
+            if self._elders_focus_all_lanes_complete(entry, progress):
+                try:
+                    self._elders_begin_handoff(entry)
+                except Exception:
+                    logger.exception("COGFIT timeout handoff failed")
+            return
+        if not info.get("peer_scheduled"):
+            info["peer_scheduled"] = True
+            progress[parent] = info
+            self._elders_screen_progress = progress
+            try:
+                self._elders_schedule_peer_screen(entry, parent)
+            except Exception:
+                logger.exception("COGFIT timeout peer handoff failed for %s", parent)
+
+    def _elders_resync_cue(self, entry):
+        """Rewrite finish_balls cue to the live independent Top/Bottom goals."""
+        live = self._elders_live_field_screens(entry)
+        try:
+            on_sec = max(0.1, float(entry.get("on_ms") or 3000) / 1000.0)
+        except (TypeError, ValueError):
+            on_sec = 3.0
+        try:
+            actions = int(entry.get("actions_in_set") or ELDERS_FOCUS_ACTIONS_PER_TEST)
+        except (TypeError, ValueError):
+            actions = int(ELDERS_FOCUS_ACTIONS_PER_TEST)
+        # action_in_set = how many correct finishes the furthest screen has done
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        furthest = 1
+        for info in progress.values():
+            try:
+                furthest = max(furthest, int(info.get("action") or 1))
+            except (TypeError, ValueError):
+                pass
+        self._flash_seq = int(getattr(self, "_flash_seq", 0) or 0) + 1
+        budget_elapsed = None
+        budget_total = None
+        if entry.get("budget_ms"):
+            started = getattr(self, "_budget_started_at", None)
+            budget_elapsed = 0.0 if not started else max(0.0, time.perf_counter() - started)
+            budget_total = float(entry.get("budget_ms") or 0) / 1000.0
+        _write_image_action_cue(
+            True,
+            live,
+            seq=self._flash_seq,
+            action=str(entry.get("action") or "COLOR"),
+            on_sec=on_sec,
+            efficiency_max_sec=entry.get("efficiency_max_sec"),
+            finish_balls=True,
+            budget_elapsed_sec=budget_elapsed,
+            budget_total_sec=budget_total,
+            action_in_set=furthest,
+            actions_in_set=actions,
+            test_num=entry.get("test_num"),
+            field_seqs=self._bump_field_cue_seqs(list(live.keys())),
+        )
+        # Keep playlist entry field_screens in sync for hit matching.
+        entry["field_screens"] = live
+        colors = {}
+        for sid, info in progress.items():
+            if not isinstance(info, dict) or info.get("done"):
+                continue
+            spec = dict(info.get("colors") or {})
+            spec["show_number"] = True
+            try:
+                spec["countdown"] = int(info.get("countdown") or 0)
+            except (TypeError, ValueError):
+                spec["countdown"] = 0
+            colors[sid] = spec
+        # Field-wide Focus: idle/finished half stays empty (no numbers).
+        # Legacy dual chain can still paint standby numbers.
+        if entry.get("elders_show_screen_numbers") or entry.get("elders_dual_field_chain"):
+            bg = entry.get("background_rgb") or ELDERS_FOCUS_BG
+            play_fields = {
+                str(f).upper()[:1]
+                for f in (entry.get("elders_play_fields") or ["A", "B"])
+                if str(f).upper()[:1] in ("A", "B")
+            } or {"A", "B"}
+            field_wide = bool(entry.get("elders_field_wide_handoff"))
+            active_play = str(entry.get("elders_play_field") or "").upper()[:1]
+            for fid in play_fields:
+                for n in range(1, 7):
+                    sid = f"{fid}{n}"
+                    if sid in colors:
+                        if field_wide and fid != active_play:
+                            colors[sid]["show_number"] = False
+                            colors[sid]["empty"] = True
+                        else:
+                            colors[sid]["show_number"] = True
+                        continue
+                    info = progress.get(sid) or {}
+                    if info.get("go_to_cue") and not field_wide:
+                        colors[sid] = {
+                            "top": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                            "bottom": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                            "red_half": "",
+                            "task": "cue",
+                            "show_number": True,
+                            "cue_from": str(info.get("cue_from") or ""),
+                        }
+                    else:
+                        # Empty idle / finished field tiles (brand fill, no number).
+                        colors[sid] = {
+                            "top": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                            "bottom": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                            "red_half": "",
+                            "task": "idle",
+                            "show_number": False if field_wide else True,
+                            "empty": True if field_wide else False,
+                        }
+        entry["screen_colors"] = colors
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            try:
+                canvas.set_screen_color_halves(
+                    colors,
+                    background_rgb=entry.get("background_rgb") or ELDERS_FOCUS_BG,
+                )
+                canvas.repaint()
+            except Exception:
+                logger.exception("Elders independent color refresh failed")
+        # Keep Accuracy rings on finished screens above live color tiles.
+        try:
+            done_fields = {
+                str(info.get("field") or "").upper()[:1]
+                for info in progress.values()
+                if isinstance(info, dict) and info.get("done")
+            }
+            overlays = getattr(self, "_field_result_overlays", None) or {}
+            for f in done_fields:
+                if not f:
+                    continue
+                ov = overlays.get(f)
+                if ov is not None and ov.isVisible():
+                    ov.raise_()
+        except Exception:
+            pass
+
+    def _elders_advance_independent_screen(self, entry, fid, win_screen) -> bool:
+        """One Correct → next pair on that screen, or Accuracy then next C1.Tn.
+
+        Returns True only when every screen has finished C1.T1–T5.
+        """
+        if not entry.get("elders_independent_screens"):
+            return False
+        progress = getattr(self, "_elders_screen_progress", None)
+        if not isinstance(progress, dict) or not progress:
+            self._elders_init_independent_progress(entry)
+            progress = getattr(self, "_elders_screen_progress", None) or {}
+        parent = _sid(win_screen)
+        if not parent or parent not in progress:
+            for sid, info in progress.items():
+                if self._goal_token_matches(info.get("goal_region"), win_screen, fid):
+                    parent = sid
+                    break
+        info = progress.get(parent)
+        if not info or info.get("done") or info.get("chain_done"):
+            return False
+        # Ignore hits during encode/blank; only probe scores.
+        if str(info.get("mem_phase") or "probe") in ("encode", "blank"):
+            return False
+        try:
+            actions = int(
+                entry.get("actions_in_set")
+                or ELDERS_COGFIT_SHARED.get("actions_per_test")
+                or ELDERS_FOCUS_ACTIONS_PER_TEST
+            )
+        except (TypeError, ValueError):
+            actions = int(ELDERS_FOCUS_ACTIONS_PER_TEST)
+        try:
+            chain_n = int(entry.get("elders_chain_tests") or ENTRY_TEST_COUNT)
+        except (TypeError, ValueError):
+            chain_n = int(ENTRY_TEST_COUNT)
+        chain_n = max(1, chain_n)
+        info["correct"] = int(info.get("correct") or 0) + 1
+        info["total"] = int(info.get("total") or 0) + 1
+        stats = getattr(self, "_elders_screen_stats", None)
+        if not isinstance(stats, dict):
+            stats = {}
+            self._elders_screen_stats = stats
+        bucket = stats.setdefault(parent, {"correct": 0, "total": 0})
+        bucket["correct"] = int(bucket.get("correct") or 0) + 1
+        bucket["total"] = int(bucket.get("total") or 0) + 1
+        action_n = int(info.get("action") or 1)
+        try:
+            test_n = int(info.get("test_num") or entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        comp = _elders_cogfit_component(entry)
+        if action_n >= actions:
+            info["done"] = True
+            info["goal_region"] = ""
+            info["mem_phase"] = "done"
+            info["done_at"] = time.perf_counter()
+            info["test_num"] = test_n
+            if test_n >= chain_n:
+                info["chain_done"] = True
+            mode_label = (ELDERS_COGFIT_MODES.get(_elders_cogfit_mode(entry)) or {}).get(
+                "label", "Focus"
+            )
+            logger.info(
+                "COGFIT %s %s %s.T%s done (%s/%s) chain_done=%s",
+                mode_label,
+                parent,
+                comp,
+                test_n,
+                info.get("correct"),
+                info.get("total"),
+                bool(info.get("chain_done")),
+            )
+        else:
+            info = self._elders_fill_screen_trial(
+                entry, info, parent, test_n, action_n + 1
+            )
+            mode_label = (ELDERS_COGFIT_MODES.get(_elders_cogfit_mode(entry)) or {}).get(
+                "label", "Focus"
+            )
+            logger.info(
+                "COGFIT %s %s %s.T%s → action %s/%s goal %s task=%s phase=%s",
+                mode_label,
+                parent,
+                comp,
+                test_n,
+                info["action"],
+                actions,
+                info.get("goal_region") or info.get("probe_goal"),
+                info.get("task"),
+                info.get("mem_phase"),
+            )
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        hits = dict(getattr(self, "_goal_hits_by_field", None) or {})
+        fid_u = str(fid or "").upper()[:1]
+        kept = []
+        for h in hits.get(fid_u) or []:
+            if self._goal_token_matches(win_screen, h, fid_u):
+                continue
+            if parent and _sid(h) == parent:
+                continue
+            kept.append(h)
+        hits[fid_u] = kept
+        self._goal_hits_by_field = hits
+        self._elders_resync_cue(entry)
+        info["armed_seq"] = int(getattr(self, "_flash_seq", 0) or 0)
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        if info.get("done"):
+            try:
+                self._elders_show_done_screen_results(fid_u, entry)
+            except Exception:
+                logger.exception("COGFIT Accuracy display failed for %s", parent)
+            if entry.get("elders_field_wide_handoff"):
+                if self._elders_play_field_screens_done(entry, fid_u):
+                    try:
+                        self._elders_on_play_field_complete(entry, fid_u)
+                    except Exception:
+                        logger.exception(
+                            "COGFIT field-wide switch failed for %s", fid_u
+                        )
+            elif info.get("chain_done"):
+                pass
+            elif entry.get("elders_dual_field_chain") or entry.get("elders_spawn_peer_on_done"):
+                if not info.get("peer_scheduled"):
+                    info["peer_scheduled"] = True
+                    progress[parent] = info
+                    self._elders_screen_progress = progress
+                    try:
+                        self._elders_schedule_peer_screen(entry, parent)
+                    except Exception:
+                        logger.exception("COGFIT peer handoff failed for %s", parent)
+            else:
+                # Single-field fallback: next C1.Tn stays on the same screen.
+                try:
+                    self._elders_schedule_next_test_on_screen(entry, parent)
+                except Exception:
+                    logger.exception("COGFIT next-test schedule failed for %s", parent)
+        return self._elders_focus_all_lanes_complete(entry, progress)
+
+    def _elders_play_field_screens_done(self, entry, fid) -> bool:
+        """True when every live screen on this field finished the current test."""
+        fid_u = str(fid or "").upper()[:1]
+        if fid_u not in ("A", "B"):
+            return False
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        tracked = [
+            p for sid, p in progress.items()
+            if isinstance(p, dict)
+            and str(p.get("field") or "").upper()[:1] == fid_u
+            and not p.get("idle_empty")
+            and not p.get("go_to_cue")
+        ]
+        if not tracked:
+            return False
+        return all(bool(p.get("done")) for p in tracked)
+
+    def _elders_focus_all_lanes_complete(self, entry, progress=None) -> bool:
+        """True when every Focus lane has finished C1.T5 (A/B bounce complete)."""
+        progress = progress if isinstance(progress, dict) else (
+            getattr(self, "_elders_screen_progress", None) or {}
+        )
+        if not progress:
+            return False
+        try:
+            need = int((entry or {}).get("elders_lane_count") or 6)
+        except (TypeError, ValueError):
+            need = 6
+        need = max(1, need)
+        if entry.get("elders_field_wide_handoff"):
+            play = str((entry or {}).get("elders_play_field") or "").upper()[:1]
+            tracked = [
+                p for p in progress.values()
+                if isinstance(p, dict)
+                and str(p.get("field") or "").upper()[:1] == play
+                and not p.get("idle_empty")
+                and not p.get("go_to_cue")
+            ]
+            return bool(tracked) and all(bool(p.get("chain_done")) for p in tracked)
+        if entry.get("elders_dual_field_chain") or entry.get("elders_spawn_peer_on_done"):
+            done_lanes = sum(
+                1 for p in progress.values()
+                if isinstance(p, dict) and p.get("chain_done")
+            )
+            return done_lanes >= need
+        # Single-field: every live start screen must finish T1–T5.
+        play_fields = {
+            str(p.get("field") or "").upper()[:1]
+            for p in progress.values()
+            if isinstance(p, dict)
+        }
+        play_fields = {f for f in play_fields if f in ("A", "B")}
+        tracked = [
+            p for p in progress.values()
+            if isinstance(p, dict) and p.get("field") in play_fields
+        ]
+        if entry.get("elders_chain_tests"):
+            return bool(tracked) and all(bool(p.get("chain_done")) for p in tracked)
+        return bool(tracked) and all(bool(p.get("done")) for p in tracked)
+
     def _any_goal_pair_complete(self, entry, hits_by_field) -> bool:
         """True when any listed A+B answer pair has both cylinders scored."""
         pairs = entry.get("goal_pairs") or []
@@ -13307,7 +17665,11 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         return remaining
 
     def _blackout_scored_goal_screens(self, entry, fid, hits):
-        """Paint scored answer screens black; leave other digits up."""
+        """Clear only scored goal seats; keep remaining goals (and other seats) lit.
+
+        World Class Players uses per-seat videos — must not release the whole
+        field's clips, or the second require_all goal disappears with the first.
+        """
         fid = str(fid or "").upper()[:1]
         hit_set = set(hits or [])
         if not hit_set:
@@ -13315,15 +17677,23 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         black = _render_solid_screen_image((0, 0, 0))
         if not black:
             return
-        keep = {}
-        for sid, path in (entry.get("screen_images") or {}).items():
-            if _field_for_screen(sid) != fid:
+        scored = []
+        for sid in (entry.get("screen_images") or {}):
+            name = _sid(sid)
+            if not name or _field_for_screen(name) != fid:
                 continue
-            if any(self._goal_token_matches(sid, win, fid) for win in hit_set):
-                keep[str(sid)] = black
-            else:
-                keep[str(sid)] = path
-        if not keep:
+            if any(self._goal_token_matches(name, win, fid) for win in hit_set):
+                scored.append(name)
+        # Also accept winning tokens that are themselves screen ids.
+        for win in hit_set:
+            name = _sid(win)
+            if name and _field_for_screen(name) == fid and name not in scored:
+                if any(
+                    self._goal_token_matches(goal, win, fid)
+                    for goal in ((entry.get("field_screens") or {}).get(fid) or [])
+                ):
+                    scored.append(name)
+        if not scored:
             return
         try:
             canvas = object.__getattribute__(self, "image_canvas")
@@ -13332,9 +17702,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if canvas is None:
             return
         try:
-            canvas.set_screen_images(keep, keep_videos=True, replace_fields={fid})
+            release = getattr(canvas, "_release_screens_from_videos", None)
+            if callable(release):
+                release(scored)
+            # Black only the scored seats; do not replace_fields (keeps peers).
+            canvas.set_screen_images(
+                {sid: black for sid in scored},
+                keep_videos=True,
+                replace_fields=None,
+            )
         except Exception:
-            logger.exception("Could not black out scored S3 screens on %s", fid)
+            logger.exception("Could not black out scored goal screens on %s", fid)
 
     def _poll_goal_advance(self):
         if self.operator_paused:
@@ -13462,6 +17840,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         for goal in field_goals
                     ):
                         continue
+                # Elders independent: ignore stale Correct from the previous
+                # color action on the same screen (before the new cue seq).
+                if entry.get("elders_independent_screens") and win:
+                    parent = _sid(win)
+                    prog = (getattr(self, "_elders_screen_progress", None) or {}).get(parent) or {}
+                    if prog.get("done"):
+                        continue
+                    try:
+                        armed = int(prog.get("armed_seq") or 0)
+                    except (TypeError, ValueError):
+                        armed = 0
+                    if armed and item_seq and item_seq < armed:
+                        continue
                 got_correct = True
                 if win:
                     field_hits.add(win)
@@ -13478,11 +17869,29 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 prev_hits = set(hits_by_field.get(fid_key) or [])
                 hits_by_field[fid_key] = sorted(field_hits)
                 self._goal_hits_by_field = hits_by_field
-                if field_hits and field_hits != prev_hits:
+                if (
+                    entry.get("elders_independent_screens")
+                    and field_hits
+                    and field_hits != prev_hits
+                ):
+                    # Each screen advances alone — do not wait for the others.
+                    newly = set(field_hits) - prev_hits
+                    test_done = False
+                    for win in newly:
+                        if self._elders_advance_independent_screen(entry, fid_key, win):
+                            test_done = True
+                    if not test_done:
+                        continue
+                    # All six screens finished their 10 actions — fall through.
+                elif field_hits and field_hits != prev_hits:
                     # First hit: black that screen; other cylinder stays lit.
                     self._blackout_scored_goal_screens(entry, fid_key, field_hits)
                     self._flush_canvas_now()
-                if entry.get("require_any_goal_pair"):
+                if entry.get("elders_independent_screens"):
+                    progress = getattr(self, "_elders_screen_progress", None) or {}
+                    if not self._elders_focus_all_lanes_complete(entry, progress):
+                        continue
+                elif entry.get("require_any_goal_pair"):
                     # Elite/WC C3: 3 A+B pairs — advance when any one pair is done.
                     if not self._any_goal_pair_complete(entry, hits_by_field):
                         continue
@@ -13527,6 +17936,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if entry.get("require_any_goal_pair")
                 else (" (all goals)" if require_all else ""),
             )
+            if entry.get("elders_independent_screens"):
+                # Hold leftover Accuracy, then end Focus (or legacy dual-round).
+                if self._elders_begin_handoff(entry):
+                    return
             self._finish_label_action()
             return
         if entry.get("independent_fields") and arrived:
@@ -13814,6 +18227,110 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if self._result_hold_mode(entry) == "screen":
             self._release_results_on(lit_screens)
         if self.image_canvas:
+            # Elders Focus C1: Top/Bottom color circles + optional start instruction.
+            screen_colors = entry.get("screen_colors") or {}
+            if entry.get("elders_independent_screens"):
+                self._elders_init_independent_progress(entry)
+            if entry.get("elders_color_task") or screen_colors:
+                try:
+                    stop = getattr(self.image_canvas, "stop_bounce_motion", None)
+                    if callable(stop):
+                        stop()
+                except Exception:
+                    pass
+                try:
+                    self.image_canvas.stop_screen_players()
+                except Exception:
+                    pass
+                try:
+                    self.image_canvas._stop_pass_ssav()
+                except Exception:
+                    pass
+                try:
+                    self.image_canvas._stop_screen_video()
+                except Exception:
+                    pass
+                self.image_canvas.set_screen_color_halves(
+                    screen_colors,
+                    background_rgb=entry.get("background_rgb") or ELDERS_FOCUS_BG,
+                )
+                instr = str(entry.get("instruction_text") or "").strip()
+                try:
+                    instr_ms = int(entry.get("instruction_ms") or 0)
+                except (TypeError, ValueError):
+                    instr_ms = 0
+                if instr and instr_ms > 0:
+                    # Instruction only on live play tiles (not idle peer-field numbers).
+                    instr_map = {}
+                    for sid, spec in (screen_colors or {}).items():
+                        name = _sid(sid)
+                        if not name:
+                            continue
+                        task = str((spec or {}).get("task") or "").lower()
+                        if task in ("idle", "cue", "number"):
+                            continue
+                        if (spec or {}).get("goal_region") or task in (
+                            "color",
+                            "small",
+                            "location",
+                            "shape",
+                            "size",
+                            "color_shape",
+                            "memory",
+                            "flash",
+                            "go_nogo",
+                            "opposite",
+                            "switch",
+                            "conflict",
+                            "odd_color",
+                            "odd_shape",
+                            "rule_color",
+                            "quantity",
+                            "rule_combo",
+                            "top",
+                            "bottom",
+                            "alternate",
+                            "follow",
+                            "far",
+                        ):
+                            instr_map[name] = instr
+                    if not instr_map:
+                        for sids in field_screens.values():
+                            for goal in sids or []:
+                                parent = _sid(goal)
+                                if parent:
+                                    instr_map[parent] = instr
+                    if instr_map:
+                        # Between the Top and Bottom color circles, smaller type.
+                        mid = tuple(ELDERS_FOCUS_INSTR_POS)
+                        instr_pos = {sid: mid for sid in instr_map}
+                        self.image_canvas.set_text_overlays(
+                            instr_map,
+                            color=(59, 47, 30),
+                            positions=instr_pos,
+                            point_size=int(ELDERS_FOCUS_INSTR_POINT),
+                        )
+                        self.image_canvas._keep_text_overlays = True
+                        seq = int(getattr(self, "_flash_seq", 0) or 0) + 1
+
+                        def _clear_elders_instruction(token=seq, canvas=self.image_canvas):
+                            if int(getattr(self, "_flash_seq", 0) or 0) != token:
+                                return
+                            try:
+                                canvas.set_text_overlays({})
+                            except Exception:
+                                pass
+
+                        QtCore.QTimer.singleShot(max(200, instr_ms), _clear_elders_instruction)
+                else:
+                    try:
+                        self.image_canvas.set_text_overlays({})
+                    except Exception:
+                        pass
+                try:
+                    self._sync_screensaver()
+                except Exception:
+                    pass
             motion_texts = entry.get("motion_texts") or {}
             theme = str(entry.get("motion_theme") or "")
             seed = int(entry.get("motion_seed") or 1)
@@ -13823,7 +18340,10 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 and (entry.get("motion_fill") or entry.get("motion_bg") or entry.get("motion_texts")
                      or entry.get("overlay_images"))
             )
-            if wants_motion and theme:
+            if entry.get("elders_color_task") or screen_colors:
+                # Color halves already painted — do not overlay stills/players.
+                pass
+            elif wants_motion and theme:
                 # Paint solid stills first so leftover logo-scale / digit tiles
                 # on screens 3–4 cannot linger smaller than the other cabinets.
                 replace_fields = None
@@ -13912,6 +18432,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 self.image_canvas._uniform_player_stills = bool(
                     entry.get("uniform_player_stills")
                 )
+                video_exts = WC_PLAYERS_VIDEO_EXTS
+                video_paint = {
+                    sid: path
+                    for sid, path in (paint or {}).items()
+                    if str(path or "").lower().endswith(video_exts)
+                }
+                for sid, path in (entry.get("screen_videos") or {}).items():
+                    name = _sid(sid)
+                    if (
+                        name
+                        and str(path or "").lower().endswith(video_exts)
+                        and os.path.isfile(path)
+                    ):
+                        video_paint[name] = path
+                still_paint = {
+                    sid: path
+                    for sid, path in (paint or {}).items()
+                    if sid not in video_paint
+                }
                 if player_paint:
                     self.image_canvas.set_screen_players(
                         player_paint,
@@ -13925,6 +18464,25 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                         pass
                 elif ssav_paint:
                     self.image_canvas.set_screen_ssav(ssav_paint, scale=pass_scale)
+                    try:
+                        self._sync_screensaver()
+                    except Exception:
+                        pass
+                elif video_paint:
+                    # World Class Players: short clips per seat + post/gray stills.
+                    self.image_canvas.set_screen_videos(
+                        video_paint,
+                        fill=False,
+                        loop=True,
+                        scale=pass_scale,
+                    )
+                    if still_paint:
+                        self.image_canvas.set_screen_images(
+                            still_paint,
+                            scale=pass_scale,
+                            keep_videos=True,
+                            replace_fields=replace_fields,
+                        )
                     try:
                         self._sync_screensaver()
                     except Exception:
@@ -13998,6 +18556,13 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             aep_dual_pass=entry.get("aep_dual_pass"),
             ap_action=entry.get("ap_action", entry.get("aep_dual_pass")),
         )
+        if entry.get("elders_independent_screens"):
+            prog = dict(getattr(self, "_elders_screen_progress", None) or {})
+            for sid, info in prog.items():
+                if isinstance(info, dict):
+                    info["armed_seq"] = int(self._flash_seq)
+                    prog[sid] = info
+            self._elders_screen_progress = prog
         logger.info(
             "Labeled action %s %s ON screens %s (+%s fillers) for %sms [test %s scale=%.2f on=%.3fs]",
             action_num,
@@ -15681,6 +20246,1395 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 out["fap_display"] = fap_line
         return out
 
+    def _elders_screen_accuracy_map(self, fid, *, done_only: bool = False) -> dict:
+        """Per-screen Accuracy % for Elders Focus (correct / 10 actions)."""
+        fid_u = str(fid or "").upper()[:1]
+        try:
+            denom = int(ELDERS_FOCUS_ACTIONS_PER_TEST)
+        except (TypeError, ValueError):
+            denom = 10
+        denom = max(1, denom)
+        out = {}
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        for sid, info in progress.items():
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("field") or "").upper()[:1] != fid_u:
+                continue
+            if done_only and not info.get("done"):
+                continue
+            if info.get("go_to_cue"):
+                continue
+            try:
+                correct = int(info.get("correct") or 0)
+            except (TypeError, ValueError):
+                correct = 0
+            # Skip number-cue placeholders that never played a 10-action set.
+            if done_only and int(info.get("total") or 0) <= 0 and not info.get("chain_done"):
+                if not info.get("peer_of") and not info.get("test_num"):
+                    continue
+            out[str(sid)] = max(0.0, min(100.0, (correct / float(denom)) * 100.0))
+        if out:
+            return out
+        if done_only:
+            return {}
+        stats = getattr(self, "_elders_screen_stats", None) or {}
+        for sid, bucket in stats.items():
+            parent = _sid(sid)
+            if not parent or _field_for_screen(parent) != fid_u:
+                continue
+            try:
+                correct = int((bucket or {}).get("correct") or 0)
+            except (TypeError, ValueError):
+                correct = 0
+            out[parent] = max(0.0, min(100.0, (correct / float(denom)) * 100.0))
+        return out
+
+    def _elders_on_play_field_complete(self, entry, finished_fid):
+        """Whole play field done → hold Accuracy 5s → clear idle → intro → next field."""
+        if not isinstance(entry, dict) or not entry.get("elders_field_wide_handoff"):
+            return
+        if getattr(self, "_elders_field_switch_active", False):
+            return
+        fid_u = str(finished_fid or "").upper()[:1]
+        if fid_u not in ("A", "B"):
+            return
+        self._elders_field_switch_active = True
+        self._stop_goal_advance_poll()
+        try:
+            self._elders_show_done_screen_results(fid_u, entry)
+        except Exception:
+            logger.exception("COGFIT field results refresh failed for %s", fid_u)
+        wait_ms = self._elders_field_result_hold_ms(entry, fid_u)
+        token = int(getattr(self, "_elders_peer_gen", 0) or 0)
+        logger.info(
+            "COGFIT Field %s complete — hold Accuracy %sms then switch",
+            fid_u,
+            wait_ms,
+        )
+
+        def _after_hold(gen=token, ent=entry, done_fid=fid_u):
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != gen:
+                self._elders_field_switch_active = False
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(
+                    200, lambda: _after_hold(gen, ent, done_fid)
+                )
+                return
+            left = self._elders_field_result_hold_ms(ent, done_fid)
+            if left > 40:
+                QtCore.QTimer.singleShot(
+                    left, lambda: _after_hold(gen, ent, done_fid)
+                )
+                return
+            try:
+                self._elders_switch_to_next_field_test(ent, done_fid, gen)
+            except Exception:
+                self._elders_field_switch_active = False
+                logger.exception("COGFIT field switch failed after %s", done_fid)
+
+        QtCore.QTimer.singleShot(
+            max(0, wait_ms), lambda: _after_hold(token, entry, fid_u)
+        )
+
+    def _elders_field_result_hold_ms(self, entry, fid) -> int:
+        """Ms left until Accuracy has been shown for the hold on this field."""
+        try:
+            hold_ms = int(
+                (entry or {}).get("elders_result_hold_ms") or ELDERS_FOCUS_RESULT_HOLD_MS
+            )
+        except (TypeError, ValueError):
+            hold_ms = int(ELDERS_FOCUS_RESULT_HOLD_MS)
+        hold_ms = max(1000, hold_ms)
+        fid_u = str(fid or "").upper()[:1]
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        now = time.perf_counter()
+        remain = 0
+        for info in progress.values():
+            if not isinstance(info, dict) or not info.get("done"):
+                continue
+            if info.get("idle_empty") or info.get("go_to_cue"):
+                continue
+            if str(info.get("field") or "").upper()[:1] != fid_u:
+                continue
+            try:
+                done_at = float(info.get("done_at") or 0)
+            except (TypeError, ValueError):
+                done_at = 0.0
+            if done_at <= 0:
+                continue
+            age_ms = int(max(0.0, (now - done_at) * 1000.0))
+            remain = max(remain, hold_ms - age_ms)
+        return max(0, remain)
+
+    def _elders_switch_to_next_field_test(self, entry, finished_fid, peer_gen=None):
+        """Clear finished field, show intro, arm the other field for next C1.Tn."""
+        if peer_gen is not None and int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_gen:
+            self._elders_field_switch_active = False
+            return
+        fid_u = str(finished_fid or "").upper()[:1]
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        cur_test = 1
+        for info in progress.values():
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("field") or "").upper()[:1] != fid_u:
+                continue
+            if info.get("idle_empty"):
+                continue
+            try:
+                cur_test = max(cur_test, int(info.get("test_num") or 1))
+            except (TypeError, ValueError):
+                pass
+        next_test = cur_test + 1
+        try:
+            chain_n = int(entry.get("elders_chain_tests") or ENTRY_TEST_COUNT)
+        except (TypeError, ValueError):
+            chain_n = int(ENTRY_TEST_COUNT)
+        if next_test > chain_n:
+            self._elders_field_switch_active = False
+            try:
+                self._elders_begin_handoff(entry)
+            except Exception:
+                logger.exception("COGFIT end handoff after T%s failed", cur_test)
+            return
+        plan = _elders_cogfit_plan(entry, next_test)
+        next_fid = str(plan.get("field") or "").upper()[:1]
+        if next_fid not in ("A", "B"):
+            next_fid = "B" if fid_u == "A" else "A"
+        # Hide Accuracy on finished field and paint it empty.
+        try:
+            self._hide_field_result_rings(fid_u)
+        except Exception:
+            pass
+        self._elders_clear_field_empty(entry, fid_u, cur_test)
+        entry["elders_play_field"] = next_fid
+        entry["elders_next_field"] = fid_u
+        entry["test_num"] = next_test
+        entry["elders_task"] = str(plan.get("task") or "small")
+        entry["elders_shape"] = str(plan.get("shape") or "circle")
+        entry["elders_target_color"] = str(plan.get("target") or "")
+        entry["instruction_text"] = _elders_cogfit_instruction(
+            entry, next_test, entry.get("elders_target_color")
+        )
+        # Invalidate older delayed timers; this switch owns the next arm.
+        self._elders_peer_gen = int(getattr(self, "_elders_peer_gen", 0) or 0) + 1
+        switch_gen = int(self._elders_peer_gen)
+        comp = _elders_cogfit_component(entry)
+        logger.info(
+            "COGFIT %s.T%s Field %s done → intro then Field %s %s.T%s",
+            comp,
+            cur_test,
+            fid_u,
+            next_fid,
+            comp,
+            next_test,
+        )
+
+        def _arm():
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != switch_gen:
+                self._elders_field_switch_active = False
+                return
+            try:
+                self._elders_arm_field_for_test(entry, next_fid, next_test)
+            finally:
+                self._elders_field_switch_active = False
+
+        try:
+            self._elders_play_inter_test_intro(entry, next_test, next_fid, _arm)
+        except Exception:
+            logger.exception("COGFIT inter-test intro failed; arming directly")
+            _arm()
+
+    def _elders_clear_field_empty(self, entry, fid, test_num=0):
+        """Finished play field → empty tiles (nothing) until its next turn."""
+        fid_u = str(fid or "").upper()[:1]
+        if fid_u not in ("A", "B"):
+            return
+        progress = dict(getattr(self, "_elders_screen_progress", None) or {})
+        bg = (entry or {}).get("background_rgb") or ELDERS_FOCUS_BG
+        for n in range(1, 7):
+            sid = f"{fid_u}{n}"
+            prev = dict(progress.get(sid) or {})
+            progress[sid] = {
+                "field": fid_u,
+                "action": int(prev.get("action") or 0),
+                "correct": int(prev.get("correct") or 0),
+                "total": int(prev.get("total") or 0),
+                "done": True,
+                "chain_done": bool(prev.get("chain_done")),
+                "idle_empty": True,
+                "goal_region": "",
+                "test_num": int(prev.get("test_num") or test_num or 0),
+                "task": "idle",
+                "go_to": "",
+                "go_to_cue": False,
+                "colors": {
+                    "top": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                    "bottom": {"name": "bg", "rgb": bg, "scale": 1.0, "shape": "circle"},
+                    "red_half": "",
+                    "task": "idle",
+                    "show_number": False,
+                    "empty": True,
+                },
+            }
+        self._elders_screen_progress = progress
+        try:
+            fs = dict((entry or {}).get("field_screens") or {})
+            fs[fid_u] = []
+            entry["field_screens"] = fs
+        except Exception:
+            pass
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            pass
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            try:
+                texts = dict(getattr(canvas, "_text_overlays", None) or {})
+                for n in range(1, 7):
+                    texts.pop(f"{fid_u}{n}", None)
+                canvas.set_text_overlays(texts)
+            except Exception:
+                pass
+
+    def _elders_arm_field_for_test(self, entry, fid, test_num):
+        """Arm all 6 screens on fid for C1/C2.Tn (other half already empty)."""
+        fid_u = str(fid or "").upper()[:1]
+        if fid_u not in ("A", "B") or not isinstance(entry, dict):
+            return
+        try:
+            test_n = int(test_num or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        plan = _elders_cogfit_plan(entry, test_n)
+        progress = dict(getattr(self, "_elders_screen_progress", None) or {})
+        stats = dict(getattr(self, "_elders_screen_stats", None) or {})
+        goals = []
+        for n in range(1, 7):
+            sid = f"{fid_u}{n}"
+            info = {
+                "field": fid_u,
+                "correct": 0,
+                "total": 0,
+                "chain_done": False,
+                "next_test_scheduled": False,
+                "peer_scheduled": False,
+                "go_to": "",
+                "go_to_cue": False,
+                "cue_from": "",
+                "timed_out": False,
+                "lane_id": sid,
+                "armed_seq": int(getattr(self, "_flash_seq", 0) or 0),
+            }
+            info = self._elders_fill_screen_trial(entry, info, sid, test_n, 1)
+            progress[sid] = info
+            # Live finish-ball goals only once Remember reaches probe.
+            if info.get("goal_region"):
+                goals.append(info["goal_region"])
+            stats.setdefault(sid, {"correct": 0, "total": 0})
+        self._elders_screen_progress = progress
+        self._elders_screen_stats = stats
+        entry["elders_play_field"] = fid_u
+        entry["test_num"] = test_n
+        entry["elders_task"] = str(plan.get("task") or "small")
+        entry["elders_shape"] = str(plan.get("shape") or "circle")
+        entry["elders_target_color"] = str(plan.get("target") or "")
+        entry["instruction_text"] = _elders_cogfit_instruction(
+            entry, test_n, entry.get("elders_target_color")
+        )
+        fs = dict(entry.get("field_screens") or {})
+        fs[fid_u] = list(goals)
+        other = "B" if fid_u == "A" else "A"
+        fs.setdefault(other, [])
+        entry["field_screens"] = fs
+        # Drop leftover hits so a stale Correct cannot skip the new test.
+        hits = dict(getattr(self, "_goal_hits_by_field", None) or {})
+        hits[fid_u] = []
+        self._goal_hits_by_field = hits
+        try:
+            opening = set(getattr(self, "_fields_opening", None) or set())
+            opening.discard(fid_u)
+            opening.discard(other)
+            self._fields_opening = opening
+        except Exception:
+            pass
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            pass
+        for sid in list(progress.keys()):
+            if progress[sid].get("field") == fid_u and not progress[sid].get("done"):
+                progress[sid]["armed_seq"] = int(getattr(self, "_flash_seq", 0) or 0)
+        self._elders_screen_progress = progress
+        try:
+            self._elders_start_screen_timer_tick()
+        except Exception:
+            pass
+        # Resume finish-ball polling for the newly armed field.
+        try:
+            self._start_goal_advance_poll()
+        except Exception:
+            pass
+        self.display_phase = "action"
+        logger.info(
+            "COGFIT Field %s armed for %s.T%s (%s live goals) task=%s",
+            fid_u,
+            _elders_cogfit_component(entry),
+            test_n,
+            len(goals),
+            plan.get("task"),
+        )
+
+    def _elders_play_inter_test_intro(self, entry, test_num, play_fid, then_cb):
+        """Beginning info + starting video before the next C1.Tn, then arm."""
+        fid_u = str(play_fid or "").upper()[:1]
+        try:
+            test_n = int(test_num or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        # Block finish-ball scoring while the card / intro plays.
+        try:
+            opening = set(getattr(self, "_fields_opening", None) or set())
+            opening.update({"A", "B"})
+            self._fields_opening = opening
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        try:
+            self._stop_goal_advance_poll()
+        except Exception:
+            pass
+        instr = _elders_cogfit_instruction(
+            entry, test_n, (entry or {}).get("elders_target_color")
+        )
+        comp = _elders_cogfit_component(entry)
+        title = _elders_cogfit_title(entry)
+        actions_n = int(
+            (entry or {}).get("actions_in_set")
+            or ELDERS_COGFIT_SHARED.get("actions_per_test")
+            or ELDERS_FOCUS_ACTIONS_PER_TEST
+        )
+        lines = [
+            title,
+            f"Component {comp}.T{test_n}",
+            f"{actions_n} Actions",
+        ]
+        if instr:
+            lines.append(str(instr).split("\n")[0])
+        logo = None
+        try:
+            logo = (
+                _opening_logo_video_for_level("L00-Elders")
+                or _intro_video_for_key("elders")
+            )
+        except Exception:
+            logo = None
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            try:
+                screens = []
+                for f in ("A", "B"):
+                    screens.extend(_field_all_screens(f))
+                canvas.set_level_summary(
+                    lines,
+                    screen_ids=screens,
+                    background=(entry or {}).get("background_rgb") or ELDERS_FOCUS_BG,
+                    foreground=(59, 47, 30),
+                    logo_video=logo,
+                )
+                canvas.show()
+                canvas.raise_()
+                canvas.repaint()
+            except Exception:
+                logger.exception("COGFIT inter-test beginning info failed")
+        logger.info(
+            "COGFIT beginning info before Field %s C1.T%s",
+            fid_u,
+            test_n,
+        )
+        gen = int(getattr(self, "_elders_peer_gen", 0) or 0)
+
+        def _after_card(g=gen, ent=entry, tnum=test_n, pfid=fid_u, cb=then_cb):
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != g:
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(
+                    200, lambda: _after_card(g, ent, tnum, pfid, cb)
+                )
+                return
+            intro = None
+            try:
+                intro = self._intro_video_for_field(pfid)
+            except Exception:
+                intro = None
+            # Elders field helper skips band intro — use static starting clip / logo.
+            if not intro:
+                try:
+                    intro = _intro_video_for_key("elders")
+                except Exception:
+                    intro = None
+            played = False
+            if canvas is not None and intro and str(intro).lower().endswith(
+                (".mp4", ".mov", ".avi", ".mkv", ".webm")
+            ):
+                try:
+                    played = bool(canvas.play_field_intro(pfid, intro))
+                except Exception:
+                    logger.exception("COGFIT starting video failed")
+                    played = False
+            hold = (
+                (_video_duration_ms(intro) + int(LEVEL_INTRO_HOLD_MS))
+                if played
+                else int(LEVEL_INTRO_MS)
+            )
+            if played:
+                logger.info(
+                    "COGFIT starting video before Field %s C1.T%s (%sms)",
+                    pfid,
+                    tnum,
+                    hold,
+                )
+            else:
+                logger.info(
+                    "COGFIT starting hold %sms before Field %s C1.T%s (logo/card)",
+                    hold,
+                    pfid,
+                    tnum,
+                )
+
+            def _done(gg=g, callback=cb):
+                if int(getattr(self, "_elders_peer_gen", 0) or 0) != gg:
+                    return
+                if self.operator_paused:
+                    QtCore.QTimer.singleShot(200, lambda: _done(gg, callback))
+                    return
+                try:
+                    if canvas is not None:
+                        canvas._clear_field_summary({"A", "B"})
+                        canvas.set_level_summary([])
+                except Exception:
+                    pass
+                if callback:
+                    callback()
+
+            QtCore.QTimer.singleShot(max(500, int(hold)), lambda: _done(g, cb))
+
+        QtCore.QTimer.singleShot(
+            max(500, int(LEVEL_CARD_MS)),
+            lambda: _after_card(gen, entry, test_n, fid_u, then_cb),
+        )
+
+    def _elders_ensure_both_sim_fields(self):
+        """If either half already has Arena Sim ON, enable both (COGFIT dual play).
+
+        Does not turn sim on when both are off — real-player sessions stay live.
+        """
+        directory = (
+            getattr(self, "speed_file_dir", None)
+            or "C:/Users/siama/Documents/simust_player"
+        )
+        path = os.path.join(directory, "arena_simulation.txt")
+        try:
+            fields = {"A": False, "B": False}
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as handle:
+                    raw = handle.read()
+                try:
+                    data = json.loads(raw) if str(raw).lstrip()[:1] == "{" else {}
+                except Exception:
+                    data = {}
+                if isinstance(data, dict):
+                    fields = {"A": bool(data.get("A")), "B": bool(data.get("B"))}
+                else:
+                    low = str(raw or "").strip().lower()
+                    both = low in ("1", "true", "yes", "on")
+                    fields = {"A": both, "B": both}
+            if not (fields.get("A") or fields.get("B")):
+                return
+            if fields.get("A") and fields.get("B"):
+                return
+            payload = {"A": True, "B": True}
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+            logger.info("Arena simulation enabled on Field A and Field B")
+        except Exception:
+            logger.exception("Could not write arena_simulation.txt for both fields")
+
+    def _elders_go_to_hints(self, entry, screens) -> dict:
+        """Finished screen → Please go to screen Bn (random peer assigned)."""
+        # Field-wide handoff has no per-screen go-to prompts.
+        if (entry or {}).get("elders_field_wide_handoff"):
+            return {}
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        out = {}
+        for sid in screens or []:
+            parent = _sid(sid)
+            if not parent:
+                continue
+            info = progress.get(parent) or {}
+            peer = _sid(info.get("go_to") or "")
+            if not peer:
+                # Fallback: same-number peer on the other field.
+                next_fid = str((entry or {}).get("elders_next_field") or "").upper()[:1]
+                if next_fid not in ("A", "B") or len(parent) < 2:
+                    continue
+                if parent[0] == next_fid:
+                    continue
+                peer = f"{next_fid}{parent[1:]}"
+            out[parent] = f"Please go to screen {peer}"
+        return out
+
+    def _elders_pick_peer_screen(self, entry, source_sid, next_fid: str) -> str:
+        """Choose a random peer-field screen that is not already claimed/busy."""
+        next_u = str(next_fid or "").upper()[:1]
+        parent = _sid(source_sid)
+        if next_u not in ("A", "B"):
+            return ""
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        claimed = set()
+        busy = set()
+        for sid, info in progress.items():
+            if not isinstance(info, dict):
+                continue
+            go = _sid(info.get("go_to") or "")
+            if go and go[0] == next_u:
+                claimed.add(go)
+            if (
+                str(info.get("field") or "").upper()[:1] == next_u
+                and not info.get("done")
+                and not info.get("chain_done")
+                and info.get("goal_region")
+            ):
+                busy.add(_sid(sid))
+        available = [
+            f"{next_u}{n}"
+            for n in range(1, 7)
+            if f"{next_u}{n}" not in claimed and f"{next_u}{n}" not in busy
+        ]
+        if not available:
+            available = [f"{next_u}{n}" for n in range(1, 7)]
+        # Prefer a different digit than the source when possible.
+        if parent and len(parent) >= 2:
+            prefer = [s for s in available if s[1:] != parent[1:]]
+            if prefer:
+                available = prefer
+        return random.choice(available)
+
+    def _elders_show_done_screen_results(self, fid, entry=None):
+        """As soon as a screen finishes 10 actions, paint Accuracy (+ Go to Bn)."""
+        fid_u = str(fid or "").upper()[:1]
+        if not fid_u:
+            return
+        acc = self._elders_screen_accuracy_map(fid_u, done_only=True)
+        if not acc:
+            return
+        if not isinstance(entry, dict):
+            entry = self._current_label_entry()
+        hints = self._elders_go_to_hints(entry, list(acc.keys()))
+        if self.image_canvas:
+            self.image_canvas.show()
+            try:
+                self.image_canvas.set_field_level_colors(self._opening_card_colors())
+            except Exception:
+                pass
+        if not isinstance(getattr(self, "_field_result_overlays", None), dict):
+            self._field_result_overlays = {}
+        host = self.image_canvas or self
+        overlay = self._field_result_overlays.get(fid_u)
+        if overlay is None or overlay.parent() is not host:
+            overlay = ResultsOverlay(host)
+            self._field_result_overlays[fid_u] = overlay
+        try:
+            overlay.set_level_colors(self._opening_card_colors())
+        except Exception:
+            pass
+        panel = {
+            "screen_accuracy": acc,
+            "screen_hints": hints,
+            "elders_accuracy_only": True,
+            "show_ap_fac": False,
+            "slice_aet": f"{fid_u}1",
+        }
+        overlay.set_panels({fid_u: panel})
+        overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
+        overlay.show()
+        overlay.raise_()
+        logger.info(
+            "Elders early Accuracy on %s: %s hints=%s",
+            fid_u,
+            {k: f"{v:.0f}%" for k, v in sorted(acc.items())},
+            hints,
+        )
+
+    def _elders_result_hold_remaining_ms(self, entry) -> int:
+        """Ms until every finished screen has shown its result for 30s."""
+        try:
+            hold_ms = int(
+                (entry or {}).get("elders_result_hold_ms")
+                or ELDERS_FOCUS_RESULT_HOLD_MS
+            )
+        except (TypeError, ValueError):
+            hold_ms = int(ELDERS_FOCUS_RESULT_HOLD_MS)
+        hold_ms = max(1000, hold_ms)
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        play_fields = {
+            str(f).upper()[:1]
+            for f in ((entry or {}).get("elders_play_fields") or [])
+            if str(f).upper()[:1] in ("A", "B")
+        }
+        if not play_fields:
+            play_fields = {
+                str(p.get("field") or "").upper()[:1]
+                for p in progress.values()
+                if isinstance(p, dict)
+            }
+            play_fields = {f for f in play_fields if f in ("A", "B")}
+        now = time.perf_counter()
+        remain = 0
+        for info in progress.values():
+            if not isinstance(info, dict) or not info.get("done"):
+                continue
+            if info.get("go_to_cue"):
+                continue
+            if play_fields and info.get("field") not in play_fields:
+                continue
+            # Legacy per-screen dual A/B: only the final C1.T5 hold gates the set end.
+            # Field-wide uses `_elders_field_result_hold_ms` between tests.
+            if (
+                (entry or {}).get("elders_dual_field_chain")
+                and not (entry or {}).get("elders_field_wide_handoff")
+                and not info.get("chain_done")
+            ):
+                continue
+            try:
+                done_at = float(info.get("done_at") or 0)
+            except (TypeError, ValueError):
+                done_at = 0.0
+            if done_at <= 0:
+                continue
+            age_ms = int(max(0.0, (now - done_at) * 1000.0))
+            remain = max(remain, hold_ms - age_ms)
+        return max(0, remain)
+
+    def _elders_schedule_next_test_on_screen(self, entry, source_sid):
+        """After this screen's Accuracy hold, start the next C1.Tn on the same tile."""
+        parent = _sid(source_sid)
+        if not parent or not isinstance(entry, dict):
+            return
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        info = progress.get(parent) or {}
+        if info.get("chain_done") or not info.get("done"):
+            return
+        if info.get("next_test_scheduled"):
+            return
+        info["next_test_scheduled"] = True
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        try:
+            hold_ms = int(
+                (entry or {}).get("elders_result_hold_ms") or ELDERS_FOCUS_RESULT_HOLD_MS
+            )
+        except (TypeError, ValueError):
+            hold_ms = int(ELDERS_FOCUS_RESULT_HOLD_MS)
+        try:
+            done_at = float(info.get("done_at") or time.perf_counter())
+        except (TypeError, ValueError):
+            done_at = time.perf_counter()
+        wait_ms = max(0, hold_ms - int((time.perf_counter() - done_at) * 1000.0))
+        gen = int(getattr(self, "_elders_peer_gen", 0) or 0)
+        logger.info(
+            "COGFIT %s → next C1.T after %sms Accuracy hold",
+            parent,
+            wait_ms,
+        )
+
+        def _arm(peer_gen=gen, ent=entry, sid=parent):
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_gen:
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(200, lambda: _arm(peer_gen, ent, sid))
+                return
+            try:
+                self._elders_arm_next_color_test(ent, sid)
+            except Exception:
+                logger.exception("COGFIT next color test failed for %s", sid)
+
+        QtCore.QTimer.singleShot(max(0, wait_ms), lambda: _arm(gen, entry, parent))
+
+    def _elders_arm_next_color_test(self, entry, source_sid):
+        """Re-arm the same screen for the next C1.Tn (single-field fallback)."""
+        parent = _sid(source_sid)
+        if not parent or not isinstance(entry, dict):
+            return
+        progress = dict(getattr(self, "_elders_screen_progress", None) or {})
+        info = dict(progress.get(parent) or {})
+        if info.get("chain_done"):
+            return
+        try:
+            chain_n = int(entry.get("elders_chain_tests") or ENTRY_TEST_COUNT)
+        except (TypeError, ValueError):
+            chain_n = int(ENTRY_TEST_COUNT)
+        chain_n = max(1, chain_n)
+        try:
+            prev_test = int(info.get("test_num") or 1)
+        except (TypeError, ValueError):
+            prev_test = 1
+        test_n = prev_test + 1
+        if test_n > chain_n:
+            info["done"] = True
+            info["chain_done"] = True
+            info["goal_region"] = ""
+            progress[parent] = info
+            self._elders_screen_progress = progress
+            return
+        plan = _elders_focus_plan(test_n)
+        spec, goal_rid = _elders_focus_make_screen_colors(test_n, parent)
+        fid_u = str(info.get("field") or parent[:1]).upper()[:1]
+        info.update({
+            "field": fid_u,
+            "action": 1,
+            "correct": 0,
+            "total": 0,
+            "done": False,
+            "chain_done": False,
+            "next_test_scheduled": False,
+            "done_at": None,
+            "test_num": test_n,
+            "target": str(plan.get("target") or ""),
+            "goal_region": goal_rid,
+            "task": str(plan.get("task") or spec.get("task") or "color"),
+            "colors": dict(spec),
+        })
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        stats = getattr(self, "_elders_screen_stats", None)
+        if not isinstance(stats, dict):
+            stats = {}
+            self._elders_screen_stats = stats
+        stats[parent] = {"correct": 0, "total": 0}
+        # Drop this screen from the Accuracy overlay so play can resume on it.
+        try:
+            self._elders_refresh_field_accuracy_overlay(fid_u, entry)
+        except Exception:
+            logger.exception("COGFIT accuracy refresh failed for %s", fid_u)
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            logger.exception("COGFIT next-test cue resync failed for %s", parent)
+        info["armed_seq"] = int(getattr(self, "_flash_seq", 0) or 0)
+        progress[parent] = info
+        self._elders_screen_progress = progress
+        # Brief instruction between the two shapes for the new task.
+        canvas = getattr(self, "image_canvas", None)
+        instr = _elders_focus_instruction(test_n)
+        if canvas is not None and instr:
+            try:
+                texts = dict(getattr(canvas, "_text_overlays", None) or {})
+                positions = dict(getattr(canvas, "_text_overlay_positions", None) or {})
+                texts[parent] = instr
+                positions[parent] = tuple(ELDERS_FOCUS_INSTR_POS)
+                canvas.set_text_overlays(
+                    texts,
+                    color=(59, 47, 30),
+                    positions=positions,
+                    point_size=int(ELDERS_FOCUS_INSTR_POINT),
+                )
+                canvas._keep_text_overlays = True
+            except Exception:
+                pass
+            try:
+                instr_ms = int(entry.get("instruction_ms") or ELDERS_FOCUS_INSTRUCTION_MS)
+            except (TypeError, ValueError):
+                instr_ms = int(ELDERS_FOCUS_INSTRUCTION_MS)
+            gen_now = int(getattr(self, "_elders_peer_gen", 0) or 0)
+
+            def _clear_instr(sid=parent, peer_g=gen_now, want=instr):
+                if int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_g:
+                    return
+                c = getattr(self, "image_canvas", None)
+                if c is None:
+                    return
+                try:
+                    texts_now = dict(getattr(c, "_text_overlays", None) or {})
+                    if texts_now.get(sid) == want:
+                        texts_now.pop(sid, None)
+                        c.set_text_overlays(texts_now)
+                except Exception:
+                    pass
+
+            QtCore.QTimer.singleShot(max(200, instr_ms), _clear_instr)
+        logger.info(
+            "COGFIT %s armed C1.T%s hit %s (independent chain)",
+            parent,
+            test_n,
+            target,
+        )
+
+    def _elders_refresh_field_accuracy_overlay(self, fid, entry=None):
+        """Repaint Accuracy rings for screens still waiting on their hold / chain end."""
+        fid_u = str(fid or "").upper()[:1]
+        if not fid_u:
+            return
+        acc = self._elders_screen_accuracy_map(fid_u, done_only=True)
+        overlays = getattr(self, "_field_result_overlays", None) or {}
+        overlay = overlays.get(fid_u)
+        if not acc:
+            if overlay is not None:
+                try:
+                    overlay.hide()
+                except Exception:
+                    pass
+            return
+        self._elders_show_done_screen_results(fid_u, entry)
+
+    def _elders_schedule_peer_screen(self, entry, source_sid):
+        """After a screen finishes: Accuracy hold, show peer number, arm next C1.Tn.
+
+        Uses ``_elders_peer_gen`` so other screens advancing cannot cancel this lane.
+        """
+        parent = _sid(source_sid)
+        if not parent or not isinstance(entry, dict):
+            return
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        src = dict(progress.get(parent) or {})
+        try:
+            cur_test = int(src.get("test_num") or entry.get("test_num") or 1)
+        except (TypeError, ValueError):
+            cur_test = 1
+        next_test = cur_test + 1
+        try:
+            chain_n = int(entry.get("elders_chain_tests") or ENTRY_TEST_COUNT)
+        except (TypeError, ValueError):
+            chain_n = int(ENTRY_TEST_COUNT)
+        if next_test > chain_n:
+            src["chain_done"] = True
+            progress[parent] = src
+            self._elders_screen_progress = progress
+            return
+        plan = _elders_focus_plan(next_test)
+        next_fid = str(plan.get("field") or "").upper()[:1]
+        if next_fid not in ("A", "B"):
+            next_fid = "B" if parent[0] == "A" else "A"
+        # Keep entry next-field in sync for hints / idle paint.
+        entry["elders_next_field"] = next_fid
+        peer = self._elders_pick_peer_screen(entry, parent, next_fid)
+        if not peer:
+            return
+        src["go_to"] = peer
+        progress[parent] = src
+        self._elders_screen_progress = progress
+        # Refresh Accuracy panel so "Please go to screen Bn" appears immediately.
+        try:
+            self._elders_show_done_screen_results(parent[0], entry)
+        except Exception:
+            pass
+        try:
+            hold_ms = int(
+                (entry or {}).get("elders_result_hold_ms") or ELDERS_FOCUS_RESULT_HOLD_MS
+            )
+        except (TypeError, ValueError):
+            hold_ms = int(ELDERS_FOCUS_RESULT_HOLD_MS)
+        try:
+            done_at = float(src.get("done_at") or time.perf_counter())
+        except (TypeError, ValueError):
+            done_at = time.perf_counter()
+        wait_ms = max(0, hold_ms - int((time.perf_counter() - done_at) * 1000.0))
+        try:
+            number_ms = int(
+                (entry or {}).get("elders_peer_number_ms") or ELDERS_FOCUS_NEXT_FIELD_CUE_MS
+            )
+        except (TypeError, ValueError):
+            number_ms = int(ELDERS_FOCUS_NEXT_FIELD_CUE_MS)
+        gen = int(getattr(self, "_elders_peer_gen", 0) or 0)
+        logger.info(
+            "COGFIT %s C1.T%s → go to %s for C1.T%s in %sms (number %sms)",
+            parent,
+            cur_test,
+            peer,
+            next_test,
+            wait_ms,
+            number_ms,
+        )
+
+        def _show_number(peer_gen=gen, ent=entry, peer_sid=peer, src_sid=parent, tnum=next_test):
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_gen:
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(
+                    200, lambda: _show_number(peer_gen, ent, peer_sid, src_sid, tnum)
+                )
+                return
+            canvas = getattr(self, "image_canvas", None)
+            if canvas is None:
+                self._elders_arm_peer_screen(ent, src_sid, peer_sid, tnum, peer_gen)
+                return
+            digit = peer_sid[1:] if len(peer_sid) >= 2 else peer_sid
+            src_digit = src_sid[1:] if len(src_sid) >= 2 else src_sid
+            # e.g. B4 shows "4" and "Screen 1 continue here"
+            cue_text = f"{digit}\nScreen {src_digit} continue here"
+            try:
+                prog = dict(getattr(self, "_elders_screen_progress", None) or {})
+                cue_info = dict(prog.get(peer_sid) or {})
+                cue_info.update({
+                    "field": peer_sid[0],
+                    "go_to_cue": True,
+                    "done": True,
+                    "goal_region": "",
+                    "cue_from": src_sid,
+                })
+                prog[peer_sid] = cue_info
+                self._elders_screen_progress = prog
+                self._elders_resync_cue(ent)
+                texts = dict(getattr(canvas, "_text_overlays", None) or {})
+                texts[peer_sid] = cue_text
+                positions = dict(getattr(canvas, "_text_overlay_positions", None) or {})
+                positions[peer_sid] = (0.5, 0.5)
+                canvas.set_text_overlays(
+                    texts,
+                    color=(59, 47, 30),
+                    positions=positions,
+                    point_size=max(18, int(ELDERS_FOCUS_NUM_POINT)),
+                )
+                canvas._keep_text_overlays = True
+                canvas.repaint()
+            except Exception:
+                logger.exception("COGFIT peer number cue failed on %s", peer_sid)
+            QtCore.QTimer.singleShot(
+                max(200, number_ms),
+                lambda: self._elders_arm_peer_screen(
+                    ent, src_sid, peer_sid, tnum, peer_gen
+                ),
+            )
+
+        QtCore.QTimer.singleShot(
+            max(0, wait_ms), lambda: _show_number(gen, entry, peer, parent, next_test)
+        )
+
+    def _elders_arm_peer_screen(self, entry, source_sid, peer_sid, test_num, peer_gen=None):
+        """Start the next C1.Tn task on the chosen peer-field screen."""
+        if peer_gen is not None and int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_gen:
+            return
+        if self.operator_paused:
+            QtCore.QTimer.singleShot(
+                200,
+                lambda: self._elders_arm_peer_screen(
+                    entry, source_sid, peer_sid, test_num, peer_gen
+                ),
+            )
+            return
+        peer = _sid(peer_sid)
+        if not peer:
+            return
+        try:
+            test_n = int(test_num or 1)
+        except (TypeError, ValueError):
+            test_n = 1
+        plan = _elders_focus_plan(test_n)
+        progress = dict(getattr(self, "_elders_screen_progress", None) or {})
+        existing = progress.get(peer) or {}
+        if (
+            existing
+            and not existing.get("done")
+            and int(existing.get("test_num") or 0) == test_n
+            and existing.get("goal_region")
+        ):
+            return
+        spec, goal_rid = _elders_focus_make_screen_colors(test_n, peer)
+        fid_u = peer[0]
+        src = _sid(source_sid)
+        src_info = progress.get(src) or {}
+        progress[peer] = {
+            "field": fid_u,
+            "action": 1,
+            "correct": 0,
+            "total": 0,
+            "done": False,
+            "chain_done": False,
+            "next_test_scheduled": False,
+            "peer_scheduled": False,
+            "go_to": "",
+            "go_to_cue": False,
+            "cue_from": "",
+            "timed_out": False,
+            "goal_region": goal_rid,
+            "colors": dict(spec),
+            "task": str(plan.get("task") or spec.get("task") or "small"),
+            "target": str(plan.get("target") or ""),
+            "test_num": test_n,
+            "peer_of": src,
+            "lane_id": src_info.get("lane_id") or src or peer,
+            "armed_seq": int(getattr(self, "_flash_seq", 0) or 0),
+        }
+        self._elders_stamp_screen_deadline(progress[peer], entry)
+        self._elders_screen_progress = progress
+        self._elders_start_screen_timer_tick()
+        stats = getattr(self, "_elders_screen_stats", None)
+        if not isinstance(stats, dict):
+            stats = {}
+            self._elders_screen_stats = stats
+        stats[peer] = {"correct": 0, "total": 0}
+        # Update play/next field pointers for the active test.
+        entry["elders_play_field"] = fid_u
+        entry["test_num"] = test_n
+        entry["elders_task"] = str(plan.get("task") or "")
+        entry["elders_shape"] = str(plan.get("shape") or "")
+        entry["elders_target_color"] = str(plan.get("target") or "")
+        nxt_plan = _elders_focus_plan(test_n + 1) if test_n < ENTRY_TEST_COUNT else {}
+        entry["elders_next_field"] = str(nxt_plan.get("field") or "")
+        entry["elders_peer_task"] = str(nxt_plan.get("task") or "")
+        try:
+            self._elders_resync_cue(entry)
+        except Exception:
+            logger.exception("COGFIT peer cue resync failed for %s", peer)
+        progress[peer]["armed_seq"] = int(getattr(self, "_flash_seq", 0) or 0)
+        self._elders_screen_progress = progress
+        # Clear large number cue; show brief instruction between shapes.
+        canvas = getattr(self, "image_canvas", None)
+        instr = _elders_focus_instruction(test_n)
+        if canvas is not None:
+            try:
+                texts = dict(getattr(canvas, "_text_overlays", None) or {})
+                texts.pop(peer, None)
+                if instr:
+                    texts[peer] = instr
+                positions = dict(getattr(canvas, "_text_overlay_positions", None) or {})
+                if instr:
+                    positions[peer] = tuple(ELDERS_FOCUS_INSTR_POS)
+                canvas.set_text_overlays(
+                    texts,
+                    color=(59, 47, 30),
+                    positions=positions,
+                    point_size=int(ELDERS_FOCUS_INSTR_POINT),
+                )
+                canvas._keep_text_overlays = True
+            except Exception:
+                pass
+        try:
+            instr_ms = int(
+                (entry or {}).get("instruction_ms") or ELDERS_FOCUS_INSTRUCTION_MS
+            )
+        except (TypeError, ValueError):
+            instr_ms = int(ELDERS_FOCUS_INSTRUCTION_MS)
+        gen_now = int(getattr(self, "_elders_peer_gen", 0) or 0)
+
+        def _clear_peer_instr(sid=peer, peer_g=gen_now, want=instr):
+            if int(getattr(self, "_elders_peer_gen", 0) or 0) != peer_g:
+                return
+            c = getattr(self, "image_canvas", None)
+            if c is None or not want:
+                return
+            try:
+                texts_now = dict(getattr(c, "_text_overlays", None) or {})
+                if texts_now.get(sid) == want:
+                    texts_now.pop(sid, None)
+                    c.set_text_overlays(texts_now)
+            except Exception:
+                pass
+
+        QtCore.QTimer.singleShot(max(200, instr_ms), _clear_peer_instr)
+        # Refresh Accuracy overlay on the source field (destination left it).
+        if src:
+            try:
+                self._elders_refresh_field_accuracy_overlay(src[0], entry)
+            except Exception:
+                pass
+        logger.info(
+            "COGFIT %s armed C1.T%s %s/%s (from %s)",
+            peer,
+            test_n,
+            plan.get("task"),
+            plan.get("shape"),
+            source_sid,
+        )
+
+    def _elders_arm_peer_small_screen(self, entry, source_sid, peer_sid, peer_gen=None):
+        """Compatibility wrapper — arm next Focus test on the peer screen."""
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        src = progress.get(_sid(source_sid)) or {}
+        try:
+            cur = int(src.get("test_num") or (entry or {}).get("test_num") or 1)
+        except (TypeError, ValueError):
+            cur = 1
+        self._elders_arm_peer_screen(entry, source_sid, peer_sid, cur + 1, peer_gen)
+
+    def _elders_begin_handoff(self, entry) -> bool:
+        """After all screens finish their chain: hold leftover Accuracy, then end/advance."""
+        if not isinstance(entry, dict) or not entry.get("elders_independent_screens"):
+            return False
+        if getattr(self, "_elders_handoff_active", False):
+            return True
+        self._elders_handoff_active = True
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
+        try:
+            _clear_image_action_cue(force_end=False)
+        except Exception:
+            pass
+        progress = getattr(self, "_elders_screen_progress", None) or {}
+        peer_done = dict(getattr(self, "_elders_peer_done", None) or {})
+        for sid, info in progress.items():
+            if not isinstance(info, dict):
+                continue
+            if info.get("done") and (
+                info.get("peer_of") or str(info.get("task") or "") == "small"
+            ):
+                peer_done[sid] = {
+                    "correct": int(info.get("correct") or 0),
+                    "total": int(info.get("total") or 0),
+                    "from": str(info.get("peer_of") or ""),
+                }
+        self._elders_peer_done = peer_done
+        # Refresh Accuracy on every field that still has finished screens.
+        fields = {
+            str(info.get("field") or "").upper()[:1]
+            for info in progress.values()
+            if isinstance(info, dict) and info.get("done")
+        }
+        for play_fid in sorted(f for f in fields if f in ("A", "B")):
+            try:
+                self._elders_show_done_screen_results(play_fid, entry)
+            except Exception:
+                logger.exception("COGFIT handoff results failed for %s", play_fid)
+        wait_ms = self._elders_result_hold_remaining_ms(entry)
+        logger.info(
+            "COGFIT handoff: hold Accuracy %sms then %s",
+            wait_ms,
+            "end Focus (no finals)"
+            if entry.get("elders_no_final_results") or entry.get("elders_chain_tests")
+            else "advance",
+        )
+        token = int(getattr(self, "_flash_seq", 0) or 0)
+
+        def _after_hold(seq=token, ent=entry):
+            if int(getattr(self, "_flash_seq", 0) or 0) != seq:
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(200, lambda: _after_hold(seq, ent))
+                return
+            left = self._elders_result_hold_remaining_ms(ent)
+            if left > 40:
+                QtCore.QTimer.singleShot(left, lambda: _after_hold(seq, ent))
+                return
+            self._elders_handoff_active = False
+            self._elders_advance_after_handoff(ent)
+
+        QtCore.QTimer.singleShot(max(0, wait_ms), lambda: _after_hold(token, entry))
+        return True
+
+    def _elders_show_next_field_cue(self, entry, seq):
+        """Show B1…B6 screen numbers for 15s, then advance to the next test."""
+        if int(getattr(self, "_flash_seq", 0) or 0) != seq:
+            return
+        next_fid = str((entry or {}).get("elders_next_field") or "").upper()[:1]
+        try:
+            cue_ms = int(ELDERS_FOCUS_NEXT_FIELD_CUE_MS)
+        except (TypeError, ValueError):
+            cue_ms = 15000
+        if next_fid in ("A", "B") and self.image_canvas:
+            # Clear finished-field result rings so the player looks at the other half.
+            play_fid = str(
+                (entry or {}).get("elders_play_field")
+                or next(iter((entry or {}).get("field_screens") or {}), "")
+            ).upper()[:1]
+            if play_fid:
+                try:
+                    self._hide_field_result_rings(play_fid)
+                except Exception:
+                    pass
+            numbers = {f"{next_fid}{n}": str(n) for n in range(1, 7)}
+            try:
+                self.image_canvas.clear_screen_color_halves()
+            except Exception:
+                pass
+            try:
+                self.image_canvas.set_field_level_colors(self._opening_card_colors())
+            except Exception:
+                pass
+            # Fill next-field tiles with brand color via empty color halves map + texts.
+            bg = (entry or {}).get("background_rgb") or ELDERS_FOCUS_BG
+            try:
+                self.image_canvas.set_screen_color_halves(
+                    {
+                        sid: {
+                            "top": {"name": "bg", "rgb": bg},
+                            "bottom": {"name": "bg", "rgb": bg},
+                            "red_half": "",
+                        }
+                        for sid in numbers
+                    },
+                    background_rgb=bg,
+                )
+            except Exception:
+                pass
+            self.image_canvas.set_text_overlays(
+                numbers,
+                color=(59, 47, 30),
+                positions={sid: (0.5, 0.5) for sid in numbers},
+            )
+            self.image_canvas._keep_text_overlays = True
+            self.image_canvas.show()
+            self.image_canvas.raise_()
+            self.image_canvas.repaint()
+            logger.info(
+                "Elders next-field cue on %s for %sms: %s",
+                next_fid,
+                cue_ms,
+                sorted(numbers.keys()),
+            )
+        else:
+            cue_ms = 0
+
+        def _continue(seq_now=seq, ent=entry):
+            if int(getattr(self, "_flash_seq", 0) or 0) != seq_now:
+                return
+            if self.operator_paused:
+                QtCore.QTimer.singleShot(200, lambda: _continue(seq_now, ent))
+                return
+            self._elders_handoff_active = False
+            try:
+                if self.image_canvas:
+                    self.image_canvas.set_text_overlays({})
+                    self.image_canvas.clear_screen_color_halves()
+            except Exception:
+                pass
+            # Results + Go-to + next-field numbers already shown — skip another
+            # results wait and open the next Elders test on the other field.
+            self._elders_advance_after_handoff(ent)
+
+        QtCore.QTimer.singleShot(max(0, cue_ms), lambda: _continue(seq, entry))
+
+    def _elders_advance_after_handoff(self, entry):
+        """End Focus chain (no finals) or open the next dual-round playlist entry."""
+        if isinstance(entry, dict) and (
+            entry.get("elders_no_final_results") or entry.get("elders_chain_tests")
+        ):
+            self._elders_finish_focus_set(entry)
+            return
+        next_idx = int(getattr(self, "current_video_index", 0) or 0) + 1
+        files = list(getattr(self, "video_files", None) or [])
+        if next_idx >= len(files):
+            self._elders_finish_focus_set(entry)
+            return
+        play_fid = str(
+            (entry or {}).get("elders_play_field")
+            or next(iter((entry or {}).get("field_screens") or {}), "")
+        ).upper()[:1]
+        if play_fid:
+            try:
+                self._hide_field_result_rings(play_fid)
+            except Exception:
+                pass
+        next_fid = str((entry or {}).get("elders_next_field") or "").upper()[:1]
+        if next_fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(next_fid)
+            except Exception:
+                pass
+        self._elders_peer_done = {}
+        self._goal_arrived = False
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
+        self._cancel_next_screen_hint()
+        self._finished_field_screens = {}
+        self._clear_held_results()
+        self._action_phase = "idle"
+        self.video_end_called = False
+        self.waiting_for_results = False
+        self.check_timer.stop()
+        self._hide_waiting_overlay()
+        self.current_video_index = next_idx
+        self.display_phase = "action"
+        logger.info(
+            "Elders dual-round done → next C1.T%s (%s)",
+            (files[next_idx] or {}).get("test_num")
+            if isinstance(files[next_idx], dict)
+            else "?",
+            (files[next_idx] or {}).get("label")
+            if isinstance(files[next_idx], dict)
+            else next_idx,
+        )
+        self._load_video(self.current_video_index)
+
+    def _elders_finish_focus_set(self, entry=None):
+        """COGFIT Focus done: clear Accuracy, skip final results, close the set."""
+        logger.info("COGFIT Focus chain complete — skipping final results")
+        self._elders_handoff_active = False
+        self._elders_peer_gen = int(getattr(self, "_elders_peer_gen", 0) or 0) + 1
+        try:
+            self._elders_stop_screen_timer_tick()
+        except Exception:
+            pass
+        self._goal_arrived = False
+        self._stop_goal_advance_poll()
+        self._stop_action_timer()
+        self._cancel_next_screen_hint()
+        self._finished_field_screens = {}
+        self._clear_held_results()
+        self._action_phase = "idle"
+        self.video_end_called = False
+        self.waiting_for_results = False
+        self.check_timer.stop()
+        self._hide_waiting_overlay()
+        self._post_results_index = None
+        try:
+            _clear_image_action_cue(force_end=True)
+        except Exception:
+            pass
+        for fid in ("A", "B"):
+            try:
+                self._hide_field_result_rings(fid)
+            except Exception:
+                pass
+        try:
+            self._clear_all_result_overlays()
+        except Exception:
+            pass
+        canvas = getattr(self, "image_canvas", None)
+        if canvas is not None:
+            try:
+                canvas.set_text_overlays({})
+            except Exception:
+                pass
+            try:
+                canvas.clear_screen_color_halves()
+            except Exception:
+                pass
+        # No final-results film: mark complete so the next COGFIT sublevel can start.
+        self.playlist_finished = True
+        self.display_phase = "completed"
+        self._phase_active = []
+        try:
+            self._publish_field_controls()
+        except Exception:
+            pass
+        if not getattr(self, "_realtime_stopped", False):
+            try:
+                self._stop_camera_only()
+            except Exception:
+                pass
+        if not getattr(self, "_is_closing", False):
+            self._status_completed = True
+            try:
+                self._update_status_file(
+                    "completed",
+                    self.total_videos,
+                    self.total_videos,
+                    "COGFIT Focus completed",
+                )
+            except Exception:
+                pass
+            try:
+                self._auto_close(self.auto_close_delay)
+            except Exception:
+                logger.exception("COGFIT Focus auto-close failed")
+
     def _show_field_result_rings(self, fid, panel):
         """Draw this field's rings on its screens. The other field stays uncovered."""
         try:
@@ -15706,11 +21660,34 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         panel = self._ensure_ap_fac_panel_slices(fid, panel)
+        if not isinstance(panel, dict):
+            panel = {}
+        else:
+            panel = dict(panel)
+        # Elders Focus: Accuracy only, independently on each of the 6 screens.
+        elders_acc = self._elders_screen_accuracy_map(fid)
+        if elders_acc:
+            panel["screen_accuracy"] = elders_acc
+            entry = self._current_label_entry()
+            hints = self._elders_go_to_hints(entry, list(elders_acc.keys()))
+            if hints:
+                panel["screen_hints"] = hints
+            panel["elders_accuracy_only"] = True
+            panel["show_ap_fac"] = False
+            # Keep a dummy slice_aet so the reveal wait does not stall.
+            if not panel.get("slice_aet"):
+                panel["slice_aet"] = f"{str(fid).upper()[:1]}1"
+            logger.info(
+                "Field %s Elders Accuracy per screen: %s",
+                fid,
+                {k: f"{v:.0f}%" for k, v in sorted(elders_acc.items())},
+            )
         overlay.set_panels({fid: panel})
         overlay.setGeometry(0, 0, host.width() or self.video_width, host.height() or self.video_height)
         overlay.show()
         overlay.raise_()
-        self._play_result_side_videos(fid, panel)
+        if not elders_acc:
+            self._play_result_side_videos(fid, panel)
 
     def _result_logo_for_field(self, fid):
         levels = self._player_attr("_phase_field_levels") or {}
@@ -17282,6 +23259,18 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.current_video_index = next_idx
             self.display_phase = "action"
             self._load_video(self.current_video_index)
+            return
+
+        # COGFIT Focus: skip per-video + final results films.
+        if isinstance(cur, dict) and (
+            cur.get("elders_no_final_results")
+            or cur.get("elders_skip_per_video_results")
+            or cur.get("elders_focus")
+        ):
+            self._post_results_index = None
+            self._finished_field_screens = {}
+            self._clear_held_results()
+            self._elders_finish_focus_set(cur)
             return
 
         # End of test: go to the per-video results. Finish marks are not shown.
@@ -19110,6 +25099,17 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             self.waiting_for_results = False
             self.display_phase = "action"
             return
+        try:
+            cur = self.video_files[self.current_video_index] if self.video_files else {}
+        except Exception:
+            cur = {}
+        if isinstance(cur, dict) and (
+            cur.get("elders_no_final_results")
+            or cur.get("elders_focus")
+        ):
+            logger.info("COGFIT Focus — skipping final results display")
+            self._elders_finish_focus_set(cur)
+            return
         logger.info("All action sets done; showing the same wait animation then final results")
         try:
             self._snapshot_finals_from_band()
@@ -19396,6 +25396,19 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         if parts:
             # Independent A/B play uses per-field results, not the cabinet wait.
             logger.info("Ignoring single-field video-ended — independent fields are live")
+            return
+        try:
+            cur = self.video_files[self.current_video_index] if self.video_files else {}
+        except Exception:
+            cur = {}
+        if isinstance(cur, dict) and (
+            cur.get("elders_no_final_results")
+            or cur.get("elders_skip_per_video_results")
+            or cur.get("elders_focus")
+        ):
+            logger.info("COGFIT Focus — skipping per-video/final results")
+            self.video_end_called = True
+            self._elders_finish_focus_set(cur)
             return
         self.video_end_called = True
         self.waiting_for_results = True

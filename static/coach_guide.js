@@ -47,6 +47,8 @@
     { id: "hp", label: "High Performance" },
     { id: "elite", label: "Elite" },
     { id: "world", label: "World Class" },
+    { group: "Players scenarios" },
+    { id: "players-formations", label: "All Players formations" },
     { group: "Coach tools" },
     { id: "unlock", label: "Unlock & level-up" },
     { id: "timing", label: "Timing tables" },
@@ -54,6 +56,36 @@
     { id: "manual", label: "Manual Coach" },
     { id: "tips", label: "Quick tips" },
   ];
+
+  /** Live formation grids (images/videos) from docs/players_scenarios.html. */
+  function playersFormationsEmbed(anchor, title) {
+    var hash = anchor ? "#" + String(anchor).replace(/^#/, "") : "";
+    return [
+      {
+        type: "h2",
+        text: title || "Seat formations (live doc)",
+      },
+      {
+        type: "p",
+        text:
+          "Every action shows Field A and Field B with the exact still or video on each screen. Amber outline = goal seat (including L/R mouths). Open full-screen if you need to zoom clips.",
+      },
+      {
+        type: "iframe",
+        src: "/docs/players-scenarios" + hash,
+        title: title || "Players formations",
+        height: "78vh",
+      },
+      {
+        type: "callout",
+        kind: "tip",
+        html:
+          '<strong>Full page.</strong> <a href="/docs/players-scenarios' +
+          hash +
+          '" target="_blank" rel="noopener">Open Players scenarios documentation</a> in a new tab.',
+      },
+    ];
+  }
 
   /** Shared AP / FAP coach copy used on Entry / Activated / HP / Elite Players pages. */
   function playersApFacBlocks(opts) {
@@ -290,14 +322,19 @@
             ["Activated", "Players C1 · Numbers C2 · Divergent C3", "S0 · S1 · S2", "A and/or B"],
             ["High Performance", "Players C1 · Numbers C2 · Divergent C3 · Sum C4", "S0–S3", "A and/or B"],
             ["Elite", "Players C1 · Numbers C2 · Divergent C3 · Sum C4", "S0–S3", "Combined 12 screens"],
-            ["World Class", "Numbers C1 · Divergent C2 · Sum C3", "S1–S3", "Combined 12 screens"],
+            [
+              "World Class",
+              "Players C1 · Numbers C2 · Divergent C3 · Sum C4",
+              "S0–S3",
+              "Combined 12 screens",
+            ],
           ],
         },
         {
           type: "callout",
           kind: "tip",
           html:
-            "<strong>Label rule.</strong> Entry → Elite shift internal S0 to wall <em>C1</em> (add one). World Class keeps S1 as wall <em>C1</em>.",
+            "<strong>Label rule.</strong> Entry → Elite / World Class Players shift internal S0 to wall <em>C1</em> (add one). WC Numbers keeps internal S1 as wall <em>C1</em>.",
         },
         {
           type: "h2",
@@ -307,13 +344,17 @@
           type: "table",
           headers: ["Family", "Tests", "Actions / test", "Cue style"],
           rows: [
-            ["Entry / Activated Players", "5", "10", "Player stills"],
+            ["Entry / Activated / HP Players", "5", "10", "Player stills"],
+            ["Elite Players 1", "5", "10", "Dual-field stills + AP / side passes"],
+            ["Elite Players 2 / WC Players", "5", "9", "Scripted seats (stills / videos)"],
             ["Entry / Activated Numbers", "5", "6", "Digits, lowest first"],
             ["HP / Elite / WC Numbers & Divergent", "5", "12 (Elite/WC) or 6 (HP)", "Digits / odd-one-out"],
             ["Sum (HP / Elite / WC)", "5", "6 or 12", "Encode reference, then pair that sums"],
           ],
         },
-      ],
+      ].concat(
+        playersFormationsEmbed("", "All Players formations (Entry → World Class)")
+      ),
     };
   }
 
@@ -401,6 +442,7 @@
         },
       ]
         .concat(playersApFacBlocks())
+        .concat(playersFormationsEmbed("entry", "Entry Players — all formations"))
         .concat([
         {
           type: "grid",
@@ -504,6 +546,7 @@
         },
       ]
         .concat(playersApFacBlocks())
+        .concat(playersFormationsEmbed("activated", "Activated Players — all formations"))
         .concat([
         {
           type: "grid",
@@ -592,6 +635,7 @@
         },
       ]
         .concat(playersApFacBlocks({ hpOffside: true }))
+        .concat(playersFormationsEmbed("hp", "High Performance Players — all formations"))
         .concat([
         {
           type: "grid",
@@ -764,6 +808,8 @@
         },
       ]
         .concat(playersApFacBlocks())
+        .concat(playersFormationsEmbed("elite1", "Elite Players 1 — all formations"))
+        .concat(playersFormationsEmbed("elite2", "Elite Players 2 — scripted formations"))
         .concat([
         {
           type: "grid",
@@ -873,17 +919,45 @@
       kicker: "L05 · World Class",
       title: "World Class band",
       lead:
-        "World Class is the top combined-field band. Wall Components start at Numbers C1 (no Players Component yet).",
+        "World Class is the top combined-field band. Players C1 (scripted 5×9 videos) comes first, then Numbers, Divergent, and Sum on the 12-screen field.",
       blocks: [
         {
-          type: "callout",
-          kind: "warn",
-          html:
-            "<strong>@Siamak — product ask.</strong> Please prepare a <em>World Class Players</em> scenario (art + rules), similar to Elite Players C1, so WC can gain a Players Component before Numbers. Until then, coaches start WC at Numbers C1.",
+          type: "h2",
+          text: "Players — C1 (internal S0) · videos",
         },
         {
+          type: "p",
+          text:
+            "Same seat plans as Elite Players 2 (5 in-set tests × 9 actions). Media from static/Players-Videos. Center goals use Teammate-AskingForBall (folder 02) — never pass.png or opponents. Cross L/R goals use any Left/Right clip from folder 03 (correct only if the ball enters the goal mouth). Posts stay as stills. No duplicate video inside one action; tests 2–5 reuse the same clips while seats rotate on actions 1–7.",
+        },
+        {
+          type: "table",
+          headers: ["Action idea", "Goal rule", "Coach cue"],
+          rows: [
+            ["a1 / a3 / a6 / a7 / a8 center", "Teammate asking video on seat", "Kick the asking teammate (center mouth)."],
+            ["a2 / a5 cross", "Cross Left/Right video + L/R mouth", "Ball must enter the side goal — no return needed."],
+            ["a7 dual", "A1 + A5 both required", "Clear both mouths (first hit clears that seat only)."],
+            ["a8 either", "A1 or B7 (posts on B3/B4)", "B2 = Neutral-Duo; B5 = OffSide-Trap-Right distractor."],
+            ["a9 paint", "B7 only", "B1 = Neutral-Duo; B6 = defender-Neutral-06."],
+          ],
+        },
+        {
+          type: "table",
+          headers: ["Sub-level", "On", "Gap", "Note"],
+          rows: [
+            ["C1.T1", "7.2 s", "2.4 s", "Video scale ×2.4 vs Elite Players 2 baseline"],
+            ["C1.T2", "~2.85 s", "~0.95 s", "−5% vs T1 baseline (not video-scaled)"],
+            ["C1.T3", "2.7 s", "0.9 s", "−5% again"],
+            ["C1.T4", "2.55 s", "0.85 s", "−5% again"],
+            ["C1.T5", "2.45 s", "0.8 s", "−5% again"],
+          ],
+        },
+      ]
+        .concat(playersFormationsEmbed("wc", "World Class Players — all formations"))
+        .concat([
+        {
           type: "h2",
-          text: "Numbers — C1 (internal S1)",
+          text: "Numbers — C2 (internal S1)",
         },
         {
           type: "p",
@@ -892,7 +966,7 @@
         },
         {
           type: "h2",
-          text: "Divergent — C2 (internal S2)",
+          text: "Divergent — C3 (internal S2)",
         },
         {
           type: "p",
@@ -901,7 +975,7 @@
         },
         {
           type: "h2",
-          text: "Sum — C3 (internal S3)",
+          text: "Sum — C4 (internal S3)",
         },
         {
           type: "p",
@@ -912,19 +986,29 @@
           type: "table",
           headers: ["Component", "Wall label", "Coach one-liner"],
           rows: [
-            ["Numbers", "C1.T1–T5", "Lowest of 12; colours change every action."],
-            ["Divergent", "C2.T1–T5", "Find the odd screen in motion camouflage."],
-            ["Sum", "C3.T1–T5", "Remember 51–99 reference; kick a summing pair."],
-            ["Players", "—", "Not shipped yet — Siamak scenario pending."],
+            ["Players", "C1.T1–T5", "Scripted video seats; asking / cross / posts / traps."],
+            ["Numbers", "C2.T1–T5", "Lowest of 12; colours change every action."],
+            ["Divergent", "C3.T1–T5", "Find the odd screen in motion camouflage."],
+            ["Sum", "C4.T1–T5", "Remember 51–99 reference; kick a summing pair."],
           ],
         },
         {
           type: "callout",
           kind: "",
           html:
-            "<strong>End of path.</strong> World Class Sum C3.T5 is currently the final unlock in the development ladder.",
+            "<strong>End of path.</strong> World Class Sum C4.T5 is currently the final unlock in the development ladder.",
         },
-      ],
+      ]),
+    };
+  }
+
+  function pagePlayersFormations() {
+    return {
+      kicker: "Players · documentation",
+      title: "All Players formations",
+      lead:
+        "Complete seat-by-seat documentation for Entry, Activated, High Performance, Elite Players 1, Elite Players 2, and World Class — with stills and videos on every screen.",
+      blocks: playersFormationsEmbed("", "Full Players scenarios document"),
     };
   }
 
@@ -959,7 +1043,7 @@
             ["Entry Numbers last set", "Activated Players C1.T1"],
             ["Activated Divergent last set", "HP Players C1.T1"],
             ["HP Sum last set", "Elite Players C1.T1"],
-            ["Elite Sum last set", "World Class Numbers C1.T1"],
+            ["Elite Sum last set", "World Class Players C1.T1"],
             ["World Class Sum last set", "End of ladder"],
           ],
         },
@@ -1137,6 +1221,7 @@
     hp: pageHp,
     elite: pageElite,
     world: pageWorld,
+    "players-formations": pagePlayersFormations,
     unlock: pageUnlock,
     timing: pageTiming,
     "ap-fac": pageApFac,
@@ -1214,6 +1299,22 @@
           h("img", { src: b.image.src, alt: b.image.alt, loading: "lazy" }),
           b.caption ? h("figcaption", null, b.caption) : null
         );
+      }
+      if (b.type === "iframe") {
+        return h("iframe", {
+          key: idx,
+          className: "coach-guide-iframe",
+          src: b.src,
+          title: b.title || "Documentation",
+          style: {
+            width: "100%",
+            height: b.height || "78vh",
+            minHeight: "520px",
+            border: "1px solid #334155",
+            borderRadius: "10px",
+            background: "#0f172a",
+          },
+        });
       }
       if (b.type === "table") {
         return h(

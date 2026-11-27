@@ -29,12 +29,14 @@ _PAINT_SCREEN_ALIASES = {
     "A4": ("A4", "2"),
     "A5": ("A5", "3"),
     "A6": ("A6", "4"),
+    "A7": ("A7",),
     "B1": ("B1", "5"),
     "B2": ("B2", "6"),
     "B3": ("B3", "7"),
     "B4": ("B4", "9"),
     "B5": ("B5", "10"),
     "B6": ("B6", "11"),
+    "B7": ("B7",),
     "12": ("A1", "12"),
     "13": ("A2", "13"),
     "14": ("A3", "14"),
@@ -59,12 +61,14 @@ _PAINT_MIRROR_B_FROM_A = {
     "B4": ("A4", 639.5, -11.5),
     "B5": ("A5", 639.0, -16.0),
     "B6": ("A6", 639.5, -18.5),
+    "B7": ("A7", 640.0, -2.0),
     "5": ("A1", 640.0, -20.5),
     "6": ("A2", 640.0, -18.5),
     "7": ("A3", 637.0, -17.5),
     "9": ("A4", 639.5, -11.5),
     "10": ("A5", 639.0, -16.0),
     "11": ("A6", 639.5, -18.5),
+    "8": ("A7", 640.0, -2.0),
 }
 
 _lock = threading.Lock()
@@ -330,12 +334,25 @@ def _masks_unlocked() -> dict:
     return _masks
 
 
+def _split_paint_suffix(screen: str):
+    """Split A2R / A1T → (body, L|R|T|B|''). Keep Field B bodies intact."""
+    sid = str(screen or "").strip().upper()
+    if not sid:
+        return "", ""
+    if len(sid) >= 3 and sid[0] in ("A", "B") and sid[-1] in ("L", "R", "T", "B"):
+        body = sid[:-1]
+        if body[1:].isdigit() and 1 <= int(body[1:]) <= 6:
+            return body, sid[-1]
+    if sid[-1:] in ("L", "R") and sid[:-1].isdigit():
+        return sid[:-1], sid[-1]
+    return sid, ""
+
+
 def _paint_screen_keys(screen: str):
     sid = str(screen or "").strip().upper()
     if not sid:
         return ()
-    body = sid.rstrip("LR")
-    suffix = sid[len(body):]
+    body, suffix = _split_paint_suffix(sid)
     aliases = _PAINT_SCREEN_ALIASES.get(body) or (body,)
     keys = []
     for alias in aliases:
@@ -382,13 +399,17 @@ def _shift_paint_view(view: dict, dx: float, dy: float) -> Optional[dict]:
 
 
 def _mirrored_paint_view(screen: str) -> Optional[dict]:
-    """Field B mouth with no pencil: reuse matching Field A paint, shifted."""
+    """Field B mouth with no pencil: reuse matching Field A paint, shifted.
+
+    Also mirrors Top/Bottom paints (B1T←A1T, B1B←A1B) when Field B has none.
+    """
     global _mirror_cache, _mirror_cache_mtime
-    body = str(screen or "").strip().upper().rstrip("LR")
+    body, suffix = _split_paint_suffix(screen)
     spec = _PAINT_MIRROR_B_FROM_A.get(body)
     if not spec:
         return None
     src_sid, dx, dy = spec
+    cache_key = f"{body}{suffix}"
     with _lock:
         try:
             mtime = os.path.getmtime(PAINT_FILE) if os.path.isfile(PAINT_FILE) else 0.0
@@ -397,21 +418,72 @@ def _mirrored_paint_view(screen: str) -> Optional[dict]:
         if _mirror_cache_mtime != mtime:
             _mirror_cache = {}
             _mirror_cache_mtime = mtime
-        cached = _mirror_cache.get(body)
+        cached = _mirror_cache.get(cache_key)
         if cached is not None:
             return cached or None
         masks = _masks_unlocked()
         src = None
-        for key in _paint_screen_keys(src_sid):
+        for key in _paint_screen_keys(f"{src_sid}{suffix}"):
             src = masks.get(key)
             if src:
                 break
         if not src:
-            _mirror_cache[body] = False
+            _mirror_cache[cache_key] = False
             return None
         shifted = _shift_paint_view(src, dx, dy)
-        _mirror_cache[body] = shifted or False
+        _mirror_cache[cache_key] = shifted or False
         return shifted
+
+
+def _parent_paint_view(body: str) -> Optional[dict]:
+    """Center-mouth paint for A2 / B3 / … (no Top/Bottom split)."""
+    keys = _paint_screen_keys(body)
+    if not keys:
+        return None
+    with _lock:
+        masks = _masks_unlocked()
+        for key in keys:
+            view = masks.get(key)
+            if view:
+                return view
+    return _mirrored_paint_view(body)
+
+
+def _tb_half_from_parent(screen: str) -> Optional[dict]:
+    """When A2T/A2B has no pencil, use the top/bottom half of the A2 Goal Area paint.
+
+    Elders Focus lights A2T / A2B; operators often paint only the center mouth
+    (A2). Splitting that mask keeps every screen on Settings Goal Area regions,
+    not only A1T / A1B.
+    """
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    body, suffix = _split_paint_suffix(screen)
+    if suffix not in ("T", "B") or not body:
+        return None
+    parent = _parent_paint_view(body)
+    if not parent or parent.get("mask") is None:
+        return None
+    mask = parent["mask"]
+    bbox = parent.get("bbox")
+    if not bbox or len(bbox) < 4:
+        return None
+    x0, y0, x1, y1 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    mid = y0 + max(1, (y1 - y0) // 2)
+    out = np.zeros_like(mask)
+    if suffix == "T":
+        out[y0:mid, x0:x1] = mask[y0:mid, x0:x1]
+        ny0, ny1 = y0, mid
+    else:
+        out[mid:y1, x0:x1] = mask[mid:y1, x0:x1]
+        ny0, ny1 = mid, y1
+    if not out.any():
+        return None
+    return {"mask": out, "bbox": (x0, ny0, x1, ny1)}
 
 
 def paint_view(screen: str) -> Optional[dict]:
@@ -419,6 +491,9 @@ def paint_view(screen: str) -> Optional[dict]:
 
     Field B mouths without their own pencil reuse the matching Field A paint
     (shifted), so Elite / dual-field goals still use Goal Area.
+
+    Top/Bottom ids (A2T / A2B …) prefer their own pencil; if missing, the
+    matching half of the parent center Goal Area paint is used.
     """
     keys = _paint_screen_keys(screen)
     if not keys:
@@ -429,7 +504,10 @@ def paint_view(screen: str) -> Optional[dict]:
             view = masks.get(key)
             if view:
                 return view
-    return _mirrored_paint_view(screen)
+    mirrored = _mirrored_paint_view(screen)
+    if mirrored:
+        return mirrored
+    return _tb_half_from_parent(screen)
 
 
 def contains(screen: str, x: float, y: float, radius=0.0, radius_x=None, radius_y=None):
@@ -443,12 +521,16 @@ def contains(screen: str, x: float, y: float, radius=0.0, radius_x=None, radius_
     if not view:
         # Distinguish "no paint stored" from "stored but empty".
         screens = (load_store().get("screens") or {})
-        keys = _paint_screen_keys(screen)
-        mirrored = _PAINT_MIRROR_B_FROM_A.get(
-            str(screen or "").strip().upper().rstrip("LR")
-        )
+        keys = list(_paint_screen_keys(screen))
+        body, suffix = _split_paint_suffix(screen)
+        mirrored = _PAINT_MIRROR_B_FROM_A.get(body)
         if mirrored:
-            keys = tuple(list(keys) + list(_paint_screen_keys(mirrored[0])))
+            keys.extend(_paint_screen_keys(f"{mirrored[0]}{suffix}"))
+        # T/B may score from parent center paint when A2T/A2B was never drawn.
+        if suffix in ("T", "B") and body:
+            keys.extend(_paint_screen_keys(body))
+            if mirrored:
+                keys.extend(_paint_screen_keys(mirrored[0]))
         if not any(key in screens for key in keys):
             return None
         return False
