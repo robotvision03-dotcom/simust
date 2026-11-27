@@ -20,10 +20,10 @@ object Prefs {
     const val ORIENTATION_PORTRAIT = "portrait"
 
     const val DEFAULT_PUBLIC_HOST = "https://my.simust.com"
-    const val DEFAULT_TEXT_ZOOM = 110
+    const val DEFAULT_TEXT_ZOOM = 100
     const val MIN_TEXT_ZOOM = 80
     const val MAX_TEXT_ZOOM = 180
-    const val APP_VERSION = "1.3.14"
+    const val APP_VERSION = "1.3.15"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -108,13 +108,13 @@ object Prefs {
     }
 
     private fun defaultTextZoom(context: Context): Int {
-        // Keep small phones (Galaxy A6 ~360dp) readable without pushing Field B off-screen.
+        // Small phones: prefer fit over magnification (frontend CSS handles hierarchy).
         val sw = context.resources.configuration.smallestScreenWidthDp
         return when {
-            sw >= 800 -> 112
-            sw >= 600 -> 108
-            sw >= 400 -> 100
-            else -> 92
+            sw >= 800 -> 108
+            sw >= 600 -> 104
+            sw >= 400 -> 96
+            else -> 88
         }
     }
 
