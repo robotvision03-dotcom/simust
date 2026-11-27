@@ -1157,6 +1157,39 @@ def require_active_booking_for_play(player_id: str, field: str = "A", now: Optio
 # ============================================================
 
 PROGRESSION = {
+    # COGFIT (was Elders) sits before Foundation. Focus=S0 … Move=S4 (C1–C5).
+    "L00-Elders": {
+        "display": "COGFIT",
+        "threshold_acc": 0,
+        "threshold_ae": 65,
+        "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
+            "S1.T1": [],
+            "S1.T2": [],
+            "S1.T3": [],
+            "S1.T4": [],
+            "S1.T5": [],
+            "S2.T1": [],
+            "S2.T2": [],
+            "S2.T3": [],
+            "S2.T4": [],
+            "S2.T5": [],
+            "S3.T1": [],
+            "S3.T2": [],
+            "S3.T3": [],
+            "S3.T4": [],
+            "S3.T5": [],
+            "S4.T1": [],
+            "S4.T2": [],
+            "S4.T3": [],
+            "S4.T4": [],
+            "S4.T5": [],
+        },
+    },
     "L00-Foundation": {
         "display": "Foundation",
         # SF-30N through SF-180N: AE-only unlock at 65%.
@@ -1256,6 +1289,11 @@ PROGRESSION = {
             "S3.T3": [],
             "S3.T4": [],
             "S3.T5": [],
+            "S4.T1": [],
+            "S4.T2": [],
+            "S4.T3": [],
+            "S4.T4": [],
+            "S4.T5": [],
         }
     },
     "L05-WorldClass": {
@@ -1263,6 +1301,11 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            "S0.T1": [],
+            "S0.T2": [],
+            "S0.T3": [],
+            "S0.T4": [],
+            "S0.T5": [],
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
@@ -1311,6 +1354,7 @@ _LEGACY_THEME_FOLDERS = {
     **{f"S1.T{n}": f"A-T{n}" for n in range(1, 6)},
     **{f"S2.T{n}": f"A1.T{n}" for n in range(1, 6)},
     **{f"S3.T{n}": f"A2.T{n}" for n in range(1, 6)},
+    **{f"S4.T{n}": f"S4-T{n}" for n in range(1, 6)},
 }
 
 def get_level_path(level_id: str) -> str:
@@ -1355,7 +1399,7 @@ def get_next_level(current_level_id: str) -> Optional[str]:
     series where the band has them). Passing the last set of a band opens
     the next band's first set (Entry S1.T5 → Activated S1.T1, Activated
     S2.T5 → High Performance S0.T1, High Performance S3.T5 → Elite S0.T1,
-    Elite S3.T5 → World Class S1.T1). World Class S3.T5 is the end.
+    Elite S4.T5 → World Class S0.T1). World Class S3.T5 is the end.
     """
     cid = simust_progress.normalize_level_id(current_level_id)
     try:
@@ -3284,6 +3328,23 @@ def _get_video_info(directory: str) -> dict:
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+@app.get("/docs/players-scenarios")
+@app.get("/docs/players_scenarios.html")
+async def players_scenarios_doc():
+    """Coach Docs: full Players formations (Entry → World Class) with media grids."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "docs",
+        "players_scenarios.html",
+    )
+    if not os.path.isfile(path):
+        return JSONResponse(
+            {"error": "players_scenarios.html missing — run tools/build_players_scenarios_doc.py"},
+            status_code=404,
+        )
+    return FileResponse(path, media_type="text/html; charset=utf-8")
+
 # ============================================================
 # Lifespan Management
 # ============================================================
@@ -3444,8 +3505,7 @@ def _foundation_subdirs_for_operator():
 def format_operator_component_label(level_id: str) -> str:
     """Operator display: Session → Component (S→C). Keep internal ids as S*.
 
-    Entry / Activated: S0→C1, S1→C2, S2→C3.
-    Other bands: S1/S2/S3.Tn → C1/C2/C3.Tn.
+    Entry / Activated / HP / Elite / World Class: S0→C1, S1→C2, …
     """
     cid = simust_progress.normalize_level_id(level_id)
     parts = str(cid or "").split("/")
@@ -3457,7 +3517,13 @@ def format_operator_component_label(level_id: str) -> str:
         return theme
     series = int(match.group(1))
     test_num = match.group(2)
-    if main in ("L01-Entry", "L02-Activated", "L03-HighPerformance"):
+    if main in (
+        "L01-Entry",
+        "L02-Activated",
+        "L03-HighPerformance",
+        "L04-Elite",
+        "L05-WorldClass",
+    ):
         component = series + 1
     else:
         component = series
@@ -3801,6 +3867,15 @@ async def start_realtime_playback(req: Request):
                 if not os.path.exists(base):
                     os.makedirs(base, exist_ok=True)
                 return base
+            # Elders Focus/Remember/… playlists are generated in the player — no asset pack.
+            if str(slot_level or "").startswith("L00-Elders") or re.search(
+                r"(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+                str(slot_level or ""),
+                re.I,
+            ):
+                launch = os.path.join(base, sub) if sub else base
+                os.makedirs(launch, exist_ok=True)
+                return launch
             launch = os.path.join(base, sub) if sub else base
             if os.path.isdir(launch):
                 return launch
@@ -3821,14 +3896,26 @@ async def start_realtime_playback(req: Request):
         if not levels_differ:
             level_path = get_level_path(level_id)
             launch_path = level_path
+            elders_level = str(level_id or "").startswith("L00-Elders") or bool(
+                re.search(
+                    r"(?<![A-Za-z])Elders(?![A-Za-z])|(?<![A-Za-z])COGFIT(?![A-Za-z])",
+                    str(level_id or ""),
+                    re.I,
+                )
+            )
             if subdirectory and level_id != "L00-Foundation":
                 launch_path = os.path.join(level_path, subdirectory)
                 if not os.path.isdir(launch_path):
-                    raise HTTPException(400, f"Subdirectory not found: {launch_path}")
+                    if elders_level:
+                        os.makedirs(launch_path, exist_ok=True)
+                    else:
+                        raise HTTPException(400, f"Subdirectory not found: {launch_path}")
             elif level_id == "L00-Foundation":
                 if not os.path.exists(level_path):
                     os.makedirs(level_path, exist_ok=True)
                 launch_path = level_path
+            elif elders_level:
+                os.makedirs(launch_path, exist_ok=True)
             if not os.path.isdir(launch_path):
                 parent = os.path.dirname(launch_path)
                 if os.path.isdir(parent) and re.search(r"L0[1-5]-", launch_path, re.I):
@@ -5779,6 +5866,116 @@ async def goal_lines_paint_save(req: Request):
     snap = goal_lines_status_snapshot()
     snap["paints"] = paints
     return {"status": "success", **snap}
+
+
+# ============================================================
+# SCREEN TOP / BOTTOM GOAL REGIONS (Elders Focus — A1T / A1B …)
+# ============================================================
+
+import simust_screen_goals  # noqa: E402
+
+
+def screen_goals_status_snapshot() -> dict:
+    """Top/Bottom goals use pencil paint (same store as Goal Area), not rectangles."""
+    try:
+        gl = goal_lines_status_snapshot()
+    except Exception:
+        gl = {}
+    paints = (gl.get("paints") or {}).get("screens") or {}
+    tb_ids = (
+        [f"A{n}{s}" for n in range(1, 7) for s in ("T", "B")]
+        + [f"B{n}{s}" for n in range(1, 7) for s in ("T", "B")]
+    )
+    painted = {sid: paints[sid] for sid in tb_ids if sid in paints}
+    return {
+        "version": 1,
+        "mode": "paint",
+        "regions": {},
+        "paints": {"screens": painted, "painted_count": len(painted)},
+        "saved_count": len(painted),
+        "order": {
+            "A": [f"A{n}{s}" for n in range(1, 7) for s in ("T", "B")],
+            "B": [f"B{n}{s}" for n in range(1, 7) for s in ("T", "B")],
+        },
+        "frame": gl.get("frame") or {},
+    }
+
+
+@app.get("/screen-goals/status")
+async def screen_goals_status():
+    if PUBLIC_MODE:
+        status = simust_remote.get_status() or {}
+        return status.get("screen_goals") or screen_goals_status_snapshot()
+    return screen_goals_status_snapshot()
+
+
+@app.post("/screen-goals/save")
+async def screen_goals_save(req: Request):
+    """Save Top/Bottom goal paint (A1T / A1B …) — same pencil store as Goal Area."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Screen goal save runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    screen = str((data or {}).get("screen") or (data or {}).get("region") or "").strip().upper()
+    strokes = (data or {}).get("strokes")
+    if not screen or not isinstance(strokes, list):
+        raise HTTPException(400, "screen (A1T/A1B/…) and strokes[] required")
+    if not re.match(r"^[AB][1-6][TB]$", screen):
+        raise HTTPException(400, "screen must be A1T / A1B … B6T / B6B")
+    try:
+        import simust_goal_paint as goal_paint
+
+        goal_paint.save_screen(screen, strokes)
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **screen_goals_status_snapshot()}
+
+
+@app.post("/screen-goals/clear")
+async def screen_goals_clear(req: Request):
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Screen goal clear runs on the training lab")
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    rid = str((data or {}).get("region") or (data or {}).get("screen") or "").strip().upper()
+    try:
+        import simust_goal_paint as goal_paint
+
+        if rid:
+            goal_paint.clear_screen(rid)
+        else:
+            for n in range(1, 7):
+                for side in ("T", "B"):
+                    goal_paint.clear_screen(f"A{n}{side}")
+                    goal_paint.clear_screen(f"B{n}{side}")
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **screen_goals_status_snapshot()}
+
+
+@app.post("/screen-goals/reset-defaults")
+async def screen_goals_reset_defaults(req: Request):
+    """Top/Bottom goals have no rectangle defaults — clear all T/B paint."""
+    if PUBLIC_MODE:
+        raise HTTPException(403, "Screen goal reset runs on the training lab")
+    try:
+        await req.json()
+    except Exception:
+        pass
+    try:
+        import simust_goal_paint as goal_paint
+
+        for n in range(1, 7):
+            for side in ("T", "B"):
+                goal_paint.clear_screen(f"A{n}{side}")
+                goal_paint.clear_screen(f"B{n}{side}")
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return {"status": "success", **screen_goals_status_snapshot()}
 
 
 @app.post("/goal-lines/paint/clear")

@@ -44,7 +44,7 @@ class ElitePlayersPlaylistTests(unittest.TestCase):
         )
         self.assertEqual(
             player._content_type_label("L04-Elite/S0.T1"),
-            "Players",
+            "Players 1",
         )
         self.assertEqual(
             player._content_type_label("L04-Elite/S1.T1"),
@@ -58,7 +58,7 @@ class ElitePlayersPlaylistTests(unittest.TestCase):
             {"test_num": 1, "actions_in_set": 10, "finish_balls": True},
             [],
         )
-        self.assertEqual(text.split("\n"), ["Players", "C1.T1", "10 Actions"])
+        self.assertEqual(text.split("\n"), ["Players 1", "C1.T1", "10 Actions"])
 
     def test_combined_decision_accepts_elite_players(self):
         decision = player._combined_play_decision(

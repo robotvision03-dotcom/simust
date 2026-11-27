@@ -117,8 +117,12 @@ def normalize_field(value) -> Optional[str]:
     return None
 
 
+# Paint-only goal mouths (Settings white goal A7 / B7) — not display cabinets.
+EXTRA_GOAL_SCREENS: Set[str] = {"A7", "B7"}
+
+
 def canonical_screen(raw) -> Optional[str]:
-    """Screen name A1–A6 or B1–B6. Old cabinet numbers still map to these names.
+    """Screen name A1–A6 or B1–B6 (or paint mouth A7/B7). Old cabinets map too.
 
     Side targets (A3R / B2L) map to the parent cabinet tile for display.
     """
@@ -127,11 +131,11 @@ def canonical_screen(raw) -> Optional[str]:
         body = text[:-1]
         if body[1:].isdigit():
             text = body
-    if text in FIELD_A_SCREENS or text in FIELD_B_SCREENS:
+    if text in FIELD_A_SCREENS or text in FIELD_B_SCREENS or text in EXTRA_GOAL_SCREENS:
         return text
     if len(text) >= 2 and text[0] in ("A", "B") and text[1:].isdigit():
         name = text[0] + str(int(text[1:]))
-        if name in FIELD_A_SCREENS or name in FIELD_B_SCREENS:
+        if name in FIELD_A_SCREENS or name in FIELD_B_SCREENS or name in EXTRA_GOAL_SCREENS:
             return name
     digits = "".join(ch for ch in text if ch.isdigit())
     if not digits:
@@ -152,8 +156,8 @@ def field_for_screens(screens: Sequence[str]) -> Optional[str]:
             names.append(name)
     if not names:
         return None
-    a = sum(1 for s in names if s in FIELD_A_SCREENS)
-    b = sum(1 for s in names if s in FIELD_B_SCREENS)
+    a = sum(1 for s in names if str(s).startswith("A"))
+    b = sum(1 for s in names if str(s).startswith("B"))
     if a and not b:
         return "A"
     if b and not a:

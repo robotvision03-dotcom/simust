@@ -115,12 +115,17 @@ def ensure_progress(user: Dict[str, Any]) -> Dict[str, Any]:
     progress.setdefault("session_credits", 0)
     progress.setdefault("challenge_results", {})
     progress.setdefault("granted_reservation_ids", [])
-    # Every account can start Foundation 30N. Later sets stay locked until a score or an admin unlock.
+    # Every account can start COGFIT Focus C1.T1 and Foundation 30N.
+    # Later sets stay locked until a score or an admin unlock.
     levels = list(progress.get("unlocked_levels") or [])
     playlists = list(progress.get("unlocked_playlists") or [])
     if "SF-30N" not in playlists:
         playlists.insert(0, "SF-30N")
         progress["unlocked_playlists"] = playlists
+    elders_focus_t1 = "L00-Elders/S0.T1"
+    if elders_focus_t1 not in levels:
+        levels.append(elders_focus_t1)
+        progress["unlocked_levels"] = levels
     if FOUNDATION_LEVEL not in levels:
         levels.append(FOUNDATION_LEVEL)
         progress["unlocked_levels"] = levels

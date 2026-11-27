@@ -308,6 +308,15 @@
   padding: 10px 12px;
   font-weight: 700;
 }
+.coach-guide-iframe {
+  display: block;
+  width: 100%;
+  min-height: 520px;
+  margin: 12px 0 8px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+}
 @media (max-width: 900px) {
   .coach-guide { flex-direction: column; min-height: auto; }
   .coach-guide-nav {

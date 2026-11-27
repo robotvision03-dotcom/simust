@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#06101f" />
     <title>SIMUST PLAY IT SMART · Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/static/coach_guide.css?v=20261120a" />
+    <link rel="stylesheet" href="/static/coach_guide.css?v=20261127a" />
     <style>
         .mesh-volume-wrap {
             border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
@@ -131,7 +131,8 @@
         .tab-button { background: transparent; color: #8190a5; border: none; border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.04em; }
         .tab-button.active { color: #fff; border-bottom-color: var(--gold); background: #276ce51a; }
         .tab-button:hover { color: #dce7f5; background: #276ce50d; }
-        .level-main-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; width: 100%; align-items: start; }
+        /* 7 bands: COGFIT … World Class (was 6 cols — World Class got clipped). */
+        .level-main-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; width: 100%; align-items: start; }
         .level-main-wrap { position: relative; min-width: 0; z-index: 1; }
         .level-main-wrap.open { z-index: 80; }
         .level-main-btn { width: 100%; height: 52px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; padding: 4px; font-weight: 800; font-size: 12px; letter-spacing: 0.02em; cursor: pointer; white-space: normal; line-height: 1.15; display: flex; align-items: center; justify-content: center; text-align: center; }
@@ -813,7 +814,7 @@
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/static/i18n.js?v=20260916a"></script>
-    <script src="/static/coach_guide.js?v=20261120b"></script>
+    <script src="/static/coach_guide.js?v=20261127a"></script>
 
     <script>
         // Replace all optional chaining (?.) with safe checks to avoid syntax errors
@@ -871,6 +872,9 @@
                 'goal-lines/preview': true,
                 'goal-lines/paint/save': true,
                 'goal-lines/paint/clear': true,
+                'screen-goals/save': true,
+                'screen-goals/clear': true,
+                'screen-goals/reset-defaults': true,
                 'goal-lines/sculpt/mesh': true,
                 'goal-lines/sculpt/save': true,
                 'goal-lines/sculpt/reload': true,
@@ -1168,8 +1172,7 @@
         };
 
         // Operator display: Session → Component (S→C).
-        // Entry / Activated / High Performance / Elite: S0→C1, S1→C2, …
-        // World Class keeps S#→C#.
+        // Entry / Activated / High Performance / Elite / World Class: S0→C1, S1→C2, …
         var formatComponentLabel = function(levelId, themeOrDisplay) {
             var id = String(levelId || '');
             var theme = String(themeOrDisplay || '');
@@ -1182,7 +1185,7 @@
             var series = parseInt(match[1], 10);
             var testNum = match[2];
             var component = series;
-            if (/L01-Entry|L02-Activated|L03-HighPerformance|L04-Elite/i.test(id)) {
+            if (/L01-Entry|L02-Activated|L03-HighPerformance|L04-Elite|L05-WorldClass/i.test(id)) {
                 component = series + 1;
             }
             return 'C' + component + '.T' + testNum;
@@ -1291,6 +1294,7 @@
             }
         };
         var LEVEL_MAIN_BUTTONS = [
+            { id: 'L00-Elders', label: 'COGFIT', bg: '#E8D5B7', fg: '#3b2f1e' },
             { id: 'L00-Foundation', label: 'Foundation', bg: '#7dffa8', fg: '#0c1c12' },
             { id: 'L01-Entry', label: 'Entry', bg: '#F1F3F5', fg: '#282c30' },
             { id: 'L02-Activated', label: 'Activated', bg: '#AFC3D5', fg: '#0c1624' },
@@ -1301,6 +1305,13 @@
         // Operator content folders: click set → reveal that component's 5 tests.
         // series = internal S# (Entry S0/S1; other bands S1/S2/S3).
         var BAND_CONTENT_SETS = {
+            'L00-Elders': [
+                { key: 'focus', series: 0, component: 1, label: 'Focus', blurb: 'C1.T1–T5 attention: color / smaller shape (Top/Bottom); A↔B field-wide' },
+                { key: 'remember', series: 1, component: 2, label: 'Remember', blurb: 'C2.T1–T5 memory: encode→blank→probe (location/color/shape/size)' },
+                { key: 'react', series: 2, component: 3, label: 'React', blurb: 'C3.T1–T5 reaction: flash, go/nogo, opposite, switch, conflict' },
+                { key: 'think', series: 3, component: 4, label: 'Think', blurb: 'C4.T1–T5 decision: odd-one-out, named rule, quantity, combo' },
+                { key: 'move', series: 4, component: 5, label: 'Move', blurb: 'C5.T1–T5 spatial: top/bottom, alternate, follow mark, far half' }
+            ],
             'L01-Entry': [
                 { key: 'players', series: 0, component: 1, label: 'Players', blurb: '4 lit screens; dual-goal AP/FAP (T1–T2 30% in order, T3–T5 50% random)' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Finish on the correct digit' }
@@ -1317,20 +1328,23 @@
                 { key: 'sum', series: 3, component: 4, label: 'Sum', blurb: 'Hit both numbers that add to the reference' }
             ],
             'L04-Elite': [
-                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Dual-field pass1; AP/FAP; pass-left/right from T3 (Elite only)' },
+                { key: 'players1', series: 0, component: 1, label: 'Players 1', group: 'players', groupLabel: 'Players', blurb: 'Dual-field pass1; AP/FAP; pass-left/right from T3 (Elite only)' },
+                { key: 'players2', series: 4, component: 5, label: 'Players 2', group: 'players', groupLabel: 'Players', blurb: 'Scripted dual-field 5×9; clockwise tests 2–5; a8–9 fixed posts on B; pass goals' },
                 { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'Combined-field number targets' },
                 { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out across the cabinet' },
                 { key: 'sum', series: 3, component: 4, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
             ],
             'L05-WorldClass': [
-                { key: 'numbers', series: 1, component: 1, label: 'Numbers', blurb: 'World Class number targets' },
-                { key: 'divergent', series: 2, component: 2, label: 'Divergent', blurb: 'Odd-one-out across the cabinet' },
-                { key: 'sum', series: 3, component: 3, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
+                { key: 'players', series: 0, component: 1, label: 'Players', blurb: 'Scripted dual-field videos; CrossBall L/R goals on matching sides; unique person #' },
+                { key: 'numbers', series: 1, component: 2, label: 'Numbers', blurb: 'World Class number targets' },
+                { key: 'divergent', series: 2, component: 3, label: 'Divergent', blurb: 'Odd-one-out across the cabinet' },
+                { key: 'sum', series: 3, component: 4, label: 'Sum', blurb: 'Two-goal sum on 12 screens' }
             ]
         };
         var mainLevelIdOf = function(levelId) {
             var id = String(levelId || '');
             if (!id) return '';
+            if (id.indexOf('Elders') !== -1 || id.indexOf('COGFIT') !== -1) return 'L00-Elders';
             if (id.indexOf('Foundation') !== -1) return 'L00-Foundation';
             return id.split('/')[0];
         };
@@ -1382,7 +1396,7 @@
             });
         };
         var contentSetItemsForMain = function(mainId, levels, unlockedLvls) {
-            return contentSetsForMain(mainId).map(function(setInfo) {
+            var leafItems = contentSetsForMain(mainId).map(function(setInfo) {
                 var tests = subLevelsForMain(mainId, levels, unlockedLvls, [], setInfo.series);
                 var unlockedCount = tests.filter(function(item) { return !item.locked; }).length;
                 return {
@@ -1395,9 +1409,64 @@
                     kind: 'set',
                     series: setInfo.series,
                     component: setInfo.component,
+                    group: setInfo.group || '',
+                    groupLabel: setInfo.groupLabel || '',
                     tests: tests
                 };
             }).filter(function(item) { return item.tests && item.tests.length > 0; });
+            // Collapse grouped leaves (e.g. Elite Players → Players 1 / Players 2).
+            var out = [];
+            var groups = {};
+            leafItems.forEach(function(item) {
+                if (!item.group) {
+                    out.push(item);
+                    return;
+                }
+                if (!groups[item.group]) {
+                    groups[item.group] = {
+                        value: item.group,
+                        label: item.groupLabel || item.group,
+                        title: item.groupLabel || item.group,
+                        meta: '2 packs',
+                        blurb: 'Players 1 (existing) and Players 2 (scripted dual-field)',
+                        locked: true,
+                        kind: 'group',
+                        children: []
+                    };
+                    out.push(groups[item.group]);
+                }
+                groups[item.group].children.push(item);
+            });
+            Object.keys(groups).forEach(function(gKey) {
+                var g = groups[gKey];
+                var unlockedKids = g.children.filter(function(c) { return !c.locked; }).length;
+                g.locked = g.children.length > 0 && unlockedKids === 0;
+                g.meta = g.children.length + ' packs';
+                g.blurb = g.children.map(function(c) { return c.title; }).join(' · ');
+            });
+            return out;
+        };
+        var findContentSetItem = function(items, key) {
+            var list = items || [];
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].value === key) return list[i];
+                var kids = list[i].children || [];
+                for (var j = 0; j < kids.length; j++) {
+                    if (kids[j].value === key) return kids[j];
+                }
+            }
+            return null;
+        };
+        var parentGroupForSet = function(items, setKey) {
+            var list = items || [];
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].kind !== 'group') continue;
+                var kids = list[i].children || [];
+                for (var j = 0; j < kids.length; j++) {
+                    if (kids[j].value === setKey) return list[i];
+                }
+            }
+            return null;
         };
 
         // =====================================================================
@@ -2206,18 +2275,17 @@
             var setOpenContentSet = openContentSetState[1];
             var shownMain = openMain;
             var contentSets = shownMain ? contentSetItemsForMain(shownMain, allLevels, unlockedLevels) : [];
-            var activeContentSet = null;
-            if (openContentSet && contentSets.length) {
-                for (var ci = 0; ci < contentSets.length; ci++) {
-                    if (contentSets[ci].value === openContentSet) {
-                        activeContentSet = contentSets[ci];
-                        break;
-                    }
-                }
-            }
+            var activeContentSet = openContentSet && contentSets.length
+                ? findContentSetItem(contentSets, openContentSet)
+                : null;
+            var activeParentGroup = activeContentSet && activeContentSet.kind === 'set'
+                ? parentGroupForSet(contentSets, activeContentSet.value)
+                : null;
             var subItems = [];
             if (shownMain === 'L00-Foundation') {
                 subItems = subLevelsForMain(shownMain, allLevels, unlockedLevels, unlockedPlaylists);
+            } else if (activeContentSet && activeContentSet.kind === 'group') {
+                subItems = activeContentSet.children || [];
             } else if (activeContentSet) {
                 subItems = activeContentSet.tests || [];
             } else if (contentSets.length) {
@@ -2396,7 +2464,8 @@
                             var active = (openMain || mainLevelIdOf(selectedLevel)) === btn.id;
                             var isOpen = shownMain === btn.id && visibleSubItems.length > 0;
                             var showingSets = isOpen && contentSets.length > 0 && !activeContentSet && shownMain === btn.id;
-                            var showingTests = isOpen && !!activeContentSet && shownMain === btn.id;
+                            var showingGroup = isOpen && !!activeContentSet && activeContentSet.kind === 'group' && shownMain === btn.id;
+                            var showingTests = isOpen && !!activeContentSet && activeContentSet.kind === 'set' && shownMain === btn.id;
                             return React.createElement('div', {
                                 key: btn.id,
                                 className: "level-main-wrap" + (isOpen ? " open" : "")
@@ -2431,21 +2500,32 @@
                                         borderColor: btn.fg
                                     }
                                 },
-                                    showingTests ?
+                                    (showingTests || showingGroup) ?
                                     React.createElement('button', {
                                         type: "button",
                                         className: "level-sub-back",
-                                        onClick: function() { setOpenContentSet(''); }
-                                    }, '← Content sets') : null,
+                                        onClick: function() {
+                                            if (showingTests && activeParentGroup) {
+                                                setOpenContentSet(activeParentGroup.value);
+                                            } else {
+                                                setOpenContentSet('');
+                                            }
+                                        }
+                                    }, showingTests && activeParentGroup
+                                        ? ('← ' + activeParentGroup.title)
+                                        : '← Content sets') : null,
                                     showingSets ?
                                     React.createElement('div', { className: "level-sub-heading" }, 'Choose content') : null,
+                                    showingGroup ?
+                                    React.createElement('div', { className: "level-sub-heading" },
+                                        activeContentSet.title + ' · choose pack') : null,
                                     showingTests ?
                                     React.createElement('div', { className: "level-sub-heading" },
                                         activeContentSet.title + ' · C' + activeContentSet.component + ' · 5 tests') : null,
                                     visibleSubItems.map(function(item) {
-                                        if (item.kind === 'set') {
+                                        if (item.kind === 'set' || item.kind === 'group') {
                                             return React.createElement('div', {
-                                                key: item.value + '-set',
+                                                key: item.value + '-' + item.kind,
                                                 className: "level-sub-row" + (item.locked ? " locked" : "")
                                             },
                                                 React.createElement('button', {
@@ -3564,8 +3644,8 @@
             var screens = screensState[0];
             var setScreens = screensState[1];
             var orderState = useState({
-                A: ['A1','A1L','A2','A2L','A2R','A3','A3L','A3R','A4','A4L','A4R','A5','A5L','A5R','A6','A6R'],
-                B: ['B1','B1L','B2','B2L','B2R','B3','B3L','B3R','B4','B4L','B4R','B5','B5L','B5R','B6','B6R']
+                A: ['A1','A1T','A1B','A1L','A2','A2T','A2B','A2L','A2R','A3','A3T','A3B','A3L','A3R','A4','A4T','A4B','A4L','A4R','A5','A5T','A5B','A5L','A5R','A6','A6T','A6B','A6R','A7'],
+                B: ['B1','B1T','B1B','B1L','B2','B2T','B2B','B2L','B2R','B3','B3T','B3B','B3L','B3R','B4','B4T','B4B','B4L','B4R','B5','B5T','B5B','B5L','B5R','B6','B6T','B6B','B6R','B7']
             });
             var order = orderState[0];
             var setOrder = orderState[1];
@@ -4035,7 +4115,7 @@
             return React.createElement('div', { className: 'panel p-5 mt-8' },
                 React.createElement('h3', { className: 'gold-accent font-bold mb-2' }, 'Goal Area and HIP Zone'),
                 React.createElement('p', { className: 'text-sm text-gray-400 mb-4' },
-                    'One camera image. The white pencil draws the goal area. The red pencil draws the HIP zone. The two lines stay separate.'),
+                    'One camera image. The white pencil draws each goal area (centers A1–A6, mouths A7/B7, sides L/R, and Top/Bottom A1T/A1B … for COGFIT Focus). The red pencil draws the HIP zone. The two lines stay separate.'),
                 React.createElement('div', { className: 'flex flex-wrap gap-2 mb-4' },
                     React.createElement('button', {
                         className: 'btn-primary',
@@ -4071,11 +4151,16 @@
                     React.createElement('span', { className: 'text-sm font-bold ml-2' }, 'Goal'),
                     fieldScreens.map(function(sid) {
                         var painted = !!((((paints || {})[sid] || {}).strokes) || []).length;
+                        var half = sid.slice(-1);
+                        var border = painted
+                            ? (half === 'T' ? '#38bdf8' : half === 'B' && sid.length === 3 ? '#fb923c' : '#22c55e')
+                            : null;
                         return React.createElement('button', {
                             key: sid,
                             className: selectedScreen === sid ? 'btn-primary' : 'refresh-btn',
-                            style: painted ? { borderColor: '#22c55e' } : null,
-                            onClick: function() { setSelectedScreen(sid); }
+                            style: border ? { borderColor: border } : null,
+                            onClick: function() { setSelectedScreen(sid); },
+                            title: half === 'T' ? 'Top goal (paint)' : (half === 'B' && sid.length === 3 ? 'Bottom goal (paint)' : sid)
                         }, sid);
                     })
                 ),

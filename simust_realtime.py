@@ -470,7 +470,47 @@ def _seed_side_goal_halves(goal_lines: dict) -> None:
             goal_lines[key] = {"p0": a, "p1": b}
 
 
+def _seed_tb_goal_halves(goal_lines: dict) -> None:
+    """Ensure A1T/A1B… cabinet aliases exist so Top/Bottom cues keep geometry.
+
+    Live hit-test uses pencil paint for T/B; these lines only anchor drawing /
+    fallbacks when paint is missing.
+    """
+    # New-name → cabinet (same as calibrate SCREEN_TO_CABINET centers).
+    centers = {
+        "A1": "12", "A2": "13", "A3": "14", "A4": "2", "A5": "3", "A6": "4",
+        "B1": "5", "B2": "6", "B3": "7", "B4": "9", "B5": "10", "B6": "11",
+    }
+    for body, cab in centers.items():
+        parent = goal_lines.get(body) or goal_lines.get(cab)
+        if not parent:
+            continue
+        for side in ("T", "B"):
+            for key in (f"{body}{side}", f"{cab}{side}"):
+                if key not in goal_lines:
+                    goal_lines[key] = {
+                        "p0": list(parent.get("p0") or []),
+                        "p1": list(parent.get("p1") or []),
+                    }
+
+
+def _seed_extra_goal_mouths(goal_lines: dict) -> None:
+    """A7 / B7 paint mouths: seed from physical goal lines (cabinet 1 / 8)."""
+    for key, src in (("A7", "1"), ("B7", "8")):
+        if key in goal_lines:
+            continue
+        parent = goal_lines.get(src)
+        if not parent:
+            continue
+        goal_lines[key] = {
+            "p0": list(parent.get("p0") or []),
+            "p1": list(parent.get("p1") or []),
+        }
+
+
 _seed_side_goal_halves(GOAL_LINES)
+_seed_tb_goal_halves(GOAL_LINES)
+_seed_extra_goal_mouths(GOAL_LINES)
 
 _BUILTIN_GOAL_LINES = {k: dict(v) for k, v in GOAL_LINES.items()}
 
@@ -567,13 +607,19 @@ def normalize_screen_id(screen):
 _NEW_SCREEN_TO_CABINET = {
     "A1": "12", "A2": "13", "A3": "14", "A4": "2", "A5": "3", "A6": "4",
     "B1": "5", "B2": "6", "B3": "7", "B4": "9", "B5": "10", "B6": "11",
+    # Paint-only goal mouths (Settings white goal A7 / B7).
+    "A7": "1", "B7": "8",
 }
 
 
 def _split_side_suffix(screen):
+    """Split A2R / A1T style ids → (body, suffix). Suffix is L/R/T/B or ''."""
     raw = str(screen or "").strip().upper()
-    if raw.endswith("L") or raw.endswith("R"):
-        return raw[:-1], raw[-1]
+    if len(raw) >= 2 and raw[-1] in ("L", "R", "T", "B"):
+        body = raw[:-1]
+        # Only treat as suffix when the body looks like A1 / B6 / 12.
+        if body and (body[0] in ("A", "B") or body.isdigit()):
+            return body, raw[-1]
     return raw, ""
 
 
@@ -581,6 +627,9 @@ def display_screen_id(screen):
     """Name to show. A1 stays A1. Old cabinet 12 stays 12."""
     body, suffix = _split_side_suffix(screen)
     if body in _NEW_SCREEN_TO_CABINET:
+        # Top/Bottom are not display mouths — show the parent screen.
+        if suffix in ("T", "B"):
+            return body
         return body + suffix
     return normalize_screen_id(screen)
 
@@ -590,11 +639,15 @@ def geometry_screen_id(screen):
 
     A1 is drawn on cabinet 12. A bare 12 is still cabinet 12. A bare 1
     stays the old goal-mouth line and is not treated as A1.
+    Top/Bottom (A1T / A1B) use the parent mouth line for cylinder fallback.
     """
     body, suffix = _split_side_suffix(screen)
     cabinet = _NEW_SCREEN_TO_CABINET.get(body)
     if cabinet:
-        return cabinet + suffix
+        if suffix in ("L", "R"):
+            return cabinet + suffix
+        # T/B share the parent cabinet geometry; hit-test uses goal paint.
+        return cabinet
     return normalize_screen_id(screen)
 
 
@@ -2471,9 +2524,10 @@ def in_finish_cylinder(
     A painted screen uses the saved pencil area. The ball's bounding box
     counts, so an edge can touch the paint while the center is still outside.
     Screens with no paint use the plain cylinder outline.
+
+    Elders Top/Bottom ids (A1T / A1B …) use the same pencil paint masks as
+    center mouths (``simust_goal_paint``), not rectangle zones.
     """
-    if p0 is None or p1 is None:
-        return False
     xy = _goal_hit_xy(point)
     if xy is None:
         return False
@@ -2482,6 +2536,41 @@ def in_finish_cylinder(
         ry = float(touch_radius if radius_y is None else radius_y)
     except (TypeError, ValueError):
         rx = ry = 0.0
+    sid = str(screen or "").strip().upper()
+    # Top/Bottom goals: paint only (no cylinder fallback).
+    if (
+        len(sid) >= 3
+        and sid[0] in ("A", "B")
+        and sid[-1] in ("T", "B")
+        and sid[1:-1].isdigit()
+    ):
+        try:
+            import simust_goal_paint as goal_paint
+
+            painted = goal_paint.contains(
+                sid, xy[0], xy[1], radius_x=rx, radius_y=ry
+            )
+            if painted is not None:
+                return bool(painted)
+        except Exception:
+            pass
+        return False
+    # A7 / B7: paint-first mouths (same scoring path as other goal areas).
+    if sid in ("A7", "B7"):
+        try:
+            import simust_goal_paint as goal_paint
+
+            painted = goal_paint.contains(
+                sid, xy[0], xy[1], radius_x=rx, radius_y=ry
+            )
+            if painted is not None:
+                return bool(painted)
+        except Exception:
+            pass
+        if p0 is None or p1 is None:
+            return False
+    if p0 is None or p1 is None:
+        return False
     try:
         import simust_goal_paint as goal_paint
 
@@ -3848,22 +3937,39 @@ class ArenaSimulator:
             self.last_player = self.PLAYER_HOME
             self.target_xy = self.BALL_HOME
             tracked = self.BALL_HOME
-        if getattr(self, "always_correct", False) and self.line_p0 and self.line_p1:
+        paint_aim = self._paint_aim_xy(screen)
+        if getattr(self, "always_correct", False) and (
+            (self.line_p0 and self.line_p1) or paint_aim is not None
+        ):
             # Mode 2 must score every action quickly and STAY in the goal.
             # Intended "correct" returns home after 0.7s and was burning the
             # clock (Foundation AE ~62%, finish-balls Wrongs → ~64%).
             # "finish" arrives and holds so advance_on_goal / Correct can fire.
+            # PRESS: the person track enters the goal paint (not the ball).
             self.intended = "finish"
             self.aim_name = "center"
-            self.target_xy = self._center_inside_goal(40.0)
+            # PRESS: player track walks into the goal paint (ball tags along).
+            # PASS/GOAL: ball track aims the paint / mouth center.
+            if paint_aim is not None:
+                self.target_xy = paint_aim
+            elif self.line_p0 and self.line_p1:
+                self.target_xy = self._center_inside_goal(40.0)
             self._ensure_finish_target_in_goal()
             tracked = self.target_xy
             # Keep AET high enough that PASS Correct AE clears unlock gates.
             self.finish_travel_s = 0.40
-        dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
-        now_in = in_goal_area(
-            tracked, self.line_p0, self.line_p1, depth, post_radius=post_radius_for(self.action)
-        )
+        if self.line_p0 and self.line_p1:
+            dist, proj_t, _, _ = compute_projection(tracked, self.line_p0, self.line_p1)
+            now_in = in_goal_area(
+                tracked,
+                self.line_p0,
+                self.line_p1,
+                depth,
+                post_radius=post_radius_for(self.action),
+                screen=screen,
+            )
+        else:
+            dist, proj_t, now_in = 0.0, 0.5, bool(paint_aim)
         print(
             f"  [SIM] {self.action} -> {self.screens} intended={self.intended.upper()} "
             f"border={name} target={tuple(round(v, 1) for v in tracked)} "
@@ -3947,10 +4053,43 @@ class ArenaSimulator:
     def _uses_physical_ball(self):
         return self.action in ("GOAL", "TARGET")
 
+    def _paint_aim_xy(self, screen=None):
+        """Center of Goal Area paint (Top/Bottom halves land in the painted half)."""
+        sid = str(screen or ((self.screens or [""])[0]) or "").strip()
+        if not sid:
+            return None
+        try:
+            import simust_goal_paint as goal_paint
+
+            view = goal_paint.paint_view(sid)
+        except Exception:
+            return None
+        if not view:
+            return None
+        bbox = view.get("bbox")
+        if not bbox or len(bbox) < 4:
+            return None
+        try:
+            x0, y0, x1, y1 = (
+                float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            )
+        except (TypeError, ValueError):
+            return None
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return ((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+
     def _center_inside_goal(self, dist=40.0):
-        """A point inside the drawn green circle, on the home side of its center."""
-        cx, cy = goal_circle_center(self.line_p0, self.line_p1)
+        """A point inside the drawn green circle, on the home side of its center.
+
+        Elders Focus Top/Bottom goals (A1T/A1B…) must aim at paint-half centers —
+        the full-mouth circle center often misses the painted T or B region.
+        """
         screen = self.screens[0] if self.screens else ""
+        paint_xy = self._paint_aim_xy(screen)
+        if paint_xy is not None:
+            return paint_xy
+        cx, cy = goal_circle_center(self.line_p0, self.line_p1)
         depth = arrival_depth_for(screen, self.action or "PASS") if screen else float(FINISH_DIST)
         radius = goal_circle_radius(depth, self.line_p0, self.line_p1)
         x0, y0 = float(self.line_p0[0]), float(self.line_p0[1])
@@ -3983,14 +4122,19 @@ class ArenaSimulator:
         """Nudge the finish target so inbound+turn can Correct inside goal paint.
 
         Correct no longer depends on the red HIP zone — only goal area.
+        Top/Bottom and Field B mouths prefer the paint bbox center first.
         """
         sid = str((self.screens or [""])[0] or "")
-        if not sid or not self.line_p0 or not self.line_p1:
+        if not sid:
             return
-        tx, ty = float(self.target_xy[0]), float(self.target_xy[1])
+        paint_xy = self._paint_aim_xy(sid)
+        if not self.line_p0 or not self.line_p1:
+            # Paint-only mouths (A7/B7, or missing line): still aim the paint.
+            if paint_xy is not None:
+                self.target_xy = paint_xy
+            return
         depth = arrival_depth_for(sid, self.action or "PASS")
         back = float(self.FINISH_BOUNCE_BACK_PX)
-        bounce = self._finish_bounce_xy((tx, ty), back)
 
         def _ok(pt, radius=12.0):
             return bool(
@@ -4005,10 +4149,24 @@ class ArenaSimulator:
                 )
             )
 
+        if paint_xy is not None:
+            bounce = self._finish_bounce_xy(paint_xy, back)
+            if _ok(paint_xy, 0.0) or _ok(paint_xy, 12.0):
+                # Prefer paint center even if bounce is slightly outside — Mode 2
+                # finishes on arrival inside paint for T/B halves.
+                self.target_xy = paint_xy
+                return
+
+        tx, ty = float(self.target_xy[0]), float(self.target_xy[1])
+        bounce = self._finish_bounce_xy((tx, ty), back)
+
         def _pick(radius):
             if _ok((tx, ty), radius) and _ok(bounce, radius):
                 return (tx, ty)
-            cx, cy = goal_circle_center(self.line_p0, self.line_p1)
+            if paint_xy is not None:
+                cx, cy = float(paint_xy[0]), float(paint_xy[1])
+            else:
+                cx, cy = goal_circle_center(self.line_p0, self.line_p1)
             best = None
             best_d = None
             for ang in range(0, 360, 5):
@@ -5729,20 +5887,38 @@ class SimustRealtimeCamera:
         action_u = (action or "").upper()
         # Union screens + keypoints so area 7 still gets a mouth line when the
         # QR lists it only under keypoints (common for PRESS / goal markers).
+        # Keep A1T / A1B ids intact so only that Top/Bottom paint lights.
         candidates = []
         for src in (screens or [], keypoints or []):
             for screen in src:
-                nid = display_screen_id(screen)
+                raw = str(screen or "").strip().upper()
+                body, suffix = _split_side_suffix(raw)
+                if suffix in ("T", "B") and body:
+                    nid = f"{body}{suffix}"
+                else:
+                    nid = display_screen_id(screen)
                 if nid and nid not in candidates:
                     candidates.append(nid)
         # PRESS may use QR keypoints instead of the software line — but still
         # draw software lines for goal-mouth screens (1/7/8) so area 7 is visible.
         use_keypoints_only = action_u == "PRESS" and keypoints
         for screen_str in candidates:
+            body, tb = _split_side_suffix(screen_str)
             geom = geometry_screen_id(screen_str)
             base = geom.rstrip("LR")
             side = geom[len(base):] if geom != base else ""
             if use_keypoints_only and base not in GOAL_MOUTH_SCREENS and geom not in GOAL_MOUTH_SCREENS:
+                continue
+            # Top/Bottom: keep the T/B key so paint_view(A1T) is used, not A1.
+            if tb in ("T", "B"):
+                if screen_str in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[screen_str]
+                elif geom in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[geom]
+                elif body in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[body]
+                elif base in GOAL_LINES:
+                    lines[screen_str] = GOAL_LINES[base]
                 continue
             if geom in GOAL_LINES:
                 lines[screen_str] = GOAL_LINES[geom]
@@ -5751,17 +5927,32 @@ class SimustRealtimeCamera:
                 lines[screen_str] = GOAL_LINES[base]
             elif base in GOAL_LINES:
                 lines[screen_str] = GOAL_LINES[base]
-        # GOAL / TARGET / PASS always need software lines for listed screens
-        if action_u in ("GOAL", "TARGET", "PASS"):
+        # GOAL / TARGET / PASS / COLOR always need software lines for listed screens
+        if action_u in ("GOAL", "TARGET", "PASS", "COLOR"):
             for screen_str in candidates:
+                body, tb = _split_side_suffix(screen_str)
                 geom = geometry_screen_id(screen_str)
                 base = geom.rstrip("LR")
-                if screen_str not in lines and geom in GOAL_LINES:
+                if screen_str in lines:
+                    continue
+                if tb in ("T", "B"):
+                    if screen_str in GOAL_LINES:
+                        lines[screen_str] = GOAL_LINES[screen_str]
+                    elif geom in GOAL_LINES:
+                        lines[screen_str] = GOAL_LINES[geom]
+                    elif body in GOAL_LINES:
+                        lines[screen_str] = GOAL_LINES[body]
+                    elif base in GOAL_LINES:
+                        lines[screen_str] = GOAL_LINES[base]
+                elif geom in GOAL_LINES:
                     lines[screen_str] = GOAL_LINES[geom]
-                elif screen_str not in lines and base in GOAL_LINES:
+                elif base in GOAL_LINES:
                     lines[screen_str] = GOAL_LINES[base]
         # Always expose mouth geometry when any mouth id is present
         for screen_str in candidates:
+            body, tb = _split_side_suffix(screen_str)
+            if tb in ("T", "B"):
+                continue  # never replace T/B paint keys with bare mouth lines
             geom = geometry_screen_id(screen_str)
             base = geom.rstrip("LR")
             if base in GOAL_MOUTH_SCREENS and base in GOAL_LINES:
@@ -7061,11 +7252,28 @@ class SimustRealtimeCamera:
                     if (finish_balls or manual_coach) and new_screens and not same_screens:
                         old_set = set(old_screens)
                         new_set = set(new_screens)
+
+                        def _goal_body(name):
+                            body, suf = _split_side_suffix(name)
+                            return body if suf else str(name)
+
+                        old_bodies = {_goal_body(s) for s in old_set}
+                        new_bodies = {_goal_body(s) for s in new_set}
+                        scored_bodies = {_goal_body(s) for s in scored}
+                        # Elders COLOR: A2T → A2B is the same screen, new half.
+                        # Treat parent-body swaps as soft so each screen keeps
+                        # its own Settings Goal Area paint (not a full wipe).
+                        tb_parent_soft = bool(
+                            old_screens
+                            and new_bodies
+                            and new_bodies.issubset(old_bodies | scored_bodies)
+                        )
                         if manual_coach or (
                             old_screens
                             and (
                                 old_set.issubset(new_set)
                                 or new_set.issubset(old_set | scored)
+                                or tb_parent_soft
                             )
                         ):
                             soft_multi_goal = True
@@ -7075,6 +7283,15 @@ class SimustRealtimeCamera:
                     ch._frame_sync_cue_raw = cue_raw
                     added = [s for s in new_screens if s not in set(old_screens)]
                     removed = set(old_screens) - set(new_screens)
+                    # Elders independent: the same Top/Bottom id may re-light after
+                    # a Correct (next color action on that screen alone).
+                    rearm = [s for s in new_screens if str(s) in scored]
+                    if rearm:
+                        scored = set(scored) - set(str(s) for s in rearm)
+                        ch._cylinder_scored_screens = scored
+                        for s in rearm:
+                            if s not in added:
+                                added.append(s)
                     lines = {
                         name: data
                         for name, data in (ch.active_goal_lines or {}).items()
