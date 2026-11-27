@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+    <meta name="theme-color" content="#06101f" />
     <title>Sign in · My SIMUST</title>
+    <script>
+      (function () {
+        try {
+          if (/\bapp=android\b/i.test(location.search) || /MySIMUSTAndroid/i.test(navigator.userAgent || '')) {
+            document.documentElement.classList.add('simust-android');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <style>
         /* ============================================================
            tailwindcss v4.2.1 (condensed) + SIMUST custom styles
@@ -2964,46 +2974,291 @@
         }
 
         @media (width <= 480px) {
+            html, body {
+                overflow-x: hidden;
+                max-width: 100vw;
+            }
+            .portal-login-intro,
+            .portal-role-section,
+            .portal-connection-note {
+                padding: 36px 14px;
+            }
+            .portal-login-intro h1 {
+                font-size: clamp(1.85rem, 9vw, 2.45rem);
+                line-height: 1.12;
+                letter-spacing: -0.03em;
+            }
+            .portal-role-heading h2,
+            .portal-connection-note h2 {
+                font-size: clamp(1.55rem, 7.5vw, 2.1rem);
+                line-height: 1.15;
+            }
+            .portal-login-header {
+                height: 64px;
+            }
+            .portal-login-header .portal-brand {
+                padding: 0 12px;
+            }
+            .portal-login-header .portal-brand strong {
+                font-size: 0.95rem;
+            }
+            .portal-back {
+                margin-inline-end: 12px;
+                font-size: 0.78rem;
+            }
+            .portal-role-grid article {
+                min-height: 200px;
+                padding: 20px 16px;
+            }
+            .portal-role-grid h3 {
+                margin-top: 18px;
+                font-size: 1.35rem;
+            }
+            .portal-login-footer {
+                padding: 18px 14px;
+                gap: 10px;
+            }
+            .portal-shell {
+                grid-template-rows: 64px 1fr;
+            }
+            .portal-topbar {
+                height: 64px;
+                padding-inline: 0;
+            }
+            .portal-brand {
+                padding: 0 12px;
+            }
+            .portal-brand strong {
+                font-size: 0.95rem;
+            }
+            .portal-profile {
+                padding: 0 12px;
+            }
+            .portal-content {
+                padding: 18px 12px 88px;
+            }
+            .portal-welcome {
+                gap: 14px;
+            }
+            .portal-welcome h1 {
+                font-size: clamp(1.7rem, 8vw, 2.35rem);
+                line-height: 1.12;
+            }
+            .portal-welcome p,
+            .portal-review {
+                font-size: 0.92rem;
+            }
+            .portal-level-card {
+                gap: 18px;
+                margin-top: 22px;
+                padding: 18px 14px;
+            }
+            .level-progress-labels b {
+                font-size: 1.55rem;
+            }
+            .level-progress-track {
+                height: 8px;
+                margin: 10px 0;
+            }
+            .level-progress-scale {
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+                font-size: 0.42rem;
+            }
+            .level-progress-scale > :nth-child(3),
+            .level-progress-scale > :nth-child(4),
+            .level-progress-scale > :nth-child(5),
+            .level-progress-scale > :nth-child(6) {
+                display: none;
+            }
+            .portal-metrics,
+            .portal-sessions,
+            .portal-action-grid,
+            .portal-parent-note {
+                margin-top: 36px;
+            }
+            .portal-metric-grid article,
+            .portal-metric-grid article:last-child {
+                min-height: 140px;
+                padding: 16px 14px;
+            }
+            .portal-focus-card,
+            .portal-retest-card {
+                padding: 20px 14px;
+            }
+            .portal-focus-card h2 {
+                font-size: clamp(1.45rem, 7vw, 2rem);
+            }
+            .portal-action-grid>article {
+                min-height: 260px;
+                padding: 20px 14px;
+            }
+            .portal-parent-note {
+                padding: 28px 14px;
+            }
+            .portal-parent-note blockquote {
+                font-size: clamp(1.35rem, 6.5vw, 1.85rem);
+            }
+            .mobile-portal-nav {
+                padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+                gap: 6px;
+            }
+            .mobile-portal-nav button {
+                min-height: 44px;
+                font-size: 0.72rem;
+                padding: 8px 6px;
+            }
+            .auth-container {
+                padding: 16px 12px;
+            }
+            .auth-container h1,
+            .auth-container h2 {
+                font-size: clamp(1.4rem, 6.5vw, 1.85rem);
+            }
+            .auth-container input,
+            .auth-container select,
+            .auth-container button {
+                min-height: 44px;
+                font-size: 16px; /* avoid iOS/Android input zoom */
+            }
+            .dashboard-view-switcher {
+                gap: 6px;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .dashboard-view-switcher button {
+                flex: 0 0 auto;
+                min-height: 40px;
+                font-size: 0.72rem;
+                padding: 8px 10px;
+            }
             .ring-metrics-container {
                 grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+            .ring-metric {
+                padding: 8px 4px;
+            }
+            .ring-chart-wrapper canvas {
+                max-height: 58px;
+                max-width: 58px;
+            }
+            .ring-metric .value {
+                font-size: 13px;
             }
             .player-results-grid {
                 grid-template-columns: 1fr;
             }
             .player-results-main {
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
             }
             .player-results-grid article {
-                padding: 8px 10px;
-                min-height: 60px;
+                padding: 8px 8px;
+                min-height: 56px;
             }
             .player-results-grid article strong {
-                font-size: .85rem;
+                font-size: .8rem;
             }
             .player-results-grid article strong .highlight-big {
-                font-size: 1rem;
+                font-size: .95rem;
                 padding: 0 4px;
             }
             .player-results-grid article small {
-                font-size: .38rem;
+                font-size: .36rem;
             }
             .player-results-grid article span {
-                font-size: .42rem;
+                font-size: .4rem;
+            }
+            .player-results-grid article.aep-fac-col {
+                flex-direction: column;
+                gap: 10px;
+            }
+            .player-results-grid .aep-fac-block + .aep-fac-block {
+                border-inline-start: 0;
+                border-top: 1px solid var(--line);
+                padding-inline-start: 0;
+                padding-top: 10px;
+            }
+            .technical-coach-section {
+                padding: 14px 12px;
+                gap: 12px;
+            }
+            .technical-coach-section .coach-avatar {
+                flex: 0 0 56px;
+                width: 56px;
+                height: 56px;
+            }
+            .technical-coach-section .coach-message .coach-advice-text,
+            .coach-advice-card .advice-text {
+                font-size: 0.95rem;
+            }
+            .session-row {
+                min-width: 520px;
             }
             .manager-team-row {
-                font-size: .55rem;
-                min-width: 480px;
+                font-size: .5rem;
+                min-width: 420px;
                 padding: 0 4px;
             }
             .manager-team-row>* {
                 padding: 4px 2px;
             }
-            .level-progress-scale {
+            .manager-access {
+                padding: 20px 12px;
+            }
+            .res-cal-layout,
+            .res-day-strip,
+            .res-slot-grid {
+                gap: 8px;
+            }
+            .res-day-chip {
+                min-width: 52px;
+                padding: 8px 6px;
+            }
+            .res-day-chip .res-day-num {
+                font-size: 1.1rem;
+            }
+        }
+
+        /* Android WebView (My SIMUST app) — tighter fit on small phones */
+        html.simust-android {
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
+        }
+        html.simust-android body {
+            overscroll-behavior-y: contain;
+        }
+        html.simust-android .portal-content,
+        html.simust-android .portal-login-intro,
+        html.simust-android .auth-container {
+            padding-left: max(12px, env(safe-area-inset-left, 0px));
+            padding-right: max(12px, env(safe-area-inset-right, 0px));
+        }
+        @media (width <= 400px) {
+            html.simust-android .portal-welcome h1,
+            html.simust-android .portal-login-intro h1 {
+                font-size: clamp(1.55rem, 8.5vw, 2.05rem);
+            }
+            html.simust-android .portal-content {
+                padding-top: 14px;
+                padding-bottom: 96px;
+            }
+            html.simust-android .portal-metric-grid article,
+            html.simust-android .portal-metric-grid article:last-child {
+                min-height: 120px;
+            }
+            html.simust-android .portal-action-grid>article {
+                min-height: 220px;
+            }
+            html.simust-android .player-results-main {
+                grid-template-columns: 1fr;
+            }
+            html.simust-android .ring-metrics-container {
                 grid-template-columns: 1fr 1fr;
             }
-            .level-progress-scale > :nth-child(3),
-            .level-progress-scale > :nth-child(4) {
-                display: none;
+            html.simust-android .dashboard-view-switcher button span {
+                font-size: 0.68rem;
             }
         }
 
