@@ -109,11 +109,9 @@ class ElitePlayersPlaylistTests(unittest.TestCase):
             if row.get("aep_dual_pass"):
                 self.assertEqual(len(goals), 2)
                 self.assertFalse(row.get("require_all_goals"))
-                goal_names = {_basename(images[sid]) for sid in goals}
-                self.assertIn("pass1.png", goal_names)
-                self.assertTrue(
-                    "pass-copy.png" in goal_names or "pass2.png" in goal_names
-                )
+                goal_names = {_basename(images[sid]).lower() for sid in goals}
+                for name in goal_names:
+                    self.assertTrue(name.startswith("teammate-pl-"), name)
                 halves = {
                     player._activated_s0_side_half(
                         int("".join(ch for ch in sid if ch.isdigit()) or 0)
@@ -124,9 +122,17 @@ class ElitePlayersPlaylistTests(unittest.TestCase):
             else:
                 self.assertEqual(len(goals), 1)
                 self.assertTrue(row.get("require_all_goals"))
-                self.assertEqual(_basename(images[goals[0]]), "pass1.png")
+                gname = _basename(images[goals[0]]).lower()
+                self.assertTrue(gname.startswith("teammate-pl-") and "-02-" in gname)
                 self.assertEqual(len(images), 6)
                 self.assertFalse(row.get("side_goals"))
+            for path in images.values():
+                self.assertTrue(
+                    os.path.normcase(path).startswith(
+                        os.path.normcase(player.PLAYERS_IMAGE_WAREHOUSE_ROOT)
+                    ),
+                    path,
+                )
 
     def test_image_counts_t1_6_t2_8_t3_to_t5_12(self):
         for series, expect in ((1, 6), (2, 8), (3, 12), (4, 12), (5, 12)):

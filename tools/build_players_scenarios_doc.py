@@ -219,10 +219,10 @@ where builders use unseeded random.</p>
     # --- Entry catalog + formations ---
     parts.append('<div class="section" id="entry"><h2>Entry Players (C1)</h2>')
     parts.append(
-        "<p>Images from <code>static/players/Players-Images</code>. "
-        "Goals = rebound teammate stills. Distractors = neutral opponents "
-        "(+ teammate from T3). Unique person # per action. 4 lit screens; "
-        "AP dual-goal uses two rebound people. Formations below: each "
+        "<p>Images from <code>static/Players-Images</code>. "
+        "Goals = Teammate-PL-*-02-B (Pass and Rebound). AP second = another "
+        "Teammate-PL. Distractors = opponents (+ teammate from T3). Unique "
+        "person # per action. 4 lit screens. Formations below: each "
         "operator sub-level C1.T1–T5 (5 in-set tests × 10 actions).</p>"
     )
     cat = p._players_warehouse_catalog()
@@ -263,9 +263,10 @@ where builders use unseeded random.</p>
     # --- Activated ---
     parts.append(
         '<div class="section" id="activated"><h2>Activated Players (C1)</h2>'
-        "<p>Stills from <code>static/players/Activated</code>. "
-        "5 lit screens; center passes only (no pass-left/right). "
-        "C1.T1–T2: 30% AP; C1.T3–T5: 50% AP. Field B mirrors Field A.</p>"
+        "<p>Stills from <code>static/Players-Images</code> warehouse "
+        "(not <code>static/players/Activated</code>). "
+        "5 lit screens; center goals = Teammate-PL-*-02-B; AP second = another "
+        "Teammate-PL. No pass-left/right. C1.T1–T2: 30% AP; C1.T3–T5: 50% AP.</p>"
     )
     for series in range(1, 6):
         on_ms, gap_ms = p._entry_series_timing_ms(series)
@@ -282,9 +283,9 @@ where builders use unseeded random.</p>
     # --- High Performance ---
     parts.append(
         '<div class="section" id="hp"><h2>High Performance Players (C1)</h2>'
-        "<p>Stills from <code>static/players/high_performance</code>. "
-        "Elite-style passes + offside traps + AP (never same action). "
-        "Field B mirrors Field A. 10 actions × 5 in-set tests per sub-level.</p>"
+        "<p>Stills from <code>static/Players-Images</code>. "
+        "Goals = Teammate-PL-*-02-B; AP second = Teammate-PL; traps = OffSide-Trap "
+        "+ posts at warehouse root. Field B mirrors Field A.</p>"
     )
     for series in range(1, 6):
         on_ms, gap_ms = p._entry_series_timing_ms(series)
@@ -301,9 +302,10 @@ where builders use unseeded random.</p>
     # --- Elite Players 1 ---
     parts.append(
         '<div class="section" id="elite1"><h2>Elite Players 1 (C1 / S0)</h2>'
-        "<p>Dual-field pack from <code>static/players/Elite</code> "
-        "(pass1 / AP / pass-left-right from T3). Lit count grows with "
-        "sub-level (3→4→6 per field). Not the scripted Players 2 pack.</p>"
+        "<p>Dual-field pack from <code>static/Players-Images</code> "
+        "(Teammate-PL-*-02-B / AP Teammate-PL / Crossball L-R from T3 / "
+        "SIMUST-ASking-Ball). Lit count grows with sub-level (3→4→6 per field). "
+        "Not the scripted Players 2 pack.</p>"
     )
     for series in range(1, 6):
         on_ms, gap_ms = p._entry_series_timing_ms(series)

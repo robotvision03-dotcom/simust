@@ -500,10 +500,10 @@ ENTRY_S0_IMAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "static", "players", "Entry"
 )
 # Shared still warehouse (Entry/Activated/HP/Elite). World Class uses videos.
+# Lives at static/Players-Images (not under static/players/).
 PLAYERS_IMAGE_WAREHOUSE_ROOT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "static",
-    "players",
     "Players-Images",
 )
 PLAYERS_IMAGE_WAREHOUSE_FOLDERS = {
@@ -513,7 +513,10 @@ PLAYERS_IMAGE_WAREHOUSE_FOLDERS = {
     "defending": "Players-Defending",
     "offside": "Players-OffSide-Trap",
     "shooting": "Players-shooting the ball",
+    "running": "Players-Running-Left-Or-Right",
 }
+PLAYERS_WAREHOUSE_LEFT_POST = "left_post.jpeg"
+PLAYERS_WAREHOUSE_RIGHT_POST = "right_post.jpeg"
 PLAYERS_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 ENTRY_S0_PASS_NAME = "pass.png"
 ENTRY_S0_ACTIONS_PER_TEST = 10
@@ -3744,8 +3747,34 @@ def _players_warehouse_list(folder_key: str) -> List[str]:
     return out
 
 
+def _players_warehouse_post_paths() -> Dict[str, str]:
+    """left_post / right_post stills at the warehouse root."""
+    root = PLAYERS_IMAGE_WAREHOUSE_ROOT
+    out = {}
+    for key, name in (
+        ("left_post", PLAYERS_WAREHOUSE_LEFT_POST),
+        ("right_post", PLAYERS_WAREHOUSE_RIGHT_POST),
+    ):
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            out[key] = path
+        else:
+            for alt in (name.replace(".jpeg", ".jpg"), name.replace(".jpeg", ".png")):
+                cand = os.path.join(root, alt)
+                if os.path.isfile(cand):
+                    out[key] = cand
+                    break
+    return out
+
+
 def _players_warehouse_catalog() -> Dict[str, List[Tuple[str, int]]]:
-    """Role → [(abspath, person_id)] from Players-Images warehouse."""
+    """Role → [(abspath, person_id)] from static/Players-Images warehouse.
+
+    pass / rebound = Teammate-PL-*-02-B (center goals; replaces pass.png).
+    pass_copy = any Teammate-PL in Pass-and-Rebound (AP second goal).
+    asking = SIMUST-ASking-Ball (replaces pass3).
+    cross_left/right = Crossball teammate stills (replaces pass-left/right).
+    """
 
     def _pool(paths: List[str], pred) -> List[Tuple[str, int]]:
         items = []
@@ -3763,12 +3792,19 @@ def _players_warehouse_catalog() -> Dict[str, List[Tuple[str, int]]]:
     rebound = _players_warehouse_list("rebound")
     cross = _players_warehouse_list("crossball")
     defending = _players_warehouse_list("defending")
+    offside = _players_warehouse_list("offside")
+    pass_pool = _pool(
+        rebound,
+        lambda n: n.startswith("teammate-pl-") and "-02-" in n,
+    )
+    pass_copy_pool = _pool(rebound, lambda n: n.startswith("teammate-pl-"))
     return {
-        # Center pass replacement: teammate rebound (hit screen / return).
-        "rebound": _pool(
-            rebound,
-            lambda n: n.startswith("teammate-pl-") and ("-02-" in n or "-05-" in n),
-        ),
+        # Center goals (old pass.png).
+        "pass": pass_pool,
+        "rebound": pass_pool,
+        # AP second goal / alternate Teammate-PL (old pass-copy.png).
+        "pass_copy": pass_copy_pool,
+        # Alternate center style (old pass3.png).
         "asking": _pool(rebound, lambda n: "asking" in n),
         "cross_left": _pool(
             cross, lambda n: "left" in n and ("cross" in n or "crossball" in n)
@@ -3776,14 +3812,29 @@ def _players_warehouse_catalog() -> Dict[str, List[Tuple[str, int]]]:
         "cross_right": _pool(
             cross, lambda n: "right" in n and ("cross" in n or "crossball" in n)
         ),
+        # Neutral distractors (never goals).
         "teammate": _pool(
             neutral,
-            lambda n: n.startswith("teammate-pl-") and n.count("-") <= 3,
+            lambda n: (
+                n.startswith("teammate-pl-")
+                and "-02-" not in n
+                and "-05-" not in n
+            ),
         ),
         "opponent": _pool(neutral, lambda n: n.startswith("opponent-pl-")),
-        "defender": _pool(
-            defending + neutral,
-            lambda n: "defending" in n,
+        "defender": _pool(defending, lambda n: "defending" in n),
+        # HP offside traps.
+        "offside_left": _pool(
+            offside,
+            lambda n: "offside" in n and "right" not in n,
+        ),
+        "offside_right": _pool(
+            offside, lambda n: "offside" in n and "right" in n
+        ),
+        # Offside trap goal seat historically used Teammate-PL-*-05-B.
+        "trap_teammate": _pool(
+            rebound,
+            lambda n: n.startswith("teammate-pl-") and "-05-" in n,
         ),
     }
 
@@ -3805,18 +3856,18 @@ def _players_warehouse_pick(
 
 
 def _entry_s0_goal_role_for_arena(arena: int, side: str = "") -> str:
-    """Center pass → rebound; L/R sided pass → crossball left/right."""
+    """Center pass → Teammate-PL-*-02; L/R sided pass → crossball left/right."""
     side_u = str(side or "").upper()[:1]
     if side_u == "L":
         return "cross_left"
     if side_u == "R":
         return "cross_right"
     half = _activated_s0_side_half(arena)
-    # Entry center-pass style stays rebound; sided halves still allow crossball
+    # Center-pass style stays pass (*-02); sided halves allow crossball
     # when an explicit L/R pass action is requested via side=.
     if half in ("L", "R") and side_u:
         return "cross_left" if half == "L" else "cross_right"
-    return "rebound"
+    return "pass"
 
 
 def _entry_s0_pick_field_media(
@@ -3829,7 +3880,7 @@ def _entry_s0_pick_field_media(
     rng: random.Random,
     side: str = "",
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
-    """Pick rebound/cross goals + unique distractors for one field action."""
+    """Pick warehouse goals + unique distractors for one field action."""
     series = max(1, min(5, int(series_num or 1)))
     want = max(1, min(6, int(lit_count or 1)))
     # Choose goal seat first so L/R crossball can match the mouth if sided.
@@ -3845,16 +3896,17 @@ def _entry_s0_pick_field_media(
     goal_arena = int(rng.choice(pass_pool))
     goal_role = _entry_s0_goal_role_for_arena(goal_arena, side_u)
     goal_pick = _players_warehouse_pick(catalog, goal_role, used_people, rng)
-    if not goal_pick and goal_role != "rebound":
-        goal_pick = _players_warehouse_pick(catalog, "rebound", used_people, rng)
+    if not goal_pick and goal_role != "pass":
+        goal_pick = _players_warehouse_pick(catalog, "pass", used_people, rng)
     if not goal_pick:
         return None, None, []
     pass_path = goal_pick[0]
     copy_path = None
     if dual_ap:
-        # Second AP goal: another rebound/cross person (never same tag #).
-        copy_role = "rebound"
-        copy_pick = _players_warehouse_pick(catalog, copy_role, used_people, rng)
+        # Second AP goal: another Teammate-PL person (never same tag #).
+        copy_pick = _players_warehouse_pick(catalog, "pass_copy", used_people, rng)
+        if not copy_pick:
+            copy_pick = _players_warehouse_pick(catalog, "pass", used_people, rng)
         if not copy_pick:
             return None, None, []
         copy_path = copy_pick[0]
@@ -3864,19 +3916,19 @@ def _entry_s0_pick_field_media(
     roles = ["opponent"] * need
     if series >= 3 and need >= 2:
         roles[0] = "teammate"
+    # Mix defenders into denser walls (Activated/HP/Elite).
+    if need >= 4:
+        roles[1] = "defender"
     rng.shuffle(roles)
     for role in roles:
         picked = _players_warehouse_pick(catalog, role, used_people, rng)
         if not picked and role != "opponent":
             picked = _players_warehouse_pick(catalog, "opponent", used_people, rng)
         if not picked:
-            # Last resort: defender stills (never a goal).
             picked = _players_warehouse_pick(catalog, "defender", used_people, rng)
         if not picked:
             return None, None, []
         distractors.append(picked[0])
-    # Stash preferred goal arena on the path object via parallel return — callers
-    # re-seat via _players_screen_assignment; pass preferred arena hint as None.
     return pass_path, copy_path, distractors
 
 
@@ -5492,39 +5544,23 @@ def _activated_s0_ap_plan(actions_per_test: int, series_num: int = 1) -> List[bo
 
 
 def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
-    """Activated S0.T1–T5 Players (operator C1.T1–T5).
+    """Activated S0.T1–T5 Players from static/Players-Images warehouse.
 
-    Always 5 lit screens (any of 1–6). Center passes only — no pass-left/right
-    here (those belong on Elite). C1.T1–T2: 30% dual-goal AP in order;
-    C1.T3–T5: 50% AP shuffled. AP = pass + pass-copy on opposite halves.
+    Always 5 lit screens (any of 1–6). Center goals only — Teammate-PL-*-02-B
+    (no pass-left/right here; those belong on Elite). AP second goal uses another
+    Teammate-PL from Pass-and-Rebound. Unique person # per action.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
     series = max(1, min(5, int(series_num or 1)))
-    center_passes = _activated_s0_existing(ACTIVATED_S0_PASS_CENTER)
-    copy_paths = _activated_s0_existing([ACTIVATED_S0_PASS_COPY])
-    opponents = _activated_s0_existing(ACTIVATED_S0_OPPONENTS)
-    teammate = _activated_s0_existing([ACTIVATED_S0_TEAMMATE])
-    if len(opponents) < 2:
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("pass") or not catalog.get("opponent"):
         logger.error(
-            "Activated S0 Players missing opponents under %s",
-            ACTIVATED_S0_IMAGE_DIR,
+            "Activated S0 Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    if not copy_paths:
-        logger.error(
-            "Activated S0 Players missing pass-copy under %s",
-            ACTIVATED_S0_IMAGE_DIR,
-        )
-        return []
-    if not center_passes:
-        logger.error(
-            "Activated S0 missing center pass images in %s",
-            ACTIVATED_S0_IMAGE_DIR,
-        )
-        return []
-    distractors = list(opponents) + list(teammate)
     actions_per_test = int(ACTIVATED_S0_ACTIONS_PER_TEST)
     lit_count = int(PLAYERS_LIT_SCREENS_ACTIVATED)
     on_ms, gap_ms = _entry_series_timing_ms(series)
@@ -5536,12 +5572,32 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
             images = {}
             field_screens = {}
             labels = []
+            person_ids = {}
+            used_people = set()
+            rng = random.Random(
+                54000
+                + series * 1000
+                + test_num * 100
+                + action_in_set * 10
+                + (1 if use_ap else 0)
+            )
             for fid in active:
-                pass_path = random.choice(center_passes)
+                pass_path, copy_path, distractors = _entry_s0_pick_field_media(
+                    catalog,
+                    series_num=series,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
+                    used_people=used_people,
+                    rng=rng,
+                )
+                if not pass_path or not distractors:
+                    continue
+                if use_ap and not copy_path:
+                    continue
                 assignment, goal_screen, copy_screen = _players_screen_assignment(
                     pass_path,
-                    copy_paths[0] if use_ap else "",
-                    distractors,
+                    copy_path if use_ap else "",
+                    list(distractors),
                     lit_count=lit_count,
                     dual_ap=use_ap,
                 )
@@ -5551,8 +5607,12 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                     continue
                 for screen, path in assignment.items():
                     sid = _hw_screen_for_field(fid, (screen, screen))
-                    if sid is not None:
-                        images[sid] = path
+                    if sid is None:
+                        continue
+                    images[sid] = path
+                    pid = _players_media_person_id(path)
+                    if pid is not None:
+                        person_ids[sid] = pid
                 goal_sid = _hw_screen_for_field(fid, (goal_screen, goal_screen))
                 if goal_sid is None:
                     continue
@@ -5595,6 +5655,8 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
                 "side_goals": False,
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "person_ids": dict(person_ids),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -5613,7 +5675,7 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
             })
     ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
     logger.info(
-        "Activated C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s)",
+        "Activated C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, lit=%s, warehouse)",
         series,
         len(playlist),
         ap_n,
@@ -5624,33 +5686,98 @@ def _build_activated_s0_playlist(series_num: int, active_fields) -> List[dict]:
 
 
 def _hp_players_image_paths(names) -> Dict[str, str]:
+    """Legacy helper: resolve names under the shared Players-Images warehouse."""
     paths = {}
+    posts = _players_warehouse_post_paths()
+    catalog = _players_warehouse_catalog()
+    role_first = {
+        HP_PLAYERS_PASS: "pass",
+        HP_PLAYERS_PASS_COPY: "pass_copy",
+        HP_PLAYERS_TEAMMATE: "teammate",
+        HP_PLAYERS_CROSS_RIGHT: "offside_right",
+        HP_PLAYERS_CROSS_LEFT: "offside_left",
+        HP_PLAYERS_TRAP_TEAMMATE: "trap_teammate",
+        HP_PLAYERS_DEFEND_08: "defender",
+        HP_PLAYERS_DEFEND_07: "defender",
+    }
     for name in names or []:
-        path = os.path.join(HP_PLAYERS_IMAGE_DIR, name)
-        if not os.path.isfile(path):
-            logger.error("High Performance Players image missing: %s", path)
+        if name in (HP_PLAYERS_LEFT_POST, PLAYERS_WAREHOUSE_LEFT_POST):
+            path = posts.get("left_post")
+        elif name in (HP_PLAYERS_RIGHT_POST, PLAYERS_WAREHOUSE_RIGHT_POST):
+            path = posts.get("right_post")
+        elif name in role_first:
+            pool = catalog.get(role_first[name]) or []
+            path = pool[0][0] if pool else ""
+        else:
+            # Fall back to warehouse root / known folders by basename.
+            path = ""
+            for folder_key in ("", "neutral", "rebound", "defending", "offside"):
+                base = (
+                    PLAYERS_IMAGE_WAREHOUSE_ROOT
+                    if not folder_key
+                    else os.path.join(
+                        PLAYERS_IMAGE_WAREHOUSE_ROOT,
+                        PLAYERS_IMAGE_WAREHOUSE_FOLDERS[folder_key],
+                    )
+                )
+                cand = os.path.join(base, name)
+                if os.path.isfile(cand):
+                    path = cand
+                    break
+        if not path or not os.path.isfile(path):
+            logger.error("High Performance Players image missing: %s", name)
             return {}
         paths[name] = path
     return paths
 
 
-def _hp_players_offside_seat(row) -> Tuple[Dict[int, str], int]:
-    """Build screen seats for one offside-trap row. Posts stay on 3 and 4."""
+def _hp_players_offside_seat(
+    row,
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    posts: Optional[Dict[str, str]] = None,
+    rng: Optional[random.Random] = None,
+) -> Tuple[Dict[int, str], int]:
+    """Build screen seats for one offside-trap row. Posts stay on 3 and 4.
+
+    Returns arena→abspath using warehouse stills (unique person tags).
+    """
+    catalog = catalog or _players_warehouse_catalog()
+    posts = posts or _players_warehouse_post_paths()
+    rng = rng or random.Random()
+    used: set = set()
     cross_r, cross_l, teammate, def08, def07, goal = row
-    seat = {
-        3: HP_PLAYERS_LEFT_POST,
-        4: HP_PLAYERS_RIGHT_POST,
+    left = posts.get("left_post")
+    right = posts.get("right_post")
+    if not left or not right:
+        return {}, int(goal or 1)
+    seat: Dict[int, str] = {
+        3: left,
+        4: right,
     }
-    if cross_r is not None:
-        seat[int(cross_r)] = HP_PLAYERS_CROSS_RIGHT
-    if cross_l is not None:
-        seat[int(cross_l)] = HP_PLAYERS_CROSS_LEFT
-    if teammate is not None:
-        seat[int(teammate)] = HP_PLAYERS_TRAP_TEAMMATE
-    if def08 is not None:
-        seat[int(def08)] = HP_PLAYERS_DEFEND_08
-    if def07 is not None:
-        seat[int(def07)] = HP_PLAYERS_DEFEND_07
+
+    def _put(arena, role: str, fallback: str = ""):
+        if arena is None:
+            return
+        picked = _players_warehouse_pick(catalog, role, used, rng)
+        if not picked and fallback:
+            picked = _players_warehouse_pick(catalog, fallback, used, rng)
+        if picked:
+            seat[int(arena)] = picked[0]
+
+    _put(cross_r, "offside_right")
+    _put(cross_l, "offside_left")
+    # Goal seat = trap teammate (*-05); also place on teammate column when set.
+    goal_pick = _players_warehouse_pick(catalog, "trap_teammate", used, rng)
+    if not goal_pick:
+        goal_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    if goal_pick:
+        seat[int(goal)] = goal_pick[0]
+        if teammate is not None and int(teammate) != int(goal):
+            _put(teammate, "teammate", "opponent")
+    elif teammate is not None:
+        _put(teammate, "trap_teammate", "pass")
+    _put(def08, "defender")
+    _put(def07, "defender")
     return seat, int(goal)
 
 
@@ -5686,40 +5813,32 @@ def _hp_players_action_plan(series_num: int) -> List[dict]:
 
 
 def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[dict]:
-    """High Performance S0 Players (operator C1.T1–T5).
+    """High Performance S0 Players from static/Players-Images warehouse.
 
-    Elite-style pass game with offside traps and dual-goal AP (never on the
-    same action). C1.T1–T2: 30% AP + up to 4 traps; C1.T3–T5: 50% AP + traps
-    on the remaining seats (posts stay on 3/4 for offside only). Field B
-    mirrors Field A.
+    Pass / AP / offside-trap mix. Goals = Teammate-PL-*-02-B; AP second =
+    another Teammate-PL; traps use OffSide-Trap stills + posts from warehouse
+    root. Field B mirrors Field A. Unique person # within each action.
     """
     active = [f for f in ("A", "B") if f in set(active_fields or [])]
     if not active:
         return []
-    names = (
-        HP_PLAYERS_LEFT_POST,
-        HP_PLAYERS_RIGHT_POST,
-        HP_PLAYERS_PASS,
-        HP_PLAYERS_PASS_COPY,
-        HP_PLAYERS_TEAMMATE,
-        *HP_PLAYERS_OPPONENTS,
-        HP_PLAYERS_CROSS_RIGHT,
-        HP_PLAYERS_CROSS_LEFT,
-        HP_PLAYERS_TRAP_TEAMMATE,
-        HP_PLAYERS_DEFEND_08,
-        HP_PLAYERS_DEFEND_07,
-    )
-    paths = _hp_players_image_paths(names)
-    if not paths:
-        return []
-    if HP_PLAYERS_PASS_COPY not in paths:
+    catalog = _players_warehouse_catalog()
+    posts = _players_warehouse_post_paths()
+    if not catalog.get("pass") or not catalog.get("opponent"):
         logger.error(
-            "High Performance Players missing pass-copy under %s",
-            HP_PLAYERS_IMAGE_DIR,
+            "High Performance Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
+        return []
+    if not posts.get("left_post") or not posts.get("right_post"):
+        logger.error(
+            "High Performance Players missing posts under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
+    lit_count = int(PLAYERS_LIT_SCREENS_HP)
     playlist = []
     for test_num in range(1, ENTRY_TEST_COUNT + 1):
         plan = _hp_players_action_plan(series)
@@ -5733,9 +5852,19 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
             copy_goal = 0
             kind = str(step.get("kind") or "pass")
             use_ap = kind == "ap"
+            rng = random.Random(
+                56000 + series * 1000 + test_num * 100 + action_in_set * 10
+            )
+            used_people: set = set()
             if kind == "offside":
-                seat_names, goal = _hp_players_offside_seat(step.get("row"))
-                seat = {screen: paths[name] for screen, name in seat_names.items()}
+                seat, goal = _hp_players_offside_seat(
+                    step.get("row"),
+                    catalog=catalog,
+                    posts=posts,
+                    rng=rng,
+                )
+                if not seat:
+                    continue
                 for fid in active:
                     for screen, path in seat.items():
                         sid = _hw_screen_for_field(fid, (screen, screen))
@@ -5745,16 +5874,23 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                     if goal_sid is not None:
                         field_screens[fid] = [goal_sid]
             else:
-                # Always 6 lit screens. AP: pass + pass-copy on opposite halves.
-                # Normal: pass goal + teammate/opponents fill the wall (no side passes).
-                distractors = [paths[name] for name in HP_PLAYERS_OPPONENTS]
-                if HP_PLAYERS_TEAMMATE in paths:
-                    distractors.append(paths[HP_PLAYERS_TEAMMATE])
+                pass_path, copy_path, distractors = _entry_s0_pick_field_media(
+                    catalog,
+                    series_num=series,
+                    lit_count=lit_count,
+                    dual_ap=use_ap,
+                    used_people=used_people,
+                    rng=rng,
+                )
+                if not pass_path or not distractors:
+                    continue
+                if use_ap and not copy_path:
+                    continue
                 assignment, goal, copy_goal = _players_screen_assignment(
-                    paths[HP_PLAYERS_PASS],
-                    paths[HP_PLAYERS_PASS_COPY] if use_ap else "",
-                    distractors,
-                    lit_count=int(PLAYERS_LIT_SCREENS_HP),
+                    pass_path,
+                    copy_path if use_ap else "",
+                    list(distractors),
+                    lit_count=lit_count,
                     dual_ap=use_ap,
                 )
                 if not assignment or not goal:
@@ -5803,6 +5939,7 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
                 "offside_trap": kind == "offside",
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -5824,7 +5961,7 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
     ap_n = sum(1 for step in playlist if step.get("aep_dual_pass"))
     trap_n = sum(1 for step in playlist if step.get("offside_trap"))
     logger.info(
-        "High Performance C1.T%s Players: %s actions (%s AP @%.0f%%, %s offside)",
+        "High Performance C1.T%s Players: %s actions (%s AP @%.0f%%, %s offside, warehouse)",
         series,
         len(playlist),
         ap_n,
@@ -5835,23 +5972,72 @@ def _build_high_performance_s0_playlist(series_num: int, active_fields) -> List[
 
 
 def _elite_players_image_paths(names) -> Dict[str, str]:
+    """Resolve legacy Elite filenames from the shared Players-Images warehouse."""
+    catalog = _players_warehouse_catalog()
+    role_map = {
+        ELITE_PLAYERS_PASS1: "pass",
+        ELITE_PLAYERS_PASS2: "pass_copy",
+        ELITE_PLAYERS_PASS3: "asking",
+        ELITE_PLAYERS_PASS_COPY: "pass_copy",
+        ELITE_PLAYERS_PASS_LEFT: "cross_left",
+        ELITE_PLAYERS_PASS_RIGHT: "cross_right",
+    }
     paths = {}
+    used: set = set()
+    rng = random.Random(58001)
     for name in names or []:
-        path = os.path.join(ELITE_PLAYERS_IMAGE_DIR, name)
-        if os.path.isfile(path):
-            paths[str(name)] = path
+        role = role_map.get(str(name))
+        if role:
+            picked = _players_warehouse_pick(catalog, role, used, rng)
+            if picked:
+                paths[str(name)] = picked[0]
+                continue
+        # Named opponent / defending / teammate stills from warehouse folders.
+        low = str(name or "").lower()
+        if "opponent" in low:
+            role = "opponent"
+        elif "defend" in low:
+            role = "defender"
+        elif "teammate" in low:
+            role = "teammate"
         else:
-            logger.error("Elite Players image missing: %s", path)
+            role = ""
+        if role:
+            picked = _players_warehouse_pick(catalog, role, used, rng)
+            if picked:
+                paths[str(name)] = picked[0]
+                continue
+        logger.error("Elite Players warehouse image missing for %s", name)
     return paths
 
 
-def _elite_players_distractor_pool(paths: Dict[str, str]) -> List[str]:
-    names = (
-        *ELITE_PLAYERS_OPPONENTS,
-        *ELITE_PLAYERS_DEFENDING,
-        *ELITE_PLAYERS_TEAMMATES,
-    )
-    return [paths[name] for name in names if name in paths]
+def _elite_players_distractor_pool(paths: Dict[str, str] = None) -> List[str]:
+    """Unique opponent / defender / teammate stills from the warehouse.
+
+    Uniqueness is by file path (Opponent-PL-01 and Teammate-PL-01 may both appear).
+    """
+    catalog = _players_warehouse_catalog()
+    out = []
+    used_paths: set = set()
+    rng = random.Random(58002)
+    for role, count in (("opponent", 8), ("defender", 8), ("teammate", 6)):
+        pool = list(catalog.get(role) or [])
+        rng.shuffle(pool)
+        taken = 0
+        for path, _pid in pool:
+            if path in used_paths:
+                continue
+            used_paths.add(path)
+            out.append(path)
+            taken += 1
+            if taken >= count:
+                break
+    if paths:
+        for path in paths.values():
+            if path and path not in used_paths:
+                used_paths.add(path)
+                out.append(path)
+    return out
 
 
 def _elite_players_goal_counts(series: int) -> List[int]:
@@ -5896,8 +6082,34 @@ def _elite_players_action_goal_plan(
     return out
 
 
-def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: bool) -> List[str]:
-    """Return unique pass image paths for this action."""
+def _elite_players_pick_passes(
+    count: int,
+    paths: Dict[str, str] = None,
+    single_only: bool = False,
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    used_people: Optional[set] = None,
+    rng: Optional[random.Random] = None,
+) -> List[str]:
+    """Return unique warehouse pass paths for this action.
+
+    1 goal → Teammate-PL-*-02-B; 2 → + pass_copy Teammate-PL; 3 → + asking.
+    """
+    catalog = catalog or _players_warehouse_catalog()
+    used_people = used_people if used_people is not None else set()
+    rng = rng or random.Random()
+    need = 1 if single_only or int(count) <= 1 else max(1, int(count))
+    roles = ["pass", "pass_copy", "asking"]
+    out = []
+    for role in roles[:need]:
+        picked = _players_warehouse_pick(catalog, role, used_people, rng)
+        if not picked and role != "pass":
+            picked = _players_warehouse_pick(catalog, "pass", used_people, rng)
+        if picked:
+            out.append(picked[0])
+    if out:
+        return out
+    # Legacy fallback from a pre-built paths map.
+    paths = paths or {}
     if single_only or int(count) <= 1:
         path = paths.get(ELITE_PLAYERS_PASS1)
         return [path] if path else []
@@ -5913,11 +6125,13 @@ def _elite_players_pick_passes(count: int, paths: Dict[str, str], single_only: b
 
 
 def _elite_side_pass_path(name: str) -> str:
-    """Elite side passes live under Elite/; fall back to Activated art if needed."""
-    for base in (ELITE_PLAYERS_IMAGE_DIR, ACTIVATED_S0_IMAGE_DIR):
-        path = os.path.join(base, str(name or ""))
-        if path and os.path.isfile(path):
-            return path
+    """Elite side passes = Crossball teammate stills from Players-Images."""
+    catalog = _players_warehouse_catalog()
+    low = str(name or "").lower()
+    role = "cross_left" if "left" in low else "cross_right"
+    pool = catalog.get(role) or []
+    if pool:
+        return pool[0][0]
     return ""
 
 
@@ -5925,10 +6139,23 @@ def _elite_players_assign_ap_action(
     series: int,
     paths: Dict[str, str],
     distractors: List[str],
+    catalog: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+    rng: Optional[random.Random] = None,
 ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """Dual-goal AP on opposite halves across A+B (any seats 1–6 may light)."""
-    pass_path = paths.get(ELITE_PLAYERS_PASS1)
-    copy_path = paths.get(ELITE_PLAYERS_PASS_COPY) or paths.get(ELITE_PLAYERS_PASS2)
+    catalog = catalog or _players_warehouse_catalog()
+    rng = rng or random.Random()
+    used: set = set()
+    pass_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    copy_pick = _players_warehouse_pick(catalog, "pass_copy", used, rng)
+    if not copy_pick:
+        copy_pick = _players_warehouse_pick(catalog, "pass", used, rng)
+    pass_path = (pass_pick or (None, None))[0] or paths.get(ELITE_PLAYERS_PASS1)
+    copy_path = (
+        (copy_pick or (None, None))[0]
+        or paths.get(ELITE_PLAYERS_PASS_COPY)
+        or paths.get(ELITE_PLAYERS_PASS2)
+    )
     if not pass_path or not copy_path:
         return {}, {}
     left_seats = [
@@ -6133,42 +6360,47 @@ def _elite_players_assign_action(
 
 
 def _build_elite_s0_playlist(series_num: int) -> List[dict]:
-    """Elite S0.T1–T5 Players (operator C1.T1–T5) on both fields together.
+    """Elite S0.T1–T5 Players from static/Players-Images warehouse.
 
-    C1.T1: 6 images on 12 screens (3/field), pass1 alternating B/A, Entry timing.
-    C1.T2: 8 images on 12 screens, same pass1 game.
-    C1.T3–T5: 12 images; pass-left / pass-right side targets on non-AP seats
-    (Activated / HP do not use those). C1.T1–T2: 30% dual-goal AP in order;
-    C1.T3–T5: 50% AP shuffled. AP advances on the first finish.
+    C1.T1: 6 images on 12 screens (3/field), center pass alternating B/A.
+    C1.T2: 8 images / 12. C1.T3–T5: 12 images; Crossball L/R on non-AP seats.
+    Goals = Teammate-PL-*-02-B; AP second = another Teammate-PL; asking =
+    SIMUST-ASking-Ball; side goals = Cross-Left/Right. Unique person # / action.
     """
-    names = (
-        *ELITE_PLAYERS_PASSES,
-        ELITE_PLAYERS_PASS_COPY,
-        *ELITE_PLAYERS_OPPONENTS,
-        *ELITE_PLAYERS_DEFENDING,
-        *ELITE_PLAYERS_TEAMMATES,
-    )
-    paths = _elite_players_image_paths(names)
+    catalog = _players_warehouse_catalog()
+    if not catalog.get("pass") or not catalog.get("opponent"):
+        logger.error(
+            "Elite Players missing warehouse images under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
+        )
+        return []
     left_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_LEFT)
     right_path = _elite_side_pass_path(ELITE_PLAYERS_PASS_RIGHT)
+    paths = {
+        ELITE_PLAYERS_PASS1: (catalog.get("pass") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS_COPY: (catalog.get("pass_copy") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS2: (catalog.get("pass_copy") or [(None, None)])[0][0],
+        ELITE_PLAYERS_PASS3: (catalog.get("asking") or [(None, None)])[0][0],
+    }
     if left_path:
         paths[ELITE_PLAYERS_PASS_LEFT] = left_path
     if right_path:
         paths[ELITE_PLAYERS_PASS_RIGHT] = right_path
-    if ELITE_PLAYERS_PASS1 not in paths:
+    if not paths.get(ELITE_PLAYERS_PASS1):
         logger.error(
-            "Elite Players missing pass1.png under %s", ELITE_PLAYERS_IMAGE_DIR
+            "Elite Players missing Teammate-PL-*-02-B under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    if ELITE_PLAYERS_PASS_COPY not in paths and ELITE_PLAYERS_PASS2 not in paths:
+    if not paths.get(ELITE_PLAYERS_PASS_COPY):
         logger.error(
-            "Elite Players missing pass-copy (or pass2) under %s",
-            ELITE_PLAYERS_IMAGE_DIR,
+            "Elite Players missing Teammate-PL pass-copy pool under %s",
+            PLAYERS_IMAGE_WAREHOUSE_ROOT,
         )
         return []
-    distractors = _elite_players_distractor_pool(paths)
+    distractors = _elite_players_distractor_pool()
     if len(distractors) < 5:
-        logger.error("Elite Players need opponent/defending/teammate images")
+        logger.error("Elite Players need opponent/defending/teammate warehouse images")
         return []
     series = max(1, min(5, int(series_num or 1)))
     on_ms, gap_ms = _entry_series_timing_ms(series)
@@ -6187,24 +6419,42 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             use_ap = bool(ap_plan[action_in_set - 1])
             use_side = bool(not use_ap and side_plan[action_in_set - 1])
             side = ""
+            rng = random.Random(
+                59000 + series * 1000 + test_num * 100 + action_in_set * 10
+            )
+            used_people: set = set()
             if use_ap:
                 images, field_screens = _elite_players_assign_ap_action(
-                    series, paths, distractors
+                    series, paths, distractors, catalog=catalog, rng=rng
                 )
             else:
                 if use_side:
-                    side = random.choice(("L", "R"))
-                    sided = left_path if side == "L" else right_path
-                    pass_list = [sided]
+                    side = rng.choice(("L", "R"))
+                    role = "cross_left" if side == "L" else "cross_right"
+                    sided_pick = _players_warehouse_pick(
+                        catalog, role, used_people, rng
+                    )
+                    sided = (sided_pick or (None, None))[0] or (
+                        left_path if side == "L" else right_path
+                    )
+                    pass_list = [sided] if sided else []
                 else:
-                    pass_list = _elite_players_pick_passes(goal_n, paths, single_only)
+                    pass_list = _elite_players_pick_passes(
+                        goal_n,
+                        paths,
+                        single_only,
+                        catalog=catalog,
+                        used_people=used_people,
+                        rng=rng,
+                    )
                 if not pass_list:
                     continue
+                action_distractors = _elite_players_distractor_pool()
                 images, field_screens = _elite_players_assign_action(
                     series,
                     action_in_set,
                     pass_list,
-                    distractors,
+                    action_distractors,
                     first_action=(
                         series == 1
                         and action_in_set == 1
@@ -6212,7 +6462,6 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
                     ),
                 )
                 if use_side and side and field_screens:
-                    # Stamp L/R mouth tokens so realtime aims the sided cylinder.
                     stamped = {}
                     for fid, goals in field_screens.items():
                         stamped[fid] = [
@@ -6225,7 +6474,6 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             goals = []
             for fid in ("A", "B"):
                 goals.extend(field_screens.get(fid) or [])
-            # AP: first finish measures preference — do not wait for both mouths.
             require_all = not use_ap
             playlist.append({
                 "kind": "labeled_action",
@@ -6253,6 +6501,7 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
                 "side_goals": bool(use_side),
                 "aep_dual_pass": bool(use_ap),
                 "ap_action": bool(use_ap),
+                "warehouse_images": True,
                 "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
                 "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
                 "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
@@ -6276,12 +6525,11 @@ def _build_elite_s0_playlist(series_num: int) -> List[dict]:
             continue
         entry["combined_field"] = True
         entry["hold_full_on"] = True
-        # Preserve per-action require_all (False on AP dual-goal preference seats).
         if "require_all_goals" not in entry:
             entry["require_all_goals"] = not bool(entry.get("aep_dual_pass"))
     ap_n = sum(1 for step in stamped if step.get("aep_dual_pass"))
     logger.info(
-        "Elite C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%)",
+        "Elite C1.T%s Players: %s actions (%s AP dual-goal @%.0f%%, warehouse)",
         series,
         len(stamped),
         ap_n,

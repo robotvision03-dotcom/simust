@@ -55,6 +55,8 @@ class EntryS0PlaylistTests(unittest.TestCase):
     def test_warehouse_catalog_roles(self):
         cat = player._players_warehouse_catalog()
         for role in (
+            "pass",
+            "pass_copy",
             "rebound",
             "opponent",
             "teammate",
@@ -64,12 +66,16 @@ class EntryS0PlaylistTests(unittest.TestCase):
             "defender",
         ):
             self.assertGreater(len(cat.get(role) or []), 0, role)
+        root = os.path.normpath(player.PLAYERS_IMAGE_WAREHOUSE_ROOT)
+        self.assertTrue(root.replace("\\", "/").endswith("static/Players-Images"))
 
     def test_t1_pool_uses_warehouse_rebound(self):
         pass_path, distractors = player._entry_s0_image_paths(1)
         self.assertTrue(pass_path and os.path.isfile(pass_path))
         self.assertTrue(_under_warehouse(pass_path))
-        self.assertIn("teammate-pl-", os.path.basename(pass_path).lower())
+        name = os.path.basename(pass_path).lower()
+        self.assertIn("teammate-pl-", name)
+        self.assertIn("-02-", name)
         self.assertEqual(len(distractors), 3)
         for path in distractors:
             self.assertTrue(_under_warehouse(path))
@@ -143,7 +149,10 @@ class EntryS0PlaylistTests(unittest.TestCase):
                     name.startswith("teammate-pl-"),
                     f"goal {sid} should be rebound teammate: {name}",
                 )
-                self.assertTrue("-02-" in name or "-05-" in name, name)
+                if step.get("aep_dual_pass"):
+                    self.assertTrue("-02-" in name or "-05-" in name, name)
+                else:
+                    self.assertIn("-02-", name)
 
     def test_unique_person_ids_per_action(self):
         for series in (1, 3, 5):

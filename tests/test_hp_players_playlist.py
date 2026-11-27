@@ -62,12 +62,19 @@ class HighPerformancePlayersTests(unittest.TestCase):
             (None, 2, 5, 1, 6, 5),
         )
         self.assertEqual(player.HP_PLAYERS_OFFSIDE_TABLE, expected)
+        posts = player._players_warehouse_post_paths()
         for row in expected:
             seat, goal = player._hp_players_offside_seat(row)
-            self.assertEqual(seat[3], "left_post.jpeg")
-            self.assertEqual(seat[4], "right_post.jpeg")
-            self.assertEqual(seat[goal], "Teammate-PL-06-05-B.png")
+            self.assertEqual(seat[3], posts["left_post"])
+            self.assertEqual(seat[4], posts["right_post"])
+            goal_name = os.path.basename(seat[goal]).lower()
+            self.assertTrue(
+                goal_name.startswith("teammate-pl-") and "-05-" in goal_name,
+                goal_name,
+            )
             self.assertEqual(goal, row[-1])
+            for path in seat.values():
+                self.assertTrue(os.path.isfile(path), path)
 
     def test_t1_has_four_traps_and_t3_has_six(self):
         self.assertEqual(player._hp_players_offside_count(1), 4)
@@ -120,25 +127,35 @@ class HighPerformancePlayersTests(unittest.TestCase):
                 self.assertEqual(len(goals), 1)
                 self.assertEqual(seats_a[3], "left_post.jpeg")
                 self.assertEqual(seats_a[4], "right_post.jpeg")
-                self.assertEqual(seats_a[goals[0]], "Teammate-PL-06-05-B.png")
+                gname = seats_a[goals[0]].lower()
+                self.assertTrue(gname.startswith("teammate-pl-") and "-05-" in gname)
             elif row.get("aep_dual_pass"):
                 self.assertEqual(len(goals), 2)
                 self.assertEqual(len(seats_a), 6)
-                self.assertEqual(seats_a[goals[0]], "pass.png")
-                self.assertEqual(seats_a[goals[1]], "pass-copy.png")
+                for g in goals:
+                    self.assertTrue(
+                        seats_a[g].lower().startswith("teammate-pl-"),
+                        seats_a[g],
+                    )
             else:
                 self.assertEqual(len(goals), 1)
                 self.assertEqual(len(seats_a), 6)
-                self.assertEqual(seats_a[goals[0]], "pass.png")
-                names = set(seats_a.values())
-                self.assertIn("Teammate-PL-01-B.png", names)
+                gname = seats_a[goals[0]].lower()
+                self.assertTrue(gname.startswith("teammate-pl-") and "-02-" in gname)
             for path in row["screen_images"].values():
                 self.assertTrue(os.path.isfile(path))
-            # No pass-left / pass-right on HP.
+                self.assertTrue(
+                    os.path.normcase(path).startswith(
+                        os.path.normcase(player.PLAYERS_IMAGE_WAREHOUSE_ROOT)
+                    ),
+                    path,
+                )
+            # No legacy Activated pass-left / pass-right filenames on HP.
             for path in row["screen_images"].values():
                 name = os.path.basename(path).lower()
                 self.assertNotIn("pass-left", name)
                 self.assertNotIn("pass-right", name)
+                self.assertFalse(name in ("pass.png", "pass-copy.png", "pass3.png"))
 
     def test_c1_t3_ap_reduces_traps_so_they_never_overlap(self):
         with patch.object(player.random, "shuffle", side_effect=lambda seq: None):
