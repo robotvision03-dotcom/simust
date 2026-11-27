@@ -5871,8 +5871,8 @@ async def goal_lines_paint_save(req: Request):
 # ============================================================
 # SCREEN TOP / BOTTOM GOAL REGIONS (Elders Focus — A1T / A1B …)
 # ============================================================
-
-import simust_screen_goals  # noqa: E402
+# Top/Bottom goals use pencil paint (simust_goal_paint), not the unused
+# simust_screen_goals rectangle store — do not import that optional lab module.
 
 
 def screen_goals_status_snapshot() -> dict:
