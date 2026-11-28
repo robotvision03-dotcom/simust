@@ -3382,28 +3382,33 @@ async def lifespan(app: FastAPI):
             # Never block uvicorn startup on a dead/slow VPS (20s HTTP each).
             # Operator/local play must come up even when my.simust.com is down.
             def _boot_host_sync():
-                try:
-                    flushed = simust_push.flush_queue()
-                    if flushed:
-                        logger.info(
-                            "Flushed %s queued player JSON payloads to the host",
-                            flushed,
-                        )
-                except Exception as exc:
-                    logger.warning("Could not flush push queue: %s", exc)
+                # Heartbeat first — if the VPS is dead, skip queue flush (avoids
+                # stacked 5s timeouts per queued JSON and log spam at boot).
+                host_ok = False
                 try:
                     simust_push.push_lab_status(
                         {"lab_online": True, "boot": True},
                         raise_errors=True,
                     )
+                    host_ok = True
                     logger.info("Lab online heartbeat sent to the public host")
                 except Exception as exc:
                     logger.error(
                         "Lab→host link FAILED (%s). /operator will show Lab offline. "
                         "Check SIMUST_PUSH_KEY matches /opt/simust/.env on the VPS "
-                        "(and that my.simust.com is up).",
+                        "(and that my.simust.com is up). Skipping push-queue flush.",
                         exc,
                     )
+                if host_ok:
+                    try:
+                        flushed = simust_push.flush_queue()
+                        if flushed:
+                            logger.info(
+                                "Flushed %s queued player JSON payloads to the host",
+                                flushed,
+                            )
+                    except Exception as exc:
+                        logger.warning("Could not flush push queue: %s", exc)
                 try:
                     users = load_users()
                     simust_push.push_accounts_async(users)
