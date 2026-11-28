@@ -74,6 +74,13 @@ _seen_ingest: Dict[str, float] = {}
 _seen_ingest_lock = threading.Lock()
 QUEUE_DIR = os.environ.get("SIMUST_PUSH_QUEUE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_queue"))
 
+# Keep short: a down my.simust.com must not stall lab boot / Android login / remote ops.
+try:
+    HTTP_TIMEOUT_SEC = float(os.environ.get("SIMUST_PUSH_TIMEOUT_SEC") or 5)
+except (TypeError, ValueError):
+    HTTP_TIMEOUT_SEC = 5.0
+HTTP_TIMEOUT_SEC = max(2.0, min(20.0, HTTP_TIMEOUT_SEC))
+
 os.makedirs(QUEUE_DIR, exist_ok=True)
 
 
@@ -290,7 +297,7 @@ def _post(payload: Dict[str, Any]) -> None:
         method="POST",
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
         if resp.status >= 300:
             raise RuntimeError(f"Push host returned HTTP {resp.status}")
 
@@ -521,7 +528,7 @@ def pull_remote_accounts() -> Dict[str, Any]:
         method="GET",
         headers=_auth_headers(body),
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     accounts = data.get("accounts") if isinstance(data, dict) else None
     return accounts if isinstance(accounts, dict) else {}
@@ -537,7 +544,7 @@ def pull_remote_state() -> Dict[str, Any]:
         method="GET",
         headers=_auth_headers(body),
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data if isinstance(data, dict) else {}
 
@@ -769,7 +776,7 @@ def pull_remote_commands() -> list:
         method="GET",
         headers=_auth_headers(body),
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     commands = data.get("commands") if isinstance(data, dict) else None
     return commands if isinstance(commands, list) else []
