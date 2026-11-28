@@ -11,7 +11,18 @@ if ROOT not in sys.path:
 
 
 def _idx(test_num: int, action_in_set: int) -> int:
+    """Elite Players 2: 9 actions per test."""
     return (int(test_num) - 1) * 9 + (int(action_in_set) - 1)
+
+
+def _wc_idx(test_num: int, action_in_set: int) -> int:
+    """World Class Players (C2): 15 actions per test."""
+    return (int(test_num) - 1) * 15 + (int(action_in_set) - 1)
+
+
+def _wc2_idx(test_num: int, action_in_set: int) -> int:
+    """World Class Players 2 (C1): 10 actions per test."""
+    return (int(test_num) - 1) * 10 + (int(action_in_set) - 1)
 
 
 class ElitePlayers2(unittest.TestCase):
@@ -59,8 +70,8 @@ class ElitePlayers2(unittest.TestCase):
 
     def test_wc_crossball_goals_match_side(self):
         pl = self.ssp._build_world_class_s0_playlist(1)
-        a2 = pl[_idx(1, 2)]
-        a5 = pl[_idx(1, 5)]
+        a2 = pl[_wc_idx(1, 2)]
+        a5 = pl[_wc_idx(1, 5)]
         self.assertEqual((a2.get("field_screens") or {}).get("A"), ["A5R"])
         path2 = os.path.basename((a2.get("screen_images") or {}).get("A5") or "").lower()
         self.assertTrue("right" in path2 and "cross" in path2, path2)
@@ -69,7 +80,7 @@ class ElitePlayers2(unittest.TestCase):
         self.assertTrue("left" in path5 and "cross" in path5, path5)
         # Remapped tests keep Cross-Right on a right-half seat (A or B).
         for test_num in range(2, 6):
-            entry = pl[_idx(test_num, 2)]
+            entry = pl[_wc_idx(test_num, 2)]
             fs = entry.get("field_screens") or {}
             goals = list(fs.get("A") or []) + list(fs.get("B") or [])
             self.assertTrue(goals, f"t{test_num} a2")
@@ -90,6 +101,37 @@ class ElitePlayers2(unittest.TestCase):
         self.assertEqual(
             self.ssp._component_set_label("L04-Elite/S4.T1"), "C5.T1"
         )
+        # World Class remap: C1 Players 2, C2 Players, C3 Numbers, …
+        self.assertEqual(
+            self.ssp._content_type_label("L05-WorldClass/S0.T1"), "Players 2"
+        )
+        self.assertEqual(
+            self.ssp._component_set_label("L05-WorldClass/S0.T1"), "C1.T1"
+        )
+        self.assertEqual(
+            self.ssp._content_type_label("L05-WorldClass/S1.T1"), "Players"
+        )
+        self.assertEqual(
+            self.ssp._component_set_label("L05-WorldClass/S1.T1"), "C2.T1"
+        )
+        self.assertEqual(
+            self.ssp._content_type_label("L05-WorldClass/S2.T1"), "Numbers"
+        )
+        self.assertEqual(
+            self.ssp._component_set_label("L05-WorldClass/S2.T1"), "C3.T1"
+        )
+        group, num = self.ssp._combined_series_group_and_num(
+            "L05-WorldClass/S0.T2", "world-class"
+        )
+        self.assertEqual((group, num), (0, 2))
+        group, num = self.ssp._combined_series_group_and_num(
+            "L05-WorldClass/S1.T3", "world-class"
+        )
+        self.assertEqual((group, num), (1, 3))
+        group, num = self.ssp._combined_series_group_and_num(
+            "L05-WorldClass/S4.T1", "world-class"
+        )
+        self.assertEqual((group, num), (4, 1))
 
     def test_playlist_forty_five(self):
         pl = self.ssp._build_elite_players2_playlist(1)
@@ -196,25 +238,43 @@ class ElitePlayers2(unittest.TestCase):
         )
         self.assertLess(int(t3[0].get("on_ms") or 0), int(t1[0].get("on_ms") or 0))
 
-    def test_world_class_c1t1_timing_doubled(self):
-        base_on, base_gap = self.ssp._wc_players_series_timing_ms(1)
-        scale = float(self.ssp.WC_PLAYERS_C1T1_TIME_SCALE)
-        want_on, _ = self.ssp._snap_ms_to_display_fps(float(base_on) * scale)
-        want_gap, _ = self.ssp._snap_ms_to_display_fps(float(base_gap) * scale)
+    def test_world_class_players_fixed_3s_timing(self):
+        want_on, _ = self.ssp._snap_ms_to_display_fps(
+            float(self.ssp.WC_PLAYERS_ACTION_ON_MS)
+        )
+        want_gap, _ = self.ssp._snap_ms_to_display_fps(
+            float(self.ssp.WC_PLAYERS_ACTION_GAP_MS)
+        )
         pl = self.ssp._build_world_class_s0_playlist(1)
-        self.assertEqual(len(pl), 45)
+        self.assertEqual(len(pl), 75)  # 5 tests × 15 actions
         for entry in pl:
             self.assertEqual(int(entry.get("on_ms") or 0), want_on)
             self.assertEqual(int(entry.get("gap_ms") or 0), want_gap)
-        # Later WC sub-levels are not doubled.
-        pl2 = self.ssp._build_world_class_s0_playlist(2)
-        on2, gap2 = self.ssp._wc_players_series_timing_ms(2)
-        self.assertEqual(int(pl2[0].get("on_ms") or 0), on2)
-        self.assertEqual(int(pl2[0].get("gap_ms") or 0), gap2)
+            self.assertEqual(int(entry.get("actions_in_set") or 0), 15)
+            self.assertTrue(entry.get("skip_ap_fac"))
+
+    def test_world_class_players2_c1_playlist(self):
+        pl = self.ssp._build_world_class_players2_playlist(1)
+        self.assertEqual(len(pl), 50)  # 5 × 10
+        want_on, _ = self.ssp._snap_ms_to_display_fps(
+            float(self.ssp.WC_PLAYERS2_ACTION_ON_MS)
+        )
+        for entry in pl:
+            self.assertTrue(entry.get("wc_players2_scenario"))
+            self.assertTrue(entry.get("wc_players_video"))
+            self.assertEqual(int(entry.get("on_ms") or 0), want_on)
+            self.assertEqual(int(entry.get("actions_in_set") or 0), 10)
+            self.assertTrue(entry.get("skip_ap_fac"))
+            for path in (entry.get("screen_images") or {}).values():
+                name = os.path.basename(str(path or "")).lower()
+                self.assertFalse(
+                    name.startswith("opponent-asking"),
+                    f"Players 2 must not use Opponent-Asking: {name}",
+                )
 
     def test_world_class_s0_video_playlist(self):
         pl = self.ssp._build_world_class_s0_playlist(1)
-        self.assertEqual(len(pl), 45)
+        self.assertEqual(len(pl), 75)
         for entry in pl:
             self.assertTrue(entry.get("wc_players_video"))
             self.assertTrue(entry.get("wc_players_scenario"))
@@ -231,6 +291,12 @@ class ElitePlayers2(unittest.TestCase):
                 len(set(people)),
                 f"duplicate person in {entry.get('label')}: {people}",
             )
+            for path in videos:
+                name = os.path.basename(path).lower()
+                self.assertFalse(
+                    name.startswith("opponent-asking"),
+                    f"WC Players must use neutral distractors, not {name}",
+                )
 
     def test_world_class_video_catalog_roles(self):
         cat = self.ssp._wc_players_video_catalog()
@@ -247,6 +313,14 @@ class ElitePlayers2(unittest.TestCase):
             "offside_right",
         ):
             self.assertGreater(len(cat.get(role) or []), 0, role)
+        # Opponent role is neutral defenders — never Opponent-AskingForBall.
+        for path, _pid in cat.get("opponent") or []:
+            name = os.path.basename(path).lower()
+            self.assertTrue(
+                name.startswith("defender-neutral"),
+                f"opponent distractor must be neutral defender: {name}",
+            )
+            self.assertNotIn("asking", name)
 
     def test_world_class_stills_from_players_videos(self):
         stills = self.ssp._wc_players_still_paths()
@@ -258,8 +332,8 @@ class ElitePlayers2(unittest.TestCase):
 
     def test_world_class_a8_9_fixed_and_posts_on_b(self):
         pl = self.ssp._build_world_class_s0_playlist(1)
-        a8_t1 = pl[_idx(1, 8)]
-        a9_t1 = pl[_idx(1, 9)]
+        a8_t1 = pl[_wc_idx(1, 8)]
+        a9_t1 = pl[_wc_idx(1, 9)]
         a8_imgs = a8_t1.get("screen_images") or {}
         a9_imgs = a9_t1.get("screen_images") or {}
         self.assertIn(
@@ -280,8 +354,8 @@ class ElitePlayers2(unittest.TestCase):
         )
         self.assertFalse(bool(a8_t1.get("require_all_goals")))
         for test_num in range(2, 6):
-            a8 = pl[_idx(test_num, 8)]
-            a9 = pl[_idx(test_num, 9)]
+            a8 = pl[_wc_idx(test_num, 8)]
+            a9 = pl[_wc_idx(test_num, 9)]
             self.assertEqual(
                 a8.get("field_screens"), a8_t1.get("field_screens")
             )
@@ -298,7 +372,6 @@ class ElitePlayers2(unittest.TestCase):
                     os.path.normpath(self.ssp.WC_PLAYERS_VIDEO_ROOT)
                 )
             )
-
 
     def test_no_gray_filler_seats(self):
         ep = self.ssp._build_elite_players2_playlist(1)
@@ -339,7 +412,7 @@ class ElitePlayers2(unittest.TestCase):
         pl = self.ssp._build_world_class_s0_playlist(1)
         # Center goals use Teammate-AskingForBall video (never pass.png / opponents).
         for anum, sid in ((1, "A5"), (3, "B6"), (6, "A3"), (7, "A1"), (8, "A1")):
-            entry = pl[_idx(1, anum)]
+            entry = pl[_wc_idx(1, anum)]
             name = os.path.basename(
                 (entry.get("screen_images") or {}).get(sid) or ""
             ).lower()

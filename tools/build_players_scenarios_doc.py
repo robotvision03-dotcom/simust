@@ -203,12 +203,13 @@ where builders use unseeded random.</p>
         ("#hp", "High Performance Players (C1)"),
         ("#elite1", "Elite Players 1 (C1)"),
         ("#elite2", "Elite Players 2 (C5) — scripted 5×9 stills"),
-        ("#wc", "World Class Players (C1) — scripted 5×9 videos"),
+        ("#wc2", "World Class Players 2 (C1) — 10×3s tactical videos"),
+        ("#wc", "World Class Players (C2) — 15×3s video pack"),
     ]
     parts.append('<div class="section"><h2>Contents</h2><div class="toc">')
     for href, label in toc:
         parts.append(f'<a href="{href}">{esc(label)}</a>')
-        if href in ("#entry", "#activated", "#hp", "#elite1", "#elite2", "#wc"):
+        if href in ("#entry", "#activated", "#hp", "#elite1", "#elite2", "#wc2", "#wc"):
             for tn in range(1, 6):
                 parts.append(
                     f'<a class="subtoc" href="{href}-t{tn}">'
@@ -344,39 +345,66 @@ where builders use unseeded random.</p>
     parts.append(render_playlist(pl_e2, embed=True))
     parts.append("</div>")
 
-    # --- World Class ---
+    # --- World Class Players 2 (C1 / S0) ---
     parts.append(
-        '<div class="section" id="wc"><h2>World Class Players (C1 / S0) — videos</h2>'
-        "<p>Same seat plans as Elite Players 2. Media from "
-        "<code>static/Players-Videos</code>. Center goals = Teammate-AskingForBall "
-        "(folder 02, never pass.png / opponents). Cross L/R = any Left/Right clip "
-        "from folder 03 (correct only if ball enters goal). Posts stay stills. "
-        "a8: B2 Neutral-Duo, B5 OffSide-Trap-Right, goals A1 or B7. "
-        "a9: B1 Neutral-Duo, B6 defender-Neutral-06, goal B7. "
-        "No duplicate video in an action; tests reuse the same clips. "
-        "C1.T1 On/Gap ×2.4. Dual require_all (e.g. a7): first hit clears that seat only. "
-        "Timing −5% per sub-level after T1 baseline.</p>"
+        '<div class="section" id="wc2"><h2>World Class Players 2 (C1 / S0) — videos</h2>'
+        "<p>New tactical pack: <strong>10 actions × 3s On ≈ 30s</strong> per test. "
+        "Media from <code>static/Players-Videos</code>. "
+        "Shoot only to Teammate-Asking (folder 02), Cross L/R (folder 03), or "
+        "between offside posts (A7/B7). Distractors = neutral defender / teammate / duo "
+        "only — <em>never</em> Opponent-AskingForBall. "
+        "Includes dual asking and Field A/B offside traps. "
+        "Tests 2–5 rotate non-offside seats; a6/a9 posts stay fixed.</p>"
     )
     parts.append(
         "<table><tr><th>Sub-level</th><th>On (ms)</th><th>Gap (ms)</th></tr>"
     )
+    on2, _ = p._snap_ms_to_display_fps(float(p.WC_PLAYERS2_ACTION_ON_MS))
+    gap2, _ = p._snap_ms_to_display_fps(float(p.WC_PLAYERS2_ACTION_GAP_MS))
     for series in range(1, 6):
-        on_ms, gap_ms = p._wc_players_series_timing_ms(series)
-        if series == 1:
-            scale = float(p.WC_PLAYERS_C1T1_TIME_SCALE)
-            on_ms, _ = p._snap_ms_to_display_fps(float(on_ms) * scale)
-            gap_ms, _ = p._snap_ms_to_display_fps(float(gap_ms) * scale)
-        parts.append(timing_row(f"C1.T{series}", on_ms, gap_ms))
+        parts.append(timing_row(f"C1.T{series}", on2, gap2))
+    parts.append("</table>")
+    for series in range(1, 6):
+        pl = p._build_world_class_players2_playlist(series)
+        on_ms = pl[0].get("on_ms") if pl else "?"
+        gap_ms = pl[0].get("gap_ms") if pl else "?"
+        parts.append(
+            f'<div class="sub" id="wc2-t{series}">'
+            f"<h3>World Class Players 2 C1.T{series} — on={on_ms}ms gap={gap_ms}ms — "
+            f"{len(pl)} actions</h3>"
+        )
+        parts.append(render_playlist(pl, embed=True))
+        parts.append("</div>")
+    parts.append("</div>")
+
+    # --- World Class Players (C2 / S1) ---
+    parts.append(
+        '<div class="section" id="wc"><h2>World Class Players (C2 / S1) — videos</h2>'
+        "<p><strong>15 actions × 3s On ≈ 45s</strong> per test. Media from "
+        "<code>static/Players-Videos</code>. Center goals = Teammate-AskingForBall "
+        "(folder 02). Cross L/R = folder 03. Posts stay stills. "
+        "Distractors = neutral only (never Opponent-AskingForBall). "
+        "a8–a9 / a13 offside layouts fixed across tests; other seats rotate. "
+        "a10–a15 add crowded asking, Cross, dual goals, and Field A offside. "
+        "No AP/FAP rings — logo on screens 3/4. "
+        "Numbers / Divergent / Sum are operator C3 / C4 / C5.</p>"
+    )
+    parts.append(
+        "<table><tr><th>Sub-level</th><th>On (ms)</th><th>Gap (ms)</th></tr>"
+    )
+    on_p, _ = p._snap_ms_to_display_fps(float(p.WC_PLAYERS_ACTION_ON_MS))
+    gap_p, _ = p._snap_ms_to_display_fps(float(p.WC_PLAYERS_ACTION_GAP_MS))
+    for series in range(1, 6):
+        parts.append(timing_row(f"C2.T{series}", on_p, gap_p))
     parts.append("</table>")
 
-    # Full video formations for each sub-level (person picks can vary by series).
     for series in range(1, 6):
         pl = p._build_world_class_s0_playlist(series)
         on_ms = pl[0].get("on_ms") if pl else "?"
         gap_ms = pl[0].get("gap_ms") if pl else "?"
         parts.append(
             f'<div class="sub" id="wc-t{series}">'
-            f"<h3>World Class C1.T{series} — on={on_ms}ms gap={gap_ms}ms — "
+            f"<h3>World Class Players C2.T{series} — on={on_ms}ms gap={gap_ms}ms — "
             f"{len(pl)} actions</h3>"
         )
         parts.append(render_playlist(pl, embed=True))

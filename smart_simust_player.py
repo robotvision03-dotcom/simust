@@ -663,7 +663,13 @@ BAND_CONTENT_SET_LABELS = {
         3: "Sum",
         4: "Players 2",
     },
-    "L05-WorldClass": {0: "Players", 1: "Numbers", 2: "Divergent", 3: "Sum"},
+    "L05-WorldClass": {
+        0: "Players 2",
+        1: "Players",
+        2: "Numbers",
+        3: "Divergent",
+        4: "Sum",
+    },
 }
 # Elite Players 2 (operator C5 / S4): scripted dual-field scenarios.
 ELITE_PLAYERS2_IMAGE_DIR = os.path.join(
@@ -698,10 +704,21 @@ WC_PLAYERS_GRAY_RGB = (110, 110, 110)
 # Elite Players 2: 5 tests × 9 actions (=45) per sub-level; T2–T5 reuse layouts faster.
 WC_PLAYERS_T1_ACTIONS = 9
 WC_PLAYERS_TEST_COUNT = 5
-# Each later S4.Tn / WC S0.Tn shortens On/Gap by 5% vs T1 baseline.
+# World Class Players (operator C2 / S1): 15 actions × 3s On ≈ 45s per test.
+WC_PLAYERS_ACTIONS = 15
+WC_PLAYERS_ACTION_ON_MS = 3000
+WC_PLAYERS_ACTION_GAP_MS = 80
+# World Class Players 2 (operator C1 / S0): 10 actions × 3s On ≈ 30s per test.
+WC_PLAYERS2_ACTIONS = 10
+WC_PLAYERS2_ACTION_ON_MS = 3000
+WC_PLAYERS2_ACTION_GAP_MS = 80
+# Offside / posts layouts stay fixed across in-set tests (do not ellipse-rotate).
+WC_PLAYERS_FIXED_LAYOUT_ACTIONS = frozenset({8, 9, 13})
+WC_PLAYERS2_FIXED_LAYOUT_ACTIONS = frozenset({6, 9})
+# Each later Elite S4.Tn shortens On/Gap by 5% vs T1 baseline.
 WC_PLAYERS_TIMING_DECAY = 0.95
-# World Class C1.T1 Players: 2× baseline, then +20% more (videos need longer).
-WC_PLAYERS_C1T1_TIME_SCALE = 2.4
+# Legacy scale (unused by fixed 3s WC Players / Players 2 clocks).
+WC_PLAYERS_C1T1_TIME_SCALE = 1.0
 # Combined A+B ellipse ring (clockwise): A1→…→A6→B1→…→B6→A1.
 WC_ELLIPSE_RING = (
     "A1", "A2", "A3", "A4", "A5", "A6",
@@ -1599,7 +1616,8 @@ def _band_series_num(*paths, band: str) -> Optional[int]:
     if not re.search(band, blob, re.I):
         return None
     if re.search(
-        r"S0[.-]T[1-5]|S2[.-]T[1-5]|S3[.-]T[1-5]|A0[-.]T[1-5]|A1[-.]T[1-5]|A2[-.]T[1-5]",
+        r"S0[.-]T[1-5]|S2[.-]T[1-5]|S3[.-]T[1-5]|S4[.-]T[1-5]|"
+        r"A0[-.]T[1-5]|A1[-.]T[1-5]|A2[-.]T[1-5]|A3[-.]T[1-5]",
         blob,
         re.I,
     ):
@@ -1848,7 +1866,7 @@ def _elite_s4_series_num(*paths) -> Optional[int]:
 
 
 def _world_class_s0_series_num(*paths) -> Optional[int]:
-    """World Class S0.T1..S0.T5 (Players, operator C1) → series 1..5."""
+    """World Class S0.T1..S0.T5 (Players 2, operator C1) → series 1..5."""
     blob = " ".join(str(p or "") for p in paths)
     if not re.search(r"L05-WorldClass|World[-_ ]?Class", blob, re.I):
         return None
@@ -1859,17 +1877,31 @@ def _world_class_s0_series_num(*paths) -> Optional[int]:
 
 
 def _world_class_series_num(*paths) -> Optional[int]:
+    """World Class S1.T* (Players video pack, operator C2)."""
     return _band_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
 
 
 def _world_class_s2_series_num(*paths) -> Optional[int]:
+    """World Class S2.T* (Numbers, operator C3)."""
     return _band_s2_series_num(*paths, band=r"L05-WorldClass|World[-_ ]?Class")
 
 
 def _world_class_s3_series_num(*paths) -> Optional[int]:
+    """World Class S3.T* (Divergent, operator C4)."""
     return _band_s3_series_num(
         *paths, band=r"L05-WorldClass|World[-_ ]?Class"
     )
+
+
+def _world_class_s4_series_num(*paths) -> Optional[int]:
+    """World Class S4.T* (Sum, operator C5)."""
+    blob = " ".join(str(p or "") for p in paths)
+    if not re.search(r"L05-WorldClass|World[-_ ]?Class", blob, re.I):
+        return None
+    match = re.search(r"S4[.-]T([1-5])", blob, re.I)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def _combined_level_band(text) -> Optional[str]:
@@ -1889,11 +1921,18 @@ COMBINED_PLAY_MESSAGE = (
 
 
 def _combined_series_group_and_num(text, band: str) -> Tuple[Optional[int], Optional[int]]:
-    """Return (series_group, set_num). Group 3=S3.T*, 2=S2.T*, 1=S1.T*, 0=S0.T*."""
+    """Return (series_group, set_num).
+
+    World Class: 0=Players2, 1=Players, 2=Numbers, 3=Divergent, 4=Sum.
+    Elite: 0=Players1, 1=Numbers, 2=Divergent, 3=Sum, 4=Players2.
+    """
     if band == "world-class":
         s0 = _world_class_s0_series_num(text)
         if s0:
             return 0, s0
+        s4 = _world_class_s4_series_num(text)
+        if s4:
+            return 4, s4
         s3 = _world_class_s3_series_num(text)
         if s3:
             return 3, s3
@@ -7170,7 +7209,9 @@ def _wc_players_video_catalog() -> Dict[str, List[Tuple[str, int]]]:
         "defender": defender_pool,
         "defender_06": defender_06,
         "duo": _pool(neutral_duo, lambda n: "players-neutral-duo" in n),
-        "opponent": _pool(asking, lambda n: n.startswith("opponent-asking")),
+        # Distractors: neutral red-shirt defenders only — never Opponent-AskingForBall
+        # (hands-up opponents confuse the real player; those clips are unused in WC).
+        "opponent": list(defender_pool),
         # Center goals (folder 02): teammate asking only — never opponents.
         "asking": _pool(asking, lambda n: n.startswith("teammate-asking")),
         "pass": _pool(asking, lambda n: n.startswith("teammate-asking")),
@@ -7187,7 +7228,12 @@ def _wc_players_video_catalog() -> Dict[str, List[Tuple[str, int]]]:
         "offside_right": _pool(
             offside, lambda n: "cross-offside-trap-right" in n
         ),
-        "offside": _pool(offside, lambda n: "cross-offside-trap" in n),
+        "offside": _pool(
+            offside,
+            lambda n: "cross-offside-trap" in n and "right" not in n,
+        ),
+        "offside_any": _pool(offside, lambda n: "cross-offside-trap" in n),
+        # Folder 05 unused in WC Players / Players 2 for now.
         "shooting": _pool(shooting, lambda n: "striking" in n),
     }
 
@@ -7374,6 +7420,112 @@ def _wc_players_t1_role_layout(action_n: int) -> Optional[dict]:
             "gray": [],
             "posts": [("B3", "left"), ("B4", "right")],
         }
+    if n == 10:
+        # Asking center A6 — crowded neutrals on both halves.
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A2", "teammate"),
+                ("A3", "opponent"),
+                ("A5", "defender"),
+                ("A6", "pass"),
+                ("B1", "duo"),
+                ("B3", "teammate"),
+                ("B5", "opponent"),
+            ],
+            "goals": {"A": ["A6"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 11:
+        # CrossBall-Left on B2; neutrals fill the ring.
+        return {
+            "slots": [
+                ("A2", "opponent"),
+                ("A4", "teammate"),
+                ("A5", "defender"),
+                ("B1", "teammate"),
+                ("B2", "cross_left"),
+                ("B4", "opponent"),
+                ("B6", "defender"),
+            ],
+            "goals": {"A": [], "B": ["B2L"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 12:
+        # Dual asking A2 + B5 (require both).
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A2", "asking"),
+                ("A4", "defender"),
+                ("A6", "teammate"),
+                ("B1", "opponent"),
+                ("B3", "duo"),
+                ("B5", "pass"),
+                ("B6", "teammate"),
+            ],
+            "goals": {"A": ["A2"], "B": ["B5"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 13:
+        # Offside trap Field A: posts A3/A4, traps A2+A5 — shoot A7 only.
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A2", "offside"),
+                ("A5", "offside_right"),
+                ("A6", "opponent"),
+                ("B2", "teammate"),
+                ("B4", "defender"),
+                ("B6", "opponent"),
+            ],
+            "goals": {"A": ["A7"], "B": []},
+            "require_all": True,
+            "gray": [],
+            "posts": [("A3", "left"), ("A4", "right")],
+        }
+    if n == 14:
+        # CrossBall-Right on B6 with dense neutrals.
+        return {
+            "slots": [
+                ("A1", "duo"),
+                ("A3", "opponent"),
+                ("A5", "teammate"),
+                ("B1", "defender"),
+                ("B3", "opponent"),
+                ("B5", "teammate"),
+                ("B6", "cross_right"),
+            ],
+            "goals": {"A": [], "B": ["B6R"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
+    if n == 15:
+        # Final: asking B3 + neutrals / duo crowd; one clear goal.
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A2", "teammate"),
+                ("A4", "opponent"),
+                ("A5", "defender"),
+                ("A6", "duo"),
+                ("B1", "teammate"),
+                ("B2", "opponent"),
+                ("B3", "pass"),
+                ("B5", "defender"),
+            ],
+            "goals": {"A": [], "B": ["B3"]},
+            "require_all": True,
+            "gray": [],
+            "posts": [],
+        }
     return None
 
 
@@ -7473,7 +7625,7 @@ def _wc_players_build_video_layout_action(
     series_num: int = 1,
     used_paths: Optional[set] = None,
 ) -> Optional[dict]:
-    """Tests 2–5: clockwise +(step−1) on a1–7; a8–9 always base (posts on B)."""
+    """Tests 2–5: clockwise +(step−1); offside/post actions stay on base seats."""
     step = max(1, min(5, int(layout_step or 1)))
     base = _wc_players_build_video_t1_action(
         action_n,
@@ -7485,7 +7637,7 @@ def _wc_players_build_video_layout_action(
     if not base:
         return None
     n = int(action_n or 0)
-    if n in (8, 9) or step == 1:
+    if n in WC_PLAYERS_FIXED_LAYOUT_ACTIONS or step == 1:
         return _wc_sync_crossball_goal_sides(base)
     steps = step - 1
     remapped = _wc_remap_action_layout(
@@ -7503,14 +7655,370 @@ def _wc_players_build_video_layout_action(
     return _wc_sync_crossball_goal_sides(remapped)
 
 
-def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
-    """World Class Players (S0 / C1) — Elite Players 2 layouts with short videos.
+def _wc_players2_role_layout(action_n: int) -> Optional[dict]:
+    """World Class Players 2 (C1): denser 10-action tactical pack.
 
-    Same 5×9 seat plans; media from static/Players-Videos.
-    Center goals: Teammate-AskingForBall (folder 02) — never pass.png / opponents.
-    Cross L/R goals: any Left/Right clip from folder 03 (enter goal = correct).
-    Person tags + file paths unique within an action; prefer fresh clips next action.
-    Tests 2–5 reuse the same video files as test 1 (seats rotate on a1–7).
+    Shoot only to Teammate-Asking / Cross L/R / between offside posts.
+    Distractors are always neutral (defender / teammate / duo) — never
+    Opponent-AskingForBall.
+    """
+    n = int(action_n or 0)
+    if n == 1:
+        return {
+            "slots": [
+                ("A2", "opponent"),
+                ("A3", "teammate"),
+                ("A4", "opponent"),
+                ("A5", "pass"),
+                ("B1", "duo"),
+                ("B3", "defender"),
+                ("B5", "teammate"),
+                ("B6", "opponent"),
+            ],
+            "goals": {"A": ["A5"], "B": []},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 2:
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A3", "opponent"),
+                ("A6", "cross_right"),
+                ("B2", "defender"),
+                ("B4", "opponent"),
+                ("B5", "teammate"),
+            ],
+            "goals": {"A": ["A6R"], "B": []},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 3:
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A4", "defender"),
+                ("A6", "teammate"),
+                ("B2", "pass"),
+                ("B3", "opponent"),
+                ("B5", "duo"),
+                ("B6", "teammate"),
+            ],
+            "goals": {"A": [], "B": ["B2"]},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 4:
+        return {
+            "slots": [
+                ("A2", "cross_left"),
+                ("A3", "opponent"),
+                ("A5", "teammate"),
+                ("B1", "defender"),
+                ("B3", "opponent"),
+                ("B6", "teammate"),
+            ],
+            "goals": {"A": ["A2L"], "B": []},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 5:
+        # Dual asking — both mouths required.
+        return {
+            "slots": [
+                ("A1", "pass"),
+                ("A3", "opponent"),
+                ("A5", "defender"),
+                ("B2", "teammate"),
+                ("B4", "asking"),
+                ("B5", "opponent"),
+                ("B6", "duo"),
+            ],
+            "goals": {"A": ["A1"], "B": ["B4"]},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 6:
+        # Offside Field B: posts B3/B4, traps B2+B5 → shoot B7 only.
+        return {
+            "slots": [
+                ("A2", "teammate"),
+                ("A4", "opponent"),
+                ("A6", "defender"),
+                ("B1", "teammate"),
+                ("B2", "offside"),
+                ("B5", "offside_right"),
+            ],
+            "goals": {"A": [], "B": ["B7"]},
+            "require_all": True,
+            "posts": [("B3", "left"), ("B4", "right")],
+        }
+    if n == 7:
+        return {
+            "slots": [
+                ("A2", "opponent"),
+                ("A4", "pass"),
+                ("A5", "teammate"),
+                ("A6", "duo"),
+                ("B1", "opponent"),
+                ("B3", "defender"),
+                ("B5", "teammate"),
+            ],
+            "goals": {"A": ["A4"], "B": []},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 8:
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A3", "opponent"),
+                ("A5", "defender"),
+                ("B3", "cross_right"),
+                ("B4", "opponent"),
+                ("B6", "teammate"),
+            ],
+            "goals": {"A": [], "B": ["B3R"]},
+            "require_all": True,
+            "posts": [],
+        }
+    if n == 9:
+        # Offside Field A: posts A3/A4, traps A2+A5 → shoot A7 only.
+        return {
+            "slots": [
+                ("A1", "teammate"),
+                ("A2", "offside"),
+                ("A5", "offside_right"),
+                ("A6", "opponent"),
+                ("B2", "duo"),
+                ("B4", "defender"),
+                ("B6", "teammate"),
+            ],
+            "goals": {"A": ["A7"], "B": []},
+            "require_all": True,
+            "posts": [("A3", "left"), ("A4", "right")],
+        }
+    if n == 10:
+        return {
+            "slots": [
+                ("A1", "opponent"),
+                ("A2", "teammate"),
+                ("A3", "pass"),
+                ("A5", "defender"),
+                ("A6", "opponent"),
+                ("B1", "duo"),
+                ("B3", "teammate"),
+                ("B5", "opponent"),
+            ],
+            "goals": {"A": ["A3"], "B": []},
+            "require_all": True,
+            "posts": [],
+        }
+    return None
+
+
+def _wc_players2_build_action(
+    action_n: int,
+    catalog: Dict[str, List[Tuple[str, int]]],
+    still_paths: Dict[str, str],
+    *,
+    series_num: int = 1,
+    used_paths: Optional[set] = None,
+) -> Optional[dict]:
+    plan = _wc_players2_role_layout(action_n)
+    if not plan:
+        return None
+    rng = random.Random(52000 + int(series_num or 1) * 100 + int(action_n or 0))
+    used_people = set()
+    action_paths = set()
+    shared_paths = used_paths if used_paths is not None else set()
+    media = {}
+    person_by_sid = {}
+    for sid, role in plan.get("slots") or []:
+        pick_paths = set(shared_paths) | set(action_paths)
+        picked = _wc_video_pick(catalog, role, used_people, rng, used_paths=pick_paths)
+        if not picked:
+            logger.error(
+                "World Class Players 2 a%s: no free person for role %s",
+                action_n,
+                role,
+            )
+            return None
+        path, pid = picked
+        media[sid] = path
+        person_by_sid[sid] = pid
+        action_paths.add(path)
+        shared_paths.add(path)
+    for sid, which in plan.get("posts") or []:
+        key = "left_post" if which == "left" else "right_post"
+        path = still_paths.get(key)
+        if not path:
+            return None
+        media[sid] = path
+    built = {
+        "screen_images": media,
+        "field_screens": dict(plan.get("goals") or {"A": [], "B": []}),
+        "action": "PASS",
+        "require_all_goals": bool(plan.get("require_all", True)),
+        "person_ids": person_by_sid,
+        "used_people": sorted(used_people),
+    }
+    return _wc_sync_crossball_goal_sides(built)
+
+
+def _build_world_class_players2_playlist(series_num: int) -> List[dict]:
+    """World Class Players 2 (S0 / C1) — 5 tests × 10 actions × 3s ≈ 30s.
+
+    Tactical mix: asking, Cross L/R, dual goals, offside traps.
+    Distractors = neutral only (never Opponent-AskingForBall).
+    """
+    series = max(1, min(5, int(series_num or 1)))
+    catalog = _wc_players_video_catalog()
+    still_paths = _wc_players_still_paths()
+    if not catalog.get("opponent") or not catalog.get("pass"):
+        logger.error(
+            "World Class Players 2 missing video catalog under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    if not still_paths.get("left_post") or not still_paths.get("right_post"):
+        logger.error(
+            "World Class Players 2 missing post stills under %s",
+            WC_PLAYERS_VIDEO_ROOT,
+        )
+        return []
+    on_ms, _ = _snap_ms_to_display_fps(float(WC_PLAYERS2_ACTION_ON_MS))
+    gap_ms, _ = _snap_ms_to_display_fps(float(WC_PLAYERS2_ACTION_GAP_MS))
+    actions_n = int(WC_PLAYERS2_ACTIONS)
+    tests_n = int(WC_PLAYERS_TEST_COUNT)
+    used_paths = set()
+    bases = []
+    for action_in_set in range(1, actions_n + 1):
+        built = _wc_players2_build_action(
+            action_in_set,
+            catalog,
+            still_paths,
+            series_num=series,
+            used_paths=used_paths,
+        )
+        if not built:
+            logger.error(
+                "World Class Players 2 C1.T%s base action %s failed",
+                series,
+                action_in_set,
+            )
+            return []
+        bases.append(built)
+    playlist = []
+    for test_num in range(1, tests_n + 1):
+        for action_in_set in range(1, actions_n + 1):
+            base = bases[action_in_set - 1]
+            if action_in_set in WC_PLAYERS2_FIXED_LAYOUT_ACTIONS or test_num == 1:
+                built = _wc_sync_crossball_goal_sides({
+                    "screen_images": dict(base.get("screen_images") or {}),
+                    "field_screens": {
+                        "A": list((base.get("field_screens") or {}).get("A") or []),
+                        "B": list((base.get("field_screens") or {}).get("B") or []),
+                    },
+                    "action": base.get("action") or "PASS",
+                    "require_all_goals": bool(base.get("require_all_goals", True)),
+                    "person_ids": dict(base.get("person_ids") or {}),
+                    "used_people": list(base.get("used_people") or []),
+                })
+            else:
+                steps = test_num - 1
+                remapped = _wc_remap_action_layout(
+                    base, lambda sid, s=steps: _wc_ellipse_next(sid, s) or sid
+                )
+                if not remapped:
+                    continue
+                people = {}
+                for sid, pid in (base.get("person_ids") or {}).items():
+                    nxt = _wc_ellipse_next(sid, steps) or sid
+                    people[nxt] = pid
+                remapped["person_ids"] = people
+                remapped["used_people"] = list(base.get("used_people") or [])
+                built = _wc_sync_crossball_goal_sides(remapped)
+            images = dict(built["screen_images"])
+            field_screens = dict(built["field_screens"])
+            goals = []
+            for fid in ("A", "B"):
+                goals.extend(field_screens.get(fid) or [])
+            gap_images = {
+                sid: path
+                for sid, path in images.items()
+                if not str(path or "").lower().endswith(WC_PLAYERS_VIDEO_EXTS)
+            }
+            playlist.append({
+                "kind": "labeled_action",
+                "index": len(playlist) + 1,
+                "test_num": test_num,
+                "action_in_set": action_in_set,
+                "actions_in_set": actions_n,
+                "is_last_in_set": action_in_set == actions_n,
+                "timing_scale": 1.0,
+                "fixed_timing": True,
+                "on_ms": on_ms,
+                "gap_ms": gap_ms,
+                "action_num": action_in_set,
+                "action": "PASS",
+                "no_fillers": True,
+                "pass_image_scale": float(ENTRY_S0_PASS_IMAGE_SCALE),
+                "uniform_player_stills": True,
+                "combined_field": True,
+                "require_all_goals": bool(built.get("require_all_goals", True)),
+                "hold_full_on": True,
+                "arena_pair": (1, 1),
+                "field_screens": field_screens,
+                "screen_images": images,
+                "gap_screen_images": gap_images,
+                "wc_players_scenario": True,
+                "wc_players_video": True,
+                "wc_players2_scenario": True,
+                "wc_players_press_goal": False,
+                "person_ids": dict(built.get("person_ids") or {}),
+                "skip_ap_fac": True,
+                "aep_dual_pass": False,
+                "ap_action": False,
+                "label": (
+                    f"WorldClass S0.T{series} Players2 T{test_num}/{tests_n} "
+                    f"a{action_in_set}/{actions_n} PASS "
+                    f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
+                ),
+                "path": (
+                    f"image://WorldClass/S0.T{series}/"
+                    f"players2/test{test_num}/{action_in_set}"
+                ),
+                "series_group": 0,
+                "series_num": int(series),
+            })
+    stamped = _stamp_finish_balls(playlist)
+    for entry in stamped:
+        if not isinstance(entry, dict):
+            continue
+        entry["combined_field"] = True
+        entry["hold_full_on"] = True
+        entry["skip_ap_fac"] = True
+        if "require_all_goals" not in entry:
+            entry["require_all_goals"] = True
+    logger.info(
+        "World Class Players 2 C1.T%s: %s actions (%s tests × %s) on=%sms gap=%sms",
+        series,
+        len(stamped),
+        tests_n,
+        actions_n,
+        on_ms,
+        gap_ms,
+    )
+    return stamped
+
+
+def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
+    """World Class Players (S1 / C2) — 5×15 video layouts ≈ 45s per test.
+
+    Media from static/Players-Videos. Center goals: Teammate-AskingForBall.
+    Cross L/R: folder 03. Distractors: neutral only (never Opponent-Asking).
+    Tests 2–5 rotate non-offside seats on the A/B ellipse.
     """
     series = max(1, min(5, int(series_num or 1)))
     catalog = _wc_players_video_catalog()
@@ -7539,15 +8047,10 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
             WC_PLAYERS_VIDEO_ROOT,
         )
         return []
-    on_ms, gap_ms = _wc_players_series_timing_ms(series)
-    # C1.T1 only: double On/Gap for every in-set test (1–5).
-    if series == 1:
-        scale = float(WC_PLAYERS_C1T1_TIME_SCALE)
-        on_ms, _ = _snap_ms_to_display_fps(float(on_ms) * scale)
-        gap_ms, _ = _snap_ms_to_display_fps(float(gap_ms) * scale)
-    actions_n = int(WC_PLAYERS_T1_ACTIONS)
+    on_ms, _ = _snap_ms_to_display_fps(float(WC_PLAYERS_ACTION_ON_MS))
+    gap_ms, _ = _snap_ms_to_display_fps(float(WC_PLAYERS_ACTION_GAP_MS))
+    actions_n = int(WC_PLAYERS_ACTIONS)
     tests_n = int(WC_PLAYERS_TEST_COUNT)
-    # Build base a1–a9 once so every in-set test shares the same video files.
     used_paths = set()
     bases = []
     for action_in_set in range(1, actions_n + 1):
@@ -7560,7 +8063,7 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
         )
         if not built:
             logger.error(
-                "World Class Players C1.T%s base action %s layout failed",
+                "World Class Players C2.T%s base action %s layout failed",
                 series,
                 action_in_set,
             )
@@ -7570,7 +8073,7 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
     for test_num in range(1, tests_n + 1):
         for action_in_set in range(1, actions_n + 1):
             base = bases[action_in_set - 1]
-            if action_in_set in (8, 9) or test_num == 1:
+            if action_in_set in WC_PLAYERS_FIXED_LAYOUT_ACTIONS or test_num == 1:
                 built = _wc_sync_crossball_goal_sides({
                     "screen_images": dict(base.get("screen_images") or {}),
                     "field_screens": {
@@ -7589,7 +8092,7 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
                 )
                 if not remapped:
                     logger.error(
-                        "World Class Players C1.T%s test %s action %s remap failed",
+                        "World Class Players C2.T%s test %s action %s remap failed",
                         series,
                         test_num,
                         action_in_set,
@@ -7609,7 +8112,6 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
             goals = []
             for fid in ("A", "B"):
                 goals.extend(field_screens.get(fid) or [])
-            # Gap: posts stills only; videos stay off between actions.
             gap_images = {
                 sid: path
                 for sid, path in images.items()
@@ -7642,19 +8144,19 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
                 "wc_players_video": True,
                 "wc_players_press_goal": False,
                 "person_ids": dict(built.get("person_ids") or {}),
-                "results_on_screen": int(PLAYERS_AP_RESULTS_SCREEN),
-                "fac_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
-                "fap_on_screen": int(PLAYERS_AP_FAP_RESULTS_SCREEN),
+                "skip_ap_fac": True,
+                "aep_dual_pass": False,
+                "ap_action": False,
                 "label": (
-                    f"WorldClass S0.T{series} Players T{test_num}/{tests_n} "
+                    f"WorldClass S1.T{series} Players T{test_num}/{tests_n} "
                     f"a{action_in_set}/{actions_n} {action_name} "
                     f"goals={','.join(goals)} on={on_ms}ms gap={gap_ms}ms"
                 ),
                 "path": (
-                    f"image://WorldClass/S0.T{series}/"
+                    f"image://WorldClass/S1.T{series}/"
                     f"players/test{test_num}/{action_in_set}"
                 ),
-                "series_group": 0,
+                "series_group": 1,
                 "series_num": int(series),
             })
     stamped = _stamp_finish_balls(playlist)
@@ -7663,10 +8165,11 @@ def _build_world_class_s0_playlist(series_num: int) -> List[dict]:
             continue
         entry["combined_field"] = True
         entry["hold_full_on"] = True
+        entry["skip_ap_fac"] = True
         if "require_all_goals" not in entry:
             entry["require_all_goals"] = True
     logger.info(
-        "World Class Players C1.T%s: %s actions (%s tests × %s) video on=%sms gap=%sms",
+        "World Class Players C2.T%s: %s actions (%s tests × %s) video on=%sms gap=%sms",
         series,
         len(stamped),
         tests_n,
@@ -15138,7 +15641,8 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
                 if _band == "elite":
                     playlist = _build_elite_s0_playlist(series_num)
                 elif _band == "world-class":
-                    playlist = _build_world_class_s0_playlist(series_num)
+                    # WC C1 = Players 2 (10×3s).
+                    playlist = _build_world_class_players2_playlist(series_num)
                 else:
                     self._playlist_block_reason = COMBINED_PLAY_MESSAGE
                     logger.error(self._playlist_block_reason)
@@ -15147,25 +15651,29 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             elif series_group == 4:
                 if _band == "elite":
                     playlist = _build_elite_players2_playlist(series_num)
+                elif _band == "world-class":
+                    # WC C5 = Sum (was S3).
+                    playlist = _build_world_class_s3_playlist(series_num)
                 else:
-                    self._playlist_block_reason = (
-                        "Players 2 scripted dual-field play is Elite only."
-                    )
+                    self._playlist_block_reason = COMBINED_PLAY_MESSAGE
                     logger.error(self._playlist_block_reason)
                     self._label_mode = False
                     return []
             elif series_group == 3:
-                playlist = (
-                    _build_world_class_s3_playlist(series_num)
-                    if _band == "world-class"
-                    else _build_elite_s3_playlist(series_num)
-                )
+                if _band == "world-class":
+                    # WC C4 = Divergent (was S2).
+                    playlist = _build_world_class_s2_playlist(series_num)
+                else:
+                    playlist = _build_elite_s3_playlist(series_num)
             elif series_group == 2:
-                playlist = (
-                    _build_world_class_s2_playlist(series_num)
-                    if _band == "world-class"
-                    else _build_elite_s2_playlist(series_num)
-                )
+                if _band == "world-class":
+                    # WC C3 = Numbers (camouflage digits / elite S1-style).
+                    playlist = _build_elite_playlist(series_num, "world-class")
+                else:
+                    playlist = _build_elite_s2_playlist(series_num)
+            elif series_group == 1 and _band == "world-class":
+                # WC C2 = Players video pack (15×3s).
+                playlist = _build_world_class_s0_playlist(series_num)
             else:
                 playlist = _build_elite_playlist(series_num, _band)
             if playlist:
@@ -23773,9 +24281,9 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _is_terminal_training_level(level: str) -> bool:
-        """World Class S3.T5 is the last set — do not loop it for the rest of the booking."""
+        """World Class S4.T5 (Sum / C5) is the last set — do not loop it."""
         text = str(level or "").replace("\\", "/")
-        return bool(re.search(r"L05-WorldClass(?:/|\\)?S3\.T5\b", text, re.I))
+        return bool(re.search(r"L05-WorldClass(?:/|\\)?S4\.T5\b", text, re.I))
 
     def _is_admin_test_session(self) -> bool:
         """Operator admin-password play with no reservation clock."""
@@ -23809,7 +24317,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
         """True while booking remains (or admin test) AND another set should run.
 
         Mode 2 keeps farming unlocked sets during a reservation, but after the
-        final World Class S3.T5 pass — or a Foundation pass whose next SF is
+        final World Class S4.T5 pass — or a Foundation pass whose next SF is
         admin-locked — continue_play=False so we show finals and stop (no loop).
 
         Admin/manual password play has no booking_end: still continue so Mode 2
@@ -23943,7 +24451,7 @@ class SmartPlayerWindow(QtWidgets.QMainWindow):
             merged["admin_test"] = True
         # Refresh seconds_left from the live booking. Do not force continue_play
         # True over an explicit False (last set / stop), and never invent a
-        # continue on World Class S3.T5 — that loops the final set forever.
+        # continue on World Class S4.T5 — that loops the final set forever.
         try:
             live_left = self._booking_seconds_left_for_field(score)
             if live_left is not None:

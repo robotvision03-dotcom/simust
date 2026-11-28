@@ -9,7 +9,7 @@ Rules:
 - Every sub-level is played in order (Entry S0 then S1; later bands S1…S3).
   Passing the last set of a band opens the next band (Entry S1.T5 → Activated
   S1.T1, Activated S2.T5 → High Performance, High Performance S3.T5 → Elite,
-  Elite S3.T5 → World Class). World Class S3.T5 is the end.
+  Elite S4.T5 → World Class). World Class S4.T5 is the end.
   Booking does not open levels. Sub-level names: S0-T# → S0.T#, A-T# → S1.T#,
   A1.T# → S2.T#.
 """

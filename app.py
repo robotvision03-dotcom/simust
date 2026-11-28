@@ -1301,26 +1301,36 @@ PROGRESSION = {
         "threshold_acc": 0,
         "threshold_ae": 70,
         "themes": {
+            # C1 Players 2
             "S0.T1": [],
             "S0.T2": [],
             "S0.T3": [],
             "S0.T4": [],
             "S0.T5": [],
+            # C2 Players (video pack)
             "S1.T1": [],
             "S1.T2": [],
             "S1.T3": [],
             "S1.T4": [],
             "S1.T5": [],
+            # C3 Numbers
             "S2.T1": [],
             "S2.T2": [],
             "S2.T3": [],
             "S2.T4": [],
             "S2.T5": [],
+            # C4 Divergent
             "S3.T1": [],
             "S3.T2": [],
             "S3.T3": [],
             "S3.T4": [],
             "S3.T5": [],
+            # C5 Sum
+            "S4.T1": [],
+            "S4.T2": [],
+            "S4.T3": [],
+            "S4.T4": [],
+            "S4.T5": [],
         }
     }
 }
@@ -1399,7 +1409,7 @@ def get_next_level(current_level_id: str) -> Optional[str]:
     series where the band has them). Passing the last set of a band opens
     the next band's first set (Entry S1.T5 → Activated S1.T1, Activated
     S2.T5 → High Performance S0.T1, High Performance S3.T5 → Elite S0.T1,
-    Elite S4.T5 → World Class S0.T1). World Class S3.T5 is the end.
+    Elite S4.T5 → World Class S0.T1). World Class S4.T5 is the end.
     """
     cid = simust_progress.normalize_level_id(current_level_id)
     try:
@@ -3368,36 +3378,47 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not ensure operator accounts: %s", exc)
     if simust_push.push_configured():
         logger.info("Lab→host JSON push is enabled")
-        try:
-            flushed = simust_push.flush_queue()
-            if flushed:
-                logger.info("Flushed %s queued player JSON payloads to the host", flushed)
-        except Exception as exc:
-            logger.warning("Could not flush push queue: %s", exc)
         if not PUBLIC_MODE:
-            try:
-                # Prove the VPS accepts this key; otherwise /operator stays Lab offline.
-                simust_push.push_lab_status({"lab_online": True, "boot": True}, raise_errors=True)
-                logger.info("Lab online heartbeat sent to the public host")
-            except Exception as exc:
-                logger.error(
-                    "Lab→host link FAILED (%s). /operator will show Lab offline. "
-                    "Check SIMUST_PUSH_KEY matches /opt/simust/.env on the VPS.",
-                    exc,
-                )
-            try:
-                users = load_users()
-                simust_push.push_accounts_async(users)
-                simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
-                simust_push.pull_and_merge_accounts(
-                    load_users,
-                    save_users,
-                    PLAYER_REPORTS_DIR,
-                    load_reservations,
-                    save_reservations,
-                    apply_reservation_unlocks_fn=_apply_reservation_unlocks,
-                    mutate_lock=_USERS_RMW_LOCK,
-                )
+            # Never block uvicorn startup on a dead/slow VPS (20s HTTP each).
+            # Operator/local play must come up even when my.simust.com is down.
+            def _boot_host_sync():
+                try:
+                    flushed = simust_push.flush_queue()
+                    if flushed:
+                        logger.info(
+                            "Flushed %s queued player JSON payloads to the host",
+                            flushed,
+                        )
+                except Exception as exc:
+                    logger.warning("Could not flush push queue: %s", exc)
+                try:
+                    simust_push.push_lab_status(
+                        {"lab_online": True, "boot": True},
+                        raise_errors=True,
+                    )
+                    logger.info("Lab online heartbeat sent to the public host")
+                except Exception as exc:
+                    logger.error(
+                        "Lab→host link FAILED (%s). /operator will show Lab offline. "
+                        "Check SIMUST_PUSH_KEY matches /opt/simust/.env on the VPS "
+                        "(and that my.simust.com is up).",
+                        exc,
+                    )
+                try:
+                    users = load_users()
+                    simust_push.push_accounts_async(users)
+                    simust_push.push_reports_async(PLAYER_REPORTS_DIR, users)
+                    simust_push.pull_and_merge_accounts(
+                        load_users,
+                        save_users,
+                        PLAYER_REPORTS_DIR,
+                        load_reservations,
+                        save_reservations,
+                        apply_reservation_unlocks_fn=_apply_reservation_unlocks,
+                        mutate_lock=_USERS_RMW_LOCK,
+                    )
+                except Exception as exc:
+                    logger.warning("Could not sync accounts/reports on startup: %s", exc)
 
                 def _pull_loop():
                     while True:
@@ -3415,10 +3436,19 @@ async def lifespan(app: FastAPI):
                         except Exception as pull_exc:
                             logger.warning("Account pull loop: %s", pull_exc)
 
-                threading.Thread(target=_pull_loop, daemon=True, name="simust-pull-users").start()
-                threading.Thread(target=_remote_operator_loop, daemon=True, name="simust-remote-ops").start()
-            except Exception as exc:
-                logger.warning("Could not sync accounts/reports on startup: %s", exc)
+                threading.Thread(
+                    target=_pull_loop, daemon=True, name="simust-pull-users"
+                ).start()
+                threading.Thread(
+                    target=_remote_operator_loop,
+                    daemon=True,
+                    name="simust-remote-ops",
+                ).start()
+
+            threading.Thread(
+                target=_boot_host_sync, daemon=True, name="simust-boot-host-sync"
+            ).start()
+            logger.info("Host sync started in background (lab UI will not wait)")
     elif not PUBLIC_MODE:
         problem = simust_push.push_config_problem() or "SIMUST_PUSH_URL / SIMUST_PUSH_KEY not set"
         logger.error(
