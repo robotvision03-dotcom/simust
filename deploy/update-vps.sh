@@ -52,4 +52,15 @@ pkill -9 -f '/opt/simust/.venv/bin/python /opt/simust/app.py' 2>/dev/null || tru
 systemctl start simust
 sleep 2
 systemctl --no-pager --full status simust | head -n 25
+
+echo "==> Refreshing Caddy (public :80/:443 → 127.0.0.1:8000)"
+if [ -f "$APP_DIR/deploy/Caddyfile" ]; then
+  cp "$APP_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+fi
+systemctl restart caddy
+sleep 2
+systemctl --no-pager --full status caddy | head -n 20
+curl -sS -m 8 -o /dev/null -w "public_operator:%{http_code} t:%{time_total}\n" https://my.simust.com/operator || true
+curl -sS -m 5 http://127.0.0.1:8000/lab-link || true
+echo
 echo "==> Done. Portal: https://my.simust.com/login"

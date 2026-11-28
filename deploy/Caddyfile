@@ -1,3 +1,10 @@
+{
+	# Avoid HTTP/3 stalls on some mobile / Windows clients.
+	servers {
+		protocols h1 h2
+	}
+}
+
 :80 {
 	header {
 		X-Content-Type-Options nosniff
@@ -5,7 +12,14 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8000 {
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 30s
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
 }
 
 my.simust.com {
@@ -17,5 +31,12 @@ my.simust.com {
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8000 {
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 30s
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
 }
