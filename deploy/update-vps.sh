@@ -36,6 +36,20 @@ if [ -f "$APP_DIR/requirements-public.txt" ] && [ -x "$APP_DIR/.venv/bin/pip" ];
 fi
 
 echo "==> Restarting simust"
-systemctl restart simust
-systemctl --no-pager --full status simust | head -n 20
+# Install unit file so TimeoutStopSec/KillMode apply (avoids hung restarts).
+if [ -f "$APP_DIR/deploy/simust.service" ]; then
+  cp "$APP_DIR/deploy/simust.service" /etc/systemd/system/simust.service
+  systemctl daemon-reload
+fi
+# Never block forever on a wedged worker: stop with short timeout, then kill leftovers.
+systemctl stop simust || true
+sleep 1
+# Anything still holding :8000 after TimeoutStopSec
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 8000/tcp 2>/dev/null || true
+fi
+pkill -9 -f '/opt/simust/.venv/bin/python /opt/simust/app.py' 2>/dev/null || true
+systemctl start simust
+sleep 2
+systemctl --no-pager --full status simust | head -n 25
 echo "==> Done. Portal: https://my.simust.com/login"

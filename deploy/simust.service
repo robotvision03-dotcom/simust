@@ -11,6 +11,13 @@ EnvironmentFile=/opt/simust/.env
 ExecStart=/opt/simust/.venv/bin/python /opt/simust/app.py
 Restart=always
 RestartSec=3
+# Wedged uvicorn used to make `systemctl restart` hang for minutes.
+TimeoutStopSec=10
+TimeoutStartSec=45
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+SendSIGKILL=yes
 
 [Install]
 WantedBy=multi-user.target
